@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+
 from typing import Any
 
 import httpx
@@ -72,10 +75,23 @@ logger = get_logger(__name__)
 # the tap resolves to no answer so their next typed message resumes the run.
 _OTHER_CALLBACK_VALUE = "__lemma_other__"
 
-# Shared Redis cache: bot_token → getMe result dict (username + id), so mention
+# Shared Redis cache: bot → getMe result dict (username + id), so mention
 # verification doesn't hit the Telegram API on every message and is shared across
 # replicas. Redis unavailable -> refetch (never fails).
 _bot_info_cache: RedisJsonCache | None = None
+
+
+def _bot_cache_key(bot_token: str) -> str:
+    """A keyed fingerprint of the token, never the token itself.
+
+    A Redis key is visible to SCAN, MONITOR, the slow log and every RDB dump,
+    and a bot token in one is a credential anyone with that access can use.
+    The token is the HMAC key, so the fingerprint identifies the bot without
+    being reversible to it -- the same scheme as the native receivers' leases.
+    """
+    return hmac.new(
+        bot_token.encode("utf-8"), b"telegram:getMe", hashlib.sha256
+    ).hexdigest()[:32]
 
 
 def _get_bot_info_cache() -> RedisJsonCache:
@@ -102,8 +118,9 @@ class TelegramPlatformService:
         if not token:
             return None
         cache = _get_bot_info_cache()
+        cache_key = _bot_cache_key(token)
         try:
-            cached = await cache.get_json(token)
+            cached = await cache.get_json(cache_key)
         except RedisError, OSError, TimeoutError, ValueError:
             cached = None
         if cached:
@@ -113,7 +130,7 @@ class TelegramPlatformService:
             info = (result.get("result") or {}) if isinstance(result, dict) else {}
             if info:
                 try:
-                    await cache.set_json(token, info)
+                    await cache.set_json(cache_key, info)
                 except RedisError, OSError, TimeoutError, TypeError:
                     # Caching `getMe` saves a round-trip, nothing more; `info`
                     # is returned below whether or not the write lands.

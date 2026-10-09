@@ -474,11 +474,9 @@ def test_teams_parser_legacy_value_event_dispatch_and_fields():
     assert event is not None
     assert event.platform == "TEAMS"
     assert event.is_dm is False
-    # ``strip_html`` removes the ``<at>...</at>`` mention tag before the
-    # legacy path's own "<at>" substring check ever sees it, so this is
-    # never actually detected as a mention here -- ``is_thread_reply``
-    # (via ``replyToId``) is what makes the conversation start instead.
-    assert event.mentioned_agent is False
+    # The ``<at>`` tag is read off the raw HTML, before ``strip_html``
+    # removes it -- this shape has no entities array to say so otherwise.
+    assert event.mentioned_agent is True
     assert event.should_start_conversation is True
     assert event.tenant_id == "legacy-tenant-e2e"
     assert event.external_channel_id == legacy_channel_id

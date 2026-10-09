@@ -80,6 +80,7 @@ def _service(
         get_latest_agent_run_for_conversation=AsyncMock(),
         run_has_only_user_messages=AsyncMock(return_value=True),
         create_agent_run=AsyncMock(),
+        conversations_with_pending_interaction=AsyncMock(return_value=set()),
     )
     uow = SimpleNamespace(collect_events=MagicMock(), commit=AsyncMock())
     service = ConversationRetryService(

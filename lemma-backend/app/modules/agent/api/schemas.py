@@ -19,6 +19,7 @@ from app.core.authorization.context import ResourceType, ResourceVisibility
 from app.core.authorization.grants import ensure_grant_uses_resource_name
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import MAX_AGENT_INSTRUCTION_CHARACTERS
+from app.modules.agent.domain.pending_interactions import PendingInteractionKind
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunApprovalDecision,
@@ -181,6 +182,15 @@ class ConversationResponse(BaseModel):
     last_run_error_reason: str | None = None
     last_run_finished_at: datetime | None = None
     last_run_retryable: bool = False
+    has_pending_interaction: bool = Field(
+        default=False,
+        description=(
+            "A question, approval or Agent Host permission request here is "
+            "waiting on the conversation's owner. Not implied by status: a "
+            "WAITING conversation may be waiting on a timer, and a permission "
+            "request waits inside a RUNNING one."
+        ),
+    )
     created_at: datetime
     updated_at: datetime
 
@@ -272,6 +282,39 @@ class MessageListResponse(BaseModel):
 
 class UserApprovalListResponse(BaseModel):
     items: list[MessageResponse]
+
+
+class PendingInteractionResponse(BaseModel):
+    """One pause waiting on the caller, and the conversation it is in."""
+
+    conversation_id: UUID
+    conversation_title: str | None = None
+    conversation_status: ConversationStatus | None = None
+    agent_id: UUID | None = Field(
+        default=None,
+        description="Absent for the pod's own assistant on older conversations.",
+    )
+    agent_name: str | None = None
+    tool_call_id: str = Field(
+        description=(
+            "The paused call, which is also the approval id the decision "
+            "endpoint takes."
+        )
+    )
+    kind: PendingInteractionKind
+    summary: str | None = Field(
+        default=None,
+        description="The question asked, or the approval's title, on one line.",
+    )
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PendingInteractionListResponse(BaseModel):
+    items: list[PendingInteractionResponse]
+    limit: int
+    next_page_token: str | None = None
 
 
 class ResolveUserApprovalRequest(BaseModel):

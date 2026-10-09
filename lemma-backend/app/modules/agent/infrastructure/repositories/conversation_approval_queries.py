@@ -23,10 +23,15 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     MessageKind,
 )
+from app.modules.agent.domain.pending_interactions import (
+    PendingInteraction,
+    PendingInteractionCursor,
+)
 from app.modules.agent.infrastructure.models import (
     AgentApprovalDecisionModel,
     MessageModel,
 )
+from app.modules.agent.infrastructure.repositories import pending_interaction_queries
 
 
 class ConversationApprovalQueriesMixin:
@@ -335,6 +340,27 @@ class ConversationApprovalQueriesMixin:
             )
         )
         return [row.to_entity() for row in result.scalars()]
+
+    async def list_pending_interactions(
+        self,
+        *,
+        user_id: UUID,
+        pod_id: UUID,
+        cursor: PendingInteractionCursor | None = None,
+        limit: int = 50,
+    ) -> tuple[list[PendingInteraction], PendingInteractionCursor | None]:
+        """Every pause waiting on this person in this pod; see the module."""
+        return await pending_interaction_queries.list_pending_interactions(
+            self.session, user_id=user_id, pod_id=pod_id, cursor=cursor, limit=limit
+        )
+
+    async def conversations_with_pending_interaction(
+        self, conversation_ids: Sequence[UUID]
+    ) -> set[UUID]:
+        """Which of these conversations hold a pause waiting on a person."""
+        return await pending_interaction_queries.conversations_with_pending_interaction(
+            self.session, conversation_ids
+        )
 
     async def list_resolved_approval_ids(
         self,

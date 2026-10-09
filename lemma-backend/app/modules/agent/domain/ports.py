@@ -22,6 +22,10 @@ from app.modules.agent.domain.run_projections import (
     StrandedConversationRef,
 )
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.pending_interactions import (
+    PendingInteraction,
+    PendingInteractionCursor,
+)
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentRunApprovalDecision,
@@ -400,5 +404,18 @@ class ConversationRepository(Protocol):
         pausing_tool_names: Sequence[str],
         limit: int | None = None,
     ) -> list[Message]: ...
+
+    async def list_pending_interactions(
+        self,
+        *,
+        user_id: UUID,
+        pod_id: UUID,
+        cursor: PendingInteractionCursor | None = None,
+        limit: int = 50,
+    ) -> tuple[list[PendingInteraction], PendingInteractionCursor | None]: ...
+
+    async def conversations_with_pending_interaction(
+        self, conversation_ids: Sequence[UUID]
+    ) -> set[UUID]: ...
 
     def collect_events(self, events: Sequence[AgentDomainEvent]) -> None: ...

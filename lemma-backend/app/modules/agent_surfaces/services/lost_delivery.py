@@ -12,6 +12,8 @@ left alone: a reply there is read by everyone in it, about one person's message.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from pydantic import ValidationError
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
@@ -49,18 +51,30 @@ def inbox_will_not_retry(exc: BaseException) -> bool:
     return isinstance(exc, DomainError) and exc.status_code != 503
 
 
+#: Counts one failed try of a delivery and returns how many there have been.
+type FailureCounter = Callable[[SurfaceWebhookReceivedEvent], Awaitable[int]]
+#: Tells the sender of a delivery that it was lost.
+type SenderTeller = Callable[
+    [SurfaceWebhookReceivedEvent, UnitOfWorkFactory], Awaitable[None]
+]
+
+
 async def after_failed_delivery(
     received: SurfaceWebhookReceivedEvent,
     exc: BaseException,
     *,
     uow_factory: UnitOfWorkFactory,
+    count_failure: FailureCounter | None = None,
+    tell_sender: SenderTeller | None = None,
 ) -> None:
     """Count one failed try; on the last, tell the sender. Never raises."""
+    count_failure = count_failure or _failed_tries
+    tell_sender = tell_sender or _tell_sender
     try:
         if inbox_will_not_retry(exc) or (
-            await _failed_tries(received) >= CONSUMER_ATTEMPTS
+            await count_failure(received) >= CONSUMER_ATTEMPTS
         ):
-            await _tell_sender(received, uow_factory=uow_factory)
+            await tell_sender(received, uow_factory)
     except (RedisError, OSError, SQLAlchemyError, *PLATFORM_TRANSPORT_ERRORS):
         logger.warning(
             "agent_surfaces.lost_delivery.sender_not_told.degraded",
@@ -78,7 +92,7 @@ async def _failed_tries(received: SurfaceWebhookReceivedEvent) -> int:
 
 
 async def _tell_sender(
-    received: SurfaceWebhookReceivedEvent, *, uow_factory: UnitOfWorkFactory
+    received: SurfaceWebhookReceivedEvent, uow_factory: UnitOfWorkFactory
 ) -> None:
     platform = platform_value_for_source(received.source)
     adapters = SurfacePlatformAdapterRegistry()

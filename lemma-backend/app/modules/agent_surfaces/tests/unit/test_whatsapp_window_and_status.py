@@ -8,14 +8,18 @@ recorded as delivered.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import fakeredis
 import pytest
 
+from app.core.config import settings
+from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
@@ -30,6 +34,9 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationEntity,
     NotificationOriginKind,
 )
+from app.modules.agent_surfaces.platforms.whatsapp import (
+    sent_messages,
+)
 from app.modules.agent_surfaces.platforms.whatsapp import service as whatsapp_service
 from app.modules.agent_surfaces.platforms.whatsapp.parser import failed_deliveries
 from app.modules.agent_surfaces.services import whatsapp_delivery_status
@@ -37,8 +44,6 @@ from app.modules.agent_surfaces.services.member_reach import MemberReach
 from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
 )
-
-pytestmark = pytest.mark.asyncio
 
 
 def _statuses(*statuses: dict[str, Any]) -> dict[str, Any]:
@@ -74,9 +79,20 @@ def test_a_failed_status_is_read_and_the_others_are_not():
     assert (failure.message_id, failure.code) == ("wamid-out-1", "131047")
 
 
-async def test_a_notification_meta_reports_undelivered_is_no_longer_delivered(
-    monkeypatch,
-):
+@pytest.fixture
+def sent() -> Iterator[None]:
+    """The Redis that remembers which message carried which notification."""
+    cache = RedisJsonCache(
+        redis_url=settings.redis_url, key_prefix="test:whatsapp-sent", ttl_seconds=60
+    )
+    cache._redis = fakeredis.FakeAsyncRedis(decode_responses=True)
+    previous = sent_messages._cache
+    sent_messages._cache = cache
+    yield
+    sent_messages._cache = previous
+
+
+async def test_a_notification_meta_reports_undelivered_is_no_longer_delivered(sent):
     notification = NotificationEntity(
         pod_id=uuid4(),
         recipient_user_id=uuid4(),
@@ -92,20 +108,14 @@ async def test_a_notification_meta_reports_undelivered_is_no_longer_delivered(
         get=AsyncMock(return_value=notification),
         update=AsyncMock(side_effect=lambda entity: entity),
     )
-    monkeypatch.setattr(
-        whatsapp_delivery_status, "NotificationRepository", lambda _uow: repository
-    )
-    monkeypatch.setattr(
-        whatsapp_delivery_status,
-        "notification_sent_as",
-        AsyncMock(return_value=str(notification.id)),
-    )
+    await sent_messages.remember_sent(notification.id, _OUTSIDE_WINDOW["id"])
 
     await whatsapp_delivery_status.apply_delivery_statuses(
         SimpleNamespace(session=SimpleNamespace(info={})),  # type: ignore[arg-type]
         SurfacePlatformWebhookIngress(
             source="whatsapp", payload=_statuses(_OUTSIDE_WINDOW)
         ),
+        notifications=repository,  # type: ignore[arg-type]
     )
 
     saved = repository.update.await_args.args[0]
@@ -113,13 +123,7 @@ async def test_a_notification_meta_reports_undelivered_is_no_longer_delivered(
     assert "24 hours" in (saved.delivery_error or "")
 
 
-async def test_a_notification_send_remembers_which_message_carried_it(monkeypatch):
-    remembered: list[tuple[object, str | None]] = []
-
-    async def remember(notification_id: object, message_id: str | None) -> None:
-        remembered.append((notification_id, message_id))
-
-    monkeypatch.setattr(whatsapp_service, "remember_sent", remember)
+async def test_a_notification_send_remembers_which_message_carried_it(sent):
     service = whatsapp_service.WhatsAppPlatformService(
         {"access_token": "t", "phone_number_id": "pn-1"}
     )
@@ -134,7 +138,7 @@ async def test_a_notification_send_remembers_which_message_carried_it(monkeypatc
 
     await service.send_message(event, "Standup?", {"notification_id": "n-1"})  # type: ignore[arg-type]
 
-    assert remembered == [("n-1", "wamid-77")]
+    assert await sent_messages.notification_sent_as("wamid-77") == "n-1"
 
 
 async def test_a_proactive_send_outside_the_window_is_refused_not_dropped():

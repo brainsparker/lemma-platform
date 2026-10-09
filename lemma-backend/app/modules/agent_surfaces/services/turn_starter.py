@@ -18,6 +18,7 @@ is what those became once nothing needed them to be methods on a namespace.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -271,6 +272,24 @@ class SurfaceTurnStarter:
             # Nothing a person sent is empty: a body we failed to fetch or
             # parse. The write declined it, and silence reads as being ignored.
             await self.tell_sender(context, _COULD_NOT_READ)
+
+    async def execute_queued_chat(
+        self, context: AgentSurfaceContext, *, last_try: bool
+    ) -> None:
+        """``execute_chat`` for the worker job, which retries what raises.
+
+        On the last try a message that failed is one nobody will answer, so the
+        person is told once rather than left waiting. Not for a cancellation (a
+        BaseException): that is the worker going away, and the job is
+        redelivered rather than lost.
+        """
+        finished = False
+        try:
+            await self.execute_chat(context)
+            finished = True
+        finally:
+            if not finished and last_try and isinstance(sys.exception(), Exception):
+                await self.tell_sender(context, PROCESSING_FAILED_REPLY)
 
     async def tell_sender(self, context: AgentSurfaceContext, message: str) -> None:
         """A short reply to the person, outside any run, at most once per window.

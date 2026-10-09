@@ -14,10 +14,12 @@ These pin the narrowing that fixed it *and* the answers it must not change.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -267,22 +269,29 @@ async def test_a_stranger_is_still_routed_into_signup(
 
 
 @pytest.fixture
-def routing_rows(monkeypatch) -> list[int]:
-    """How many surfaces each routing read hydrated, in order."""
-    seen: list[int] = []
-    original = SurfaceRepository.list_active_for_routing
+def surfaces_read() -> Iterator[set[UUID]]:
+    """Every surface row hydrated while the message is handled, by id.
 
-    async def counting(self, *args, **kwargs):
-        found = await original(self, *args, **kwargs)
-        seen.append(len(found))
-        return found
+    Counted at the ORM, below any repository, so a read that went around the
+    narrowed query is counted too.
+    """
+    seen: set[UUID] = set()
 
-    monkeypatch.setattr(SurfaceRepository, "list_active_for_routing", counting)
-    return seen
+    def loaded(target: AgentSurface, _context: object) -> None:
+        seen.add(target.id)
+
+    event.listen(AgentSurface, "load", loaded)
+    yield seen
+    event.remove(AgentSurface, "load", loaded)
 
 
 async def test_a_strangers_message_does_not_read_everybody(
-    authenticated_client, db_session, test_pod, fixed_test_org, shared_bot, routing_rows
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_org,
+    shared_bot,
+    surfaces_read,
 ) -> None:
     """Somebody in no pod used to read the whole fan-in, one row per signup.
 
@@ -292,10 +301,12 @@ async def test_a_strangers_message_does_not_read_everybody(
     sessions = shared_bot
     await _provision_other_people(sessions, organization_id=UUID(fixed_test_org["id"]))
 
+    surfaces_read.clear()
+
     context = await _ingest(sessions, sender_phone="1555" + str(uuid4().int)[:7])
 
     assert context is not None, "a stranger's first message was dropped"
-    assert routing_rows and max(routing_rows) <= 2
+    assert 1 <= len(surfaces_read) <= 2, f"read {len(surfaces_read)} surfaces"
 
 
 async def test_a_group_message_reads_the_groups_own_surfaces(
@@ -304,7 +315,7 @@ async def test_a_group_message_reads_the_groups_own_surfaces(
     test_pod,
     fixed_test_org,
     shared_bot,
-    routing_rows,
+    surfaces_read,
     monkeypatch,
 ) -> None:
     """A group the pod adopted is answered by its surface, not by the crowd's."""
@@ -324,15 +335,17 @@ async def test_a_group_message_reads_the_groups_own_surfaces(
         mine = _shared_surface(UUID(test_pod["id"]), organization_id, "TELEGRAM")
         session.add(mine)
         await session.flush()
+        mine_id = mine.id
         await SurfaceGroupRepository(session).ensure(
             pod_id=UUID(test_pod["id"]),
-            surface_id=mine.id,
+            surface_id=mine_id,
             platform="TELEGRAM",
             external_channel_id=str(chat_id),
         )
         await session.commit()
 
     command = "/help@lemma_bot"
+    surfaces_read.clear()
     async with sessions() as session:
         await build_surface_ingress(SqlAlchemyUnitOfWork(session)).prepare_ingress(
             SurfacePlatformWebhookIngress(
@@ -353,4 +366,4 @@ async def test_a_group_message_reads_the_groups_own_surfaces(
             )
         )
 
-    assert routing_rows == [1]
+    assert surfaces_read == {mine_id}

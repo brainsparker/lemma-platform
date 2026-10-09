@@ -77,6 +77,17 @@ async def test_a_failed_run_says_why_and_try_again_reruns_it(
     assert await stage.saw("Here is the report.")
 
 
+class _StartRefused(SurfaceAgentRunProgressObserver):
+    """An observer whose start hit a database blip; the rest of it is real.
+
+    The runner is the subject here: it used to skip the finish -- the call that
+    sends the answer -- whenever the start had failed.
+    """
+
+    async def on_run_started(self, conversation: object, ctx: object) -> None:
+        raise OperationalError("select", {}, Exception("connection reset"))
+
+
 async def test_an_observer_that_could_not_start_still_delivers_the_answer(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -87,12 +98,6 @@ async def test_an_observer_that_could_not_start_still_delivers_the_answer(
     monkeypatch,
     platform_fake,
 ) -> None:
-    async def refuse_to_start(self, conversation, ctx) -> None:
-        raise OperationalError("select", {}, Exception("connection reset"))
-
-    monkeypatch.setattr(
-        SurfaceAgentRunProgressObserver, "on_run_started", refuse_to_start
-    )
     stage = await stage_surface(
         SurfacePlatform.TELEGRAM,
         fake=platform_fake[SurfacePlatform.TELEGRAM],
@@ -105,6 +110,10 @@ async def test_an_observer_that_could_not_start_still_delivers_the_answer(
         monkeypatch=monkeypatch,
     )
 
-    await stage.say("hello", script=[script_text("The answer, regardless.")])
+    await stage.say(
+        "hello",
+        script=[script_text("The answer, regardless.")],
+        observer_class=_StartRefused,
+    )
 
     assert await stage.saw("The answer, regardless.")

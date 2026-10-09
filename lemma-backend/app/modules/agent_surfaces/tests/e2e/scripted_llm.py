@@ -162,9 +162,15 @@ async def run_scripted_agent_run(
     agent_name: str | None,
     script: list[ScriptTurn] | None = None,
     expected_status: AgentRunStatus = AgentRunStatus.COMPLETED,
+    observer_class: type[
+        SurfaceAgentRunProgressObserver
+    ] = SurfaceAgentRunProgressObserver,
 ) -> None:
     """Drive the conversation's latest RUNNING agent run through the real
     ``PydanticAIHarness`` (mock-LLM mode).
+
+    ``observer_class`` is the seam for a test about the runner surviving an
+    observer that fails part-way: a subclass, constructed here like the real one.
 
     If ``script`` is given, it is (re-)written onto conversation metadata
     before driving the run. Pass it on the first call for a flat script that
@@ -205,7 +211,7 @@ async def run_scripted_agent_run(
         user_id=user_id,
         pod_id=pod_id,
         agent_name=agent_name,
-        observer=SurfaceAgentRunProgressObserver(
+        observer=observer_class(
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
             egress_factory=build_surface_egress,
         ),
@@ -226,6 +232,9 @@ async def process_ingress_and_run_scripted(
     *,
     script: list[ScriptTurn] | None = None,
     expected_status: AgentRunStatus = AgentRunStatus.COMPLETED,
+    observer_class: type[
+        SurfaceAgentRunProgressObserver
+    ] = SurfaceAgentRunProgressObserver,
 ) -> SurfaceContext:
     """Process one inbound surface event and drive the real harness.
 
@@ -261,6 +270,7 @@ async def process_ingress_and_run_scripted(
             agent_name=context.agent_name,
             script=script,
             expected_status=expected_status,
+            observer_class=observer_class,
         )
     return context
 

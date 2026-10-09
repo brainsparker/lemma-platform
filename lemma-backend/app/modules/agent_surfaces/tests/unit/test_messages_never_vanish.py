@@ -16,14 +16,12 @@ from uuid import uuid4
 import pytest
 
 from app.core.domain.errors import DomainError
-from app.core.request_context import bind_job_context
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
-from app.modules.agent_surfaces.events import handlers
 from app.modules.agent_surfaces.services import lost_delivery, turn_starter
 from app.modules.agent_surfaces.services.personal_dm_routes import (
     PersonalRouteUnavailable,
@@ -108,7 +106,8 @@ async def test_a_message_whose_private_route_went_away_goes_the_ordinary_way():
     assert runs == [rerouted]
 
 
-async def test_an_empty_message_is_answered_with_a_request_to_resend(monkeypatch):
+async def test_an_empty_message_is_answered_with_a_request_to_resend():
+    """The write declines an empty body; the person is told, not ignored."""
     starter = _starter()
     told: list[str] = []
 
@@ -121,40 +120,37 @@ async def test_an_empty_message_is_answered_with_a_request_to_resend(monkeypatch
         return_value=turn_starter.AttachmentIngest()
     )
     starter._name_new_thread = AsyncMock()  # type: ignore[method-assign]
-    monkeypatch.setattr(turn_starter, "write_inbound_message", AsyncMock())
 
     await starter.start_agent_chat(_context("   "))
 
     assert told == [turn_starter._COULD_NOT_READ]
 
 
-async def test_the_last_failed_try_of_a_queued_message_tells_the_sender(monkeypatch):
+@pytest.mark.parametrize(
+    ("last_try", "told_after"),
+    [(False, []), (True, [PROCESSING_FAILED_REPLY])],
+    ids=["retried-later", "last-try"],
+)
+async def test_the_last_failed_try_of_a_queued_message_tells_the_sender(
+    last_try, told_after
+):
+    starter = _starter()
     told: list[str] = []
-    starter = SimpleNamespace(
-        execute_chat=AsyncMock(side_effect=RuntimeError("database gone")),
-        tell_sender=AsyncMock(side_effect=lambda _c, message: told.append(message)),
-    )
-    monkeypatch.setattr(handlers, "build_surface_turn_starter", lambda _f: starter)
-    monkeypatch.setattr(
-        handlers,
-        "streaq_worker",
-        SimpleNamespace(context=SimpleNamespace(uow_factory=AsyncMock())),
-    )
-    payload = handlers.SurfaceProcessMessageTaskPayload(context=_context()).model_dump(
-        mode="json"
-    )
 
-    for attempt in (1, 2, 3):
-        with (
-            bind_job_context(
-                job_id="j", task_name="process_surface_message", attempt=attempt
-            ),
-            pytest.raises(RuntimeError),
-        ):
-            await handlers.process_surface_message.fn(payload)
+    async def fail(_context) -> None:
+        raise RuntimeError("database gone")
 
-    # Once, on the last try: the earlier ones are retried.
-    assert told == [PROCESSING_FAILED_REPLY]
+    async def tell(_context, message: str) -> None:
+        told.append(message)
+
+    starter.execute_chat = fail  # type: ignore[method-assign]
+    starter.tell_sender = tell  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError):
+        await starter.execute_queued_chat(_context(), last_try=last_try)
+
+    # Only on the last try: the earlier ones are retried by the job.
+    assert told == told_after
 
 
 @pytest.mark.parametrize(
@@ -166,29 +162,30 @@ async def test_the_last_failed_try_of_a_queued_message_tells_the_sender(monkeypa
     ids=["retried-then-dead-lettered", "terminal-at-once"],
 )
 async def test_a_delivery_the_inbox_gives_up_on_tells_the_sender(
-    monkeypatch, failure, tries_before_told
+    failure, tries_before_told
 ):
-    counts: dict[str, int] = {}
+    tries = 0
+    told: list[SurfaceWebhookReceivedEvent] = []
 
-    class _Redis:
-        async def incr(self, key: str) -> int:
-            counts[key] = counts.get(key, 0) + 1
-            return counts[key]
+    async def count_failure(_received) -> int:
+        nonlocal tries
+        tries += 1
+        return tries
 
-        async def expire(self, key: str, ttl: int) -> None:
-            return None
+    async def tell_sender(received, _uow_factory) -> None:
+        told.append(received)
 
-    told = AsyncMock()
-    monkeypatch.setattr(lost_delivery, "get_redis", lambda: _Redis())
-    monkeypatch.setattr(lost_delivery, "_tell_sender", told)
     received = SurfaceWebhookReceivedEvent(source="slack", payload={})
-
     for _ in range(tries_before_told):
         await lost_delivery.after_failed_delivery(
-            received, failure, uow_factory=AsyncMock()
+            received,
+            failure,
+            uow_factory=AsyncMock(),
+            count_failure=count_failure,
+            tell_sender=tell_sender,
         )
 
-    told.assert_awaited_once()
+    assert told == [received]
 
 
 async def test_a_sender_profile_the_platform_would_not_give_is_not_cached_as_nobody(

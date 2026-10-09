@@ -57,7 +57,10 @@ def failure_reason(failure: WhatsAppFailedDelivery) -> str:
 
 
 async def apply_delivery_statuses(
-    uow: SqlAlchemyUnitOfWork, request: SurfaceIngressRequest
+    uow: SqlAlchemyUnitOfWork,
+    request: SurfaceIngressRequest,
+    *,
+    notifications: NotificationRepository | None = None,
 ) -> None:
     """Mark the notifications a ``statuses`` webhook says failed."""
     if request.payload.get("object") != "whatsapp_business_account":
@@ -65,7 +68,7 @@ async def apply_delivery_statuses(
     failures = failed_deliveries(request.payload)
     if not failures:
         return
-    notifications = NotificationRepository(uow)
+    notifications = notifications or NotificationRepository(uow)
     for failure in failures:
         try:
             async with connection_released(uow.session):  # Redis, not the DB

@@ -9,16 +9,20 @@ a reply that did not carry them.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+import fakeredis
 import httpx
 import pytest
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
+from app.core.config import settings
+from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -48,12 +52,14 @@ from app.modules.agent_surfaces.platforms.telegram.message_experience import (
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     classify_whatsapp_error,
 )
-from app.modules.agent_surfaces.services import egress_service, owed_reply
-from app.modules.agent_surfaces.services import progress_reply
+from app.modules.agent_surfaces.services import (
+    egress_service,
+    owed_reply,
+    pending_envelope,
+    progress_reply,
+)
 from app.modules.agent_surfaces.services.owed_reply import OwedReply
 from app.modules.agent_surfaces.services.pending_envelope import RunFiles
-
-pytestmark = pytest.mark.asyncio
 
 
 class _RateLimited(Exception):
@@ -138,31 +144,6 @@ async def _platform_refusing(retry_after: float, *, partial: bool = False) -> bo
     return True
 
 
-class _Claims:
-    """The Redis claim store, in memory."""
-
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-
-    async def get_raw(self, key: str) -> str | None:
-        return self.values.get(key)
-
-    async def set_raw_if_absent(self, key: str, value: str, **_: object) -> bool:
-        if key in self.values:
-            return False
-        self.values[key] = value
-        return True
-
-    async def set_raw(self, key: str, value: str, **_: object) -> None:
-        self.values[key] = value
-
-    async def delete_if_value(self, key: str, expected: str) -> bool:
-        if self.values.get(key) == expected:
-            del self.values[key]
-            return True
-        return False
-
-
 class _Queue:
     def __init__(self) -> None:
         self.jobs: list[dict[str, Any]] = []
@@ -189,27 +170,41 @@ def _egress_factory(send):
     return lambda _uow: SimpleNamespace(send_agent_message_for_conversation=send)
 
 
+class _Redis(fakeredis.FakeAsyncRedis):
+    """fakeredis without Lua: the one script the claims run, compare-and-delete."""
+
+    async def eval(self, _script: str, _numkeys: int, key: str, expected: str) -> int:  # type: ignore[override]
+        if await self.get(key) != expected:
+            return 0
+        return await self.delete(key)
+
+
+def _fake_store(prefix: str) -> RedisJsonCache:
+    cache = RedisJsonCache(
+        redis_url=settings.redis_url, key_prefix=prefix, ttl_seconds=60
+    )
+    cache._redis = _Redis(decode_responses=True)
+    return cache
+
+
 @pytest.fixture
-def claims(monkeypatch) -> _Claims:
-    store = _Claims()
-    monkeypatch.setattr(owed_reply, "_claims", lambda: store)
-
-    async def nothing_held(*_: object) -> None:
-        return None
-
-    monkeypatch.setattr(owed_reply, "discard_display_paths", nothing_held)
-    return store
+def claims() -> Iterator[RedisJsonCache]:
+    """The Redis the owed reply and the held files live in, in memory."""
+    store = _fake_store("test:owed-reply")
+    previous = (owed_reply._claims_cache, pending_envelope._cache)
+    owed_reply._claims_cache = store
+    pending_envelope._cache = _fake_store("test:held-files")
+    yield store
+    owed_reply._claims_cache, pending_envelope._cache = previous
 
 
 async def test_an_answer_the_platform_deferred_is_owed_not_lost(monkeypatch):
     """The observer's one send gave up on a long rate limit: a job is scheduled."""
-    scheduled: list[tuple[OwedReply, float | None]] = []
-
-    async def owe(owed: OwedReply, *, retry_after: float | None) -> bool:
-        scheduled.append((owed, retry_after))
-        return True
-
-    monkeypatch.setattr(progress_reply, "owe_reply", owe)
+    queue = _Queue()
+    monkeypatch.setattr(
+        "app.core.infrastructure.jobs.streaq_job_queue.get_streaq_job_queue",
+        lambda: queue,
+    )
 
     async def rate_limited_send(**_: object) -> bool:
         return await _platform_refusing(300)
@@ -227,10 +222,13 @@ async def test_an_answer_the_platform_deferred_is_owed_not_lost(monkeypatch):
     )
     conversation = SimpleNamespace(id=uuid4())
 
+    before = datetime.now(UTC)
     await progress_reply.deliver_final_answer(state, conversation)  # type: ignore[arg-type]
 
-    [(owed, retry_after)] = scheduled
-    assert (owed.message, owed.agent_run_id, retry_after) == ("the answer", run_id, 300)
+    [job] = queue.jobs
+    owed = OwedReply.model_validate(job["payload"])
+    assert (owed.message, owed.agent_run_id) == ("the answer", run_id)
+    assert (job["_defer_until"] - before).total_seconds() >= 300
     assert state._final_send_failed is True
 
 
@@ -270,7 +268,7 @@ async def test_an_owed_reply_still_refused_waits_as_long_as_asked(claims):
     assert job["payload"]["attempt"] == 1
     assert (job["_defer_until"] - before).total_seconds() >= 900
     # The claim is given back, so the next attempt can take it.
-    assert claims.values == {}
+    assert await claims.get_raw(owed.key) is None
 
 
 async def test_an_owed_reply_that_partly_arrived_is_not_sent_again(claims):
@@ -435,19 +433,17 @@ async def test_a_failed_overflow_part_does_not_resend_the_whole_answer(monkeypat
     ids=["files-arrived", "files-lost"],
 )
 async def test_held_files_stay_held_when_their_part_did_not_arrive(
-    monkeypatch, files, released
+    claims, files, released
 ):
-    releases: list[list[str]] = []
-
-    async def release(**kwargs: Any) -> None:
-        releases.append(kwargs["paths"])
-
     async def receipt(*_: Any, **__: Any) -> DeliveryReceipt:
         return DeliveryReceipt(parts={"text": PartDelivery.NATIVE, "files": files})
 
-    monkeypatch.setattr(egress_service, "release_held_files", release)
+    conversation_id, run = uuid4(), RunFiles(uuid4())
+    assert await pending_envelope.remember_display_path(
+        conversation_id, run, "/me/report.pdf"
+    )
     egress = egress_service.SurfaceEgress(
-        uow=SimpleNamespace(),  # type: ignore[arg-type]
+        uow=SimpleNamespace(session=SimpleNamespace(info={})),  # type: ignore[arg-type]
         delivery=SimpleNamespace(deliver_envelope_receipt=receipt),  # type: ignore[arg-type]
         progress=SimpleNamespace(),  # type: ignore[arg-type]
     )
@@ -456,10 +452,11 @@ async def test_held_files_stay_held_when_their_part_did_not_arrive(
         SimpleNamespace(),  # type: ignore[arg-type]
         envelope=SurfaceEnvelope(text="hi"),
         metadata={},
-        conversation_id=uuid4(),
-        run=RunFiles(uuid4()),
+        conversation_id=conversation_id,
+        run=run,
         held=["/me/report.pdf"],
     )
 
     assert delivered is True
-    assert releases == ([["/me/report.pdf"]] if released else [])
+    still_held = await pending_envelope.held_display_paths(conversation_id, run)
+    assert still_held == ([] if released else ["/me/report.pdf"])

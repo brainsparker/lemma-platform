@@ -19,7 +19,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     ConversationType,
 )
-from app.modules.agent_surfaces.services import channel_exposure, egress_service
+from app.modules.agent_surfaces.services.channel_exposure import outsiders_would_see
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     _delivering_adapter,
     _slack_event,
@@ -30,8 +30,15 @@ from app.modules.agent_surfaces.tests.unit.surface_doubles import (
 
 pytestmark = pytest.mark.asyncio
 
+#: The group's row, read by the repository the check uses; doubled at its
+#: source, since the store is a collaborator of the unit and not part of it.
+_GROUP_LOOKUP = (
+    "app.modules.agent_surfaces.infrastructure.repositories.group_repository."
+    "SurfaceGroupRepository.get"
+)
 
-def _channel_egress(monkeypatch, *, shared: bool, group: object | None = None):
+
+def _channel(*, shared: bool):
     surface = _slack_surface()
     conversation_id = uuid4()
     event = _slack_event().model_copy(
@@ -52,17 +59,7 @@ def _channel_egress(monkeypatch, *, shared: bool, group: object | None = None):
         conversation_kind="CHANNEL",
         last_event=event.model_dump(mode="json"),
     )
-    adapter = _delivering_adapter()
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
-    monkeypatch.setattr(
-        channel_exposure,
-        "SurfaceGroupRepository",
-        lambda _session: SimpleNamespace(get=AsyncMock(return_value=group)),
-    )
-    return egress, adapter, conversation_id
+    return surface, conversation_id, event, link
 
 
 @pytest.mark.parametrize(
@@ -74,49 +71,60 @@ def _channel_egress(monkeypatch, *, shared: bool, group: object | None = None):
     ids=["table", "file"],
 )
 async def test_a_shared_channel_gets_a_link_not_the_contents(monkeypatch, request_):
-    egress, adapter, conversation_id = _channel_egress(monkeypatch, shared=True)
-    rows = AsyncMock()
-    file_bytes = AsyncMock()
-    monkeypatch.setattr(egress_service, "resolve_table_preview", rows)
-    monkeypatch.setattr(egress_service, "resolve_pod_file_parts", file_bytes)
+    """Reaching the rows or the file's bytes would need the pod's storage, which
+    these doubles do not have: arriving at all is what the test would catch."""
+    monkeypatch.setattr(_GROUP_LOOKUP, AsyncMock(return_value=None))
+    surface, conversation_id, _event, link = _channel(shared=True)
+    adapter = _delivering_adapter()
+    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
+    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
+        link
+    )
 
     sent = await egress.send_display_resource_for_conversation(
         conversation_id=conversation_id, request=request_, tool_call_id="t-1"
     )
 
     assert sent is True
-    rows.assert_not_awaited()
-    file_bytes.assert_not_awaited()
+    adapter._render_file.assert_not_awaited()
     adapter._render_resource.assert_awaited_once()
     note = adapter.send_message.await_args.kwargs["message"]
     assert "outside the pod" in note
 
 
-async def test_a_group_opened_to_outsiders_is_treated_the_same(monkeypatch):
-    group = SimpleNamespace(shared_externally=False, welcomes_outsiders=True)
-    egress, _adapter, conversation_id = _channel_egress(
-        monkeypatch, shared=False, group=group
-    )
-    rows = AsyncMock()
-    monkeypatch.setattr(egress_service, "resolve_table_preview", rows)
+@pytest.mark.parametrize(
+    ("group", "outsiders"),
+    [
+        (SimpleNamespace(shared_externally=False, welcomes_outsiders=True), True),
+        (SimpleNamespace(shared_externally=True, welcomes_outsiders=False), True),
+        (SimpleNamespace(shared_externally=False, welcomes_outsiders=False), False),
+        (None, False),
+    ],
+    ids=["opened-to-outsiders", "shared-outside", "members-only", "no-record"],
+)
+async def test_what_the_pod_knows_about_the_group_decides(
+    monkeypatch, group, outsiders
+):
+    monkeypatch.setattr(_GROUP_LOOKUP, AsyncMock(return_value=group))
+    surface, _conversation_id, event, link = _channel(shared=False)
+    target = SimpleNamespace(surface=surface, link=link, event=event)
 
-    await egress.send_display_resource_for_conversation(
-        conversation_id=conversation_id,
-        request=DisplayResourceRequest(type=DisplayResourceType.TABLE, name="deals"),
-    )
-
-    rows.assert_not_awaited()
-
-
-async def test_a_channel_of_members_still_gets_the_rows(monkeypatch):
-    egress, _adapter, conversation_id = _channel_egress(monkeypatch, shared=False)
-    rows = AsyncMock(return_value=None)
-    monkeypatch.setattr(egress_service, "resolve_table_preview", rows)
-    monkeypatch.setattr(egress_service, "apply_table_rows", lambda plan, _rows: plan)
-
-    await egress.send_display_resource_for_conversation(
-        conversation_id=conversation_id,
-        request=DisplayResourceRequest(type=DisplayResourceType.TABLE, name="deals"),
+    seen = await outsiders_would_see(
+        SimpleNamespace(session=SimpleNamespace()),  # type: ignore[arg-type]
+        target,  # type: ignore[arg-type]
+        DisplayResourceRequest(type=DisplayResourceType.TABLE, name="deals"),
     )
 
-    rows.assert_awaited_once()
+    assert seen is outsiders
+
+
+async def test_a_card_is_not_member_data():
+    """Only what is read with the member's authority is held back."""
+    surface, _conversation_id, event, link = _channel(shared=True)
+    target = SimpleNamespace(surface=surface, link=link, event=event)
+
+    assert not await outsiders_would_see(
+        SimpleNamespace(session=SimpleNamespace()),  # type: ignore[arg-type]
+        target,  # type: ignore[arg-type]
+        DisplayResourceRequest(type=DisplayResourceType.APP, name="crm"),
+    )

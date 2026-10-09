@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
+from app.core.infrastructure.db.session_uow import SESSION_UOW_KEY
+from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceEntity,
+    AgentSurfaceStatus,
+    SurfaceConfig,
+    SurfacePlatform,
+)
 from app.modules.agent_surfaces.domain.errors import AgentSurfacePlatformError
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TelegramApiError,
@@ -84,19 +93,68 @@ async def test_register_webhook_raises_with_telegram_description(monkeypatch):
     assert "HTTPS url must be provided" in str(exc_info.value)
 
 
-async def test_an_unconfirmed_webhook_is_reported_not_refused(monkeypatch, caplog):
+class _Telegram:
+    """The Bot API, as far as registering a webhook goes."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        #: Bot API methods and the registration's commits, as they happened.
+        self.order: list[str] = []
+        self.reported_url = WEBHOOK_URL
+        self.refuses_set = False
+
+    async def answer(
+        self, method: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        self.calls.append((method, dict(payload)))
+        self.order.append(method)
+        if method == "setWebhook" and self.refuses_set:
+            raise TelegramApiError(
+                method=method, status_code=400, description="bad webhook"
+            )
+        if method == "getWebhookInfo":
+            return {"ok": True, "result": {"url": self.reported_url}}
+        return {"ok": True, "result": True}
+
+
+@pytest.fixture
+def telegram(monkeypatch) -> _Telegram:
+    bot = _Telegram()
+
+    async def call(_self, method, payload, client=None):
+        return await bot.answer(method, payload)
+
+    monkeypatch.setattr(TelegramClient, "call", call)
+    return bot
+
+
+class _Uow:
+    """Records the commits the registration makes, in order with the calls."""
+
+    def __init__(self, order: list[str]) -> None:
+        self._order = order
+
+    async def commit(self) -> None:
+        self._order.append("commit")
+
+
+def _committing_service(order: list[str]) -> AgentSurfaceService:
+    repository = AsyncMock()
+    repository.session = SimpleNamespace(info={SESSION_UOW_KEY: _Uow(order)})
+    service = AgentSurfaceService(
+        surface_repository=repository, account_binding_resolver=AsyncMock()
+    )
+    service._build_public_surface_webhook_url = lambda _id: WEBHOOK_URL
+    return service
+
+
+async def test_an_unconfirmed_webhook_is_reported_not_refused(telegram, caplog):
     """``setWebhook`` was accepted, so Telegram is posting with this secret.
 
     Raising here rolled the surface back, and Telegram went on posting to a
     surface that no longer existed. The row now stays, and the mismatch is said.
     """
-
-    async def fake_call(self, method, payload, client=None):
-        if method == "getWebhookInfo":
-            return {"ok": True, "result": {"url": "https://stale.example/webhook"}}
-        return {"ok": True, "result": True}
-
-    monkeypatch.setattr(TelegramClient, "call", fake_call)
+    telegram.reported_url = "https://stale.example/webhook"
 
     await _service()._register_telegram_webhook(
         credentials={"bot_token": "T"},
@@ -107,14 +165,7 @@ async def test_an_unconfirmed_webhook_is_reported_not_refused(monkeypatch, caplo
     assert "telegram_webhook_mismatch" in caplog.text
 
 
-def _surface_with_secret():
-    from app.modules.agent_surfaces.domain.entities import (
-        AgentSurfaceEntity,
-        SurfaceConfig,
-        SurfacePlatform,
-    )
-    from uuid import uuid4
-
+def _surface_with_secret() -> AgentSurfaceEntity:
     surface = AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
@@ -128,24 +179,8 @@ def _surface_with_secret():
     return surface
 
 
-async def test_the_row_is_committed_before_telegram_is_called(monkeypatch):
-    from app.modules.agent_surfaces.services import surface_telegram_webhook
-
-    order: list[str] = []
-
-    async def commit(_source) -> None:
-        order.append("commit")
-
-    async def fake_call(self, method, payload, client=None):
-        order.append(method)
-        if method == "getWebhookInfo":
-            return {"ok": True, "result": {"url": WEBHOOK_URL}}
-        return {"ok": True, "result": True}
-
-    monkeypatch.setattr(surface_telegram_webhook, "commit_now", commit)
-    monkeypatch.setattr(TelegramClient, "call", fake_call)
-    service = _service()
-    service._build_public_surface_webhook_url = lambda _id: WEBHOOK_URL
+async def test_the_row_is_committed_before_telegram_is_called(telegram):
+    service = _committing_service(telegram.order)
 
     await service._register_committed_telegram_webhook(
         _surface_with_secret(),
@@ -153,28 +188,14 @@ async def test_the_row_is_committed_before_telegram_is_called(monkeypatch):
         drop_pending_updates=False,
     )
 
-    assert order[0] == "commit"
-    assert order.index("commit") < order.index("setWebhook")
+    # The commit comes first: Telegram posts to the secret as soon as it is set.
+    assert telegram.order[0] == "commit"
+    assert telegram.order.index("commit") < telegram.order.index("setWebhook")
 
 
-async def test_a_refused_registration_is_recorded_on_the_committed_row(monkeypatch):
-    from app.modules.agent_surfaces.domain.entities import AgentSurfaceStatus
-    from app.modules.agent_surfaces.services import surface_telegram_webhook
-
-    async def commit(_source) -> None:
-        return None
-
-    async def fake_call(self, method, payload, client=None):
-        if method == "setWebhook":
-            raise TelegramApiError(
-                method=method, status_code=400, description="bad webhook"
-            )
-        return {"ok": True, "result": True}
-
-    monkeypatch.setattr(surface_telegram_webhook, "commit_now", commit)
-    monkeypatch.setattr(TelegramClient, "call", fake_call)
-    service = _service()
-    service._build_public_surface_webhook_url = lambda _id: WEBHOOK_URL
+async def test_a_refused_registration_is_recorded_on_the_committed_row(telegram):
+    telegram.refuses_set = True
+    service = _committing_service(telegram.order)
     surface = _surface_with_secret()
 
     with pytest.raises(AgentSurfacePlatformError):
@@ -185,19 +206,11 @@ async def test_a_refused_registration_is_recorded_on_the_committed_row(monkeypat
     saved = service.surface_repository.update.await_args.args[0]
     assert saved.status is AgentSurfaceStatus.ERROR
     assert saved.webhook_secret == "the-secret"
+    # Once before the call, and again so the ERROR is not rolled back with it.
+    assert telegram.order[0] == telegram.order[-1] == "commit"
 
 
-async def test_re_registering_keeps_the_messages_telegram_is_holding(monkeypatch):
-    calls: list[tuple[str, dict]] = []
-
-    async def fake_call(self, method, payload, client=None):
-        calls.append((method, dict(payload)))
-        if method == "getWebhookInfo":
-            return {"ok": True, "result": {"url": WEBHOOK_URL}}
-        return {"ok": True, "result": True}
-
-    monkeypatch.setattr(TelegramClient, "call", fake_call)
-
+async def test_re_registering_keeps_the_messages_telegram_is_holding(telegram):
     await _service()._register_telegram_webhook(
         credentials={"bot_token": "T"},
         webhook_url=WEBHOOK_URL,
@@ -207,6 +220,6 @@ async def test_re_registering_keeps_the_messages_telegram_is_holding(monkeypatch
 
     assert all(
         payload["drop_pending_updates"] is False
-        for method, payload in calls
+        for method, payload in telegram.calls
         if method in {"deleteWebhook", "setWebhook"}
     )

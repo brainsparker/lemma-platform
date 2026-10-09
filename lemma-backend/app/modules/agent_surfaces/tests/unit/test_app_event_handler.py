@@ -170,8 +170,7 @@ async def test_the_channel_setup_modal_opens_with_the_connection_handed_back(
 
     adapter.open_channel_setup_modal = _open_modal
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.app_event_handler."
-        "agent_conversations.surface_agent_identity",
+        "app.modules.agent.contracts.conversations_for_surfaces.surface_agent_identity",
         AsyncMock(return_value=None),
     )
 

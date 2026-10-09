@@ -43,7 +43,6 @@ from app.modules.agent_surfaces.services.progress_plan import (
 )
 from app.modules.usage.contracts import UsageLimitExceededError
 
-pytestmark = pytest.mark.asyncio
 
 _NATIVE_RETRY = ["SLACK", "TEAMS", "WHATSAPP", "TELEGRAM"]
 
@@ -283,8 +282,11 @@ async def test_a_typed_retry_reruns_the_failed_request(
     monkeypatch, text, outsider, retried
 ):
     rerun = AsyncMock()
+    # Doubled where `agent` publishes it: the other module's contract, not a
+    # part of the unit under test.
     monkeypatch.setattr(
-        telegram_command_service.agent_conversations, "retry_failed_run", rerun
+        "app.modules.agent.contracts.conversations_for_surfaces.retry_failed_run",
+        rerun,
     )
     adapter = AsyncMock()
 

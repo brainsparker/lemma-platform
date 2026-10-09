@@ -32,7 +32,7 @@ logger = get_logger(__name__)
 
 
 async def _deliver(
-    notify: Callable[[], Awaitable[None]], on_failure: Callable[[], None]
+    notify: Callable[[], Awaitable[None]], on_failure: Callable[[Exception], None]
 ) -> bool:
     """Await one observer callback. True when it landed.
 
@@ -40,13 +40,12 @@ async def _deliver(
     because the logging contract is checked statically and requires the event
     to be a literal at the `logger` call — a name threaded through a parameter
     is invisible to it, and an event nothing can see is an event nobody will
-    find when it fires. It runs inside the `except`, so `exc_info=True` there
-    carries the observer's exception.
+    find when it fires. It is handed the exception so the traceback is logged.
     """
     try:
         await notify()
-    except Exception:
-        on_failure()
+    except Exception as exc:
+        on_failure(exc)
         return False
     return True
 
@@ -62,10 +61,10 @@ async def notify_run_started(
         return False
     return await _deliver(
         lambda: observer.on_run_started(conversation, ctx),
-        lambda: logger.warning(
+        lambda exc: logger.warning(
             "agent.run_observer.start_delivery.degraded",
             agent_run_id=agent_run_id,
-            exc_info=True,
+            exc_info=exc,
         ),
     )
 
@@ -81,10 +80,10 @@ async def notify_event(
         return
     await _deliver(
         lambda: observer.on_event(event, conversation, ctx),
-        lambda: logger.warning(
+        lambda exc: logger.warning(
             "agent.run_observer.event_delivery.degraded",
             agent_run_id=agent_run_id,
-            exc_info=True,
+            exc_info=exc,
         ),
     )
 
@@ -99,10 +98,10 @@ async def notify_run_finished(
         return
     await _deliver(
         lambda: observer.on_run_finished(conversation, ctx),
-        lambda: logger.warning(
+        lambda exc: logger.warning(
             "agent.run_observer.finish_delivery.degraded",
             agent_run_id=agent_run_id,
-            exc_info=True,
+            exc_info=exc,
         ),
     )
 
@@ -120,9 +119,9 @@ async def notify_run_failed(
         return
     await _deliver(
         lambda: observer.on_run_failed(conversation, error),
-        lambda: logger.warning(
+        lambda exc: logger.warning(
             "agent.run_observer.failure_delivery.degraded",
             agent_run_id=agent_run_id,
-            exc_info=True,
+            exc_info=exc,
         ),
     )

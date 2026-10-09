@@ -622,7 +622,7 @@ async def test_runtime_resolves_org_agent_host_profile():
 
     assert resolved.harness_kind is HarnessKind.HARNESS
     assert resolved.model_name_for_harness == "grok-4"
-    assert resolved.public_snapshot()["harness_id"] == str(profile.harness_id)
+    assert resolved.runtime_snapshot().harness_id == str(profile.harness_id)
 
 
 @pytest.mark.asyncio
@@ -640,7 +640,7 @@ async def test_runtime_resolves_agent_host_profile_that_pins_no_model():
     )
 
     assert resolved.model is None
-    assert resolved.public_snapshot()["model_name"] is None
+    assert resolved.runtime_snapshot().model_name is None
 
 
 @pytest.mark.asyncio
@@ -668,7 +668,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
     )
     options = HarnessOptions(
         model_name=resolved.model_name_for_harness,
-        extra={"runtime_profile": resolved.public_snapshot()},
+        extra={"runtime_profile": resolved.runtime_snapshot().as_payload()},
     )
 
     run_config = agent_host_run_config(options)
@@ -689,7 +689,9 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
         agent_host_run_config(
             HarnessOptions(
                 model_name=resolved_unpinned.model_name_for_harness,
-                extra={"runtime_profile": resolved_unpinned.public_snapshot()},
+                extra={
+                    "runtime_profile": resolved_unpinned.runtime_snapshot().as_payload()
+                },
             )
         ).model_name
         is None

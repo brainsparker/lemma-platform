@@ -154,7 +154,7 @@ async def _resolve_vision_model(
                 "Settings \u2192 Models."
             )
         workspace_model = pydantic_ai_model_from_runtime_profile(
-            runtime_profile=workspace.public_snapshot(),
+            runtime_profile=workspace.runtime_snapshot().as_payload(),
             runtime_credentials=workspace.credentials,
         )
         if workspace_model is None:
@@ -186,7 +186,7 @@ async def _resolve_vision_model(
             "that does."
         )
     model = pydantic_ai_model_from_runtime_profile(
-        runtime_profile=resolved.public_snapshot(),
+        runtime_profile=resolved.runtime_snapshot().as_payload(),
         runtime_credentials=resolved.credentials,
     )
     if model is None:

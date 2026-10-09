@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.log.log import get_logger
 from app.modules.agent.domain.runtime_profiles import (
@@ -17,7 +17,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
 )
-from app.modules.agent.domain.value_objects import HarnessKind
+from app.modules.agent.domain.value_objects import HarnessKind, JsonObject
 
 logger = get_logger(__name__)
 
@@ -28,7 +28,9 @@ class ResolvedAgentRuntime:
     harness_kind: HarnessKind
     model: RuntimeModelCatalogEntry | None
     provider_model_name: str | None
-    credentials: dict[str, object] | None
+    # Revealed plaintext, for the harness alone; kept out of the repr so a
+    # logged or raised ResolvedAgentRuntime does not print the key.
+    credentials: dict[str, object] | None = field(repr=False)
     # What the runtime can do when no catalog entry is selected. A harness
     # profile routinely pins no model -- the harness picks its own -- and
     # capabilities must survive that, because "nothing selected" says nothing
@@ -53,19 +55,19 @@ class ResolvedAgentRuntime:
             return "default"
         return self.provider_model_name or self.model.name
 
-    def public_snapshot(self) -> dict[str, object | None]:
-        return {
-            "profile_id": self.profile.id,
-            "profile_name": self.profile.name,
-            "user_id": str(self.profile.user_id) if self.profile.user_id else None,
-            "harness_id": str(self.profile.harness_id)
+    def runtime_snapshot(self) -> RuntimeSnapshot:
+        return RuntimeSnapshot(
+            profile_id=self.profile.id,
+            profile_name=self.profile.name,
+            user_id=str(self.profile.user_id) if self.profile.user_id else None,
+            harness_id=str(self.profile.harness_id)
             if self.profile.harness_id
             else None,
-            "scope": self.profile.scope.value,
-            "protocol": self.profile.protocol.value,
-            "model_name": self.model.name if self.model else None,
-            "provider_model_name": self.provider_model_name,
-            "model_metadata": dict(self.model.metadata) if self.model else {},
+            scope=self.profile.scope.value,
+            protocol=self.profile.protocol.value,
+            model_name=self.model.name if self.model else None,
+            provider_model_name=self.provider_model_name,
+            model_metadata=dict(self.model.metadata) if self.model else {},
             # Carried so paths that rebuild a context from the snapshot — the
             # MCP bridges, notably — can work out whether this model reads
             # images, instead of assuming it cannot and delegating needlessly.
@@ -75,11 +77,37 @@ class ResolvedAgentRuntime:
             # Host run -- those pin no model -- so `pod_view_document_pages`
             # refused and `view_image` was withheld from hosts that read images
             # natively.
-            "model_capabilities": [
-                capability.value for capability in self.capabilities
-            ],
-            "config": _config_dict(self.profile.config),
-        }
+            model_capabilities=[capability.value for capability in self.capabilities],
+            config=_config_dict(self.profile.config),
+        )
+
+
+class RuntimeSnapshot(BaseModel):
+    """What a run needs to rebuild its model client, unredacted. Internal.
+
+    It carries the provider's full config, custom headers included, so it is
+    never returned from an API or logged; the listing's projection is
+    ``AgentRuntimeProfile.public_dict``. Named for what it is: it used to be
+    ``public_snapshot``, an invitation to do exactly that.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    profile_id: str
+    profile_name: str
+    user_id: str | None = None
+    harness_id: str | None = None
+    scope: str
+    protocol: str
+    model_name: str | None = None
+    provider_model_name: str | None = None
+    model_metadata: JsonObject = Field(default_factory=dict)
+    model_capabilities: list[str] = Field(default_factory=list)
+    config: JsonObject = Field(default_factory=dict, repr=False)
+
+    def as_payload(self) -> dict[str, object | None]:
+        """The dict form the harness options and usage metering still take."""
+        return self.model_dump(mode="json")
 
 
 def selected_model(

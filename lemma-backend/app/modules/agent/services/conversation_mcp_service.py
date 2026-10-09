@@ -363,7 +363,7 @@ class ConversationMCPService:
         reads images natively was told to delegate to a VISION_MODEL, and when
         none was configured, that PDF pages could not be viewed at all.
 
-        Resolving is what produces capabilities, and `public_snapshot()` carries
+        Resolving is what produces capabilities, and `runtime_snapshot()` carries
         them precisely so the MCP bridges can rebuild a context. It costs one
         indexed lookup inside a unit of work this method already holds open, and
         no network call -- the model catalog lives on the profile.
@@ -400,7 +400,7 @@ class ConversationMCPService:
                 exc_info=True,
             )
             return stored
-        return resolved.public_snapshot()
+        return resolved.runtime_snapshot().as_payload()
 
 
 async def _native_commands(conversation: Conversation, run: AgentRun | None) -> bool:

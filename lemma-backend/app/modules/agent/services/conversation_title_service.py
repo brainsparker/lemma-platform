@@ -203,7 +203,7 @@ class ConversationTitleGenerator:
         resolved = await self._resolve_runtime(
             organization_id=organization_id, user_id=user_id, pod_id=pod_id
         )
-        runtime_profile = resolved.public_snapshot()
+        runtime_profile = resolved.runtime_snapshot().as_payload()
         model = (
             self._model_for_profile or require_pydantic_ai_model_from_runtime_profile
         )(

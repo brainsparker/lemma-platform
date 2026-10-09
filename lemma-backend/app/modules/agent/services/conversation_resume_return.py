@@ -412,7 +412,7 @@ class ResumeToolReturnBuilder:
             workload_id=agent.id,
             is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
             configured_accounts=configured_accounts,
-            runtime_profile=resolved.public_snapshot(),
+            runtime_profile=resolved.runtime_snapshot().as_payload(),
             runtime_credentials=resolved.credentials or {},
             workspace_id=workspace_location.workspace_id,
             workspace_cwd=workspace_location.cwd,

@@ -74,7 +74,7 @@ async def build_run_context(
 
     `runtime_profile_snapshot` and `runtime_credentials` are passed in rather
     than recomputed: the caller needs the same snapshot for the run identity and
-    the harness options, and two calls to `public_snapshot()` would be two
+    the harness options, and two calls to `runtime_snapshot()` would be two
     objects that only happen to agree.
     """
     surface_context = surface_context_from_conversation(conversation)

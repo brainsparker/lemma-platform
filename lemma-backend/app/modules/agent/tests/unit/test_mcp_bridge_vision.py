@@ -18,6 +18,8 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+
+from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.agent.domain.vision import (
@@ -47,11 +49,14 @@ async def test_the_bridge_resolves_the_runtime_so_capabilities_are_present(monke
     from app.modules.agent.services import conversation_mcp_service as bridge
 
     resolved = SimpleNamespace(
-        public_snapshot=lambda: {
-            "profile_id": "p",
-            "model_name": "claude-opus-5",
-            "model_capabilities": ["TEXT", "TOOLS", "VISION"],
-        }
+        runtime_snapshot=lambda: RuntimeSnapshot(
+            profile_id="p",
+            profile_name="p",
+            scope="ORGANIZATION",
+            protocol="ANTHROPIC_COMPATIBLE",
+            model_name="claude-opus-5",
+            model_capabilities=["TEXT", "TOOLS", "VISION"],
+        )
     )
 
     class _Service:
@@ -365,7 +370,7 @@ def test_an_empty_catalog_falls_back_to_the_harness_itself():
 def test_the_snapshot_the_bridge_reads_carries_those_capabilities():
     """The whole point: this dict is what `vision_mode_from_runtime_profile` sees.
 
-    Deriving the capabilities is worthless if `public_snapshot` still reports
+    Deriving the capabilities is worthless if `runtime_snapshot` still reports
     `[]` whenever no model is selected, which is what it did.
     """
     from app.modules.agent.domain.runtime_profiles import (
@@ -399,7 +404,7 @@ def test_the_snapshot_the_bridge_reads_carries_those_capabilities():
         ],
     )
 
-    snapshot = resolved.public_snapshot()
+    snapshot = resolved.runtime_snapshot().as_payload()
 
     assert "VISION" in snapshot["model_capabilities"]
     assert vision_mode_from_runtime_profile(snapshot) is AgentVisionMode.DIRECT

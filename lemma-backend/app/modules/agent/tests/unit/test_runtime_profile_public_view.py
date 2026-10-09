@@ -23,9 +23,35 @@ from app.modules.agent.domain.runtime_profiles import (
     public_url,
 )
 from app.modules.agent.domain.sentinels import UNSET
+from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.services.runtime_provider_patch import resolve_provider_patch
+from app.modules.agent.services.runtime_resolution import ResolvedAgentRuntime
 
 pytestmark = pytest.mark.unit
+
+
+def test_the_internal_runtime_snapshot_keeps_secrets_out_of_its_repr() -> None:
+    """The unredacted snapshot is typed and internal; printing it, or the
+    resolved runtime it came from, must not print a header or the key."""
+    profile = _profile(
+        OpenAICompatibleRuntimeConfig(
+            base_url="https://api.example.com/v1",
+            headers={"X-Gateway": "SECRET::header"},
+        )
+    )
+    resolved = ResolvedAgentRuntime(
+        profile=profile,
+        harness_kind=HarnessKind.LEMMA,
+        model=profile.model_catalog[0],
+        provider_model_name="model-a",
+        credentials={"api_key": "SECRET::key"},
+    )
+
+    snapshot = resolved.runtime_snapshot()
+
+    assert snapshot.config["headers"] == {"X-Gateway": "SECRET::header"}
+    assert "SECRET::" not in repr(snapshot)
+    assert "SECRET::" not in repr(resolved)
 
 
 def _profile(config: OpenAICompatibleRuntimeConfig | AzureOpenAIRuntimeConfig):

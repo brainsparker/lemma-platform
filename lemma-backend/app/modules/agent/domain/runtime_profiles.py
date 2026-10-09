@@ -211,7 +211,9 @@ class AgentRuntimeProfile(BaseModel):
     description: str | None = None
     default_model_name: str | None = None
     model_catalog: list[RuntimeModelCatalogEntry] = Field(default_factory=list)
-    config: RuntimeProfileConfig = Field(default_factory=dict)
+    # Out of the repr: custom headers live here, unmasked, and a profile is
+    # exactly the kind of object that ends up in a log line or a traceback.
+    config: RuntimeProfileConfig = Field(default_factory=dict, repr=False)
     credentials: RuntimeCredentials | None = None
     status: RuntimeProfileStatus = RuntimeProfileStatus.ACTIVE
     metadata: JsonObject = Field(default_factory=dict)

@@ -8,8 +8,10 @@ from app.core.registry import LemmaModule
 
 def _routers():
     from app.modules.agent_surfaces.api.controllers.surface_controller import (
-        available_surfaces_router as surface_catalog,
         router as surface,
+    )
+    from app.modules.agent_surfaces.api.controllers.surface_catalog_controller import (
+        available_surfaces_router as surface_catalog,
         setup_guide_router as surface_setup_guide,
     )
     from app.modules.agent_surfaces.api.controllers.slack_setup_controller import (

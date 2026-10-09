@@ -46,6 +46,7 @@ from app.modules.function.infrastructure.models import (
     FunctionRevisionModel,
     FunctionRunModel,
 )
+from app.modules.function.tests.fakes import InMemoryPodRunSlots
 
 from app.modules.test_support.e2e.waiters import eventually
 
@@ -256,6 +257,7 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
             runtime_http_client_factory=runtime_http_clients.get,
             organization_resolver=resolve_function_organization_id,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+            pod_runs=InMemoryPodRunSlots(),
         )
 
         api_result = await dispatcher.execute(
@@ -365,6 +367,7 @@ async def test_a_destroyed_sandbox_behind_a_warm_endpoint_costs_no_failed_run(
             runtime_http_client_factory=runtime_http_clients.get,
             organization_resolver=resolve_function_organization_id,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+            pod_runs=InMemoryPodRunSlots(),
         )
 
         warm_run_id = await _create_run(

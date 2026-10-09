@@ -42,6 +42,10 @@ from app.modules.agent_surfaces.domain.envelope import (
 )
 from app.modules.agent_surfaces.domain.ports import ColdEmailThread
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
+from app.modules.agent_surfaces.services.channel_exposure import (
+    deliver_withheld,
+    outsiders_would_see,
+)
 from app.modules.agent_surfaces.services.cold_email_thread import (
     build_cold_email_thread,
 )
@@ -226,7 +230,11 @@ class SurfaceEgress:
         tool_output: object | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        """Show one resource -- a file, a table, a card -- on the surface."""
+        """Show one resource -- a file, a table, a card -- on the surface.
+
+        A member's file or rows are not posted where people outside the pod
+        read them; see `channel_exposure`.
+        """
         target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
             return False
@@ -239,6 +247,14 @@ class SurfaceEgress:
             tool_output=tool_output,
         )
         message_metadata = await self.delivery.egress_metadata(target, metadata)
+        if await outsiders_would_see(self.uow, target, display_request):
+            return await deliver_withheld(
+                self.delivery,
+                target,
+                render_plan=render_plan,
+                metadata=message_metadata,
+                conversation_id=conversation_id,
+            )
         # A FILE resource is delivered as a native attachment when it fits the
         # platform's cap; otherwise we fall through to the card render plan, whose
         # action is a Lemma app deep link — openable only by a recipient with pod

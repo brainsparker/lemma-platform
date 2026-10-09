@@ -234,6 +234,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.available_surfaces_builder.surface_connector_s_has_no.diagnostic': EventSpec('debug', frozenset({'connector_id'})),
     'agent_surfaces.available_surfaces_builder.system_claim_lookup_failed.diagnostic': EventSpec('debug', frozenset({'platform'})),
     'agent_surfaces.card_retirement.card_not_retired.degraded': EventSpec('warning', frozenset({'conversation_id', 'platform'})),
+    'agent_surfaces.channel_exposure.resource_withheld': EventSpec('info', frozenset({'conversation_id', 'platform'})),
     'agent_surfaces.chat_onboarding.answer_rejected.observed': EventSpec('info', frozenset({'platform', 'reason', 'step'})),
     'agent_surfaces.chat_onboarding.email_unavailable.observed': EventSpec('info', frozenset({'platform', 'step'})),
     'agent_surfaces.chat_onboarding.signup_refused.failed': EventSpec('error', frozenset({'platform', 'reason', 'step'})),

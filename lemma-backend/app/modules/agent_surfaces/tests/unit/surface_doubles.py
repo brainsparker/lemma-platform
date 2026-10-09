@@ -59,6 +59,13 @@ _CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
 _AGENT_DIRECTORY = "app.modules.agent.contracts.agents"
 
 
+async def _the_tap_stands(_uow, **kwargs) -> agent_conversations.ApprovalResolution:
+    """A fresh pause: the decision recorded is the one that was tapped."""
+    return agent_conversations.ApprovalResolution(
+        status="resolved", decision=kwargs["decision"]
+    )
+
+
 @pytest.fixture(autouse=True)
 def conversation_operations(monkeypatch):
     """`agent`'s conversation operations, doubled for every test in this file.
@@ -75,7 +82,7 @@ def conversation_operations(monkeypatch):
         "pending_interaction": AsyncMock(return_value=None),
         "pending_question": AsyncMock(return_value=None),
         "pending_approval": AsyncMock(return_value=None),
-        "resolve_pending_interaction": AsyncMock(return_value=True),
+        "resolve_pending_interaction": AsyncMock(side_effect=_the_tap_stands),
         "retry_failed_run": AsyncMock(),
         "surface_agent_identity": AsyncMock(return_value=None),
         "conversation_metadata_value": AsyncMock(return_value=None),

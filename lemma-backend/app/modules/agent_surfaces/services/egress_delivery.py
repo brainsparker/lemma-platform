@@ -138,6 +138,20 @@ class SurfaceDelivery:
             # waiting for an answer that is now not coming. Those are
             # `warning`, because the failure is invisible from both ends --
             # the run completes normally and the person just never hears back.
+            #
+            # Except a conversation that *was* opened from a platform and has
+            # since lost its link -- the thread was repointed at a newer one.
+            # Then somebody is waiting there too, and the answer goes nowhere.
+            surface_id = await agent_conversations.conversation_metadata_value(
+                self.uow, conversation_id, "surface_id"
+            )
+            if surface_id is not None:
+                logger.warning(
+                    "agent_surfaces.egress.surface_conversation_lost_its_thread.degraded",
+                    conversation_id=str(conversation_id),
+                    surface_id=surface_id,
+                )
+                return None
             logger.debug(
                 "agent_surfaces.egress.skipped_no_conversation.diagnostic",
                 conversation_id=conversation_id,

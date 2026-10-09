@@ -159,6 +159,46 @@ async def resolve_interaction_delivery(
     return await _resolve_link_delivery(ingress, parsed, link)
 
 
+async def resolve_moved_interaction_delivery(
+    ingress: InteractionIngress,
+    parsed: ParsedSurfaceInteraction,
+    conversation_id: UUID,
+    *,
+    authorized_surface_ids: Collection[UUID] | None = None,
+) -> InteractionDelivery | None:
+    """The thread a tap came from, when its conversation no longer holds one.
+
+    A card outlives the link it was sent under: the thread can be repointed at
+    a newer conversation while the old card is still on screen. Its tap then
+    names a conversation with no link, which used to be dropped at debug -- a
+    button that did nothing. The thread it was tapped in is still known, so the
+    person can at least be told.
+
+    Only for that answer, never to resolve anything: the tap's conversation id
+    is unsigned, and the thread proves who is in it now, not that the old
+    conversation was ever theirs. ``None`` while the conversation still has a
+    link -- then the tap was refused for a reason that must stay silent.
+    """
+    if (
+        await ingress.conversation_link_repository.get_by_conversation_id(
+            conversation_id
+        )
+        is not None
+    ):
+        return None
+    current = await resolve_current_interaction_delivery(
+        ingress, parsed, authorized_surface_ids=authorized_surface_ids
+    )
+    if current is None or not interaction_sender_matches(current[0], parsed):
+        return None
+    logger.info(
+        "agent_surfaces.ingress_service.surface_interaction_moved.observed",
+        conversation_id=str(conversation_id),
+        current_conversation_id=str(current[0].conversation_id),
+    )
+    return current
+
+
 async def resolve_current_interaction_delivery(
     ingress: InteractionIngress,
     parsed: ParsedSurfaceInteraction,

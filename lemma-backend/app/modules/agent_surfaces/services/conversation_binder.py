@@ -437,6 +437,23 @@ class ConversationBinder:
             current_conversation_agent_id=current_conversation_agent_id,
         ):
             return True
+        # A run paused on the person holds the thread the same way, and for the
+        # same reason: the card they were shown answers only that conversation.
+        # Cutting to a new one left its buttons doing nothing and sent a typed
+        # "approve" to an agent with nothing to approve. Pauses never expire,
+        # so neither does the hold -- until the person answers or moves on.
+        if (
+            await agent_conversations.pending_interaction(
+                self.uow, link.conversation_id
+            )
+            is not None
+        ):
+            logger.info(
+                "agent_surfaces.conversation_binder.reset_held_for_pause.observed",
+                surface_id=str(surface.id),
+                conversation_id=str(link.conversation_id),
+            )
+            return False
         holds = await self.conversation_link_repository.conversation_holds_notification(
             link.conversation_id,
             delivered_since=datetime.now(timezone.utc)

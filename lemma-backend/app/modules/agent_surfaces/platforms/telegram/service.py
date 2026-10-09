@@ -25,6 +25,7 @@ from app.modules.agent_surfaces.platforms.telegram.attachment_naming import (
     resolve_attachment_name_and_mime,
 )
 from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
+    CALLBACK_STORE_ERRORS,
     put_callback_token,
 )
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
@@ -82,6 +83,24 @@ def _get_bot_info_cache() -> RedisJsonCache:
             ttl_seconds=3600,
         )
     return _bot_info_cache
+
+
+async def _retry_keyboard() -> dict[str, list[list[dict[str, str]]]] | None:
+    """A "Try again" button, or ``None`` when its token cannot be stored.
+
+    The button is optional and the message it rides is not: it is the notice
+    that a run failed. Minting the token used to be unguarded, so a Redis blip
+    lost the notice along with the button, and the person heard nothing.
+    """
+    try:
+        retry_token = await put_callback_token({"action": "retry"})
+    except CALLBACK_STORE_ERRORS:
+        logger.warning(
+            "agent_surfaces.telegram.retry_button_unavailable.degraded",
+            exc_info=True,
+        )
+        return None
+    return {"inline_keyboard": [[{"text": "Try again", "callback_data": retry_token}]]}
 
 
 class TelegramPlatformService:
@@ -165,12 +184,7 @@ class TelegramPlatformService:
         reply_markup = (metadata or {}).get("reply_markup")
         retry_action = (metadata or {}).get("retry_action") is True
         if retry_action and not isinstance(reply_markup, dict):
-            retry_token = await put_callback_token({"action": "retry"})
-            reply_markup = {
-                "inline_keyboard": [
-                    [{"text": "Try again", "callback_data": retry_token}]
-                ]
-            }
+            reply_markup = await _retry_keyboard()
 
         # `chunk_text("")` is `[]`, and the `or [message or ""]` this replaces
         # made that one empty chunk: a blank bubble, and for an approval one
@@ -297,14 +311,23 @@ class TelegramPlatformService:
         if not chat_id:
             return False
         rows: list[list[dict[str, str]]] = []
-        for button in approval_plan.buttons:
-            token = await put_callback_token(
-                {
-                    "callback_id": approval_plan.callback_id,
-                    "decision": button.decision,
-                }
+        try:
+            for button in approval_plan.buttons:
+                token = await put_callback_token(
+                    {
+                        "callback_id": approval_plan.callback_id,
+                        "decision": button.decision,
+                    }
+                )
+                rows.append([{"text": button.label[:64], "callback_data": token}])
+        except CALLBACK_STORE_ERRORS:
+            # Buttons nothing could resolve would read as expired on the first
+            # tap. Asking in words instead is the fallback a person can answer.
+            logger.warning(
+                "agent_surfaces.telegram.decision_buttons_unavailable.degraded",
+                exc_info=True,
             )
-            rows.append([{"text": button.label[:64], "callback_data": token}])
+            return False
         body_lines = [approval_plan.title]
         if approval_plan.reason:
             body_lines.append(approval_plan.reason)

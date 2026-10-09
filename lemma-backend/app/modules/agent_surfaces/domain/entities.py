@@ -237,6 +237,9 @@ class ParsedSurfaceInteraction(BaseModel):
     external_user_id: str | None = None
     callback_id: str = ""
     action: str | None = None
+    #: ``"expired"`` (nothing the tap carried can be resolved), ``"other"``
+    #: (they want to type the answer) or ``"unreadable"`` (what the tap carried
+    #: could not be looked up just now, and tapping again may work).
     interaction_state: str | None = None
     values: dict[str, Any] = Field(default_factory=dict)
     # Set when the tapped control is a native approval button; carries the

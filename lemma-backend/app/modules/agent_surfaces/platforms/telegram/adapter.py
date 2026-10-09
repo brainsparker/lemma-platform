@@ -22,13 +22,17 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
+    CallbackTokenUnreadable,
     get_callback_token,
 )
+from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.telegram.parser import TelegramMessageParser
 from app.modules.agent_surfaces.platforms.telegram.service import (
     _OTHER_CALLBACK_VALUE,
     TelegramPlatformService,
 )
+
+logger = get_logger(__name__)
 
 _CONTACT_REQUEST_MARKUP = {
     "keyboard": [
@@ -192,10 +196,16 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         if not isinstance(callback_query, dict):
             return None
         token = str(callback_query.get("data") or "").strip()
-        return _interaction_from_token(
-            await get_callback_token(token),
-            _tap_origin(payload, callback_query),
-        )
+        origin = _tap_origin(payload, callback_query)
+        try:
+            stored = await get_callback_token(token)
+        except CallbackTokenUnreadable:
+            logger.warning(
+                "agent_surfaces.telegram.callback_token_unreadable.degraded",
+                exc_info=True,
+            )
+            return ParsedSurfaceInteraction(interaction_state="unreadable", **origin)
+        return _interaction_from_token(stored, origin)
 
     async def acknowledge_interaction(
         self,

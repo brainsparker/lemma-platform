@@ -1953,6 +1953,10 @@ button svg, a svg { flex-shrink:0; }
     .history__archive { opacity: 1; width: 44px; height: 44px; right: 2px }
     .history__rename-input { font-size: 16px }
 }
+/* A row waiting on you keeps saying so under the pointer and on touch, where
+   the time is hidden behind Rename and Archive. The item's padding already
+   clears them, so nothing overlaps. `--warn`, measured for AA. */
+.history__entry .history__at[data-waiting] { visibility: visible; color: var(--warn) }
 .all__entry .all__row { width: 100%; padding-right: 48px }
 .all__entry .history__rename-button { right: 2px; top: 50%; transform: translateY(-50%) }
 .all__entry:has(.history__rename--editing) > .all__row { display: none }

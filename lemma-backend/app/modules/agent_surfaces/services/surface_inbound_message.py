@@ -37,6 +37,9 @@ from app.modules.agent_surfaces.services.pending_interaction_resume import (
     ResumeOutcome,
     maybe_resume_pending_interaction,
 )
+from app.modules.agent_surfaces.services.attachment_ingest_memo import (
+    AttachmentIngestMemo,
+)
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     IngestedAttachment,
 )
@@ -267,6 +270,7 @@ async def transcribe_voice_attachments(
     ingested: list[IngestedAttachment],
     original_text: str | None,
     metadata: dict[str, Any],
+    memo: AttachmentIngestMemo | None = None,
 ) -> str:
     """Transcribe inbound voice notes and fold them into the message text.
 
@@ -282,7 +286,7 @@ async def transcribe_voice_attachments(
         return original
 
     results = await _transcribe_all(
-        [item for item in ingested if item.is_audio and item.audio_bytes is not None]
+        [item for item in ingested if item.is_audio], memo=memo
     )
     combined = _combined_voice_text(_record_transcripts(results, metadata))
     if original and not _is_a_type_word(original, ingested):
@@ -291,16 +295,42 @@ async def transcribe_voice_attachments(
 
 
 async def _transcribe_all(
-    items: list[IngestedAttachment],
+    items: list[IngestedAttachment], *, memo: AttachmentIngestMemo | None
 ) -> list[tuple[IngestedAttachment, VoiceTranscript | None]]:
-    """Transcribe every voice note at once; a failure yields None for that one."""
-    transcripts = await transcribe_voice_notes(
+    """Transcribe every voice note at once; a failure yields None for that one.
+
+    A transcript a previous attempt at this message already paid for is reused
+    rather than bought again (see ``attachment_ingest_memo``).
+    """
+    known: dict[int, VoiceTranscript] = {}
+    if memo is not None:
+        for index, item in enumerate(items):
+            cached = await memo.transcript(item.memo_key)
+            if cached is not None:
+                known[index] = cached
+    pending = [
+        (index, item)
+        for index, item in enumerate(items)
+        if index not in known and item.audio_bytes is not None
+    ]
+    fresh = await transcribe_voice_notes(
         [
             VoiceClip(audio_bytes=item.audio_bytes, mime=item.mime or "audio/ogg")
-            for item in items
+            for _, item in pending
+            if item.audio_bytes is not None
         ]
     )
-    return list(zip(items, transcripts))
+    for (index, item), transcript in zip(pending, fresh):
+        if transcript is None:
+            continue
+        known[index] = transcript
+        if memo is not None:
+            await memo.remember_transcript(item.memo_key, transcript)
+    return [
+        (item, known.get(index))
+        for index, item in enumerate(items)
+        if index in known or item.audio_bytes is not None
+    ]
 
 
 async def _say_the_decision_was_not_recorded(

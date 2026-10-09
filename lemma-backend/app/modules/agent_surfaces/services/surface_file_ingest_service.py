@@ -35,6 +35,11 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
 from app.core.net.capped_read import ResponseTooLargeError
+from app.modules.agent_surfaces.services.attachment_ingest_memo import (
+    AttachmentIngestMemo,
+    RememberedAttachment,
+    memo_key,
+)
 from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
     INBOUND_VOICE_TRANSCRIBE_BYTE_CAP,
@@ -79,6 +84,8 @@ class IngestedAttachment:
     mime: str | None = None
     content_type: str | None = None
     audio_bytes: bytes | None = None
+    #: Where a retry of this message finds this file, and its transcript.
+    memo_key: str | None = None
 
     @property
     def is_audio(self) -> bool:
@@ -207,8 +214,10 @@ class SurfaceFileIngestService:
         self,
         *,
         adapter_registry: SurfacePlatformAdapterRegistry | None = None,
+        memo: AttachmentIngestMemo | None = None,
     ) -> None:
         self.adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
+        self.memo = memo or AttachmentIngestMemo()
 
     async def ingest_attachments(
         self,
@@ -310,7 +319,7 @@ class SurfaceFileIngestService:
         """
         directory = f"/me/{str(platform).lower()}"
         outcome = AttachmentIngest()
-        for attachment in attachments:
+        for index, attachment in enumerate(attachments):
             result = await self._ingest_one(
                 adapter=adapter,
                 pod_id=pod_id,
@@ -321,6 +330,9 @@ class SurfaceFileIngestService:
                 directory=directory,
                 attachment=attachment,
                 store=store,
+                key=memo_key(
+                    pod_id=pod_id, platform=platform, parsed=parsed, index=index
+                ),
             )
             if isinstance(result, IngestedAttachment):
                 outcome.saved.append(result)
@@ -340,6 +352,7 @@ class SurfaceFileIngestService:
         directory: str,
         attachment: dict[str, Any],
         store: StoreInTransaction,
+        key: str | None = None,
     ) -> IngestedAttachment | AttachmentFailure:
         label = _attachment_label(attachment)
         declared_size = attachment.get("size")
@@ -355,6 +368,83 @@ class SurfaceFileIngestService:
                 ),
             )
 
+        # A retry of this message: the file is already in the pod. Only a voice
+        # note whose transcript never landed needs its bytes again, and even
+        # then it is not stored a second time.
+        remembered = await self._recall(key)
+        if remembered is not None and not await self._needs_audio_bytes(
+            remembered
+        ):
+            return remembered
+
+        downloaded = await self._download(
+            adapter=adapter,
+            platform=platform,
+            parsed=parsed,
+            credentials=credentials,
+            attachment=attachment,
+            label=label,
+        )
+        if isinstance(downloaded, AttachmentFailure):
+            return downloaded
+        content, name, mime = downloaded
+        if remembered is not None:
+            if len(content) <= INBOUND_VOICE_TRANSCRIBE_BYTE_CAP:
+                remembered.audio_bytes = content
+            return remembered
+        stored = await self._store(
+            pod_id=pod_id,
+            platform=platform,
+            ctx=ctx,
+            directory=directory,
+            attachment=attachment,
+            store=store,
+            label=label,
+            content=content,
+            name=name,
+            mime=mime,
+        )
+        if isinstance(stored, IngestedAttachment) and key is not None:
+            stored.memo_key = key
+            await self.memo.remember(
+                key,
+                RememberedAttachment(
+                    path=stored.path,
+                    name=stored.name,
+                    mime=stored.mime,
+                    content_type=stored.content_type,
+                ),
+            )
+        return stored
+
+    async def _recall(self, key: str | None) -> IngestedAttachment | None:
+        remembered = await self.memo.recall(key)
+        if remembered is None:
+            return None
+        return IngestedAttachment(
+            path=remembered.path,
+            name=remembered.name,
+            mime=remembered.mime,
+            content_type=remembered.content_type,
+            memo_key=key,
+        )
+
+    async def _needs_audio_bytes(self, remembered: IngestedAttachment) -> bool:
+        return (
+            remembered.is_audio
+            and await self.memo.transcript(remembered.memo_key) is None
+        )
+
+    async def _download(
+        self,
+        *,
+        adapter: Any,
+        platform: str,
+        parsed: ParsedInboundSurfaceEvent,
+        credentials: dict[str, Any],
+        attachment: dict[str, Any],
+        label: str,
+    ) -> tuple[bytes, str, str | None] | AttachmentFailure:
         # The download runs with no session open at all. It used to run inside
         # one that committed first to hand the connection back -- correct, but
         # only legible as a comment, and invisible to the static gate because
@@ -413,7 +503,22 @@ class SurfaceFileIngestService:
                     f"{INBOUND_ATTACHMENT_BYTE_CAP // (1024 * 1024)} MB limit"
                 ),
             )
+        return content, name, mime
 
+    async def _store(
+        self,
+        *,
+        pod_id: UUID,
+        platform: str,
+        ctx: Any,
+        directory: str,
+        attachment: dict[str, Any],
+        store: StoreInTransaction,
+        label: str,
+        content: bytes,
+        name: str,
+        mime: str | None,
+    ) -> IngestedAttachment | AttachmentFailure:
         content_type = attachment.get("content_type")
         file_name = _safe_file_name(name, mime, content)
 

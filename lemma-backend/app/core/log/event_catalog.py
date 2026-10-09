@@ -224,6 +224,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.adapter.teams_message_partially_delivered.degraded': EventSpec('warning', frozenset({'sent_chunks', 'total_chunks'})),
     'agent_surfaces.adapter.teams_service_url_refused.degraded': EventSpec('warning', frozenset()),
     'agent_surfaces.adapter.teams_typing_indicator_best_effort.observed': EventSpec('debug', frozenset()),
+    'agent_surfaces.attachment_ingest_memo.read_failed.degraded': EventSpec('warning', frozenset()),
+    'agent_surfaces.attachment_ingest_memo.write_failed.degraded': EventSpec('warning', frozenset()),
     'agent_surfaces.available_surfaces_builder.pool_lookup_failed.diagnostic': EventSpec('debug', frozenset({'platform'})),
     'agent_surfaces.available_surfaces_builder.surface_connector_s_has_no.diagnostic': EventSpec('debug', frozenset({'connector_id'})),
     'agent_surfaces.available_surfaces_builder.system_claim_lookup_failed.diagnostic': EventSpec('debug', frozenset({'platform'})),

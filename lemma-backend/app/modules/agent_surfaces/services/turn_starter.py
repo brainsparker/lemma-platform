@@ -75,6 +75,9 @@ from app.modules.agent_surfaces.services.group_audience import (
     email_audience,
     outside_names,
 )
+from app.modules.agent_surfaces.services.attachment_ingest_memo import (
+    AttachmentIngestMemo,
+)
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     AttachmentIngest,
     IngestedAttachment,
@@ -116,8 +119,12 @@ class SurfaceTurnStarter:
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
         file_ingest_service: SurfaceFileIngestService | None = None,
         pooled_numbers: PooledNumberReader | None = None,
+        ingest_memo: AttachmentIngestMemo | None = None,
     ) -> None:
         self.uow_factory = uow_factory
+        # Shared with the file ingest by Redis key, not by instance: what a
+        # retry reuses is keyed on the message, whichever object reads it.
+        self.ingest_memo = ingest_memo or AttachmentIngestMemo()
         # `None` reads the pool through each short scope's own unit of work.
         self.pooled_numbers = pooled_numbers
         self.adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
@@ -204,6 +211,7 @@ class SurfaceTurnStarter:
             ingested=ingested,
             original_text=context.message_text,
             metadata=metadata,
+            memo=self.ingest_memo,
         )
         await self._name_new_thread(adapter, credentials, context)
 

@@ -141,6 +141,14 @@ class AgentSettings(BaseSettings):
             "spent narrowest-scope-first."
         ),
     )
+    agent_memory_file_max_chars: int = Field(
+        default=8000,
+        description=(
+            "Size past which a write to a memory topic or journal file is "
+            "answered with a warning to condense it. Memory files are read back "
+            "into later runs, so their size is paid again every time."
+        ),
+    )
     agent_memory_brief_cache_ttl_seconds: int = Field(
         default=60,
         description=(

@@ -123,3 +123,28 @@ class TestAnthropicCachesToolDefinitionsToo:
 
         assert "openai_user" in settings
         assert "anthropic_cache_instructions" not in settings
+
+
+def test_no_heading_is_said_twice_across_the_prompt_and_the_run_context() -> None:
+    """The todo guidance and the stored list both opened `# Task list`, so the
+    model read one section title over two different things."""
+    from app.modules.agent.domain.run_context_prompt import render_run_context
+
+    conversation = _conversation()
+    run_toolsets, _ = resolve_toolset_names(None, conversation)
+    system_prompt = build_agent_instructions(
+        agent=_agent(conversation),
+        conversation=conversation,
+        ctx=SimpleNamespace(run_toolsets=run_toolsets),
+    )
+    run_context = render_run_context(
+        sections=[task_list_section(conversation, toolsets=run_toolsets)]
+    )
+
+    headings = [
+        line
+        for line in f"{system_prompt}\n{run_context}".splitlines()
+        if line.startswith("# ")
+    ]
+    assert "# Your current task list" in headings
+    assert len(headings) == len(set(headings)), headings

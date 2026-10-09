@@ -29,7 +29,10 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
+from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceError,
+    PersonalRouteUnavailable,
+)
 from app.modules.agent_surfaces.domain.ingress_context import (
     AgentSurfaceContext,
     SurfaceChatContext,
@@ -83,9 +86,6 @@ from app.modules.agent_surfaces.services.run_background import (
 from app.modules.agent_surfaces.services.surface_inbound_message import (
     transcribe_voice_attachments,
     write_inbound_message,
-)
-from app.modules.agent_surfaces.services.personal_dm_routes import (
-    PersonalRouteUnavailable,
 )
 from app.modules.agent_surfaces.services.surface_inbound import release_ingress_claim
 from app.modules.agent_surfaces.services.telegram_command_service import (
@@ -471,7 +471,6 @@ class SurfaceTurnStarter:
     async def _validate_personal_context(self, context: SurfaceChatContext) -> None:
         if context.personal_dm_route_id is not None:
             from app.modules.agent_surfaces.services.personal_dm_routes import (
-                PersonalRouteUnavailable,
                 validate_personal_dm_route,
             )
 

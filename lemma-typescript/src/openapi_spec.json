@@ -1003,6 +1003,17 @@
             "title": "Agent Name",
             "type": "string"
           },
+          "generation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenerationSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the model generates for this step: reasoning effort, output cap, temperature. Each field set here replaces the agent's; each left unset keeps it."
+          },
           "input_mapping": {
             "additionalProperties": {
               "discriminator": {
@@ -1034,6 +1045,47 @@
             },
             "title": "Input Mapping",
             "type": "object"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What this step is for. Added to the agent's own instructions for this run only; the agent keeps its identity and gains a task.",
+            "title": "Instructions"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Another model from the agent's runtime profile, for this step only. Unset runs on the agent's model.",
+            "title": "Model Name"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "maximum": 604800.0,
+                "minimum": 600.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How long the step may run before the workflow stops it, in place of the deployment's ceiling. Checked by a periodic sweep, so the step ends within minutes of it, not to the second. A step waiting on a person gets the usual multiple of it.",
+            "title": "Timeout Seconds"
           }
         },
         "required": [
@@ -1231,7 +1283,7 @@
         "type": "string"
       },
       "AgentRuntimeConfig": {
-        "description": "Select an agent runtime profile and optional catalog model.",
+        "description": "Select an agent runtime profile, an optional catalog model, and how it generates.",
         "properties": {
           "model_name": {
             "anyOf": [
@@ -1249,6 +1301,16 @@
             "minLength": 1,
             "title": "Profile Id",
             "type": "string"
+          },
+          "settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenerationSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -4789,6 +4851,13 @@
             "title": "Name",
             "type": "string"
           },
+          "reasoning_model_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasoning Model Names",
+            "type": "array"
+          },
           "source": {
             "const": "ANTHROPIC_COMPATIBLE",
             "default": "ANTHROPIC_COMPATIBLE",
@@ -5196,6 +5265,13 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "reasoning_model_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasoning Model Names",
+            "type": "array"
           },
           "source": {
             "const": "OPENAI_COMPATIBLE",
@@ -9456,6 +9532,77 @@
         ],
         "title": "FunctionType",
         "type": "string"
+      },
+      "GenerationSettings": {
+        "additionalProperties": false,
+        "description": "Portable generation settings. Every field unset means \"provider default\".\n\nLayered lowest to highest: the model's catalog entry, the runtime profile,\nthe agent, the workflow step. A field a layer leaves unset is inherited\nfrom the layer below, so an agent that only lowers reasoning effort keeps\nwhatever output cap its profile chose.",
+        "properties": {
+          "max_output_tokens": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Most tokens one model response may use, thinking included. Still clamped to the room the context window leaves.",
+            "title": "Max Output Tokens"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sent only to OpenAI-compatible models whose catalog entry declares the REASONING capability; ignored elsewhere."
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          },
+          "thinking_budget_tokens": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Extended-thinking budget. Sent only to Anthropic-compatible models whose catalog entry declares the REASONING capability; ignored elsewhere.",
+            "title": "Thinking Budget Tokens"
+          },
+          "top_p": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top P"
+          }
+        },
+        "title": "GenerationSettings",
+        "type": "object"
       },
       "GroupDetailResponse": {
         "properties": {
@@ -14650,6 +14797,18 @@
         "title": "PublishStatusResponse",
         "type": "object"
       },
+      "ReasoningEffort": {
+        "description": "How long a reasoning model thinks before it answers.\n\nThe values are the OpenAI Chat Completions ``reasoning_effort`` vocabulary,\nwhich is the wire format OPENAI_COMPATIBLE speaks. Which values a given\nmodel accepts is the model's business; ``none`` and ``minimal`` in\nparticular are not universal.",
+        "enum": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "title": "ReasoningEffort",
+        "type": "string"
+      },
       "RecordAccessMode": {
         "description": "Row-visibility mode for record reads/writes on RLS-enabled tables.\n\n``USER`` (the default when the ``mode`` param is omitted) scopes rows to the\ncaller's own ``user_id`` so app apps keep their per-user semantics \u2014 pod\nadmins included. ``ADMIN`` returns and operates on every member's rows and\nrequires the caller to administer the table (otherwise the request is\nrejected). The mode is a no-op for non-RLS tables, whose rows are shared by\nevery member regardless.\n\nEndpoints expose this as an *optional* query param (default ``None`` ==\n``USER``) rather than one defaulting to ``RecordAccessMode.USER``: a named\nenum query param carrying a literal default makes the TypeScript generator\nemit ``mode: RecordAccessMode = 'USER'``, which fails strict typecheck (a raw\nstring is not assignable to the enum). An optional param generates the valid\n``mode?: RecordAccessMode`` while keeping one shared, CAPS-valued enum type.",
         "enum": [
@@ -18190,6 +18349,20 @@
             ],
             "title": "Name"
           },
+          "reasoning_model_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Model Names"
+          },
           "refresh_models": {
             "default": false,
             "title": "Refresh Models",
@@ -18490,6 +18663,20 @@
               }
             ],
             "title": "Name"
+          },
+          "reasoning_model_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Model Names"
           },
           "refresh_models": {
             "default": false,
@@ -20126,6 +20313,8 @@
           "max_results": {
             "default": 10,
             "description": "Maximum number of search results to return",
+            "maximum": 20.0,
+            "minimum": 1.0,
             "title": "Max Results",
             "type": "integer"
           },
@@ -20182,7 +20371,7 @@
                 "type": "null"
               }
             ],
-            "description": "Set when the search could not be run exactly as asked \u2014 for example a vertical this provider does not serve.",
+            "description": "Set when the search could not be run exactly as asked \u2014 for example a vertical this provider does not serve \u2014 or when it found nothing, which is not always the same as nothing existing.",
             "title": "Note"
           },
           "results": {
@@ -20538,6 +20727,20 @@
             "description": "Optional public icon URL for the workflow.",
             "title": "Icon Url"
           },
+          "max_concurrent_runs": {
+            "anyOf": [
+              {
+                "maximum": 1000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many runs of this workflow may be in progress at once. A run started past the limit is not refused: it waits, with a `QUEUED` active wait, and starts when an earlier run finishes. Null means no limit.",
+            "title": "Max Concurrent Runs"
+          },
           "mode": {
             "$ref": "#/components/schemas/WorkflowMode",
             "default": "GLOBAL",
@@ -20702,6 +20905,18 @@
             "default": true,
             "title": "Is Active",
             "type": "boolean"
+          },
+          "max_concurrent_runs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many runs of this workflow may be in progress at once. A run started past the limit is not refused: it waits, with a `QUEUED` active wait, and starts when an earlier run finishes. Null means no limit.",
+            "title": "Max Concurrent Runs"
           },
           "mode": {
             "$ref": "#/components/schemas/WorkflowMode",
@@ -21591,7 +21806,8 @@
           "AGENT",
           "FUNCTION",
           "TIME",
-          "DECISION"
+          "DECISION",
+          "QUEUED"
         ],
         "title": "WorkflowRunWaitType",
         "type": "string"
@@ -21777,6 +21993,20 @@
             ],
             "description": "Updated public icon URL for the workflow.",
             "title": "Icon Url"
+          },
+          "max_concurrent_runs": {
+            "anyOf": [
+              {
+                "maximum": 1000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many runs of this workflow may be in progress at once. A run started past the limit is not refused: it waits, with a `QUEUED` active wait, and starts when an earlier run finishes. Null means no limit. Send null to remove it.",
+            "title": "Max Concurrent Runs"
           },
           "mode": {
             "anyOf": [
@@ -39150,6 +39380,70 @@
           "resource": "workflow.run.form",
           "result": "entity",
           "verb": "submit"
+        }
+      }
+    },
+    "/pods/{pod_id}/workflow-runs/{run_id}/retry": {
+      "post": {
+        "description": "Resume a failed run from the node that failed, keeping every earlier node's output -- an agent step's answer is not produced again. Allowed when the failed node is a function, decision, loop or wait-until node; any other run, or one that has not failed, returns 409.",
+        "operationId": "workflow.run.retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Workflow Run",
+        "tags": [
+          "workflows"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "workflow.run"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "workflow.run",
+          "result": "entity",
+          "verb": "retry"
         }
       }
     },

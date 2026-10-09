@@ -212,6 +212,7 @@ export type { FunctionRunSummaryResponse } from './models/FunctionRunSummaryResp
 export { FunctionStatus } from './models/FunctionStatus.js';
 export type { FunctionSummaryResponse } from './models/FunctionSummaryResponse.js';
 export { FunctionType } from './models/FunctionType.js';
+export type { GenerationSettings } from './models/GenerationSettings.js';
 export type { GroupDetailResponse } from './models/GroupDetailResponse.js';
 export type { GroupLineResponse } from './models/GroupLineResponse.js';
 export type { GroupLinkRequest } from './models/GroupLinkRequest.js';
@@ -344,6 +345,7 @@ export { PublishMode } from './models/PublishMode.js';
 export type { PublishStartRequest } from './models/PublishStartRequest.js';
 export { PublishStatus } from './models/PublishStatus.js';
 export type { PublishStatusResponse } from './models/PublishStatusResponse.js';
+export { ReasoningEffort } from './models/ReasoningEffort.js';
 export { RecordAccessMode } from './models/RecordAccessMode.js';
 export type { RecordListResponse } from './models/RecordListResponse.js';
 export type { ReportFeedbackRequest } from './models/ReportFeedbackRequest.js';

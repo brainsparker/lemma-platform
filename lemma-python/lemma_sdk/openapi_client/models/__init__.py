@@ -291,6 +291,7 @@ _NAME_TO_MODULE = {
     'FunctionStatus': 'function_status',
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
+    'GenerationSettings': 'generation_settings',
     'GroupDetailResponse': 'group_detail_response',
     'GroupLineResponse': 'group_line_response',
     'GroupLinkRequest': 'group_link_request',
@@ -439,6 +440,7 @@ _NAME_TO_MODULE = {
     'PublishStartRequest': 'publish_start_request',
     'PublishStatus': 'publish_status',
     'PublishStatusResponse': 'publish_status_response',
+    'ReasoningEffort': 'reasoning_effort',
     'RecordAccessMode': 'record_access_mode',
     'RecordCreateResponseRecordCreate': 'record_create_response_record_create',
     'RecordGetResponseRecordGet': 'record_get_response_record_get',
@@ -926,6 +928,7 @@ if TYPE_CHECKING:
     from .function_status import FunctionStatus
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
+    from .generation_settings import GenerationSettings
     from .group_detail_response import GroupDetailResponse
     from .group_line_response import GroupLineResponse
     from .group_link_request import GroupLinkRequest
@@ -1074,6 +1077,7 @@ if TYPE_CHECKING:
     from .publish_start_request import PublishStartRequest
     from .publish_status import PublishStatus
     from .publish_status_response import PublishStatusResponse
+    from .reasoning_effort import ReasoningEffort
     from .record_access_mode import RecordAccessMode
     from .record_create_response_record_create import RecordCreateResponseRecordCreate
     from .record_get_response_record_get import RecordGetResponseRecordGet
@@ -1574,6 +1578,7 @@ __all__ = [
     'FunctionStatus',
     'FunctionSummaryResponse',
     'FunctionType',
+    'GenerationSettings',
     'GroupDetailResponse',
     'GroupLineResponse',
     'GroupLinkRequest',
@@ -1722,6 +1727,7 @@ __all__ = [
     'PublishStartRequest',
     'PublishStatus',
     'PublishStatusResponse',
+    'ReasoningEffort',
     'RecordAccessMode',
     'RecordCreateResponseRecordCreate',
     'RecordGetResponseRecordGet',

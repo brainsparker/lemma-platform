@@ -15,7 +15,7 @@ pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[5]
 BEFORE = "0043_surface_groups"
-REVISION = "0044_agent_host_run_resume"
+REVISION = "0044_agent_run_reliability"
 COLUMNS = ("consumed_stream_id", "credential_expires_at")
 
 

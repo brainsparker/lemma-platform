@@ -15,7 +15,7 @@ pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[5]
 BEFORE = "0043_surface_groups"
-REVISION = "0044_agent_message_client_id"
+REVISION = "0044_agent_run_reliability"
 INDEX = "uq_agent_message_client_message_id"
 
 

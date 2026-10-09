@@ -57,6 +57,17 @@ def _is_shared(visibility: str | None) -> bool:
     return visibility != ResourceVisibility.PERSONAL.value
 
 
+def _editor_id(
+    agent: Agent, requester_user_id: UUID | None, ctx: Context | None
+) -> UUID:
+    """Whose view of the organization's models an edit is checked against."""
+    if requester_user_id is not None:
+        return requester_user_id
+    if ctx is not None and ctx.user_id is not None:
+        return ctx.user_id
+    return agent.user_id
+
+
 def _refuse_pod_default(agent: Agent, *, verb: str) -> None:
     """The pod's own assistant is not editable, and not deletable.
 
@@ -341,7 +352,7 @@ class AgentService:
                 self.uow,
                 agent.agent_runtime,
                 pod_id=pod_id,
-                user_id=requester_user_id or (ctx and ctx.user_id) or agent.user_id,
+                user_id=_editor_id(agent, requester_user_id, ctx),
                 shared=_is_shared(agent.visibility),
             )
 

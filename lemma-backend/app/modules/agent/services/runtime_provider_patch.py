@@ -69,11 +69,7 @@ def resolve_provider_patch(
     refresh_models: bool,
 ) -> ProviderProfilePatch:
     """Settle a PATCH against the stored profile."""
-    changes: dict[str, object] = {}
-    if not isinstance(name, UnsetType):
-        changes["name"] = normalize_profile_name(name)
-    if not isinstance(description, UnsetType):
-        changes["description"] = description.strip() if description else None
+    changes = _label_changes(name=name, description=description)
 
     next_base_url = _next_base_url(base_url, stored, is_anthropic=is_anthropic)
     base_url_changed = not isinstance(base_url, UnsetType) and str(
@@ -92,13 +88,8 @@ def resolve_provider_patch(
     origin_changed = base_url_changed and provider_origin(
         next_base_url, is_anthropic=is_anthropic
     ) != provider_origin(stored.base_url, is_anthropic=is_anthropic)
-    # Custom headers count: once the listing shows only their names, a header
-    # value is as write-only as the key, and as often a credential.
-    keeps_secret = (
-        isinstance(api_key, UnsetType) and profile.credentials is not None
-    ) or (isinstance(headers, UnsetType) and bool(stored.headers))
-    if origin_changed and keeps_secret:
-        raise KeyMustBeReenteredError()
+    if origin_changed:
+        _refuse_carrying_secrets(profile, stored, api_key=api_key, headers=headers)
 
     next_credentials = _next_credentials(
         api_key=api_key,
@@ -148,6 +139,29 @@ class KeyMustBeReenteredError(ValueError):
             "The provider address moved to a different host. Re-enter the API "
             "key, and any custom headers, for the new address."
         )
+
+
+def _label_changes(*, name, description) -> dict[str, object]:
+    changes: dict[str, object] = {}
+    if not isinstance(name, UnsetType):
+        changes["name"] = normalize_profile_name(name)
+    if not isinstance(description, UnsetType):
+        changes["description"] = description.strip() if description else None
+    return changes
+
+
+def _refuse_carrying_secrets(
+    profile: AgentRuntimeProfile, stored, *, api_key, headers
+) -> None:
+    """A move to another origin must bring its own key, and its own headers.
+
+    Custom headers count: once the listing shows only their names, a header
+    value is as write-only as the key, and as often a credential.
+    """
+    keeps_key = isinstance(api_key, UnsetType) and profile.credentials is not None
+    keeps_headers = isinstance(headers, UnsetType) and bool(stored.headers)
+    if keeps_key or keeps_headers:
+        raise KeyMustBeReenteredError()
 
 
 ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"

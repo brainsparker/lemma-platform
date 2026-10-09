@@ -195,11 +195,16 @@ class TelegramMessageParser:
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedInboundSurfaceEvent | None:
         del headers
-        message = payload_any(payload, "message", "edited_message")
+        message = payload_any(payload, "message")
         if not message:
             # Inline-keyboard taps arrive as ``callback_query`` and are owned by
             # the interaction path (``parse_inbound_interaction``); they are not
             # chat messages, so the message parser ignores them.
+            #
+            # So is ``edited_message``. It carries the original's
+            # ``message_id``, so inside the dedupe window an edit was dropped
+            # silently and after it the edit started a second run that answered
+            # the same message again. An edit is not a new turn.
             return None
 
         batch = _batch(payload, message)

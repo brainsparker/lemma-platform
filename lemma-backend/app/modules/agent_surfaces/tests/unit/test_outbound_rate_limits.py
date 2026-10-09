@@ -74,7 +74,7 @@ def _teams_event() -> ParsedInboundSurfaceEvent:
         message_text="hi",
         reply_target={
             "conversation_id": "19:conv",
-            "service_url": "https://smba.example.test/teams",
+            "service_url": "https://smba.trafficmanager.net/teams",
         },
     )
 

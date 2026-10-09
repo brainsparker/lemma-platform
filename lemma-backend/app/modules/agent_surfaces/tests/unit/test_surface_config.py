@@ -22,6 +22,7 @@ EXPECTED = [
     ("microsoft_bot_tenant_id", "MICROSOFT_BOT_TENANT_ID", None),
     ("microsoft_bot_openid_config_url", "MICROSOFT_BOT_OPENID_CONFIG_URL", None),
     ("microsoft_bot_oauth_base_url", "MICROSOFT_BOT_OAUTH_BASE_URL", None),
+    ("microsoft_bot_service_extra_host", "MICROSOFT_BOT_SERVICE_EXTRA_HOST", None),
     ("microsoft_bot_app_name", "MICROSOFT_BOT_APP_NAME", None),
     ("slack_signing_secret", "SLACK_SIGNING_SECRET", None),
     ("slack_app_id", "SLACK_APP_ID", None),

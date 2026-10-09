@@ -10,6 +10,7 @@ from app.core.log.log import get_logger
 import aiohttp
 
 from app.core.net.aiohttp_client import new_aiohttp_session
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
@@ -297,18 +298,23 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
         The response `properties` dict sometimes contains `email` depending on
         the tenant's Teams configuration. This does not require Graph admin consent.
         """
-        if not event.tenant_id:
+        conversation_id = event.reply_target.get("conversation_id")
+        if not event.tenant_id or not conversation_id:
+            return None
+        try:
+            base_url = client.bf_service_url(event.reply_target.get("service_url"))
+        except AgentSurfaceValidationError:
+            logger.warning(
+                "agent_surfaces.adapter.teams_service_url_refused.degraded",
+                exc_info=True,
+            )
             return None
         bot_token = await self._get_bot_token(event.tenant_id)
         if not bot_token:
             return None
 
-        conversation_id = event.reply_target.get("conversation_id")
-        if not conversation_id:
-            return None
-
         url = (
-            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+            f"{base_url}"
             f"/v3/conversations/{quote(str(conversation_id))}/members/{quote(bf_user_id)}"
         )
         try:

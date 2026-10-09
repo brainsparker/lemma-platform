@@ -94,9 +94,14 @@ async def fake_slack(message_store, fixed_test_user):
 
 
 @pytest_asyncio.fixture
-async def fake_teams(message_store, fixed_test_user):
+async def fake_teams(message_store, fixed_test_user, monkeypatch):
+    from app.modules.agent_surfaces.config import surface_settings
+
     server = FakeTeamsServer(fixed_test_user["email"], message_store)
     await server.start()
+    # The bot token only goes to Bot Framework hosts; the double is local. The
+    # worker subprocess gets the same host through its environment.
+    monkeypatch.setattr(surface_settings, "microsoft_bot_service_extra_host", "127.0.0.1")
     try:
         yield server
     finally:

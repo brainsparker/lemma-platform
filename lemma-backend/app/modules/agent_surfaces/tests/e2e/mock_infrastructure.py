@@ -717,12 +717,20 @@ class FakeTeamsServer:
         """
         self._oauth_error_code = code
 
-    def issue_webhook_token(self, *, audience: str) -> str:
+    def issue_webhook_token(
+        self, *, audience: str, service_url: str | None = None
+    ) -> str:
+        """A Bot Framework token, bound like the real one to a ``serviceUrl``.
+
+        Defaults to this server's own service URL, which is what the payload
+        helpers put on the activity.
+        """
         now = int(time.time())
         return jwt.encode(
             {
                 "iss": "https://api.botframework.com",
                 "aud": audience,
+                "serviceurl": service_url or self.service_url,
                 "iat": now,
                 "nbf": now - 10,
                 "exp": now + 600,

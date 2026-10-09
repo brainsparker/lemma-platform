@@ -139,6 +139,7 @@ class SurfaceWebhookSecurityService:
         if normalized == "TEAMS":
             await verify_teams_jwt(
                 headers=headers,
+                raw_body=raw_body,
                 expected_app_id=surface_settings.microsoft_bot_app_id,
             )
             return

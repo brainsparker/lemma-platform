@@ -21,7 +21,11 @@ from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 from app.core.net.aiohttp_client import new_aiohttp_session
 from app.core.observability.dependency_incident import DependencyIncident
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
+from app.modules.agent_surfaces.platforms.teams.attachment_urls import (
+    is_bot_framework_service_url,
+)
 
 logger = get_logger(__name__)
 _token_cache_incident = DependencyIncident("teams_token_cache", logger=logger)
@@ -71,7 +75,21 @@ def looks_like_guid(value: str | None) -> bool:
 
 
 def bf_service_url(service_url: str | None) -> str:
-    return str(service_url or "").rstrip("/") or BF_FALLBACK_SERVICE_URL.rstrip("/")
+    """The Bot Framework base URL to send the bot token to, or raise.
+
+    Every Teams call that carries the bot token builds its URL here, which is
+    what makes this the one place the ``serviceUrl`` host is checked: the
+    value comes from an inbound activity, and a host outside Bot Framework
+    would otherwise be handed a token that can post into every tenant.
+    """
+    base = str(service_url or "").rstrip("/") or BF_FALLBACK_SERVICE_URL.rstrip("/")
+    if not is_bot_framework_service_url(
+        base, extra_host=surface_settings.microsoft_bot_service_extra_host or ""
+    ):
+        raise AgentSurfaceValidationError(
+            "Teams serviceUrl is not a Bot Framework endpoint."
+        )
+    return base
 
 
 async def get_graph_token(tenant_id: str) -> str | None:
@@ -195,6 +213,14 @@ async def resolve_graph_team_id(
         return str(raw_team_id)
     if not raw_team_id:
         return None
+    try:
+        base_url = bf_service_url(service_url)
+    except AgentSurfaceValidationError:
+        logger.warning(
+            "agent_surfaces.client.teams_service_url_refused.degraded",
+            exc_info=True,
+        )
+        return None
 
     bot_token = await get_bot_token()
     if not bot_token:
@@ -204,7 +230,7 @@ async def resolve_graph_team_id(
         )
         return None
 
-    details_url = f"{bf_service_url(service_url)}/v3/teams/{quote(str(raw_team_id))}"
+    details_url = f"{base_url}/v3/teams/{quote(str(raw_team_id))}"
 
     owns_session = session is None
     http = session or new_aiohttp_session()

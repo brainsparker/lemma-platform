@@ -16,6 +16,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.tool_payload_limits import bounded_rows
 from app.modules.agent.tools.pod.models import (
     PodGetRecordsRequest,
     PodTablesRequest,
@@ -131,11 +132,12 @@ async def pod_get_records(
             sorts=[(s.column, s.direction) for s in request.sorts] or None,
             filters=[(f.column, f.op, f.value) for f in request.filters] or None,
         )
-        return {
-            "success": True,
-            "records": [to_json_value(record.data) for record in records],
-            "total": total,
-        }
+        shown, left_out = bounded_rows([to_json_value(r.data) for r in records])
+        result: JsonObject = {"success": True, "records": shown, "total": total}
+        if left_out:
+            result["truncated"] = True
+            result["note"] = _too_large_note(left_out, shown=len(shown))
+        return result
 
     return await run_pod_tool(
         ctx.deps,
@@ -224,17 +226,20 @@ async def pod_query(
             table_service=services.table,
             ctx=services.ctx,
         )
+        shown, left_out = bounded_rows([to_json_value(row) for row in rows])
         result: JsonObject = {
             "success": True,
-            "rows": to_json_value(rows),
+            "rows": shown,
             # Not "total": this is how many rows came back, which is only the
             # total when nothing was cut. Reporting the capped count as a total
             # is how an agent tells someone they have 1000 orders when they have
             # forty thousand.
-            "row_count": row_count,
-            "truncated": truncated,
+            "row_count": len(shown),
+            "truncated": truncated or bool(left_out),
         }
-        if truncated:
+        if left_out:
+            result["note"] = _too_large_note(left_out, shown=len(shown))
+        elif truncated:
             result["note"] = (
                 f"Only the first {row_count} rows are shown; the result was cut "
                 "short by the row cap. Do not treat this count as a total -- "
@@ -245,6 +250,21 @@ async def pod_query(
 
     return await run_pod_tool(
         ctx.deps, tool_name="pod_query", args=request.model_dump(), op=op
+    )
+
+
+def _too_large_note(left_out: int, *, shown: int) -> str:
+    """Said when rows were cut for size, which the row cap never sees.
+
+    A row count bounds how many rows come back, not how large they are: rows
+    with a wide text or JSON column are megabytes long, and whatever a tool
+    returns rides in the conversation for the rest of the run.
+    """
+    return (
+        f"Only the first {shown} rows are shown: {left_out} more matched but "
+        "would have made the result too large to carry. Do not treat this as a "
+        "total -- select fewer or narrower columns, page with a smaller limit, "
+        "or aggregate in SQL."
     )
 
 

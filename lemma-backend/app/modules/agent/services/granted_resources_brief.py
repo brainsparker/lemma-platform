@@ -7,10 +7,14 @@ read different rows.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from typing import Protocol
 from uuid import UUID
 
-from app.core.authorization.context import ResourceType
+from app.core.authorization.context import Context, ResourceType
+from app.core.domain.errors import DomainError
 from app.core.authorization.current import reset_current_context, set_current_context
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.services.brief_lines import (
@@ -24,11 +28,29 @@ from app.modules.agent.services.brief_seams import (
 )
 from app.modules.datastore.contracts.agent_tools import build_table_service
 
-_MAX_TABLES = 50
+
+class _TableReader(Protocol):
+    """The two reads this makes of the datastore's table service."""
+
+    async def get_tables(
+        self, pod_id: UUID, table_names: Sequence[str], ctx: Context
+    ) -> Mapping[str, object]: ...
+
+    async def get_table(
+        self, pod_id: UUID, table_name: str, ctx: Context
+    ) -> object: ...
+
+
+class _TableReaderFactory(Protocol):
+    def __call__(self, uow: SqlAlchemyUnitOfWork) -> _TableReader: ...
 
 
 class GrantedResourcesBrief:
-    """Renders what a named agent has been granted, with table schemas."""
+    """Renders what a named agent has been granted, with table schemas.
+
+    The table service is a constructor seam like the other two, so a test
+    hands in a double instead of replacing a name inside this module.
+    """
 
     def __init__(
         self,
@@ -36,10 +58,12 @@ class GrantedResourcesBrief:
         *,
         repository: RepositoryFactory,
         authorization: AuthorizationFactory,
+        tables: _TableReaderFactory | None = None,
     ) -> None:
         self.uow_factory = uow_factory
         self._repository = repository
         self._authorization = authorization
+        self._tables = tables
 
     async def lines(self, *, agent: Agent, pod_id: UUID, user_id: UUID) -> list[str]:
         # uow 1: grants + name resolution (plain queries).
@@ -69,32 +93,21 @@ class GrantedResourcesBrief:
                 )
             names = await repo.resolve_resource_names(pod_id=pod_id, refs=refs)
 
-        # Granted table schemas (resolve names -> column summaries).
-        granted_table_names = {
-            names.get((ResourceType.DATASTORE_TABLE, rid))
-            for (rtype, rid) in {(r[0], r[1]) for r in rows}
-            if rtype == "datastore_table"
-        }
-        granted_table_names.discard(None)
-
-        # uow 2: table schema summaries (datastore read needs ctx). Render the
-        # rows (lazy column access) before the uow closes.
-        table_summaries: dict[str, str] = {}
-        if granted_table_names:
-            async with self.uow_factory() as uow:
-                ctx = await self._authorization(uow).build_user_context(
-                    user_id=user_id, pod_id=pod_id
-                )
-                token = set_current_context(ctx)
-                try:
-                    tables, _ = await build_table_service(uow).list_tables(
-                        pod_id, ctx, limit=_MAX_TABLES
-                    )
-                    for table in tables:
-                        if table.table_name in granted_table_names:
-                            table_summaries[table.table_name] = table_line(table)
-                finally:
-                    reset_current_context(token)
+        # Sorted, so the same grants render the same bytes on every rebuild:
+        # this half of the brief sits in the system prompt, ahead of the whole
+        # replayed history, and the cap below picks *which* grants are shown.
+        granted = sorted(
+            perms_by_ref.items(), key=lambda item: (item[0][0], str(item[0][1]))
+        )
+        shown_tables = sorted(
+            name
+            for (resource_type, resource_id), _ in granted[:_MAX_RESOURCES]
+            if resource_type == "datastore_table"
+            and (name := names.get((ResourceType.DATASTORE_TABLE, resource_id)))
+        )
+        table_summaries = await self._table_summaries(
+            shown_tables, pod_id=pod_id, user_id=user_id
+        )
 
         lines = [
             "\n## Granted Resources",
@@ -103,7 +116,6 @@ class GrantedResourcesBrief:
                 "approval gates also apply. Describe tables for column descriptions."
             ),
         ]
-        granted = list(perms_by_ref.items())
         # Omitted grants must not be mistaken for absent access.
         lines.extend(
             more_note(
@@ -124,3 +136,54 @@ class GrantedResourcesBrief:
             else:
                 lines.append(f"- {resource_type}: {name}  (grants: {perm_list})")
         return lines
+
+    async def _table_summaries(
+        self, table_names: list[str], *, pod_id: UUID, user_id: UUID
+    ) -> dict[str, str]:
+        """Schema lines for exactly these tables, read as the invoking user.
+
+        By name, not by listing the pod's tables and filtering: a listing is
+        capped, so a granted table past the pod's first page lost its schema.
+        The rows are rendered (lazy column access) before the uow closes.
+        """
+        if not table_names:
+            return {}
+        async with self.uow_factory() as uow:
+            ctx = await self._authorization(uow).build_user_context(
+                user_id=user_id, pod_id=pod_id
+            )
+            token = set_current_context(ctx)
+            try:
+                service = (self._tables or build_table_service)(uow)
+                tables = await self._readable_tables(
+                    service, table_names, pod_id=pod_id, ctx=ctx
+                )
+                return {name: table_line(table) for name, table in tables.items()}
+            finally:
+                reset_current_context(token)
+
+    @staticmethod
+    async def _readable_tables(
+        service: _TableReader,
+        table_names: list[str],
+        *,
+        pod_id: UUID,
+        ctx: Context,
+    ) -> dict[str, object]:
+        """Every one of them in one read; one at a time only if that fails.
+
+        The batch read refuses the whole set when one table is gone or this
+        person cannot read it. Such a grant is still listed, without a schema
+        line -- the same as a table the person cannot see.
+        """
+        try:
+            return dict(await service.get_tables(pod_id, table_names, ctx))
+        except DomainError:
+            pass
+        readable: dict[str, object] = {}
+        for name in table_names:
+            try:
+                readable[name] = await service.get_table(pod_id, name, ctx)
+            except DomainError:
+                continue
+        return readable

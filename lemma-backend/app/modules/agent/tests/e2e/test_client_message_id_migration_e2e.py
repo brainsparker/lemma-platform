@@ -14,8 +14,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0045_public_rows"
-REVISION = "0046_agent_run_reliability"
+BEFORE = "0046_decisions_adoption"
+REVISION = "0047_agent_run_reliability"
 INDEX = "uq_agent_message_client_message_id"
 
 

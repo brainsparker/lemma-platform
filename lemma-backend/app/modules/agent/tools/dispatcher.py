@@ -115,6 +115,7 @@ class AgentToolDispatcher:
                 exit_stack=exit_stack,
                 include_final_answer=include_final_answer,
                 include_notification_tools=include_notification_tools,
+                only=name,
             )
             tool = prepared.get(name)
             if tool is None:
@@ -143,7 +144,16 @@ class AgentToolDispatcher:
         toolsets: list[object] | None = None,
         include_final_answer: bool = False,
         include_notification_tools: bool = False,
+        only: str | None = None,
     ) -> dict[str, PreparedTool]:
+        """Every tool, or with ``only`` just the toolset that owns that name.
+
+        A call needs one tool, and each toolset is opened -- entered, listed --
+        to find it. Every MCP `tools/call` opened all of them for the one it
+        ran; with ``only`` the walk stops at the owner, so the ones after it are
+        never entered. Listing still opens all of them, which is also what
+        catches two toolsets claiming one name.
+        """
         if toolsets is None:
             toolsets = await self._assembler.assemble(
                 agent=agent,
@@ -182,6 +192,8 @@ class AgentToolDispatcher:
                     tool=tool,
                     run_ctx=run_ctx,
                 )
+            if only is not None and only in prepared:
+                break
         if (
             run_audience(ctx).answers_outsiders
             or Audience.of(conversation).answers_outsiders

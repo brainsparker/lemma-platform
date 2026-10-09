@@ -3,9 +3,11 @@
 One task per connection, for the life of the socket. It listens on the host's
 notice channel -- one subscription -- and reads the command queue on every
 poke and every floor tick, pushing what it finds. It also hears ``superseded``
-and ``revoked`` and ends the connection for them. Supersession is decided by
-the link generation each ``hello`` claims in the database, never by which
-notice arrived: see ``agent_host_link_ownership``.
+and ``revoked`` and ends the connection for them, and on every floor tick reads
+the host's link generation again, so a lost notice cannot leave two links
+pushing for one host. Supersession is decided by the link generation each
+``hello`` claims in the database, never by which notice arrived: see
+``agent_host_link_ownership``.
 
 Split from the session, which owns reading the socket; the two share only the
 writer, the ops relay and the session's ``stop``.
@@ -92,6 +94,8 @@ class LinkPusher:
                     )
                     notices.detach()
                     raw = None
+                if raw is None and await self._lost_the_host(host_id):
+                    return
                 notice = parse_host_notice(raw) if raw is not None else None
                 if notice is not None and notice.kind == OP:
                     # An op is not a reason to re-read the command queue.
@@ -100,6 +104,14 @@ class LinkPusher:
                 if notice is not None and self._obey(host_id, notice):
                     return
                 await self._push_commands(host_id)
+
+    async def _lost_the_host(self, host_id: UUID) -> bool:
+        """On a floor tick: whether a newer link now owns the host."""
+        newer = await self._ownership.newer_generation(host_id)
+        if newer is None:
+            return False
+        self._superseded(host_id, newer)
+        return True
 
     def _obey(self, host_id: UUID, notice: HostNotice) -> bool:
         """Act on a notice; True when it ended this connection."""

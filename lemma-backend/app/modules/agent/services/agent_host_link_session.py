@@ -69,6 +69,7 @@ from app.modules.agent.infrastructure.agent_host.repository_common import (
 )
 from app.modules.agent.services.agent_host_link_ops import LinkOpRelay
 from app.modules.agent.services.agent_host_link_mcp import AgentHostLinkMcp
+from app.modules.agent.services.conversation_mcp_authorization import RelayingHost
 from app.modules.agent.services.agent_host_link_ownership import LinkOwnership
 from app.modules.agent.services.agent_host_link_pusher import LinkPusher
 from app.modules.agent.services.agent_host_link_store import (
@@ -499,18 +500,23 @@ class AgentHostLinkSession:
         await self._writer.send_frame(ServerFrameType.REVOKED, EmptyBody(), re=frame.id)
         raise LinkClose(LinkCloseCode.NORMAL, "revoked")
 
+    def _relaying_host(self) -> RelayingHost:
+        host, _ = self._linked()
+        return RelayingHost(host_id=host.host_id, user_id=host.user_id)
+
     async def _mcp_request(self, frame: LinkFrame) -> None:
-        self._linked()
-        result = await self._mcp.relay_request(McpBody.model_validate(frame.body))
+        result = await self._mcp.relay_request(
+            McpBody.model_validate(frame.body), host=self._relaying_host()
+        )
         await self._writer.send_frame(
             ServerFrameType.MCP_OK, McpOkBody(result=result), re=frame.id
         )
 
     async def _interaction_wait(self, frame: LinkFrame) -> None:
-        self._linked()
+        host = self._relaying_host()
         body = InteractionWaitBody.model_validate(frame.body)
         try:
-            answer = await self._mcp.wait_for_interaction(body)
+            answer = await self._mcp.wait_for_interaction(body, host=host)
         except TimeoutError:
             raise LinkRequestError(
                 LinkErrorCode.UNAVAILABLE,

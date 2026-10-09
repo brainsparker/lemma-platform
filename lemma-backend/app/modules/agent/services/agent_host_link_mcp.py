@@ -42,6 +42,7 @@ from app.modules.agent.services.agent_host_link_tool_calls import (
     report_if_orphaned,
     tool_call_key,
 )
+from app.modules.agent.services.conversation_mcp_authorization import RelayingHost
 from app.modules.agent.services.conversation_mcp_service import (
     ConversationMCPService,
 )
@@ -177,15 +178,25 @@ class AgentHostLinkMcp:
         self._max_wait_seconds = max_wait_seconds
         self._ledger = ledger or ToolCallLedger()
 
-    async def _authorize(self, body: McpBody | InteractionWaitBody) -> None:
+    async def _authorize(
+        self,
+        body: McpBody | InteractionWaitBody,
+        *,
+        host: RelayingHost | None,
+        allow_ended_run: bool = False,
+    ) -> None:
         if not await self._service.authorize(
             conversation_id=body.conversation_id,
             token=body.token,
             agent_run_id=body.run_id,
+            host=host,
+            allow_ended_run=allow_ended_run,
         ):
             raise LinkUnauthorized("the token does not grant this conversation")
 
-    async def relay_request(self, body: McpBody) -> JsonObject:
+    async def relay_request(
+        self, body: McpBody, *, host: RelayingHost | None = None
+    ) -> JsonObject:
         """Answer one ``tools/list`` or ``tools/call``, as the MCP result's JSON.
 
         A tool that fails comes back as an ``isError`` result, not an exception:
@@ -196,8 +207,11 @@ class AgentHostLinkMcp:
         the call's claim -- may fail retryably. Anything after raises
         ``DispatchedCallFailed``, which is never retryable. A call with a
         ``request_id`` executes at most once; see ``agent_host_link_tool_calls``.
+
+        ``host`` is the machine the link authenticated: a run's token is only
+        honoured from the person it belongs to and the host leasing its run.
         """
-        await self._authorize(body)
+        await self._authorize(body, host=host)
         if body.method == "tools/list":
             with origin_scope(Origin(OriginKind.MCP_CONVERSATION)):
                 listed = mcp.types.ListToolsResult(
@@ -296,13 +310,17 @@ class AgentHostLinkMcp:
             code, outcome.message if outcome and outcome.message else _UNFINISHED
         )
 
-    async def wait_for_interaction(self, body: InteractionWaitBody) -> JsonObject:
+    async def wait_for_interaction(
+        self, body: InteractionWaitBody, *, host: RelayingHost | None = None
+    ) -> JsonObject:
         """Hold until a person decides the parked call, then return the answer.
 
         Raises ``TimeoutError`` after the maximum wait; the host treats that as
         the interaction going unanswered, as it did when its own poll gave up.
+        A run that has ended is answered ``TERMINAL_RUN`` below, not refused
+        as unauthorized, so the host stops waiting instead of retrying.
         """
-        await self._authorize(body)
+        await self._authorize(body, host=host, allow_ended_run=True)
         answer = await self._decided_while_running(body)
         if answer is not None:
             return answer

@@ -16,10 +16,6 @@ from typing import Any
 from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
-from supertokens_python.recipe.session.asyncio import (
-    get_session_without_request_response,
-)
-from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -49,8 +45,6 @@ from app.modules.agent.infrastructure.mcp import (
 )
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.authorization.dependencies import assert_pod_membership
-from app.core.authorization.factory import create_authorization_data_service
 from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
 from app.modules.agent.infrastructure.agent_host.repository import (
@@ -60,6 +54,10 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     AgentRuntimeProfileRepository,
     ConversationRepository,
+)
+from app.modules.agent.services.conversation_mcp_authorization import (
+    RelayingHost,
+    authorize_run_token,
 )
 from app.modules.agent.services.mcp_pausing_calls import (
     close_pausing_tool_call,
@@ -83,9 +81,9 @@ from app.modules.agent.tools.tool_errors import (
 
 logger = get_logger(__name__)
 
-#: What a caller is refused for on this mount, phrased the way
-#: `assert_pod_membership` renders it ("You need access to this pod to ...").
-_CONVERSATION_MCP_ACCESS = "use this conversation's tools"
+
+class AgentRemoved(ValueError):
+    """The run's agent was deleted; its tools must not run as anybody else."""
 
 
 class ConversationMCPService:
@@ -99,71 +97,21 @@ class ConversationMCPService:
         conversation_id: UUID,
         token: str,
         agent_run_id: UUID | None = None,
+        host: RelayingHost | None = None,
+        allow_ended_run: bool = False,
     ) -> bool:
         """Whether ``token`` may use ``conversation_id``'s tools as ``agent_run_id``.
 
-        A named run has to be one of this conversation's: a token good for one
-        conversation must not act as, or read, a run of another.
+        See ``conversation_mcp_authorization`` for every rule it applies.
         """
-        try:
-            session = await get_session_without_request_response(
-                token,
-                anti_csrf_check=False,
-                session_required=True,
-            )
-        except SuperTokensSessionError:
-            # The token is not valid: expected traffic, and the denial below is
-            # the whole answer.
-            return False
-        except Exception:
-            # The auth backend could not answer. Same denial — a caller holding
-            # a good token must not be let through because SuperTokens is down —
-            # but this is an outage, not a bad token, and catching both as one
-            # made the two indistinguishable from outside.
-            logger.error(
-                "agent.conversation_mcp_service.session_lookup.failed",
-                exc_info=True,
-            )
-            return False
-        if session is None:
-            return False
-        token_user_id = UUID(session.get_user_id())
-        async with self.uow_factory() as uow:
-            conversation = await ConversationRepository(uow).get_conversation(
-                conversation_id,
-                include_runs=False,
-            )
-            if conversation is None or conversation.user_id != token_user_id:
-                return False
-            if agent_run_id is not None:
-                run = await ConversationRepository(uow).get_agent_run(agent_run_id)
-                if run is None or run.conversation_id != conversation_id:
-                    logger.warning(
-                        "agent.conversation_mcp_service.run_not_in_conversation.denied",
-                        conversation_id=str(conversation_id),
-                        agent_run_id=str(agent_run_id),
-                    )
-                    return False
-            # Owning the conversation is not access to the pod it lives in. Every
-            # HTTP conversation route also asserts membership
-            # (``CONVERSATION_MEMBERSHIP``), because ownership plus an agent grant
-            # survives being removed from a pod -- which is how a removed member
-            # kept the ability to instruct that pod's agents (PS-POD-040,
-            # DEV-ACCESS-001). This mount is the tool path for every remote
-            # harness and was the one entry point that checked only ownership.
-            auth_ctx = await create_authorization_data_service(uow).build_user_context(
-                user_id=token_user_id,
-                pod_id=conversation.pod_id,
-            )
-        try:
-            assert_pod_membership(auth_ctx, _CONVERSATION_MCP_ACCESS)
-        except DomainError:
-            logger.warning(
-                "agent.conversation_mcp_service.pod_membership_missing.denied",
-                conversation_id=str(conversation_id),
-            )
-            return False
-        return True
+        return await authorize_run_token(
+            self.uow_factory,
+            conversation_id=conversation_id,
+            token=token,
+            agent_run_id=agent_run_id,
+            host=host,
+            allow_ended_run=allow_ended_run,
+        )
 
     async def run_has_ended(self, *, agent_run_id: UUID) -> bool:
         """Whether the run is terminal (or gone): nothing will resume it."""
@@ -369,6 +317,11 @@ class ConversationMCPService:
                 run = await conversation_repo.get_active_agent_run(conversation_id)
             agent_id = conversation.agent_id or (run.agent_id if run else None)
             agent = await agent_repo.get(agent_id) if agent_id is not None else None
+            if agent_id is not None and agent is None:
+                # Gone between the call's authorization and now. Falling
+                # through would read the run as the pod's own assistant, which
+                # acts with the person's full standing.
+                raise AgentRemoved(f"Agent {agent_id} no longer exists")
             # Records the cwd when nothing had recorded it, so metadata is
             # the source of truth in fact and not only by intention.
             workspace_location = await ensure_recorded_location(

@@ -33,6 +33,10 @@ def _safe_connector_details(details: object | None) -> dict | None:
             "connector_id",
             "operation_name",
             "retry_after",
+            # The MCP server's host, never its URL: enough to tell which server
+            # failed, without the path or query a tenant may have put a secret
+            # in.
+            "server_host",
         }
     }
     return redact_value(allowed) if allowed else None

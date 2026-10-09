@@ -27,6 +27,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
 from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.domain.errors import DomainError
+from app.core.redaction import redact_text
 from app.modules.agent.domain.value_objects import to_json_value
 from app.modules.agent.tools.connectors.connector_access import (
     connector_execution_only,
@@ -44,11 +45,60 @@ from app.modules.connectors.services.connector_operation_search import (
 )
 
 _MAX_VIOLATIONS = 10
+# Installs listed in one call. An org past it is told so rather than shown a
+# list that silently stops.
+_LIST_LIMIT = 200
+
+#: What a connector error's details may carry back to the model. Connector
+#: errors already pass theirs through an allowlist and redaction; this is the
+#: same short list again, so a domain error from elsewhere cannot widen it.
+_DETAIL_KEYS = (
+    "operation_name",
+    "upstream_message",
+    "upstream_status",
+    "server_host",
+    "reason",
+    "retry_after",
+)
 
 
 def _error(code: str, message: str, **extra: Any) -> dict[str, Any]:
-    """A failure the model can act on, rather than one that ends the run."""
-    return {"error": code, "message": message, **extra}
+    """A failure the model can act on, rather than one that ends the run.
+
+    `success: False` is the uniform contract `result_is_failure` reads. Without
+    it every connector failure counted as a successful tool call -- in spans,
+    and in the `isError` an MCP client sees.
+    """
+    return {"success": False, "error": message, "code": code, **extra}
+
+
+def _failure(
+    exc: DomainError,
+    *,
+    auth_config: str | None = None,
+    operation: str | None = None,
+) -> dict[str, Any]:
+    """A connector error, naming what failed and what the provider said.
+
+    The error types fix their own message ("provider is temporarily
+    unavailable"), so the text alone named neither the install, the operation,
+    the server nor anything the server had said -- the parts a model needs to
+    fix its call or tell the person which connector is down.
+    """
+    details = exc.details if isinstance(exc.details, dict) else {}
+    carried = {
+        key: redact_text(value) if isinstance(value, str) else value
+        for key in _DETAIL_KEYS
+        if (value := details.get(key)) is not None
+    }
+    named = {
+        key: value
+        for key, value in (("auth_config", auth_config), ("operation", operation))
+        if value
+    }
+    return _error(
+        exc.code or "connector_error", safe_error_text(exc), **named, **carried
+    )
 
 
 def _no_organization() -> dict[str, Any]:
@@ -75,14 +125,14 @@ async def list_connectors(ctx: RunContext[BaseAgentContext]) -> dict[str, Any]:
 
     async with connector_services(deps) as services:
         try:
-            configs, _ = await services.connector.list_auth_configs(
-                user_id=deps.user_id, organization_id=deps.org_id, limit=200
+            configs, next_cursor = await services.connector.list_auth_configs(
+                user_id=deps.user_id, organization_id=deps.org_id, limit=_LIST_LIMIT
             )
         except DomainError as exc:
             # The other three tools already return failures as data. Raising
             # here instead would end the agent's run over something it could
             # simply report -- an org it cannot read is not a crash.
-            return _error(exc.code or "connector_error", safe_error_text(exc))
+            return _failure(exc)
         items = [
             {
                 "auth_config": config.name,
@@ -95,7 +145,18 @@ async def list_connectors(ctx: RunContext[BaseAgentContext]) -> dict[str, Any]:
             }
             for config in configs
         ]
-    return {"items": items, "count": len(items)}
+    if next_cursor is None:
+        return {"items": items, "count": len(items)}
+    return {
+        "items": items,
+        "count": len(items),
+        "truncated": True,
+        "note": (
+            f"Only the first {_LIST_LIMIT} installs are listed. Use "
+            "`search_connector_operations` without `auth_config` to search "
+            "every install for what you need."
+        ),
+    }
 
 
 @connectors_toolset.tool
@@ -133,7 +194,7 @@ async def search_connector_operations(
                     limit=request.limit,
                 )
         except DomainError as exc:
-            return _error(exc.code or "connector_error", safe_error_text(exc))
+            return _failure(exc, auth_config=request.auth_config)
     return to_json_value(found)
 
 
@@ -159,7 +220,9 @@ async def describe_connector_operation(
                 operation_name=request.operation,
             )
         except DomainError as exc:
-            return _error(exc.code or "connector_error", safe_error_text(exc))
+            return _failure(
+                exc, auth_config=request.auth_config, operation=request.operation
+            )
     # Whole input and output schemas; some connectors publish very large ones.
     return bounded_tool_payload(to_json_value(detail), what="operation schema")
 
@@ -276,5 +339,7 @@ async def run_connector_operation(
     except DomainError as exc:
         # Connector failures are information for the model (wrong argument,
         # account needs reconnecting), not a reason to end the run.
-        return _error(exc.code or "connector_error", safe_error_text(exc))
+        return _failure(
+            exc, auth_config=request.auth_config, operation=request.operation
+        )
     return bounded_tool_payload(to_json_value(response), what="connector response")

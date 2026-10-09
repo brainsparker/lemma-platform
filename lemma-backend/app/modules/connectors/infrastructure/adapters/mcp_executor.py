@@ -20,6 +20,7 @@ import base64
 import json
 from collections.abc import Mapping
 from typing import Any, Callable, Protocol
+from urllib.parse import urlparse
 
 import httpx
 import httpx2
@@ -231,7 +232,11 @@ async def apply_session_setup(
 
 
 def raise_on_tool_error(
-    tool_name: str, result: object, *, during_setup: bool = False
+    tool_name: str,
+    result: object,
+    *,
+    during_setup: bool = False,
+    server_host: str | None = None,
 ) -> None:
     """Report a tool that answered ``isError`` as the server rejecting the call.
 
@@ -256,6 +261,7 @@ def raise_on_tool_error(
             # detail allowlist lets through; for a setup step it is the step's
             # tool, which is the whole point of saying it.
             "operation_name": tool_name,
+            "server_host": server_host,
             "upstream_message": redact_text(text)[:_UPSTREAM_MESSAGE_LIMIT],
         },
     )
@@ -328,6 +334,7 @@ class McpExecutor:
                     "provider": "mcp",
                     "reason": "tool_error",
                     "operation_name": tool_name,
+                    "server_host": urlparse(str(server_url)).hostname,
                     "upstream_message": redact_text(message)[:_UPSTREAM_MESSAGE_LIMIT],
                 },
             ) from exc
@@ -339,15 +346,24 @@ class McpExecutor:
             message = _flatten_message(exc)
             raise OperationExecutionInfrastructureError(
                 f"MCP tool '{tool_name}' failed: {message}",
-                details={"provider": "mcp", "upstream_message": message},
+                details={
+                    "provider": "mcp",
+                    "operation_name": tool_name,
+                    "server_host": urlparse(str(server_url)).hostname,
+                    "upstream_message": redact_text(message)[:_UPSTREAM_MESSAGE_LIMIT],
+                },
             ) from exc
 
-        return self._map_result(tool_name, result)
+        return self._map_result(
+            tool_name, result, server_host=urlparse(str(server_url)).hostname
+        )
 
-    def _map_result(self, tool_name: str, result: Any) -> Any:
+    def _map_result(
+        self, tool_name: str, result: Any, *, server_host: str | None = None
+    ) -> Any:
         # A tool that answers `is_error` is the server rejecting this call -- a
         # bad argument, a missing project, a refusal it chose.
-        raise_on_tool_error(tool_name, result)
+        raise_on_tool_error(tool_name, result, server_host=server_host)
         structured = _structured_output(result)
         if structured is not None:
             return structured

@@ -48,6 +48,11 @@ async def agent_mcp_server():
         """Convert an amount into another currency."""
         return {"amount": amount * 2, "currency": to_currency}
 
+    @server.tool
+    def refuse_transfer(amount: float) -> dict:
+        """Move money; this server always declines."""
+        raise ValueError(f"insufficient funds to move {amount}")
+
     port = _free_port()
     task = asyncio.create_task(
         server.run_async(
@@ -271,9 +276,42 @@ class TestTheAgentCanUseATenantConnector:
                 arguments={"amount": "twenty-one", "to_currency": "EUR"},
             ),
         )
-        assert result["error"] == "invalid_arguments"
+        assert result["code"] == "invalid_arguments"
         assert result["violations"]
         assert result["input_schema"]
+
+    async def test_a_refusal_names_the_install_the_tool_and_what_the_server_said(
+        self, installed_connector, agent_deps, agent_mcp_server
+    ):
+        """The error types fix their own message, so the model was told
+        "Connector rejected the operation request" and nothing else: not which
+        install, not which tool, not the server's reason. And with no
+        `success: false` the failure counted as a successful tool call."""
+        from app.modules.agent.tools.connectors.models import (
+            RunConnectorOperationRequest,
+        )
+        from app.modules.agent.tools.connectors.pydantic_adapter import (
+            run_connector_operation,
+        )
+        from app.modules.agent.tools.tool_errors import result_is_failure
+
+        install, _org, _user = installed_connector
+        result = await run_connector_operation(
+            _run_context(agent_deps),
+            RunConnectorOperationRequest(
+                auth_config=install.name,
+                operation="refuse_transfer",
+                arguments={"amount": 5},
+            ),
+        )
+
+        assert result_is_failure(result), result
+        assert result["auth_config"] == install.name
+        assert result["operation"] == "refuse_transfer"
+        assert "insufficient funds" in result["upstream_message"]
+        assert result["server_host"] == "127.0.0.1"
+        # The host, not the URL: a path or query could carry a secret.
+        assert agent_mcp_server not in str(result)
 
     async def test_an_unknown_operation_is_reported_not_raised(
         self, installed_connector, agent_deps
@@ -419,7 +457,10 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
             SearchConnectorOperationsRequest(auth_config=install.name),
         )
         assert "error" not in result, result
-        assert [item["name"] for item in result["items"]] == ["convert_currency"]
+        assert sorted(item["name"] for item in result["items"]) == [
+            "convert_currency",
+            "refuse_transfer",
+        ]
 
     async def test_a_granted_named_agent_reaches_the_real_server(
         self, installed_connector, connector_test_pod, authenticated_client

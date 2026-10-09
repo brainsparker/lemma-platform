@@ -426,7 +426,14 @@ processes (§8).
   their own tools. When host execution is on, Lemma stops offering them its
   `exec_command` and file tools. Two tools that do the same thing in the same
   folder only confuse the model. Browser, pod, connector, `ask_user`,
-  `display_resource` and the rest stay.
+  `display_resource` and the rest stay. This applies only to a run its user
+  started in the app, by the §2 rule (`triggered_by_run_user`): the agent's
+  own shell asks a person before each command, and a workflow, schedule or
+  channel run has nobody there to answer, so it keeps Lemma's command tools,
+  which run without asking, and the VM they run in. The run's own `lemma`
+  CLI never asks either way: Claude Code is started with it allowed by its
+  exact path and by the name its `PATH` resolves to it
+  ([Agent Host](agent-host.md#what-a-coding-agent-loads)).
 - **The prompt** tells the agent it is on the user's Mac, names the root, and
   says the browser is a separate machine that reaches the Mac's `localhost`
   through the relay. An in-process run's workspace guidance is the Mac's, not
@@ -518,7 +525,8 @@ contract left to it.
   [provider adapters §8.3](sandbox/provider-adapters.md#83-failures);
   `host_offline` -- nothing picked the op up -- reaches the agent as "This Mac
   is not connected, so the command did not run".
-- **Agent Host runs** (§7) have Lemma's `WORKSPACE_CLI` toolset withheld
+- **Agent Host runs** (§7) their user started have Lemma's `WORKSPACE_CLI`
+  toolset withheld
   (`RunToolAssembler.assemble(host_execution="native")`), and their runtime
   prompt swaps its Runtime and Browser sections for
   `prompts/agent_host_host_execution.md`. Whether they do is decided once,

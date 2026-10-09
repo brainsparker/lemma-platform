@@ -326,6 +326,48 @@ async fn lemmas_cli_goes_first_on_the_agents_path() {
     assert!(std::env::split_paths(&path).count() > 1, "{path}");
 }
 
+/// The run's own `lemma` raises no permission request: Claude Code is given
+/// the binary by its full path and by the name its `PATH` resolves to it.
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_code_may_run_lemmas_cli_without_asking() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = TempDir::new().unwrap();
+    let cli = directory.path().join("pack/backend");
+    std::fs::create_dir_all(cli.join("bin")).unwrap();
+    std::fs::write(cli.join("bin/lemma"), "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(
+        cli.join("bin/lemma"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let log = directory.path().join("claude.jsonl");
+    let run = request(
+        adapter("claude-code", &log, BTreeMap::new()),
+        directory.path().join("cwd"),
+        false,
+        json!({ "lemma_cli": cli }),
+    );
+    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+
+    let traffic = read_traffic(&log);
+    let options = &sessions(&traffic)[0]["params"]["_meta"]["claudeCode"]["options"];
+    let binary = std::fs::canonicalize(&cli).unwrap().join("bin/lemma");
+    assert_eq!(
+        options["allowedTools"],
+        json!([format!("Bash({}:*)", binary.display()), "Bash(lemma:*)"])
+    );
+    let path = recorded_environment(&traffic)["PATH"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        std::env::split_paths(&path).next().unwrap().join("lemma"),
+        binary
+    );
+}
+
 /// What each agent's run is given when the person has not chosen their own
 /// setup: Lemma's MCP server, Lemma's sign-in and Lemma's instructions. Codex
 /// and `OpenCode` stay in the person's own config folders, as they are.

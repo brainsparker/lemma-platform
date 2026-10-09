@@ -55,9 +55,7 @@ def test_a_host_heard_from_lately_takes_runs(status):
     assert _host(status) is None
 
 
-@pytest.mark.parametrize(
-    "seen_ago", [AGENT_HOST_OFFLINE_AFTER_SECONDS + 1, 3600, None]
-)
+@pytest.mark.parametrize("seen_ago", [AGENT_HOST_OFFLINE_AFTER_SECONDS + 1, 3600, None])
 def test_a_host_not_heard_from_is_refused_at_admission(seen_ago):
     """It used to be queued anyway and fail minutes later, naming nothing."""
     refusal = _host(AgentHostStatus.ONLINE, seen_ago=seen_ago)

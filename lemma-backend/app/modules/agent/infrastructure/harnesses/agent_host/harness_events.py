@@ -68,7 +68,7 @@ class RunEventApplier:
         self.uow_factory = uow_factory
         self.artifact_writer = artifact_writer
 
-    async def apply(
+    async def events_for(
         self,
         normalizer: AgentHostEventNormalizer,
         entry: StreamedEvent,

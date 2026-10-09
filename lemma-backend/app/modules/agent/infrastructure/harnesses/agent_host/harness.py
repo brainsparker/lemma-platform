@@ -14,7 +14,7 @@ and recovery - on a slow cadence, because none of that arrives as an event.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -316,7 +316,7 @@ class RemoteHarness:
         ctx: AgentContext,
         conversation: Conversation,
         agent_run_id: UUID,
-    ) -> AsyncIterator[AgentEvent]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         """Each entry's events, then -- once all are handed on -- its place.
 
         Code after a ``yield`` runs only when the consumer asks for the next
@@ -324,7 +324,7 @@ class RemoteHarness:
         the cursor say an entry's messages are on the record.
         """
         for entry in batch:
-            events = await self._applier.apply(
+            events = await self._applier.events_for(
                 normalizer,
                 entry,
                 ctx=ctx,

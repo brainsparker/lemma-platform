@@ -25,9 +25,6 @@ from app.modules.agent.domain.agent_host_permissions import (
     permission_approval_tool_call_id,
 )
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
-    AgentHostDispatchRepository,
-)
 from app.modules.agent.infrastructure.models import MessageModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.runtime_models import AgentHostCommandModel
@@ -117,8 +114,12 @@ async def test_a_decision_the_host_cannot_be_given_is_not_written_either(
     async def _unavailable(self, **_kwargs):
         raise OperationalError("INSERT", {}, ConnectionError("database went away"))
 
+    # The database half of the decision fails, the way a connection dropping
+    # mid-transaction does; everything the request runs through stays real.
     monkeypatch.setattr(
-        AgentHostDispatchRepository, "enqueue_permission_decision", _unavailable
+        "app.modules.agent.infrastructure.agent_host.dispatch_repository."
+        "AgentHostDispatchRepository.enqueue_permission_decision",
+        _unavailable,
     )
     with pytest.raises(OperationalError):
         await scenario.owner_client.post(

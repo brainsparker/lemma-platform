@@ -115,7 +115,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
     conversation = await ConversationRepository(uow).get_conversation(conversation_id)
     assert conversation is not None
     applier = RunEventApplier(lambda: SqlAlchemyUnitOfWork(db_session), None)
-    await applier.apply(
+    await applier.events_for(
         AgentHostEventNormalizer(agent_run_id=new_run.id, model_name="claude"),
         StreamedEvent(
             stream_id="1-0",

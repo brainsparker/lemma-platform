@@ -11,6 +11,7 @@ from app.modules.agent.services.conversation_approvals import (
     ApprovalCoordinator,
 )
 from app.modules.agent.services.conversation_queries import ConversationQueries
+from app.modules.agent.services.conversation_pauses import ConversationPauses
 from app.modules.agent.services.conversation_turns import TurnCoordinator
 from app.modules.agent.services.send_window import SendWindow, window_key
 from app.modules.agent.domain.queued_messages import CLIENT_MESSAGE_ID
@@ -23,7 +24,6 @@ from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.services.conversation_access import (
-    authorized_conversation,
     resolve_expected_agent_id,
     require_agent_action,
     require_agent_actions,
@@ -43,9 +43,7 @@ from app.modules.agent.domain.ports import (
     AgentRepository,
     ConversationRepository,
 )
-from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.value_objects import (
-    AgentRunApprovalDecision,
     AgentRunStartResult,
     AgentRuntimeConfig,
     ConversationType,
@@ -59,18 +57,10 @@ from app.modules.agent.services.runtime_availability import (
     ensure_turn_runtime_available,
 )
 from app.modules.usage.contracts.execution import UsageService
-from app.modules.agent.services.pause_resume import (
-    PAUSING_TOOL_NAMES,
-    PauseResume,
-)
+from app.modules.agent.services.pause_resume import PauseResume
 
 
-# Defined with the primitive that consumes it, so the list and the resume path
-# that depends on it cannot drift apart.
-_PAUSING_TOOL_NAMES = PAUSING_TOOL_NAMES
-
-
-class ConversationService:
+class ConversationService(ConversationPauses):
     """Application service for conversation storage and run coordination."""
 
     def __init__(
@@ -266,156 +256,6 @@ class ConversationService:
             conversation.is_archived = is_archived
 
         return await self.conversation_repository.update_conversation(conversation)
-
-    async def resolve_user_approval(
-        self,
-        *,
-        conversation_id: UUID,
-        approval_id: str,
-        user_id: UUID,
-        pod_id: UUID,
-        decision: AgentRunApprovalDecision,
-        response: dict[str, object] | None = None,
-        agent_name: str | None = None,
-        defer_reconciliation: bool = False,
-    ) -> ApprovalResolution:
-        """Record the user's decision and resume the paused agent run.
-
-        ``ask_user`` / ``request_approval`` end their run when called (conversation
-        -> WAITING) instead of blocking. This records the decision durably, then
-        synthesizes the tool's return (the answers, or the approved tool's result
-        run as the user, or a denial) and starts a fresh run that replays it from
-        history so the agent continues where it left off.
-
-        This is the HTTP entry point: it authorizes the caller, then delegates to
-        :meth:`resolve_user_approval_internal`. Surface ingress (which has already
-        authorized the external user against the conversation owner) calls the
-        internal method directly with the loaded conversation.
-        """
-        conversation = await authorized_conversation(
-            self.conversation_repository,
-            self.agent_repository,
-            conversation_id=conversation_id,
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_name=agent_name,
-            action=Permissions.AGENT_EXECUTE,
-        )
-        return await self.resolve_user_approval_internal(
-            conversation=conversation,
-            approval_id=approval_id,
-            user_id=user_id,
-            pod_id=pod_id,
-            decision=decision,
-            response=response,
-            agent_name=agent_name,
-            defer_reconciliation=defer_reconciliation,
-        )
-
-    async def resolve_user_approval_internal(
-        self,
-        *,
-        conversation: Conversation,
-        approval_id: str,
-        user_id: UUID,
-        pod_id: UUID,
-        decision: AgentRunApprovalDecision,
-        response: dict[str, object] | None = None,
-        agent_name: str | None = None,
-        defer_reconciliation: bool = False,
-    ) -> ApprovalResolution:
-        """Resume a paused run for an already-authorized + loaded conversation.
-
-        Kept on the service because `agent_surfaces` reaches this and
-        `get_pending_user_interaction` off one import of this class; see
-        `ApprovalCoordinator` for what it does.
-        """
-        return await self.approvals.resolve_user_approval_internal(
-            conversation=conversation,
-            approval_id=approval_id,
-            user_id=user_id,
-            pod_id=pod_id,
-            decision=decision,
-            response=response,
-            agent_name=agent_name,
-            defer_reconciliation=defer_reconciliation,
-        )
-
-    async def get_pending_ask_user(
-        self,
-        *,
-        conversation_id: UUID,
-    ) -> dict[str, object] | None:
-        """Oldest unresolved ``ask_user`` pause for a conversation, or ``None``.
-
-        Returns ``{tool_call_id, kind, tool_args, agent_run_id}``. Used by surface
-        ingress to render the questions on the surface (from a WAITING event) and
-        to route a typed reply back into the run as the answer.
-        """
-        return await self.approvals.oldest_unresolved_pause(
-            conversation_id=conversation_id,
-            tool_names=("ask_user",),
-        )
-
-    async def get_pending_approval(
-        self,
-        *,
-        conversation_id: UUID,
-    ) -> dict[str, object] | None:
-        """Oldest unresolved ``request_approval`` pause, or ``None``.
-
-        The approval counterpart of :meth:`get_pending_ask_user`, and it has to
-        be its own lookup rather than a filter applied to
-        :meth:`get_pending_user_interaction`. That one answers "what is this
-        conversation waiting on", of *any* pausing kind, which is right for
-        routing a typed reply back — a person answering in words answers
-        whatever is pending. It is wrong for rendering, because a conversation
-        can hold more than one unresolved pause at a time: an `ask_user` nobody
-        ever tapped stays unresolved forever, and being older it is the one
-        returned. The approval card then had nothing to render and the run sat
-        WAITING with nobody told.
-        """
-        return await self.approvals.oldest_unresolved_pause(
-            conversation_id=conversation_id,
-            tool_names=("request_approval",),
-        )
-
-    async def get_pending_sign_in(
-        self,
-        *,
-        conversation_id: UUID,
-    ) -> dict[str, object] | None:
-        """Oldest unresolved ``browser_sign_in`` pause, or ``None``.
-
-        Its own lookup for the same reason :meth:`get_pending_approval` is: a
-        conversation can hold several unresolved pauses, and the oldest of *any*
-        kind is the wrong one to render a sign-in link for.
-
-        This is what replaced a table. A sign-in used to write a row carrying
-        the origin, the reason and a status -- all three of which are already
-        here: the first two in the paused call's arguments, and the third in
-        whether this returns anything at all.
-        """
-        return await self.approvals.oldest_unresolved_pause(
-            conversation_id=conversation_id,
-            tool_names=("browser_sign_in",),
-        )
-
-    async def get_pending_user_interaction(
-        self,
-        *,
-        conversation_id: UUID,
-    ) -> dict[str, object] | None:
-        """Oldest unresolved pausing tool call (``ask_user`` or
-        ``request_approval``) for a conversation, or ``None``.
-
-        Returns ``{tool_call_id, kind, tool_args, agent_run_id}``. Used by
-        surface ingress to route a typed reply back into the paused run.
-        """
-        return await self.approvals.oldest_unresolved_pause(
-            conversation_id=conversation_id,
-            tool_names=_PAUSING_TOOL_NAMES,
-        )
 
     async def add_user_message_and_start_run(
         self,

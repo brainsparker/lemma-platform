@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from functools import lru_cache
 
+from redis.exceptions import RedisError
+
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
@@ -32,7 +34,7 @@ class UnavailableModels:
     async def mark(self, *, profile_id: str, model_name: str) -> None:
         try:
             await self._cache.set_json(_key(profile_id, model_name), {"404": True})
-        except Exception:  # noqa: BLE001 - a lost hint only costs one more 404
+        except RedisError, OSError, TimeoutError:  # a lost hint only costs one more 404
             logger.warning(
                 "agent.runtime_availability.mark_failed.degraded",
                 profile_id=profile_id,
@@ -42,7 +44,7 @@ class UnavailableModels:
     async def is_marked(self, *, profile_id: str, model_name: str) -> bool:
         try:
             return await self._cache.get_json(_key(profile_id, model_name)) is not None
-        except Exception:  # noqa: BLE001 - the provider is still the authority
+        except RedisError, OSError, TimeoutError:  # the provider is still the authority
             logger.warning(
                 "agent.runtime_availability.lookup_failed.degraded",
                 profile_id=profile_id,

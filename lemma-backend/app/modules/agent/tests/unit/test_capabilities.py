@@ -171,6 +171,30 @@ def test_showing_your_work_is_taught_on_both_paths():
     assert "display_resource" in remote.read_text()
 
 
+def test_independent_calls_are_invited_into_one_turn_on_both_paths():
+    """Nothing set or forbade parallel calls, and no fragment invited them, so
+    a run made one read per model turn. The reply rules are the one prompt every
+    run gets on both harnesses, so that is where the invitation lives."""
+    from app.modules.agent.domain.entities import Agent, Conversation
+    from app.modules.agent.domain.prompts import build_agent_instructions
+
+    conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="reader",
+        instruction="",
+    )
+    for include_fragments in (True, False):
+        prompt = build_agent_instructions(
+            agent=agent,
+            conversation=conversation,
+            ctx=SimpleNamespace(run_toolsets=[]),
+            include_toolset_prompts=include_fragments,
+        )
+        assert "as parallel tool calls" in " ".join(prompt.split())
+
+
 def test_the_workspace_contract_follows_the_machine_the_commands_run_on():
     """A run whose `exec_command` is on the user's Mac is told about the Mac."""
     from app.modules.agent.capabilities.assembler import _instructions_for
@@ -538,6 +562,10 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
     assert "0 of 2 done" in planned["reminder"]
     # The exact call to make, in the task's own words, so flipping it is copying.
     assert "- [x] Fetch the Q3 report" in planned["reminder"]
+    # Check off promptly -- but the list is no lock on the work: nothing says
+    # to finish one item before touching the next.
+    assert "as soon as it is finished" in planned["reminder"]
+    assert "before starting" not in planned["reminder"]
 
     flipped = await call({"todos": ["- [x] Fetch the Q3 report"]})
     assert flipped["todos"] == ["- [x] Fetch the Q3 report", "- [ ] Summarize"]

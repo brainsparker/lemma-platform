@@ -7,6 +7,7 @@ worker wherever it was before.
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID
 
 from app.modules.usage.contracts.execution import build_usage_service
@@ -31,7 +32,41 @@ async def reconcile_agent_approval(
 ) -> None:
     """Execute a durable approval decision outside the HTTP request deadline."""
     worker_ctx: AppWorkerContext = streaq_worker.context
-    await reconcile_agent_approval_now(context, uow_factory=worker_ctx.uow_factory)
+    await reconcile_reporting_failure(context, uow_factory=worker_ctx.uow_factory)
+
+
+async def reconcile_reporting_failure(
+    context: dict[str, str | None],
+    *,
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    """Reconcile, and tell the conversation's platform if that fails.
+
+    A chat tap on Approve is answered "running it now" before this job runs,
+    so a failure here is a broken promise the person would otherwise never
+    hear about. Not on a cancellation: a worker shutting down hands the job to
+    the next one, and nothing has failed yet. The failure still propagates, so
+    the job is recorded as failed.
+    """
+    outcome = "failed"
+    try:
+        await reconcile_agent_approval_now(context, uow_factory=uow_factory)
+        outcome = "reconciled"
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
+    finally:
+        if outcome == "failed":
+            # Lazily, as `handlers` reaches the surfaces egress contract: it is
+            # only needed on this path, and importing it loads the platforms.
+            from app.modules.agent_surfaces.contracts.egress import (
+                report_approved_action_failed,
+            )
+
+            await report_approved_action_failed(
+                uow_factory=uow_factory,
+                conversation_id=UUID(str(context["conversation_id"])),
+            )
 
 
 async def reconcile_agent_approval_now(
@@ -93,4 +128,8 @@ async def reconcile_agent_approval_now(
             )
 
 
-__all__ = ["reconcile_agent_approval", "reconcile_agent_approval_now"]
+__all__ = [
+    "reconcile_agent_approval",
+    "reconcile_agent_approval_now",
+    "reconcile_reporting_failure",
+]

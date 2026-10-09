@@ -256,6 +256,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.delivery.part_reached_nobody.degraded': EventSpec('warning', frozenset({'part', 'platform'})),
     'agent_surfaces.display_resource_content.enrichment_skipped.diagnostic': EventSpec('debug', frozenset({'conversation_id', 'path', 'step'})),
     'agent_surfaces.display_resource_content.pod_file_unreadable.degraded': EventSpec('warning', frozenset({'conversation_id', 'path'})),
+    'agent_surfaces.egress.approval_failure_notice_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent_surfaces.egress.approval_not_delivered.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.egress.ask_user_not_delivered.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.egress.ask_user_render_skipped.degraded': EventSpec('warning', frozenset({'conversation_id'})),

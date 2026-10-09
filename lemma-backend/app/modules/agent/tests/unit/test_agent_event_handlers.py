@@ -16,7 +16,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
 )
-from app.modules.agent.events import handlers
+from app.modules.agent.events import approval_jobs, handlers
 from app.modules.agent.domain.run_projections import (
     StaleAgentRunRef,
     StrandedConversationRef,
@@ -458,17 +458,17 @@ class TestApprovalReconciliationJob:
         contexts: list,
     ) -> None:
         monkeypatch.setattr(
-            handlers,
+            approval_jobs,
             "ConversationRepository",
             lambda uow: _ApprovalRepository(
                 conversation=conversation, decision=decision
             ),
         )
-        monkeypatch.setattr(handlers, "AgentRepository", lambda uow: None)
+        monkeypatch.setattr(approval_jobs, "AgentRepository", lambda uow: None)
         monkeypatch.setattr(
-            handlers, "create_authorization_data_service", lambda uow: None
+            approval_jobs, "create_authorization_data_service", lambda uow: None
         )
-        monkeypatch.setattr(handlers, "build_usage_service", lambda uow: None)
+        monkeypatch.setattr(approval_jobs, "build_usage_service", lambda uow: None)
 
         class _Service:
             def __init__(self, **_kwargs) -> None:
@@ -480,14 +480,14 @@ class TestApprovalReconciliationJob:
                 contexts.append(get_current_context())
                 resolved.append(kwargs)
 
-        monkeypatch.setattr(handlers, "ConversationService", _Service)
+        monkeypatch.setattr(approval_jobs, "ConversationService", _Service)
 
         class _AuthData:
             async def build_user_context(self, **kwargs):
                 return SimpleNamespace(**kwargs)
 
         monkeypatch.setattr(
-            handlers, "create_authorization_data_service", lambda uow: _AuthData()
+            approval_jobs, "create_authorization_data_service", lambda uow: _AuthData()
         )
 
     def test_the_job_is_registered_on_the_worker(self) -> None:
@@ -513,7 +513,7 @@ class TestApprovalReconciliationJob:
             contexts=[],
         )
 
-        await handlers.reconcile_agent_approval_now(
+        await approval_jobs.reconcile_agent_approval_now(
             {
                 "conversation_id": str(conversation.id),
                 "approval_id": "call-1",
@@ -545,7 +545,7 @@ class TestApprovalReconciliationJob:
             contexts=contexts,
         )
 
-        await handlers.reconcile_agent_approval_now(
+        await approval_jobs.reconcile_agent_approval_now(
             {
                 "conversation_id": str(conversation.id),
                 "approval_id": "call-1",
@@ -573,7 +573,7 @@ class TestApprovalReconciliationJob:
             contexts=[],
         )
 
-        await handlers.reconcile_agent_approval_now(
+        await approval_jobs.reconcile_agent_approval_now(
             {
                 "conversation_id": str(uuid4()),
                 "approval_id": "call-1",

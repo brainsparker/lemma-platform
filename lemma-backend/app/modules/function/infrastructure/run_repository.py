@@ -55,6 +55,18 @@ def _expired_run_error(run, *, now: datetime) -> str:
     )
 
 
+def _after_run(run_id: UUID):
+    """Keyset condition: runs ordered after ``run_id`` by (created_at, id)."""
+    after_created_at = (
+        select(FunctionRunModel.created_at)
+        .where(FunctionRunModel.id == run_id)
+        .scalar_subquery()
+    )
+    return tuple_(FunctionRunModel.created_at, FunctionRunModel.id) > tuple_(
+        after_created_at, literal(run_id, FunctionRunModel.id.type)
+    )
+
+
 class FunctionRunRepository(FunctionRunRepositoryPort):
     def __init__(
         self,
@@ -279,15 +291,7 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
             .limit(limit)
         )
         if after is not None:
-            after_created_at = (
-                select(FunctionRunModel.created_at)
-                .where(FunctionRunModel.id == after)
-                .scalar_subquery()
-            )
-            statement = statement.where(
-                tuple_(FunctionRunModel.created_at, FunctionRunModel.id)
-                > tuple_(after_created_at, literal(after, FunctionRunModel.id.type))
-            )
+            statement = statement.where(_after_run(after))
         return list((await self.session.scalars(statement)).all())
 
     async def list_runs_by_function(

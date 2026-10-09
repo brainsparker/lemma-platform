@@ -74,13 +74,15 @@ class PodRunGate:
         self,
         *,
         limit: int,
-        redis_factory: Callable[[], Redis] = get_redis,
+        redis_factory: Callable[[], Redis] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         if limit < 1:
             raise ValueError("pod run limit must be positive")
         self._limit = limit
-        self._redis_factory = redis_factory
+        # Resolved at call time, not bound as a default at import: a test that
+        # patches the module's `get_redis` must reach this gate too.
+        self._redis_factory = redis_factory or (lambda: get_redis())
         self._now = now
 
     @staticmethod

@@ -46,6 +46,9 @@ ORPHANED_RUN_ERROR = (
     "partly run and was not retried"
 )
 
+#: Orphaned runs failed per transaction when a sandbox is destroyed.
+_ORPHANED_RUNS_PAGE = 200
+
 
 class FunctionRuntimeQuarantine:
     def __init__(
@@ -104,17 +107,28 @@ class FunctionRuntimeQuarantine:
         *,
         started_before: datetime,
     ) -> None:
-        async with self._uow_factory() as uow:
-            failed = await FunctionExecutionRepository(uow).fail_in_flight_on_pod(
-                pod_id,
-                started_before=started_before,
-                error=ORPHANED_RUN_ERROR,
-            )
-        for run_id in failed:
-            await self._pod_runs.release(pod_id, run_id)
-        if failed:
+        # In pages, each its own transaction: the pod's run gate keeps the
+        # in-flight set far below a page, but nothing here should hold an
+        # unbounded set of row locks if it ever is not.
+        total = 0
+        while True:
+            async with self._uow_factory() as uow:
+                failed = await FunctionExecutionRepository(uow).fail_in_flight_on_pod(
+                    pod_id,
+                    started_before=started_before,
+                    error=ORPHANED_RUN_ERROR,
+                    limit=_ORPHANED_RUNS_PAGE,
+                )
+            for run_id in failed:
+                await self._pod_runs.release(pod_id, run_id)
+            total += len(failed)
+            # A failed run leaves RUNNING, so the next page is new rows; a row
+            # another transaction holds is skipped, never returned again.
+            if len(failed) < _ORPHANED_RUNS_PAGE:
+                break
+        if total:
             logger.warning(
                 "function.runtime.orphaned_runs_failed",
                 pod_id=str(pod_id),
-                run_count=len(failed),
+                run_count=total,
             )

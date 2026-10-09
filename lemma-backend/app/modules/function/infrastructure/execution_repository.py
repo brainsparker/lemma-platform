@@ -289,8 +289,10 @@ class FunctionExecutionRepository:
         *,
         started_before: datetime,
         error: str,
+        limit: int,
     ) -> list[UUID]:
-        """Fail the asynchronous runs a destroyed pod sandbox was executing.
+        """Fail up to ``limit`` asynchronous runs a destroyed pod sandbox was
+        executing, oldest first.
 
         Only job-backed runs: a synchronous one holds its own connection to
         the sandbox and fails through it. Rows another transaction holds are
@@ -306,6 +308,8 @@ class FunctionExecutionRepository:
                     FunctionRunModel.job_id.is_not(None),
                     FunctionRunModel.started_at <= started_before,
                 )
+                .order_by(FunctionRunModel.started_at, FunctionRunModel.id)
+                .limit(limit)
                 .with_for_update(of=FunctionRunModel, skip_locked=True)
             )
         ).all()

@@ -187,9 +187,20 @@ def failure_events(
     agent_run_id: UUID,
     message: str,
 ) -> list[AgentEvent]:
-    """Close whatever the run left open, then fail it."""
+    """Keep what the agent wrote, close whatever it left open, then fail it.
+
+    Everything the agent said and thought since its last tool call lives only
+    in the normalizer until a flush, and on a long run that stretch is usually
+    the report. Flushed as ordinary, non-final messages: the run is failing, so
+    nothing here may claim to be its answer, and the recorded final answer is
+    deliberately not adopted (``adopt_recorded_final_answer``).
+    """
     terminal = error_event(agent_run_id, message)
-    return [*normalizer.close_outstanding(terminal), terminal]
+    return [
+        *normalizer.flush_messages(final=False),
+        *normalizer.close_outstanding(terminal),
+        terminal,
+    ]
 
 
 def terminal_checkpoint_state(

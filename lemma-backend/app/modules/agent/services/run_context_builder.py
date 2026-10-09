@@ -27,6 +27,11 @@ from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.private_notes import keeper_started, run_is_private
+from app.modules.agent.domain.run_context_prompt import (
+    render_run_context,
+    task_list_section,
+)
+from app.modules.agent.capabilities.open_notifications import open_notification_text
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.attached_document_brief import (
     build_attached_document_section,
@@ -130,29 +135,31 @@ async def build_run_context(
         supports_pause_signal=(resolved_runtime.harness_kind == HarnessKind.LEMMA),
         is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
         memory_enabled=memory_is_active(run_toolsets),
+        run_toolsets=run_toolsets,
         grant_summary=grant_summary,
         audience=audience,
         delivers_to_surface=not run_is_private(agent_run.metadata),
         keeper_asking=for_outsider and keeper_started(agent_run.metadata),
         **surface_context,
     )
+    run_brief = ""
     try:
-        ctx.context_brief = (
-            await link_brief(
+        if audience.asking_pod_id is not None:
+            ctx.context_brief = await link_brief(
                 uow_factory,
                 pod_id=conversation.pod_id,
                 asking_pod_id=audience.asking_pod_id,
                 steward_user_id=user_id,
             )
-            if audience.asking_pod_id is not None
-            else await outsider_brief(
+        elif for_outsider:
+            ctx.context_brief = await outsider_brief(
                 uow_factory,
                 pod_id=conversation.pod_id,
                 owner_user_id=user_id,
                 contact_id=audience.contact_id,
             )
-            if for_outsider
-            else await AgentContextBriefBuilder(uow_factory).build(
+        else:
+            brief = await AgentContextBriefBuilder(uow_factory).build(
                 agent=agent,
                 conversation=conversation,
                 toolsets=run_toolsets,
@@ -164,7 +171,7 @@ async def build_run_context(
                 # this turn.
                 run_source=run_source_of(agent_run),
             )
-        )
+            ctx.context_brief, run_brief = brief.stable, brief.per_run
     # The failures a run should survive: a denied grant, a missing file, a
     # database or storage blip. Not a TypeError -- `agent_memory_brief` says a
     # real authorization failure "should fail the brief, not hide as an empty
@@ -195,6 +202,17 @@ async def build_run_context(
             conversation_id=str(conversation.id),
             exc_info=True,
         )
+    # Never on a stranger's run: an open request is the owner's to answer.
+    if not for_outsider:
+        ctx.open_notifications = await open_notification_text(conversation.id)
+    ctx.run_context = render_run_context(
+        sections=(
+            run_brief,
+            ctx.attached_document,
+            task_list_section(conversation, toolsets=run_toolsets),
+            ctx.open_notifications,
+        )
+    )
     # How image-returning tools answer on this run. Settled before the
     # toolset is built, because the assembler needs it: `view_image` is
     # offered whenever the mode can answer at all, and withholding it on

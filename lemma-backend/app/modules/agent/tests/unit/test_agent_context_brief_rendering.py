@@ -123,17 +123,14 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
     SCHEDULED = {"started_by": "SCHEDULE", "schedule_name": "daily-invoices"}
 
     def test_a_scheduled_firing_is_told_nobody_is_watching(self):
-        framed = brief_lines.with_run_framing(
-            "BRIEF", conversation=SimpleNamespace(metadata=self.SCHEDULED)
-        )
+        framed = brief_lines.run_framing(SimpleNamespace(metadata=self.SCHEDULED))
         assert "daily-invoices" in framed
         assert "Assume nobody is watching" in framed
 
     def test_a_person_typing_into_a_scheduled_conversation_is_not_ignored(self):
         """``started_by`` stays on the conversation; a person may return to it."""
-        framed = brief_lines.with_run_framing(
-            "BRIEF",
-            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+        framed = brief_lines.run_framing(
+            SimpleNamespace(metadata=self.SCHEDULED),
             run_source="user_message",
         )
         assert "Assume nobody is watching" not in framed
@@ -148,9 +145,8 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         responded was told nothing had come from a person — so it would carry on
         as though unattended and file its answer away from them.
         """
-        framed = brief_lines.with_run_framing(
-            "BRIEF",
-            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+        framed = brief_lines.run_framing(
+            SimpleNamespace(metadata=self.SCHEDULED),
             run_source="approval_resume",
         )
         assert "Assume nobody is watching" not in framed
@@ -158,18 +154,16 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
 
     def test_an_approval_resume_says_so_outside_a_schedule_too(self):
         """Most approvals happen in an ordinary conversation."""
-        framed = brief_lines.with_run_framing(
-            "BRIEF",
-            conversation=SimpleNamespace(metadata={}),
+        framed = brief_lines.run_framing(
+            SimpleNamespace(metadata={}),
             run_source="approval_resume",
         )
         assert "A person answered what you were waiting on" in framed
 
     def test_a_snooze_resume_is_a_timer_not_a_person(self):
         """The other resume: nobody pressed anything, a clock came due."""
-        framed = brief_lines.with_run_framing(
-            "BRIEF",
-            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+        framed = brief_lines.run_framing(
+            SimpleNamespace(metadata=self.SCHEDULED),
             run_source="wait_resume",
         )
         assert "Assume nobody is watching" in framed
@@ -181,23 +175,20 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         there, and claiming otherwise is the failure that costs somebody an
         answer. This is the shape that would have caught `approval_resume`.
         """
-        framed = brief_lines.with_run_framing(
-            "BRIEF",
-            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+        framed = brief_lines.run_framing(
+            SimpleNamespace(metadata=self.SCHEDULED),
             run_source="some_future_human_action",
         )
         assert "Assume nobody is watching" not in framed
 
     def test_the_unattended_wording_does_not_claim_the_reply_vanishes(self):
         """Replies are persisted. Nobody reading it *now* is the honest claim."""
-        framed = brief_lines.with_run_framing(
-            "BRIEF", conversation=SimpleNamespace(metadata=self.SCHEDULED)
-        )
+        framed = brief_lines.run_framing(SimpleNamespace(metadata=self.SCHEDULED))
         assert "still saved to this conversation" in framed
 
     def test_a_surface_run_is_told_where_the_person_is(self):
         conversation = SimpleNamespace(metadata={"surface_platform": "SLACK"})
-        framed = brief_lines.with_run_framing("BRIEF", conversation=conversation)
+        framed = brief_lines.run_framing(conversation)
         assert "arrived from slack" in framed
 
     def test_an_unmarked_run_is_told_its_budget_and_nothing_guessed_at(self):
@@ -210,9 +201,9 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         """
         conversation = SimpleNamespace(metadata={})
 
-        framing = brief_lines.with_run_framing("BRIEF", conversation=conversation)
+        framing = brief_lines.run_framing(conversation)
 
-        assert framing.startswith("BRIEF")
+        assert framing.startswith("## This run")
         assert "steps" in framing and "minutes" in framing
         # The number never travels alone. Stated bare, a ceiling reads as a
         # target and the run hurries to fit it; the limit is only there for a
@@ -229,17 +220,15 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
     def test_an_unattended_run_is_told_to_take_the_time_it_needs(self):
         conversation = SimpleNamespace(metadata={"started_by": "SCHEDULE"})
 
-        framing = brief_lines.with_run_framing(
-            "BRIEF", conversation=conversation, run_source="wait_resume"
-        )
+        framing = brief_lines.run_framing(conversation, run_source="wait_resume")
 
         assert "Take the time the work needs" in framing
         assert "A person is waiting" not in framing
 
     def test_a_conversation_with_no_metadata_at_all_is_safe(self):
-        framing = brief_lines.with_run_framing("BRIEF", conversation=SimpleNamespace())
+        framing = brief_lines.run_framing(SimpleNamespace())
 
-        assert framing.startswith("BRIEF")
+        assert framing.startswith("## This run")
         assert "nobody is watching" not in framing.lower()
 
 

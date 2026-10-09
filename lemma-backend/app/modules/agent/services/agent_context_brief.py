@@ -24,7 +24,10 @@ its own entry and its own TTL, for the reason above.
 from __future__ import annotations
 
 from collections.abc import Collection
+from dataclasses import dataclass
 from uuid import UUID
+
+from pydantic import BaseModel, ValidationError
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.modules.agent.domain.agent_kind import AgentKind
@@ -48,8 +51,8 @@ from app.modules.agent.services.brief_lines import (
     more_note,
     table_line,
     top_level_file_entries,
+    run_framing,
     user_lines,
-    with_run_framing,
 )
 from app.modules.agent.services.agent_self_brief import (
     AgentSelfBriefBuilder,
@@ -108,10 +111,39 @@ def _get_brief_cache() -> RedisJsonCache | None:
     if _brief_cache is None or _brief_cache._ttl_seconds != ttl:
         _brief_cache = RedisJsonCache(
             redis_url=settings.redis_url,
-            key_prefix="agent:context-brief",
+            # Versioned: an entry is now the two halves below, and an entry
+            # in the old one-string shape must read as a miss, not a brief.
+            key_prefix="agent:context-brief:v2",
             ttl_seconds=ttl,
         )
     return _brief_cache
+
+
+class _Inventory(BaseModel):
+    """What the cache holds: the brief, split by how often each half changes.
+
+    ``files`` is the top-level file listing, which ordinary work changes -- an
+    upload, a report the agent saved -- so it goes in the run's context part
+    rather than the system prompt. Everything in ``stable`` changes only when
+    somebody reshapes the pod.
+    """
+
+    stable: str
+    files: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ContextBrief:
+    """The runtime brief in its two halves.
+
+    ``stable`` is appended to the system prompt and holds for the conversation;
+    ``per_run`` -- what started this run, the file listing, memory -- changes
+    between runs, and rides in the run's context part instead. Kept apart
+    because a changed byte in the system prompt re-reads the whole history.
+    """
+
+    stable: str
+    per_run: str
 
 
 def _cache_suffix(key: _BriefKey) -> str:
@@ -154,6 +186,16 @@ def _member_line(member) -> str:
     return f"- {who}{email}{role}{you} (to: {member.to})"
 
 
+def _decoded(raw: str | None) -> _Inventory | None:
+    """A cache entry, or None when there is none or it is not this shape."""
+    if raw is None:
+        return None
+    try:
+        return _Inventory.model_validate_json(raw)
+    except ValidationError:
+        return None
+
+
 class AgentContextBriefBuilder:
     """Assembles the runtime brief.
 
@@ -194,14 +236,14 @@ class AgentContextBriefBuilder:
         pod_id: UUID,
         toolsets: Collection[AgentToolset] = (),
         run_source: str | None = None,
-    ) -> str:
+    ) -> ContextBrief:
         # The pod default assistant runs with the user's permissions and sees the
         # whole pod; named agents see only what they're granted. This is the one
         # thing the conversation contributes, so it is resolved into the key.
         is_default = agent.kind is AgentKind.POD_DEFAULT
         with run_phase("context_brief") as span:
             key: _BriefKey = (agent.id, pod_id, user_id, is_default)
-            cached = await _get_cached_brief(key)
+            cached = _decoded(await _get_cached_brief(key))
             span.set_attribute("lemma.cache_hit", cached is not None)
             if cached is None:
                 cached = await self._build_uncached(
@@ -213,11 +255,10 @@ class AgentContextBriefBuilder:
                 )
             # Outside the cache, and for the same reason memory is: this varies
             # per conversation, and the cache is deliberately not keyed by one.
-            # Ahead of memory only so the volatile-most section still ends the
-            # brief.
-            brief = with_run_framing(
-                cached, conversation=conversation, run_source=run_source
+            memory = await self._memory_section(
+                agent=agent, pod_id=pod_id, user_id=user_id, toolsets=toolsets
             )
+            asks: list[str] = []
             if is_default:
                 # Per conversation too: which other pods this thread may ask,
                 # and how, depends on who reads it and whether anyone is here.
@@ -228,38 +269,40 @@ class AgentContextBriefBuilder:
                     pod_id=pod_id,
                     user_id=user_id,
                 )
-                if asks:
-                    brief = brief + "\n" + "\n".join(asks)
-            return await self._with_memory(
-                brief, agent=agent, pod_id=pod_id, user_id=user_id, toolsets=toolsets
+            per_run = (
+                run_framing(conversation, run_source=run_source),
+                "\n".join(asks),
+                cached.files,
+                memory,
+            )
+            return ContextBrief(
+                stable=cached.stable,
+                per_run="\n\n".join(part.strip() for part in per_run if part.strip()),
             )
 
-    async def _with_memory(
+    async def _memory_section(
         self,
-        inventory: str,
         *,
         agent: Agent,
         pod_id: UUID,
         user_id: UUID,
         toolsets: Collection[AgentToolset],
     ) -> str:
-        """Append the memory section, which is cached and invalidated apart.
+        """The memory section, which is cached and invalidated apart.
 
         Outside the inventory cache above, not inside it: memory changes when
         this agent writes a fact mid-conversation, and baking it into a 60s
         entry is exactly how an agent ends up unable to recall what it just
-        learned. Appended last for the same reason -- the volatile part belongs
-        after the stable one, so everything before it stays cacheable.
+        learned.
 
         Gated on the same predicate the prompt fragment uses: an agent with no
         way to reach a pod file is never shown folders it cannot write to.
         """
         if not memory_is_active(toolsets):
-            return inventory
-        section = await AgentMemoryBriefBuilder(self.uow_factory).build(
+            return ""
+        return await AgentMemoryBriefBuilder(self.uow_factory).build(
             agent=agent, pod_id=pod_id, user_id=user_id
         )
-        return f"{inventory}\n{section}" if section else inventory
 
     async def _build_uncached(
         self,
@@ -269,7 +312,7 @@ class AgentContextBriefBuilder:
         is_default: bool,
         user_id: UUID,
         pod_id: UUID,
-    ) -> str:
+    ) -> _Inventory:
         # uow 1: plain identity reads (no authorization context needed).
         async with self.uow_factory() as uow:
             repo = self._repo_factory()(uow)
@@ -300,8 +343,10 @@ class AgentContextBriefBuilder:
             )
         )
 
+        files: list[str] = []
         if is_default:
             lines.extend(await self._pod_inventory(pod_id=pod_id, user_id=user_id))
+            files = await self._file_lines(pod_id=pod_id, user_id=user_id)
         else:
             lines.extend(
                 await GrantedResourcesBrief(
@@ -311,9 +356,9 @@ class AgentContextBriefBuilder:
                 ).lines(agent=agent, pod_id=pod_id, user_id=user_id)
             )
 
-        brief = "\n".join(lines)
-        await _set_cached_brief(key, brief)
-        return brief
+        inventory = _Inventory(stable="\n".join(lines), files="\n".join(files))
+        await _set_cached_brief(key, inventory.model_dump_json())
+        return inventory
 
     async def _pod_inventory(self, *, pod_id: UUID, user_id: UUID) -> list[str]:
         """Everything in this pod, one section per kind of resource.
@@ -328,7 +373,6 @@ class AgentContextBriefBuilder:
         lines.extend(await self._people_lines(pod_id=pod_id, user_id=user_id))
         lines.extend(await self._workflow_lines(pod_id=pod_id, user_id=user_id))
         lines.extend(await self._function_lines(pod_id=pod_id))
-        lines.extend(await self._file_lines(pod_id=pod_id, user_id=user_id))
         return lines
 
     async def _table_lines(self, *, pod_id: UUID, user_id: UUID) -> list[str]:

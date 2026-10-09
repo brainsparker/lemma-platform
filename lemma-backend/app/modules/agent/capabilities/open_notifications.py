@@ -6,12 +6,13 @@ has no idea a question is outstanding, and no idea what the asker wanted done
 with the reply. Without this capability the reply is just chat: nothing comes
 back, and the asking run waits for something that will never arrive.
 
-So this injects, at run assembly, the open asks on this conversation: what was
+So this renders, once per run, the open asks on this conversation: what was
 sent, and the ``background_instruction`` the asker wrote — which the recipient
 never sees, and which is the only place the asker can say "record their status
-update" or "write the PO number into purchase_orders".
+update" or "write the PO number into purchase_orders". The text rides in the
+run's context part; the capability below carries the tools that answer it.
 
-Instructions, not a tool call, because the agent has to know *before* it decides
+In the prompt, not a tool call, because the agent has to know *before* it decides
 how to reply. A tool it must remember to call first is a tool it will sometimes
 not call, and the failure is silent.
 """
@@ -194,10 +195,13 @@ def render_open_notifications(notifications: list[dict]) -> str:
 
 
 class OpenNotificationsCapability(AbstractCapability[object]):
-    """Standing awareness of what this person owes, plus the tool to close it."""
+    """The tools that close an open request.
 
-    def __init__(self, instructions: str) -> None:
-        self._instructions = instructions
+    The requests themselves are not instructions here: they change the moment
+    somebody answers, so they ride in the run's context part
+    (``domain/run_context_prompt``) where a change costs only their own length,
+    rather than in the system prompt where it re-reads the whole history.
+    """
 
     def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
         return "open_notifications"
@@ -216,18 +220,14 @@ class OpenNotificationsCapability(AbstractCapability[object]):
         """
         return GracefulToolset(respond_toolset)
 
-    def get_instructions(self) -> str:
-        return self._instructions
 
+async def open_notification_text(conversation_id: UUID) -> str | None:
+    """What this person owes an answer to, rendered; None when nothing is open.
 
-async def build_open_notifications_capability(
-    conversation_id: UUID,
-) -> OpenNotificationsCapability | None:
-    """None when nothing is open — the common case, and it must cost nothing.
-
-    Deliberately not cached in the prompt prefix: unlike the platform fragment,
-    this changes the moment somebody answers, and a stale copy would have an
-    agent chasing a question that is already closed.
+    None is the common case, and it must cost nothing beyond the one read.
+    Read once per run by the run-context builder, for both harnesses: the
+    in-process one offers the respond tools when it is set, and an Agent Host
+    run reaches the same tools over MCP.
     """
     from app.modules.agent_surfaces.contracts.notifications import (
         open_notifications_for_conversation,
@@ -237,15 +237,4 @@ async def build_open_notifications_capability(
     # lookup fails — a conversation must keep working, and the cost of a failed
     # read is a missed answer rather than a broken reply.
     notifications = await open_notifications_for_conversation(conversation_id)
-    instructions = render_open_notifications(notifications)
-    return OpenNotificationsCapability(instructions) if instructions else None
-
-
-async def open_notification_instructions(conversation_id: UUID) -> str | None:
-    """The same standing instructions, for a harness with no capabilities.
-
-    An Agent Host run reaches its tools over MCP and its instructions through
-    the prompt, so it takes the text rather than the capability.
-    """
-    capability = await build_open_notifications_capability(conversation_id)
-    return capability.get_instructions() if capability is not None else None
+    return render_open_notifications(notifications) or None

@@ -30,7 +30,7 @@ from app.modules.agent.services.runtime_model_factory import provider_model_sett
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.domain.queued_messages import STEERED_INTO_RUN
-from app.modules.agent.domain.runtime_notes import prepend_runtime_notes
+from app.modules.agent.domain.run_context_prompt import run_context_for
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     ConversationType,
@@ -106,14 +106,14 @@ def run_start_payload(
     runtime_instructions: str,
     carries_history: bool,
     resumed_tool_call_id: str | None = None,
-    open_notifications: str | None = None,
 ) -> JsonObject:
     """Everything one dispatched run needs, and nothing it does not.
 
-    ``open_notifications`` is what this person still owes an answer to, as the
-    in-process harness's capability renders it. It rides in the turn's prompt,
-    not the system prompt: it changes the moment somebody answers, and the
-    system prompt is delivered once per provider session.
+    The run's context part -- the clock, the task list, memory, the attached
+    doc, what this person still owes an answer to -- rides in the turn's
+    prompt, not the system prompt: it changes from run to run, and the system
+    prompt is delivered once per provider session, re-sent whenever its digest
+    changes.
 
     ``carries_history`` is set when the run is not even going to try to resume a
     provider session, so the prompt has to bring the conversation with it, and
@@ -140,7 +140,6 @@ def run_start_payload(
             ),
             ctx=ctx,
             runtime_instructions=runtime_instructions,
-            open_notifications=open_notifications,
         ),
     }
 
@@ -303,7 +302,6 @@ def _prompt_payload(
     messages: Sequence[Message],
     ctx: AgentContext,
     runtime_instructions: str,
-    open_notifications: str | None = None,
 ) -> JsonObject:
     sections: list[str] = []
     instructions = build_agent_instructions(
@@ -324,10 +322,9 @@ def _prompt_payload(
     # spec carries only system_prompt + user_prompt, and the schema reaches the
     # agent as the `lemma_final_answer` tool's inputSchema over MCP.
     history = _render_history(messages)
-    if open_notifications:
-        history = open_notifications + ("\n\n" + history if history else "")
+    run_context = run_context_for(ctx)
     return {
-        "user_prompt": prepend_runtime_notes(history),
+        "user_prompt": run_context + ("\n\n" + history if history else ""),
         "system_prompt": "\n\n".join(section for section in sections if section),
     }
 

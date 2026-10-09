@@ -9,10 +9,15 @@ label defusing, attachments -- has to reach the others.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 from app.modules.agent.domain.private_notes import defuse_lemma_labels, lemma_label
 from app.modules.agent.domain.surface_prompts import attachment_listing_block
-from app.modules.agent.domain.value_objects import to_json_value
+from app.modules.agent.domain.value_objects import (
+    MessageKind,
+    MessageRole,
+    to_json_value,
+)
 from app.modules.agent.infrastructure.harnesses.channel_context import (
     audience_block,
     channel_context_block,
@@ -25,6 +30,37 @@ from app.modules.agent.infrastructure.harnesses.sender_labels import (
 
 def _message_text(msg: object) -> str:
     return getattr(msg, "text", None) or ""
+
+
+def timed_user_prompt_text(msg: object, *, with_roster: bool = True) -> str:
+    """A person's message as the model reads it, with when they sent it.
+
+    The time comes from the stored message, not the clock, so a past turn
+    replays byte-for-byte on every later run and the provider's cached prefix
+    runs through it. A note stamped with "now" and never stored -- as this used
+    to be -- vanished from the replay, and the next run's prefix diverged at
+    the previous message, re-reading the whole run before it.
+    """
+    note = _sent_at_note(msg)
+    text = user_prompt_text(msg, with_roster=with_roster)
+    return f"{note}\n\n{text}" if note else text
+
+
+def _sent_at_note(msg: object) -> str | None:
+    """Only on a person's message: a notice Lemma made up has no sending time,
+    and one stamped when it was built would change on every run."""
+    if getattr(msg, "role", None) is not MessageRole.USER:
+        return None
+    if getattr(msg, "kind", None) is not MessageKind.TEXT:
+        return None
+    metadata = getattr(msg, "metadata", None)
+    if isinstance(metadata, dict) and metadata.get("synthetic"):
+        return None
+    sent = getattr(msg, "created_at", None)
+    if not isinstance(sent, datetime):
+        return None
+    stamp = sent.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"<notes>Sent {stamp} (UTC).</notes>"
 
 
 def user_prompt_text(msg: object, *, with_roster: bool = True) -> str:

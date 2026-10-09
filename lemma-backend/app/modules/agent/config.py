@@ -352,12 +352,15 @@ class AgentSettings(BaseSettings):
         description="Server-provided Lemma system model profile provider type.",
     )
     lemma_llm_caching_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Enable LLM prompt caching. Activates PromptCachingCapability, which "
-            "applies conversation-id session affinity on OPENAI_COMPATIBLE profiles "
-            "(e.g. Fireworks via lemma-cloud) and an explicit instruction cache "
-            "breakpoint on ANTHROPIC_COMPATIBLE profiles."
+            "Ask providers to reuse the cached prompt prefix. On "
+            "OPENAI_COMPATIBLE profiles this sends the baseline `user` field, "
+            "keyed on the pod and agent so a provider can route requests that "
+            "share a prompt start together; on ANTHROPIC_COMPATIBLE profiles it "
+            "marks cache breakpoints after the tool definitions, the system "
+            "prompt and the message history. Both are part of each protocol's "
+            "standard request, so turning this off only gives up the reuse."
         ),
     )
     lemma_openai_default_model: str = Field(

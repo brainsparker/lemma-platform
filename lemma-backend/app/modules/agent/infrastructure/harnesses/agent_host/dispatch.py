@@ -22,9 +22,6 @@ from app.modules.agent.domain.agent_host import NEW_SESSION_ONLY, AgentHostRunSp
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
-from app.modules.agent.capabilities.open_notifications import (
-    open_notification_instructions,
-)
 from app.modules.agent.domain.queued_messages import is_queued
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import JsonObject
@@ -377,7 +374,6 @@ async def _admit[DepsT: AgentContext](
         messages=messages,
         ctx=ctx,
         agent_run_id=agent_run_id,
-        open_notifications=await open_notification_instructions(conversation.id),
         runtime_instructions=load_agent_host_runtime_prompt(
             host_execution=bool(getattr(ctx, "host_runs_native_commands", False))
         ),
@@ -409,7 +405,9 @@ async def _admit[DepsT: AgentContext](
     # multi-kilobyte block into the provider's transcript per message, which it
     # then re-read in full on every turn after that. Skipped only when this
     # exact text is already known to have reached this session; the host still
-    # sends it if it ends up opening a new one.
+    # sends it if it ends up opening a new one. Only conversation-stable text is
+    # in it -- the task list, memory, the attached doc and open requests ride in
+    # the user prompt -- so an active conversation keeps one digest.
     system_prompt = str(
         prompt.get("system_prompt") or prompt.get("recovery_system_prompt") or ""
     )

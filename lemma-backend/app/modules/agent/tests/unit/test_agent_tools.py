@@ -11,7 +11,11 @@ from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.prompts import build_agent_instructions
-from app.modules.agent.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.domain.run_context_prompt import task_list_section
+from app.modules.agent.tools.toolset_selection import (
+    AgentGrantSummary,
+    resolve_toolset_names,
+)
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -1015,9 +1019,6 @@ def test_a_run_is_shown_the_task_list_it_is_supposed_to_be_ticking_off():
     trimming eventually drops. An agent that cannot see its own checklist cannot
     check anything off it -- which is how a plan gets written once and never
     updated again.
-
-    Both harnesses get this: the section is added outside the
-    `include_toolset_prompts` guard, like the working-directory one.
     """
     conversation = Conversation(
         pod_id=uuid4(),
@@ -1029,6 +1030,51 @@ def test_a_run_is_shown_the_task_list_it_is_supposed_to_be_ticking_off():
                 {"content": "Summarize findings", "done": False},
             ]
         },
+    )
+
+    section = task_list_section(conversation, toolsets=[AgentToolset.TODO])
+
+    assert section.startswith("# Your current task list")
+    assert "- [x] Fetch the Q3 report" in section
+    assert "- [ ] Summarize findings" in section
+    assert "1 of 2 done" in section
+    # Named, so picking up mid-plan needs no inference.
+    assert "Summarize findings**" in section
+
+
+def test_a_named_agent_that_never_declared_todo_is_still_shown_its_list():
+    """TODO is always on, so no agent row lists it. The task list used to be
+    gated on the declared list, and a named agent never saw the plan it had
+    written -- on either harness."""
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        metadata={"todos": [{"content": "Fetch the Q3 report", "done": False}]},
+    )
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="researcher",
+        instruction="Do the task.",
+        toolsets=[AgentToolset.WEB_SEARCH],
+    )
+    run_toolsets, _ = resolve_toolset_names(agent, conversation)
+
+    assert "Fetch the Q3 report" in task_list_section(
+        conversation, toolsets=run_toolsets
+    )
+
+
+def test_the_task_list_is_never_in_the_system_prompt():
+    """Every `write_todos` rewrites it. In the system prompt, each rewrite made
+    the next run re-read the whole history uncached; it rides in the run's
+    context part instead."""
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        metadata={"todos": [{"content": "Fetch the Q3 report", "done": False}]},
     )
     agent = Agent(
         pod_id=conversation.pod_id,
@@ -1045,32 +1091,14 @@ def test_a_run_is_shown_the_task_list_it_is_supposed_to_be_ticking_off():
             ctx=SimpleNamespace(surface_platform=None),
             include_toolset_prompts=include_fragments,
         )
-        assert "# Task list" in prompt
-        assert "- [x] Fetch the Q3 report" in prompt
-        assert "- [ ] Summarize findings" in prompt
-        assert "1 of 2 done" in prompt
-        # Named, so picking up mid-plan needs no inference.
-        assert "Summarize findings**" in prompt
+        assert "Fetch the Q3 report" not in prompt
 
 
 def test_a_conversation_that_never_planned_is_not_nagged_about_a_task_list():
     """An agent with no list should decide whether the work needs one."""
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
-    agent = Agent(
-        pod_id=conversation.pod_id,
-        user_id=conversation.user_id,
-        name="researcher",
-        instruction="Do the task.",
-        toolsets=[AgentToolset.TODO],
-    )
 
-    prompt = build_agent_instructions(
-        agent=agent,
-        conversation=conversation,
-        ctx=SimpleNamespace(surface_platform=None),
-    )
-
-    assert "This conversation already has a task list" not in prompt
+    assert task_list_section(conversation, toolsets=[AgentToolset.TODO]) == ""
 
 
 def test_an_agent_without_the_todo_toolset_is_never_shown_a_task_list():
@@ -1081,23 +1109,8 @@ def test_an_agent_without_the_todo_toolset_is_never_shown_a_task_list():
         agent_id=uuid4(),
         metadata={"todos": [{"content": "Fetch the Q3 report", "done": False}]},
     )
-    agent = Agent(
-        pod_id=conversation.pod_id,
-        user_id=conversation.user_id,
-        name="builder",
-        instruction="Do the task.",
-        toolsets=[AgentToolset.WORKSPACE_CLI],
-    )
 
-    prompt = build_agent_instructions(
-        agent=agent,
-        conversation=conversation,
-        ctx=SimpleNamespace(
-            workspace_cwd=f"{WORKSPACE_ROOT}/c/x/y", surface_platform=None
-        ),
-    )
-
-    assert "# Task list" not in prompt
+    assert task_list_section(conversation, toolsets=[AgentToolset.WORKSPACE_CLI]) == ""
 
 
 def test_a_finished_plan_is_shown_as_history_rather_than_as_work():
@@ -1108,22 +1121,11 @@ def test_a_finished_plan_is_shown_as_history_rather_than_as_work():
         agent_id=uuid4(),
         metadata={"todos": [{"content": "Ship it", "done": True}]},
     )
-    agent = Agent(
-        pod_id=conversation.pod_id,
-        user_id=conversation.user_id,
-        name="researcher",
-        instruction="Do the task.",
-        toolsets=[AgentToolset.TODO],
-    )
 
-    prompt = build_agent_instructions(
-        agent=agent,
-        conversation=conversation,
-        ctx=SimpleNamespace(surface_platform=None),
-    )
+    section = task_list_section(conversation, toolsets=[AgentToolset.TODO])
 
-    assert "Every item on this conversation's list is finished" in prompt
-    assert "replaces the old one" in prompt
+    assert "Every item on this conversation's list is finished" in section
+    assert "replaces the old one" in section
 
 
 def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
@@ -2077,39 +2079,55 @@ def test_persisted_agent_prompt_includes_web_search_with_toolset():
 
 def test_remote_harness_instructions_include_todo_guidance_only_with_toolset():
     # Remote harnesses get toolset prompts folded into instructions (no capability
-    # layer). The todo task-list guidance must ride along — but only when the agent
-    # actually has TODO — so they behave like the in-process LEMMA harness.
+    # layer). The todo guidance must ride along -- but only when the run actually
+    # has TODO -- so they behave like the in-process LEMMA harness.
     pod_id, user_id = uuid4(), uuid4()
     conversation = Conversation(pod_id=pod_id, user_id=user_id, agent_id=uuid4())
+    agent = Agent(pod_id=pod_id, user_id=user_id, name="planner", instruction="x")
 
-    without_todo = Agent(
-        pod_id=pod_id, user_id=user_id, name="plain", instruction="x", toolsets=[]
-    )
     assert "# Task list" not in build_agent_instructions(
-        agent=without_todo, conversation=conversation, ctx=object()
+        agent=agent, conversation=conversation, ctx=SimpleNamespace(run_toolsets=[])
     )
-
-    with_todo = Agent(
-        pod_id=pod_id,
-        user_id=user_id,
-        name="planner",
-        instruction="x",
-        toolsets=[AgentToolset.TODO],
-    )
+    with_todo = SimpleNamespace(run_toolsets=[AgentToolset.TODO])
     remote_prompt = build_agent_instructions(
-        agent=with_todo, conversation=conversation, ctx=object()
+        agent=agent, conversation=conversation, ctx=with_todo
     )
     assert "# Task list" in remote_prompt and "write_todos" in remote_prompt
 
     # The in-process LEMMA harness suppresses toolset prompts (the TodoCapability
     # supplies the same guidance), so it's not double-included here.
     lemma_prompt = build_agent_instructions(
-        agent=with_todo,
+        agent=agent,
         conversation=conversation,
-        ctx=object(),
+        ctx=with_todo,
         include_toolset_prompts=False,
     )
     assert "# Task list" not in lemma_prompt
+
+
+def test_a_named_agent_is_taught_the_tools_it_has_but_never_declared():
+    """The always-on toolsets reach every run, so their guidance must too.
+
+    Read from the agent row, a named coding agent driven through Agent Host was
+    handed `display_resource`, `write_todos` and the skills over MCP and told
+    about none of them.
+    """
+    conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="coder",
+        instruction="You write code.",
+        toolsets=[AgentToolset.WORKSPACE_CLI],
+    )
+
+    prompt = build_agent_instructions(
+        agent=agent, conversation=conversation, ctx=object()
+    )
+
+    assert "## Skills" in prompt
+    assert "# Task list" in prompt
+    assert "display_resource" in prompt
 
 
 def test_pod_default_assistant_uses_rich_base_and_all_fragments():
@@ -2148,7 +2166,9 @@ def test_user_agent_uses_lean_base_and_only_its_toolset_fragments():
     )
 
     prompt = build_agent_instructions(
-        agent=agent, conversation=conversation, ctx=object()
+        agent=agent,
+        conversation=conversation,
+        ctx=SimpleNamespace(run_toolsets=[AgentToolset.WORKSPACE_CLI]),
     )
 
     # Both agent kinds open on the same resource map, followed by their role.
@@ -2173,7 +2193,7 @@ def test_user_agent_without_toolsets_has_no_tool_fragments():
     )
 
     prompt = build_agent_instructions(
-        agent=agent, conversation=conversation, ctx=object()
+        agent=agent, conversation=conversation, ctx=SimpleNamespace(run_toolsets=[])
     )
 
     assert prompt.startswith("# The pod")
@@ -2272,7 +2292,9 @@ def test_latest_user_prompt_includes_metadata_state_without_changing_content():
 
     assert history == []
     assert user_prompt is not None
-    assert user_prompt.startswith("What should I do next?")
+    # When they sent it, then exactly what they sent.
+    assert user_prompt.startswith("<notes>Sent ")
+    assert "</notes>\n\nWhat should I do next?" in user_prompt
     assert "UI state:" in user_prompt
     assert '"screen": "pod_runs"' in user_prompt
     assert message.text == "What should I do next?"

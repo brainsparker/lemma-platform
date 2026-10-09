@@ -136,7 +136,7 @@ MOVED_FROM_CORE = [
         "claude-sonnet-4-5,claude-haiku-4-5",
     ),
     ("lemma_default_model_type", "LEMMA_DEFAULT_MODEL_TYPE", "openai_compat"),
-    ("lemma_llm_caching_enabled", "LEMMA_LLM_CACHING_ENABLED", False),
+    ("lemma_llm_caching_enabled", "LEMMA_LLM_CACHING_ENABLED", True),
     ("lemma_openai_default_model", "LEMMA_OPENAI_DEFAULT_MODEL", ""),
     ("lemma_openai_model_names", "LEMMA_OPENAI_MODEL_NAMES", ""),
     ("lemma_openai_vision_model_names", "LEMMA_OPENAI_VISION_MODEL_NAMES", ""),

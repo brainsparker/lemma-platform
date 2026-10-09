@@ -34,7 +34,7 @@ from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
 from app.modules.agent.domain.queued_messages import DURING_ACTIVE_RUN
 from app.modules.agent.infrastructure.harnesses.user_turn_text import (
-    user_prompt_text,
+    timed_user_prompt_text,
 )
 from app.modules.agent.domain.value_objects import (
     TEXTUAL_MESSAGE_KINDS,
@@ -65,7 +65,7 @@ def history_and_prompt(
         and ordered[-1].role is MessageRole.USER
         and ordered[-1].kind in TEXTUAL_MESSAGE_KINDS
     ):
-        user_prompt = user_prompt_text(ordered[-1])
+        user_prompt = timed_user_prompt_text(ordered[-1])
         history_messages = ordered[:-1]
 
     # The trailing user turn is carried as the prompt rather than in history,
@@ -105,7 +105,9 @@ def _to_pydantic_ai_messages(
             converted.append(
                 ModelRequest(
                     parts=[
-                        UserPromptPart(content=user_prompt_text(msg, with_roster=False))
+                        UserPromptPart(
+                            content=timed_user_prompt_text(msg, with_roster=False)
+                        )
                     ]
                 )
             )

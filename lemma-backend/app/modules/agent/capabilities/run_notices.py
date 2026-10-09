@@ -1,7 +1,7 @@
 """Delivers the run's queued notices, in the one position that is free.
 
-Follows ``current_time.py`` exactly, and for its reasons rather than for
-symmetry:
+Follows ``run_context.py`` on its first request, and for its reasons rather
+than for symmetry:
 
   * **A ``UserPromptPart``, never a ``SystemPromptPart``.** Anthropic hoists
     system parts out of the message stream into the top-level ``system``

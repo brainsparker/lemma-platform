@@ -169,6 +169,14 @@ class PlatformCapabilities:
     # for it, so its messages go to that pod's surface and no other, whichever
     # pods on the shared number the sender is in.
     bot_creates_groups: bool = False
+    # Can a private chat keep being the same chat while the address it is
+    # delivered on changes? True only for WhatsApp, where the channel and thread
+    # ids embed the pooled number the message arrived on, and a reassigned
+    # number must not cut a person off from their conversation. Everywhere else
+    # a new address is a new thread on purpose -- each top-level Slack DM has
+    # its own `ts` -- and adopting the person's last link there collapsed every
+    # DM thread into one and moved replies between them.
+    dm_address_may_move: bool = False
 
     @property
     def delivery_cardinality(self) -> DeliveryCardinality:
@@ -330,6 +338,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # holding none is back on the single number in settings, where the old
         # once-per-organization rule is exactly right. See the field.
         system_identity_may_be_absent=True,
+        dm_address_may_move=True,
     ),
     "TELEGRAM": PlatformCapabilities(
         platform="TELEGRAM",
@@ -390,6 +399,12 @@ def bot_creates_groups_on(platform: str | None) -> bool:
     """Is every group this platform's bot is in one it created? (WhatsApp)"""
     capabilities = get_platform_capabilities(platform)
     return capabilities is not None and capabilities.bot_creates_groups
+
+
+def dm_address_may_move(platform: str | None) -> bool:
+    """May a private chat here continue at a new delivery address?"""
+    capabilities = get_platform_capabilities(platform)
+    return capabilities is not None and capabilities.dm_address_may_move
 
 
 def has_shared_system_bot(platform: str | None) -> bool:

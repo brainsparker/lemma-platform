@@ -26,6 +26,9 @@ from app.modules.agent_surfaces.domain.ports import SurfaceInstallationRepositor
 from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
     SurfaceConversationLinkRepository,
 )
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    dm_address_may_move,
+)
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -83,6 +86,7 @@ async def adopt_earlier_dm_link(
         external_user_id is None
         or user_id is None
         or thread_shape(route.conversation_kind) is not ThreadShape.MULTIPLEXED
+        or not dm_address_may_move(surface.surface_type.value)
     ):
         return None
     platform = surface.surface_type.value
@@ -111,7 +115,7 @@ async def adopt_earlier_dm_link(
     ):
         return None
     return await links.rebind_thread_address(
-        link_id=earlier.id,
+        link=earlier,
         surface_id=surface.id,
         external_channel_id=parsed.external_channel_id,
         external_thread_id=parsed.external_thread_id,

@@ -271,6 +271,7 @@ class AgentHostLinkMcp:
         outcome = ToolCallOutcome(
             state="failed", code=LinkErrorCode.INTERNAL.value, message=_UNFINISHED
         )
+        alive = asyncio.ensure_future(self._ledger.keep_alive(key))
         try:
             result = await self._dispatched(body)
             outcome = ToolCallOutcome(state="done", result=result)
@@ -281,6 +282,7 @@ class AgentHostLinkMcp:
             )
             raise
         finally:
+            alive.cancel()
             await asyncio.shield(self._record(key, outcome))
 
     async def _record(self, key: str, outcome: ToolCallOutcome) -> None:
@@ -289,7 +291,8 @@ class AgentHostLinkMcp:
         except _TRANSIENT:
             # The caller on this link still gets its answer; only a retry of
             # the same call would find the claim and not the outcome, and it
-            # is refused rather than repeated.
+            # waits until the heartbeat lapses, then is told the call may have
+            # run rather than repeating it.
             logger.warning(
                 "agent.agent_host_link.tool_call_unrecorded.degraded",
                 exc_info=True,

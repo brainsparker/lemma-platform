@@ -37,6 +37,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.agent_host_link.superseded': EventSpec('info', frozenset({'connection_id', 'host_id', 'link_generation', 'superseded_by', 'superseded_by_generation'})),
     'agent.agent_host_link.task.failed': EventSpec('error', frozenset({'connection_id', 'host_id', 'link_task'})),
     'agent.agent_host_link.tool_call.failed': EventSpec('error', frozenset()),
+    'agent.agent_host_link.tool_call_heartbeat.degraded': EventSpec('warning', frozenset()),
     'agent.agent_host_link.tool_call_unavailable.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent.agent_host_link.tool_call_unrecorded.degraded': EventSpec('warning', frozenset()),
     'agent.agent_host_ops.request_unavailable.degraded': EventSpec('warning', frozenset({'host_id', 'method'})),

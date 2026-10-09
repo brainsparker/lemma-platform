@@ -35,4 +35,16 @@ USER_PAUSING_TOOL_NAMES = ("ask_user", "request_approval", "browser_sign_in")
 
 PAUSING_TOOL_NAMES = (*USER_PAUSING_TOOL_NAMES, WAIT_TOOL_NAME)
 
-__all__ = ["PAUSING_TOOL_NAMES", "USER_PAUSING_TOOL_NAMES", "WAIT_TOOL_NAME"]
+#: On a pausing call's metadata: the call does not end its run. A remote
+#: harness has no way to pause mid tool call, so the run stays going while the
+#: host's bridge waits for the answer, and that answer is delivered into the
+#: same run rather than by a resume. Written by Lemma when it records the call,
+#: never read from the model's arguments.
+PARKED_IN_RUN_KEY = "parked_in_run"
+
+__all__ = [
+    "PARKED_IN_RUN_KEY",
+    "PAUSING_TOOL_NAMES",
+    "USER_PAUSING_TOOL_NAMES",
+    "WAIT_TOOL_NAME",
+]

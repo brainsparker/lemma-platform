@@ -58,6 +58,7 @@ from app.modules.agent.infrastructure.repositories.conversation_list_page import
 from app.modules.agent.infrastructure.repositories.conversation_run_lifecycle import (
     ConversationRunLifecycleMixin,
 )
+from app.modules.agent.domain.subagent_spawn import SPAWN_KEY
 from app.modules.agent.infrastructure.repositories.conversation_approval_queries import (
     ConversationApprovalQueriesMixin,
 )
@@ -310,6 +311,27 @@ class ConversationRepository(
             .where(ConversationModel.id == conversation_id)
             .with_for_update()
         )
+
+    async def find_spawned_child(
+        self, *, parent_id: UUID, parent_run_id: UUID, spawn_key: str
+    ) -> ConversationEntity | None:
+        """The child one parent run already spawned for this exact task.
+
+        ``ix_agent_conv_parent`` narrows it to the parent's children, of which
+        there are few; the metadata comparison is over those.
+        """
+        metadata = ConversationModel.conversation_metadata
+        model = await self.session.scalar(
+            select(ConversationModel)
+            .where(
+                ConversationModel.parent_id == parent_id,
+                metadata["parent_run_id"].astext == str(parent_run_id),
+                metadata[SPAWN_KEY].astext == spawn_key,
+            )
+            .order_by(ConversationModel.created_at)
+            .limit(1)
+        )
+        return model.to_entity() if model is not None else None
 
     async def list_children(
         self,

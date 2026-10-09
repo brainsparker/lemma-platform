@@ -315,6 +315,48 @@ class ConversationApprovalQueriesMixin:
         )
         return [row.to_entity() for row in result.scalars()]
 
+    async def pausing_calls_decided_awaiting_a_return(
+        self,
+        *,
+        conversation_id: UUID,
+        pausing_tool_names: Sequence[str],
+    ) -> list[MessageEntity]:
+        """Pausing calls somebody decided whose return has not landed yet.
+
+        The window an approved tool spends running in a worker. A message sent
+        in it must not start a run of its own: that run's history would show
+        the call unanswered, and the approved result would land behind it.
+        """
+        stmt = self._pausing_calls_stmt(
+            conversation_id=conversation_id,
+            pausing_tool_names=pausing_tool_names,
+            answered=self._returned_call_ids(conversation_id),
+            limit=None,
+        ).where(MessageModel.tool_call_id.in_(self._decided_call_ids(conversation_id)))
+        result = await self.session.execute(stmt)
+        return [row.to_entity() for row in result.scalars()]
+
+    async def pausing_call_ids_of_run(
+        self,
+        *,
+        conversation_id: UUID,
+        agent_run_id: UUID,
+        pausing_tool_names: Sequence[str],
+    ) -> list[str]:
+        """Every pausing call one run made, answered or not, oldest first."""
+        result = await self.session.execute(
+            select(MessageModel.tool_call_id)
+            .where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.agent_run_id == agent_run_id,
+                MessageModel.kind == MessageKind.TOOL_CALL.value,
+                MessageModel.tool_name.in_(list(pausing_tool_names)),
+                MessageModel.tool_call_id.is_not(None),
+            )
+            .order_by(MessageModel.sequence)
+        )
+        return [call_id for call_id in result.scalars() if call_id is not None]
+
     async def pausing_calls_awaiting_a_decision(
         self,
         *,

@@ -358,7 +358,9 @@ class ApprovalCoordinator:
             # duplicate host run for the same turn.
             return
 
-        if await self.pauses.resume_would_duplicate_a_live_turn(paused_run_id):
+        if await self.pauses.resume_would_duplicate_a_live_turn(
+            paused_run_id, conversation_id=conversation.id, tool_call_id=approval_id
+        ):
             return
 
         await self.pauses.start_resume_run_if_ready(

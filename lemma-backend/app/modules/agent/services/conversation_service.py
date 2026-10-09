@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 from uuid import UUID
 
 
@@ -10,6 +12,8 @@ from app.modules.agent.services.conversation_approvals import (
 )
 from app.modules.agent.services.conversation_queries import ConversationQueries
 from app.modules.agent.services.conversation_turns import TurnCoordinator
+from app.modules.agent.services.send_window import SendWindow, window_key
+from app.modules.agent.domain.queued_messages import CLIENT_MESSAGE_ID
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
@@ -34,7 +38,6 @@ from app.modules.agent.domain.entities import (
 )
 from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
-    ConversationStateError,
 )
 from app.modules.agent.domain.ports import (
     AgentRepository,
@@ -56,12 +59,6 @@ from app.modules.agent.services.runtime_availability import (
     ensure_turn_runtime_available,
 )
 from app.modules.usage.contracts.execution import UsageService
-from app.modules.agent.infrastructure.queued_message_queries import (
-    QueuedMessageRepository,
-)
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
 from app.modules.agent.services.pause_resume import (
     PAUSING_TOOL_NAMES,
     PauseResume,
@@ -93,8 +90,11 @@ class ConversationService:
         self.authorization_service = authorization_service
         self.fallback_model_name = fallback_model_name
         self.usage_service = usage_service
+        self.send_window = SendWindow()
         self.resume_returns = ResumeToolReturnBuilder(uow, agent_repository)
-        self.pauses = PauseResume(uow, conversation_repository, agent_repository)
+        self.pauses = PauseResume(
+            uow, conversation_repository, agent_repository, usage_service
+        )
         self.approvals = ApprovalCoordinator(
             uow, conversation_repository, self.resume_returns, self.pauses
         )
@@ -428,10 +428,53 @@ class ConversationService:
         message_metadata: dict[str, object] | None = None,
         require_execute_grant: bool = True,
         typed_in_lemma: bool = False,
+        client_message_id: str | None = None,
     ) -> AgentRunStartResult:
+        """Store a message and start, or join, the run that answers it.
+
+        A person's own send and a new conversation's first message go through
+        `send_window`; a chat platform's next line in a thread does not (people
+        say "yes" twice, and its delivery id already catches redeliveries).
+        """
         # Once, here, so creating the conversation and checking it against the
         # expected agent read the same answer.
         agent_name = _named_agent(agent_name)
+        start = partial(
+            self._add_user_message_and_start_run,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            content=content,
+            pod_id=pod_id,
+            agent_name=agent_name,
+            message_metadata=message_metadata,
+            require_execute_grant=require_execute_grant,
+            typed_in_lemma=typed_in_lemma,
+            client_message_id=client_message_id,
+        )
+        if not typed_in_lemma and conversation_id is not None:
+            return await start()
+        key = window_key(
+            user_id=user_id,
+            content=content,
+            conversation_id=conversation_id,
+            pod_id=pod_id,
+            agent_name=agent_name,
+        )
+        return await self.send_window.start_once(key, start)
+
+    async def _add_user_message_and_start_run(
+        self,
+        *,
+        conversation_id: UUID | None,
+        user_id: UUID,
+        content: str,
+        pod_id: UUID,
+        agent_name: str | None,
+        message_metadata: dict[str, object] | None,
+        require_execute_grant: bool,
+        typed_in_lemma: bool,
+        client_message_id: str | None,
+    ) -> AgentRunStartResult:
         conversation = await self._get_or_create_conversation_for_message(
             conversation_id=conversation_id,
             user_id=user_id,
@@ -469,6 +512,7 @@ class ConversationService:
             agent_name=agent_name,
             message_metadata=message_metadata,
             typed_in_lemma=typed_in_lemma,
+            client_message_id=client_message_id,
         )
 
     async def send_from_lemma(
@@ -479,14 +523,17 @@ class ConversationService:
         content: str,
         pod_id: UUID,
         message_metadata: dict[str, object] | None = None,
+        client_message_id: str | None = None,
     ) -> AgentRunStartResult:
         """A message a person typed in Lemma's own composer.
 
         The only caller that may say so. Typed into a group's conversation it
         is marked as written in Lemma (``domain/private_notes``), which changes
         who the model takes the writer to be -- so a chat platform's line, a
-        sub-agent's or a reply delivery's must never arrive this way.
+        sub-agent's or a reply delivery's must never arrive this way. A client
+        id sent only in the metadata, as the web app first did, is used too.
         """
+        carried = (message_metadata or {}).get(CLIENT_MESSAGE_ID)
         return await self.add_user_message_and_start_run(
             conversation_id=conversation_id,
             user_id=user_id,
@@ -494,6 +541,8 @@ class ConversationService:
             pod_id=pod_id,
             message_metadata=message_metadata,
             typed_in_lemma=True,
+            client_message_id=client_message_id
+            or (carried if isinstance(carried, str) and carried else None),
         )
 
     async def _get_or_create_conversation_for_message(
@@ -539,47 +588,15 @@ class ConversationService:
         )
 
     async def withdraw_queued_message(
-        self,
-        *,
-        conversation_id: UUID,
-        message_id: UUID,
-        user_id: UUID,
-        pod_id: UUID,
+        self, *, conversation_id: UUID, message_id: UUID, user_id: UUID, pod_id: UUID
     ) -> None:
-        """Take back a message the agent has not seen yet.
-
-        Only a queued message nobody is carrying: once a run has claimed it, or
-        a steer is on its way to a host, it may already be in the agent's
-        context, and deleting it would leave the agent answering something the
-        person can no longer see. That is a conflict, not a missing message --
-        the client drew it as queued a moment ago and should redraw it.
-        """
-        conversation = validate_conversation_access(
-            await self.conversation_repository.get_conversation(conversation_id),
+        """Take back a message the agent has not seen yet; see `TurnCoordinator`."""
+        await self.turns.withdraw_queued_message(
+            conversation_id=conversation_id,
+            message_id=message_id,
             user_id=user_id,
             pod_id=pod_id,
         )
-        await require_agent_action(
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_id=conversation.agent_id,
-            action=Permissions.AGENT_EXECUTE,
-        )
-        withdrawn = await QueuedMessageRepository(
-            self.uow
-        ).withdraw_queued_user_message(
-            conversation_id=conversation.id, message_id=message_id
-        )
-        if not withdrawn:
-            raise ConversationStateError(
-                "This message is no longer waiting: the agent already has it."
-            )
-        await self.uow.commit()
-
-    @property
-    def wait_repository(self) -> AgentConversationWaitRepository:
-        """The conversation wait store, reached through the turn coordinator."""
-        return self.turns.wait_repository
 
 
 def _named_agent(agent_name: str | None) -> str | None:

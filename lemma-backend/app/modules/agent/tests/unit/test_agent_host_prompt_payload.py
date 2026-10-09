@@ -184,6 +184,28 @@ class TestWakingUp:
 
         assert "Friday." in prompt
 
+    async def test_a_resume_carries_its_return_and_what_was_said_meanwhile(self):
+        """A message sent while the pause was open is claimed by the resume run,
+        and both are what the session has not seen: the answer it was waiting
+        on, and the message. Carrying only the message lost the answer."""
+        paused, resume = uuid7(), uuid7()
+        said = _in_run(
+            5,
+            MessageRole.USER,
+            "Also do the patio booking.",
+            paused,
+            {"during_active_run": True, "steered_into_run": str(resume)},
+        )
+        prompt = _user_prompt(
+            carries_history=False,
+            messages=[*_transcript(), said, _woke_up(6, "lemma-mcp-1")],
+            resumed_tool_call_id="lemma-mcp-1",
+            agent_run_id=resume,
+        )
+
+        assert "check the build" in prompt
+        assert "patio booking" in prompt
+
     async def test_a_resume_whose_return_is_gone_falls_back(self):
         """History is trimmed by size, so the message may not have survived.
 

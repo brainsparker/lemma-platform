@@ -371,6 +371,16 @@ def _turn_messages(
     ordered = sorted(messages, key=lambda item: item.sequence)
     if carries_history:
         return ordered
+    resumed = (
+        [
+            message
+            for message in ordered
+            if message.kind == MessageKind.TOOL_RETURN
+            and message.tool_call_id == resumed_tool_call_id
+        ]
+        if resumed_tool_call_id is not None
+        else []
+    )
     if agent_run_id is not None:
         answering = [
             message
@@ -382,16 +392,11 @@ def _turn_messages(
             )
         ]
         if answering:
-            return answering
-    if resumed_tool_call_id is not None:
-        resumed = [
-            message
-            for message in ordered
-            if message.kind == MessageKind.TOOL_RETURN
-            and message.tool_call_id == resumed_tool_call_id
-        ]
-        if resumed:
-            return resumed
+            # A resume also carries what was said while the pause was being
+            # answered: the return the session is waiting on, and the messages.
+            return [*resumed, *answering]
+    if resumed:
+        return resumed
     for message in reversed(ordered):
         if message.role == MessageRole.USER:
             return [message]

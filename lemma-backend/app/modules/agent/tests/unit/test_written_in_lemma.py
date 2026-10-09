@@ -110,6 +110,8 @@ def _coordinator(conversation: Conversation):
         get_active_agent_run_for_update=AsyncMock(return_value=None),
         create_agent_run=AsyncMock(return_value=created),
         append_message=AsyncMock(side_effect=append_message),
+        # No pause is open, so nothing holds the message back.
+        pausing_calls_decided_awaiting_a_return=AsyncMock(return_value=[]),
     )
     agents = SimpleNamespace(
         get=AsyncMock(return_value=SimpleNamespace(name="lem", kind=None))

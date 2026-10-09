@@ -18,7 +18,10 @@ from pydantic import (
 from app.core.authorization.context import ResourceType, ResourceVisibility
 from app.core.authorization.grants import ensure_grant_uses_resource_name
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.entities import MAX_AGENT_INSTRUCTION_CHARACTERS
+from app.modules.agent.domain.entities import (
+    MAX_AGENT_INSTRUCTION_CHARACTERS,
+    MAX_MESSAGE_CHARACTERS,
+)
 from app.modules.agent.domain.pending_interactions import PendingInteractionKind
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -252,6 +255,15 @@ class AgentRunStartResponse(BaseModel):
     conversation_id: UUID
     agent_run_id: UUID
     started_new_run: bool
+    deduplicated: bool = Field(
+        default=False,
+        description=(
+            "True when this send was already received -- the same "
+            "client_message_id, or the same text from the same person a moment "
+            "ago. Nothing new was stored; agent_run_id is the run already "
+            "answering it."
+        ),
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -349,8 +361,22 @@ class UpdateConversationRequest(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
-    content: str
+    # Bounded like an agent's instruction: an empty message started a paid run
+    # with nothing to answer, and an unbounded one is stored and replayed into
+    # every later turn of the conversation.
+    content: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARACTERS)
     metadata: JsonObject | None = None
+    client_message_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description=(
+            "The sender's own id for this send, generated once per message the "
+            "person sends and reused on every retry of it. A second send with an "
+            "id already used in this conversation stores nothing and returns the "
+            "first send's run, with deduplicated=true."
+        ),
+    )
 
 
 class CreateAgentRequest(BaseModel):

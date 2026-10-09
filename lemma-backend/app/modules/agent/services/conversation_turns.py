@@ -4,11 +4,8 @@ A turn is one user message plus the run that answers it. Starting one is mostly
 a question of *whether* to start a run at all -- a message typed while a run is
 already going joins that run instead of racing a second one -- and the answer
 has to be decided under the conversation lock, because two browser tabs asking
-at once must not each get a run.
-
-Stopping is the same question in reverse, and the asymmetry is deliberate: a
-stop closes any pause the run was sitting on, but never starts the resume run
-that closing a pause normally triggers. Stop means stop.
+at once must not each get a run. A message can also wait behind a pause instead
+(`turn_admission`). Stopping is in `conversation_stop`.
 
 Split from `ConversationService` because this is the part with the lock, the
 ordering constraints and the outbox; the rest of that class is storage.
@@ -18,23 +15,18 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.services.usage_preflight import assert_usage_preflight_allowed
 from app.modules.usage.contracts.execution import UsageService
-from app.modules.agent.domain.entities import Conversation, Message
+from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.private_notes import (
-    NOTE_IN_DM_KEY,
     PRIVATE_NOTE_KEY,
-    WRITTEN_IN_LEMMA_KEY,
-    is_private_note,
     run_metadata_for,
-    written_in_lemma_into,
 )
+from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
 from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
-    AgentRunStopRequestedEvent,
 )
 from app.modules.agent.domain.ports import (
     AgentRepository,
@@ -54,10 +46,15 @@ from app.modules.agent.infrastructure.wait_repository import (
 from app.modules.agent.services.conversation_access import (
     require_agent_action,
     resolve_agent,
-    resolve_expected_agent_id,
     validate_conversation_access,
 )
+from app.core.authorization.permissions import Permissions
+from app.modules.agent.domain.errors import ConversationStateError
+from app.modules.agent.infrastructure.queued_message_queries import (
+    QueuedMessageRepository,
+)
 from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
+from app.modules.agent.services.conversation_stop import StopCoordinator
 from app.modules.agent.services.pause_resume import PauseResume
 from app.modules.agent.services.queued_followups import (
     LEFTOVERS_KEY,
@@ -78,38 +75,28 @@ from app.modules.agent.services.realtime import (
     publish_conversation_event,
 )
 from app.modules.agent.services.run_dispatch import run_enqueue_suppressed
-from app.modules.agent.services.serialization import message_to_payload
-from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
-from app.modules.agent.domain.wait import AgentWaitWakeReason
-from app.modules.agent.tools.waiting.models import (
-    build_wait_result,
-    elapsed_seconds,
+from app.modules.agent.services.turn_admission import (
+    HeldTurn,
+    hold_behind,
+    pause_holding_the_turn,
+    stamped,
+    user_message_metadata,
 )
+from app.modules.agent.services.serialization import message_to_payload
 
 logger = get_logger(__name__)
 
 
-def _stamped(
-    message_metadata: dict[str, object] | None,
-    conversation: Conversation,
-    *,
-    typed_in_lemma: bool,
-) -> dict[str, object] | None:
-    """The caller's metadata, with where it was written decided by the server.
+def _said_after_stop(run: AgentRun | None) -> int | None:
+    """The newest message sequence when Stop was pressed on this run.
 
-    A client never says it: the mark changes who the model takes the writer to
-    be, so a chat platform's payload or a client's body claiming it is dropped.
+    None for a stop that did not record one, which is answered as Stop always
+    was: nothing starts.
     """
-    if not message_metadata and not typed_in_lemma:
-        return message_metadata
-    stamped = dict(message_metadata or {})
-    stamped.pop(WRITTEN_IN_LEMMA_KEY, None)
-    written_in = (
-        written_in_lemma_into(conversation.metadata) if typed_in_lemma else None
-    )
-    if written_in is not None:
-        stamped[WRITTEN_IN_LEMMA_KEY] = written_in
-    return stamped or message_metadata
+    value = (run.metadata or {}).get(STOP_REQUESTED_AFTER_SEQUENCE) if run else None
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
 
 
 class TurnCoordinator:
@@ -132,6 +119,9 @@ class TurnCoordinator:
         self.pauses = pauses
         self.usage_service = usage_service
         self.runtime_check = runtime_check
+        self.stops = StopCoordinator(
+            uow, conversation_repository, agent_repository, approvals, pauses
+        )
 
     async def start(
         self,
@@ -143,6 +133,8 @@ class TurnCoordinator:
         agent_name: str | None,
         message_metadata: dict[str, object] | None,
         typed_in_lemma: bool = False,
+        client_message_id: str | None = None,
+        supersede_pauses: bool = True,
     ) -> AgentRunStartResult:
         """Append the message and return the run that will answer it.
 
@@ -150,8 +142,13 @@ class TurnCoordinator:
         this is the half that needs the lock. ``typed_in_lemma`` is the caller
         saying a person typed this in Lemma's own composer, rather than a chat
         platform, a sub-agent or a reply delivery handing it on.
+
+        ``client_message_id`` is the sender's id for this send: a second send
+        with the same id is the first one retried, and gets the first one's run
+        back rather than a second message. ``supersede_pauses`` is False for a
+        sender who is not the person a pause asked (``turn_admission``).
         """
-        message_metadata = _stamped(
+        message_metadata = stamped(
             message_metadata, conversation, typed_in_lemma=typed_in_lemma
         )
         # Resolve the agent (a read) before taking the conversation lock, so the
@@ -163,11 +160,26 @@ class TurnCoordinator:
         )
 
         await self.conversation_repository.lock_conversation(conversation.id)
+        if client_message_id is not None:
+            # Under the lock, so two copies of one send cannot both miss it.
+            original = (
+                await self.conversation_repository.find_user_message_by_client_id(
+                    conversation_id=conversation.id, client_message_id=client_message_id
+                )
+            )
+            if original is not None and original.agent_run_id is not None:
+                await self.uow.commit()
+                return AgentRunStartResult(
+                    conversation_id=conversation.id,
+                    agent_run_id=original.agent_run_id,
+                    started_new_run=False,
+                    deduplicated=True,
+                )
         active_run = await self.conversation_repository.get_active_agent_run_for_update(
             conversation.id
         )
-        started_new_run = active_run is None
         superseded_returns: list[Message] = []
+        held: HeldTurn | None = None
         if active_run is None:
             # A prior run may have paused on ask_user/request_approval (conversation
             # -> WAITING) without the user ever resolving it — the composer stays
@@ -176,60 +188,43 @@ class TurnCoordinator:
             # no matching return for it and silently drops it (see
             # PydanticAIHarness._build_tool_batch), permanently losing the model's
             # memory of asking and leaving the UI card stuck "needs your input".
-            superseded_returns = (
-                await self.approvals.supersede_stale_pending_interactions(
-                    conversation=conversation,
-                    user_id=user_id,
+            if supersede_pauses:
+                superseded_returns = (
+                    await self.approvals.supersede_stale_pending_interactions(
+                        conversation=conversation,
+                        user_id=user_id,
+                    )
                 )
+            held = await pause_holding_the_turn(
+                self.conversation_repository,
+                conversation.id,
+                include_undecided=not supersede_pauses,
             )
-            selected_agent_runtime = (
-                conversation.agent_runtime
-                or agent.agent_runtime
-                or await default_agent_runtime_for_pod(
-                    self.uow, pod_id=conversation.pod_id
-                )
+        started_new_run = active_run is None and held is None
+        if started_new_run:
+            active_run = await self._create_run(
+                conversation, agent, user_id=user_id, message_metadata=message_metadata
             )
-            await self.runtime_check(
-                self.uow,
-                selected_agent_runtime,
-                organization_id=conversation.organization_id,
-                user_id=user_id,
+        answering_run_id = active_run.id if active_run is not None else None
+        if held is not None:
+            answering_run_id = held.agent_run_id
+            await hold_behind(
+                self.uow, self.conversation_repository, conversation, held
             )
-            await self.assert_usage_preflight_allowed(
-                organization_id=conversation.organization_id,
-                user_id=user_id,
-                agent_runtime=selected_agent_runtime,
-            )
-            active_run = await self.conversation_repository.create_agent_run(
-                conversation_id=conversation.id,
-                agent_id=conversation.agent_id,
-                agent_runtime=selected_agent_runtime,
-                metadata=run_metadata_for(message_metadata),
-            )
-
-        # The flag goes on *after* the caller's metadata, not before it: a
-        # surface builds this dict out of webhook fields, and the run this
-        # message belongs to is not something the sender gets a vote on.
-        metadata = {
-            **(message_metadata or {}),
-            "during_active_run": not started_new_run,
-        }
-        metadata.pop("author_user_id", None)
-        metadata.pop("agent_run_id", None)
-        metadata.pop(NOTE_IN_DM_KEY, None)
-        if (
-            is_private_note(metadata)
-            and (conversation.metadata or {}).get("conversation_kind") == "DM"
-        ):
-            metadata[NOTE_IN_DM_KEY] = True
+        assert answering_run_id is not None
 
         saved_user_message = await self.conversation_repository.append_message(
             conversation_id=conversation.id,
-            agent_run_id=active_run.id,
+            agent_run_id=answering_run_id,
             draft=MessageDraft.of_text(
                 content,
                 role=MessageRole.USER,
-                metadata=metadata,
+                metadata=user_message_metadata(
+                    message_metadata,
+                    conversation,
+                    joins_a_run=not started_new_run,
+                    client_message_id=client_message_id,
+                ),
             ),
         )
 
@@ -238,7 +233,7 @@ class TurnCoordinator:
                 [
                     AgentRunStartedEvent(
                         conversation_id=conversation.id,
-                        agent_run_id=active_run.id,
+                        agent_run_id=answering_run_id,
                         user_id=user_id,
                         pod_id=pod_id,
                         agent_name=agent_name,
@@ -257,7 +252,11 @@ class TurnCoordinator:
         frames = [
             message_payload(item.agent_run_id, message_to_payload(item))
             for item in superseded_returns
-        ] + [input_added_payload(active_run.id, message_to_payload(saved_user_message))]
+        ] + [
+            input_added_payload(
+                answering_run_id, message_to_payload(saved_user_message)
+            )
+        ]
 
         async def _publish_frames() -> None:
             for frame in frames:
@@ -266,8 +265,39 @@ class TurnCoordinator:
         self.uow.after_commit(_publish_frames)
         return AgentRunStartResult(
             conversation_id=conversation.id,
-            agent_run_id=active_run.id,
+            agent_run_id=answering_run_id,
             started_new_run=started_new_run,
+        )
+
+    async def _create_run(
+        self,
+        conversation: Conversation,
+        agent: Agent,
+        *,
+        user_id: UUID,
+        message_metadata: dict[str, object] | None,
+    ) -> AgentRun:
+        selected_agent_runtime = (
+            conversation.agent_runtime
+            or agent.agent_runtime
+            or await default_agent_runtime_for_pod(self.uow, pod_id=conversation.pod_id)
+        )
+        await self.runtime_check(
+            self.uow,
+            selected_agent_runtime,
+            organization_id=conversation.organization_id,
+            user_id=user_id,
+        )
+        await self.assert_usage_preflight_allowed(
+            organization_id=conversation.organization_id,
+            user_id=user_id,
+            agent_runtime=selected_agent_runtime,
+        )
+        return await self.conversation_repository.create_agent_run(
+            conversation_id=conversation.id,
+            agent_id=conversation.agent_id,
+            agent_runtime=selected_agent_runtime,
+            metadata=run_metadata_for(message_metadata),
         )
 
     async def start_queued_followup(
@@ -275,7 +305,7 @@ class TurnCoordinator:
         *,
         conversation: Conversation,
         completed_run_id: UUID,
-    ) -> tuple[UUID, list[Message]] | None:
+    ) -> tuple[UUID | None, list[Message]] | None:
         """The backstop for messages no run ever read.
 
         Normally nothing reaches here. A message sent while a run is in flight is
@@ -296,7 +326,9 @@ class TurnCoordinator:
         Returns the new run's id and the messages whose live UI frames the
         caller owes the conversation -- superseded pause returns, and the queued
         messages this run just claimed -- or None when there is nothing to
-        answer. The frames come back rather than going out from here because
+        answer. After a pause the run id can be None with frames still owed:
+        the queued messages, redrawn as waiting on the person's answer. A
+        stopped run answers only what was said after Stop. The frames come back rather than going out from here because
         publishing is a Redis round trip and this still holds a pooled
         connection -- and unlike `start`, whose caller commits again later and
         drains `after_commit`, the caller here is a worker job with no second
@@ -314,17 +346,32 @@ class TurnCoordinator:
         if conversation.status == ConversationStatus.WAITING:
             # The run ended by asking the person something. Starting a turn now
             # would auto-deny that question before they had a chance to see it,
-            # and the queue does not need it: their answer starts a run whose
-            # history rebuild picks these messages up along the way.
-            return None
+            # and the queue does not need it: the run that resumes the pause
+            # claims these messages. Unless it has been answered already.
+            return await self.pauses.resume_if_already_answered(
+                conversation=conversation, paused_run_id=completed_run_id
+            )
         completed_run = await self.conversation_repository.get_agent_run(
             completed_run_id
         )
-        sources = [
-            completed_run_id,
-            *leftover_sources(completed_run.metadata if completed_run else None),
-        ]
-        queue = await next_queue(self.conversation_repository, sources)
+        stopped = (
+            completed_run is not None and completed_run.status == AgentRunStatus.STOPPED
+        )
+        stopped_after = _said_after_stop(completed_run) if stopped else None
+        if stopped and stopped_after is None:
+            # Stop means stop: nothing said before it starts the next turn.
+            return None
+        sources = (
+            [completed_run_id]
+            if stopped
+            else [
+                completed_run_id,
+                *leftover_sources(completed_run.metadata if completed_run else None),
+            ]
+        )
+        queue = await next_queue(
+            self.conversation_repository, sources, after_sequence=stopped_after
+        )
         if queue is None:
             return None
         answering, notes = queue
@@ -346,7 +393,11 @@ class TurnCoordinator:
             user_id=conversation.user_id,
         )
         leftovers = await still_waiting(
-            self.conversation_repository, sources, answering=answering, notes=notes
+            self.conversation_repository,
+            sources,
+            answering=answering,
+            notes=notes,
+            after_sequence=stopped_after,
         )
         agent_runtime = (
             (completed_run.agent_runtime if completed_run is not None else None)
@@ -376,7 +427,10 @@ class TurnCoordinator:
         # messages its prompt has to carry -- all of them, not only the newest
         # -- and what tells the person's client they are no longer waiting.
         claimed = await self.conversation_repository.claim_queued_user_messages(
-            answering, into_run_id=followup_run.id, notes=notes
+            answering,
+            into_run_id=followup_run.id,
+            notes=notes,
+            after_sequence=stopped_after,
         )
         self.uow.collect_events(
             [
@@ -402,16 +456,38 @@ class TurnCoordinator:
         pod_id: UUID,
         agent_name: str | None = None,
     ) -> Conversation:
-        expected_agent_id = await resolve_expected_agent_id(
-            self.agent_repository,
+        """Stop the run in flight, or the pause it left; see `conversation_stop`."""
+        return await self.stops.stop_conversation(
+            conversation_id=conversation_id,
+            user_id=user_id,
             pod_id=pod_id,
             agent_name=agent_name,
         )
+
+    @property
+    def wait_repository(self) -> AgentConversationWaitRepository:
+        return self.stops.wait_repository
+
+    async def withdraw_queued_message(
+        self,
+        *,
+        conversation_id: UUID,
+        message_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+    ) -> None:
+        """Take back a message the agent has not seen yet.
+
+        Only a queued message nobody is carrying: once a run has claimed it, or
+        a steer is on its way to a host, it may already be in the agent's
+        context, and deleting it would leave the agent answering something the
+        person can no longer see. That is a conflict, not a missing message --
+        the client drew it as queued a moment ago and should redraw it.
+        """
         conversation = validate_conversation_access(
             await self.conversation_repository.get_conversation(conversation_id),
             user_id=user_id,
             pod_id=pod_id,
-            agent_id=expected_agent_id,
         )
         await require_agent_action(
             user_id=user_id,
@@ -419,127 +495,15 @@ class TurnCoordinator:
             agent_id=conversation.agent_id,
             action=Permissions.AGENT_EXECUTE,
         )
-        active_run = await self.conversation_repository.get_active_agent_run_for_update(
-            conversation.id
+        withdrawn = await QueuedMessageRepository(
+            self.uow
+        ).withdraw_queued_user_message(
+            conversation_id=conversation.id, message_id=message_id
         )
-        if active_run is not None:
-            finish_result = await self.conversation_repository.finish_agent_run(
-                agent_run_id=active_run.id,
-                status=AgentRunStatus.STOP_REQUESTED,
+        if not withdrawn:
+            raise ConversationStateError(
+                "This message is no longer waiting: the agent already has it."
             )
-            if finish_result is not None:
-                conversation.status = finish_result.conversation_status
-            self.conversation_repository.collect_events(
-                [
-                    AgentRunStopRequestedEvent(
-                        conversation_id=conversation.id,
-                        agent_run_id=active_run.id,
-                        user_id=user_id,
-                    )
-                ]
-            )
-            await self.uow.commit()
-            return conversation
-
-        # No active run, but the conversation may still be suspended. Neither
-        # pause has a run by construction — both ended cleanly when the tool
-        # paused them — so without these, Stop silently did nothing: the wait
-        # still fired later, and the approval card stayed up.
-        await self._cancel_active_wait(conversation=conversation)
-        await self._deny_unresolved_pauses(conversation=conversation, user_id=user_id)
-        return conversation
-
-    @property
-    def wait_repository(self) -> AgentConversationWaitRepository:
-        # Built on demand rather than in __init__: the repository binds a session
-        # eagerly, and plenty of callers construct this service without a real
-        # unit of work to exercise paths that never touch the database.
-        return AgentConversationWaitRepository(self.uow)
-
-    async def _cancel_active_wait(self, *, conversation: Conversation) -> None:
-        """Stop a waiting agent for good: drop the wait, never resume.
-
-        Whatever it was waiting on is left alone. Stop means stop the agent, and
-        killing someone's build because they stopped a chat is a surprise they
-        did not ask for -- a process dies at its own ceiling anyway, and a child
-        run is stopped by stopping the child.
-
-        The CANCELLED tool return is still written, so the paused call is not
-        left dangling in history — a tool call with no return is dropped when
-        history is rebuilt, and the model would see a turn that ends mid-thought.
-        What is deliberately skipped is ``start_resume_run_if_ready``: Stop means
-        the agent does not wake.
-        """
-        wait = await self.wait_repository.find_active_for_conversation(conversation.id)
-        if wait is None:
-            return
-
-        wait.cancel()
-        await self.wait_repository.update(wait)
-        await self.conversation_repository.set_conversation_status(
-            conversation_id=conversation.id,
-            status=ConversationStatus.STOPPED,
-        )
-        conversation.status = ConversationStatus.STOPPED
-        await self.pauses.append_pause_tool_return(
-            conversation=conversation,
-            paused_run_id=wait.agent_run_id,
-            tool_call_id=wait.tool_call_id,
-            tool_name=WAIT_TOOL_NAME,
-            tool_result=build_wait_result(
-                wait_type=wait.wait_type,
-                reason=AgentWaitWakeReason.CANCELLED,
-                waited_seconds=elapsed_seconds((wait.spec or {}).get("started_at")),
-                note_to_self=(wait.spec or {}).get("note_to_self"),
-            ),
-        )
-        # Nothing to cancel. The wait row is the timer: the poller's due query
-        # filters on ACTIVE, and `find_active_by_external_ref` ignores anything
-        # that is not, so completing the wait above is what stops it firing.
-        # This used to call through `app/composition/agent_snooze_scheduler.py`,
-        # whose `cancel_snooze_wake` had already been reduced to `del timer_id`.
-
-    async def _deny_unresolved_pauses(
-        self, *, conversation: Conversation, user_id: UUID
-    ) -> None:
-        """Close an ask_user/request_approval the person decided not to answer.
-
-        A conversation paused this way has no active run either — the run that
-        asked finished when the tool paused it — so the branch above found
-        nothing and Stop returned the conversation untouched, on the one state
-        where someone most wants to abandon a turn.
-
-        DENY, never approve, for the reason
-        ``supersede_stale_pending_interactions`` gives: this is a response
-        synthesized on the user's behalf, not a decision they made. And, as with
-        a wait, no resume run follows.
-        """
-        superseded = await self.approvals.supersede_stale_pending_interactions(
-            conversation=conversation,
-            user_id=user_id,
-        )
-        if not superseded:
-            return
-
-        await self.conversation_repository.set_conversation_status(
-            conversation_id=conversation.id,
-            status=ConversationStatus.STOPPED,
-        )
-        conversation.status = ConversationStatus.STOPPED
-
-        # Published after the commit, not inside it: these are live UI frames
-        # and sending them from here would hold a pooled connection across a
-        # Redis round trip. Same arrangement as `start`.
-        frames = [
-            message_payload(item.agent_run_id, message_to_payload(item))
-            for item in superseded
-        ]
-
-        async def _publish_frames() -> None:
-            for frame in frames:
-                await publish_conversation_event(conversation.id, frame)
-
-        self.uow.after_commit(_publish_frames)
         await self.uow.commit()
 
     async def assert_usage_preflight_allowed(

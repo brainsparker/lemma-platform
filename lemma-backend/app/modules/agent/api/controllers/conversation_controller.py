@@ -383,10 +383,9 @@ async def send_message(
     request: Request,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> StreamingResponse:
-    # Build the authorization context inside the SHORT uow below rather than via a
-    # request-scoped PodContextDep: a StreamingResponse keeps request-scoped
-    # dependencies (and their pooled connection) alive for the whole SSE stream,
-    # which pins one DB connection per in-flight stream. Here the connection is
+    # The auth context is built in the SHORT uow below, not a request-scoped
+    # PodContextDep: a StreamingResponse keeps those (and their pooled
+    # connection) alive for the whole SSE stream. Here the connection is
     # released the moment send_from_lemma commits, before streaming.
     async def start_run() -> AgentRunStartResult:
         async with pod_context_scope(
@@ -400,6 +399,7 @@ async def send_message(
                 content=data.content,
                 pod_id=pod_id,
                 message_metadata=data.metadata,
+                client_message_id=data.client_message_id,
             )
 
     return await start_and_stream_run(
@@ -421,8 +421,7 @@ async def send_message(
         "any stream already subscribed to the conversation surfaces the "
         "resulting events, so callers steering an in-flight run should attach "
         "to that stream rather than opening a second one here. When no run is "
-        "active, this starts a new one exactly like the streaming send route, "
-        "just without attaching a stream to it."
+        "active, this starts a new one like the streaming send route, unstreamed."
     ),
     responses={
         404: {"description": "Conversation was not found or is not visible"},
@@ -448,6 +447,7 @@ async def append_message(
             content=data.content,
             pod_id=pod_id,
             message_metadata=data.metadata,
+            client_message_id=data.client_message_id,
         )
     return AgentRunStartResponse.model_validate(result)
 

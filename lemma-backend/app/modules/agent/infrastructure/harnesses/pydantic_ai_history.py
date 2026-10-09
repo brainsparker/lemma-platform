@@ -34,6 +34,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.private_notes import defuse_lemma_labels, lemma_label
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.queued_messages import DURING_ACTIVE_RUN
 from app.modules.agent.domain.surface_prompts import attachment_listing_block
 from app.modules.agent.infrastructure.harnesses.channel_context import (
     audience_block,
@@ -215,6 +216,12 @@ def _match_tool_returns(
     because a return after either of those belongs to a later turn. `setdefault`
     keeps the first return for an id: a resumed pause can leave two, and the
     earlier one is the one the model was shown.
+
+    Except a user message sent while the call was still running: it is stored
+    where it was typed, which is before the return the call wrote afterwards,
+    but it did not end the call's turn. Stopping at it lost the return -- an
+    approved action's result was replaced by "the user did not answer" -- and
+    the loop that called this places the message after the returns anyway.
     """
     matched: dict[str, tuple[int, object]] = {}
     index = start_index
@@ -227,10 +234,18 @@ def _match_tool_returns(
                 matched.setdefault(getattr(msg, "tool_call_id", None), (index, msg))
             index += 1
             continue
+        if role == MessageRole.USER and _sent_while_running(msg):
+            index += 1
+            continue
         if role in (MessageRole.ASSISTANT, MessageRole.USER):
             break
         index += 1
     return matched
+
+
+def _sent_while_running(message: object) -> bool:
+    metadata = getattr(message, "metadata", None)
+    return isinstance(metadata, dict) and metadata.get(DURING_ACTIVE_RUN) is True
 
 
 def _user_moved_on(messages: list[object], after_index: int) -> bool:

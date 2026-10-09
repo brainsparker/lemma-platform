@@ -31,6 +31,10 @@ from app.modules.agent.domain.value_objects import (
 
 MAX_AGENT_INSTRUCTION_CHARACTERS = 60_000
 
+#: What one message a person sends may hold. The same budget as an agent's
+#: instruction: both are text replayed into every model request that follows.
+MAX_MESSAGE_CHARACTERS = MAX_AGENT_INSTRUCTION_CHARACTERS
+
 
 def validate_agent_instruction(instruction: str | None) -> str:
     """Validate authored text without rejecting historical entities on read."""

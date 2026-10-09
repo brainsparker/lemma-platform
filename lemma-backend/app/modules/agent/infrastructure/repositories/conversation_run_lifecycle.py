@@ -18,6 +18,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRunFinishResult,
     AgentRunStatus,
     ConversationStatus,
+    JsonObject,
     JsonValue,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
@@ -42,6 +43,7 @@ class ConversationRunLifecycleMixin:
         error_code: str | None = None,
         error_reason: str | None = None,
         output_data: JsonValue | None = None,
+        stamp: JsonObject | None = None,
     ) -> AgentRunFinishResult | None:
         """Move a run on from the status it is in, once, whoever else is trying.
 
@@ -88,6 +90,7 @@ class ConversationRunLifecycleMixin:
             metadata.pop("failure", None)
             if next_status == AgentRunStatus.FAILED and error_code:
                 metadata["failure"] = {"code": error_code, "reason": error_reason}
+            metadata.update(stamp or {})
             values: dict[str, object] = {
                 "status": next_status.value,
                 "error": error,

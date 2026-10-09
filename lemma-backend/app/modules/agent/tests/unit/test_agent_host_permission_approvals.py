@@ -704,10 +704,10 @@ class TestAParkedInteractionDoesNotResume:
     polling for. The turn carries on the moment it reads it, so dispatching a
     resume run here would put two runs on the same turn.
 
-    Keyed on the run still running rather than on a marker in the call's
-    arguments, unlike the ACP permission above: those arguments come from the
-    model, not from Lemma, so there is nothing of ours to read back. "Still
-    running" is also the honest condition — it is what makes a resume wrong.
+    Keyed on the mark Lemma writes on the call when it records it over MCP
+    (`parked_in_run`), with the run still running: not on the call's arguments,
+    which come from the model, and not on the run's status alone, which an
+    in-process pause answered before its run was written WAITING shares.
     """
 
     @pytest.mark.asyncio
@@ -720,6 +720,7 @@ class TestAParkedInteractionDoesNotResume:
         # An ordinary request_approval — no ACP marker, so only the run's own
         # state can tell this apart from an in-process pause.
         repository.call.tool_args = {"tool_name": "exec_command", "args": {}}
+        repository.call.metadata = {"parked_in_run": True}
         repository.paused_run = SimpleNamespace(
             id=run_id, status=AgentRunStatus.RUNNING
         )

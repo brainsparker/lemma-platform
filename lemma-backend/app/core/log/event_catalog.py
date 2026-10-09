@@ -15,6 +15,7 @@ class EventSpec:
 EVENT_CATALOG: dict[str, EventSpec] = {
     "logging.contract.violation": EventSpec("error"),
     'agent.agent_host.final_answer_read_failed.degraded': EventSpec('warning', frozenset()),
+    'agent.agent_host.parked_run_suspended': EventSpec('info', frozenset({'agent_run_id', 'conversation_id', 'tool_name'})),
     'agent.agent_host_legacy.pairing_refused': EventSpec('info', frozenset()),
     'agent.agent_host_legacy.upgrade_required': EventSpec('info', frozenset({'host_id'})),
     'agent.agent_host_link.announce_skipped.degraded': EventSpec('warning', frozenset({'host_id'})),

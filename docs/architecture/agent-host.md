@@ -625,6 +625,20 @@ guarantee:
   never stalls the runs still working. A wait whose run has ended is answered
   `TERMINAL_RUN`, not held for its full half hour. The bridge no longer polls
   every 2 seconds.
+- **The parked window.** A parked question, approval or ACP permission request
+  holds a run that is still RUNNING, and the worker job reading it. Pauses
+  never expire, so past `AGENT_HOST_PARKED_WINDOW_SECONDS` (10 minutes) the
+  worker marks the run (`suspended_while_parked`) and sends the ordinary
+  `CANCEL_RUN`; the host ends the ACP turn as it does for Stop, and the
+  terminal it reports is read as WAITING (`harnesses/agent_host/parked_window.py`).
+  Nothing on the wire changed: the bridge's wait ends with its run and hands
+  the agent the unchanged "waiting" result, never a denial, and the host
+  resolves a held permission request as the cancelled turn's. The pause stays
+  listed, and deciding it resumes a new run that carries the decision. A
+  permission request cannot be answered in the turn that asked, so its
+  decision tells the resumed agent that nothing ran and to do it again if it
+  is still needed -- the host asks once more. An answer inside the window is
+  delivered into the turn, as before.
 - **Steering.** A message the person sends while a run is working reaches a
   harness that published the `steering` capability as a `STEER_RUN` command,
   fenced on the run's lease epoch like every run command. The run's turn sends

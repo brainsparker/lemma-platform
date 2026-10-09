@@ -30,7 +30,6 @@ from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.modules.agent.domain.agent_host_permissions import AGENT_HOST_PERMISSION_KEY
 from app.modules.agent.domain.pending_interactions import (
     AGENT_HOST_PERMISSION_DECISION_WINDOW,
     WAITING_ON_A_PERSON_TOOLS,
@@ -46,18 +45,13 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
     MessageModel,
 )
+from app.modules.agent.infrastructure.repositories.parked_pause_queries import (
+    is_host_permission_call as _is_host_permission,
+    in_a_run_suspended_while_parked,
+)
 from app.modules.agent.infrastructure.repository_status import (
     conversation_status_values_for_db,
 )
-
-
-def _is_host_permission() -> ColumnElement[bool]:
-    # The marker must be an object, as `agent_host_permission_request` reads
-    # it; `jsonb ? key` alone would also match a bare string argument. The
-    # COALESCE keeps an ordinary call from reading as NULL -- neither a
-    # permission request nor not one -- which `NOT` would leave NULL too.
-    marker_type = func.jsonb_typeof(MessageModel.tool_args[AGENT_HOST_PERMISSION_KEY])
-    return func.coalesce(marker_type, "absent") == "object"
 
 
 def _summary_text() -> ColumnElement[str | None]:
@@ -82,7 +76,8 @@ def pending_pause_conditions() -> list[ColumnElement[bool]]:
     parked remote approval or an Agent Host permission request holds a run that
     is still RUNNING. A pause in a conversation that is neither was overtaken --
     the run failed or was stopped around it -- and is not one an answer can
-    resume. A permission request is further bounded by the host's own timeout.
+    resume. A permission request is further bounded by the host's own timeout,
+    unless Lemma ended its turn for it and left the conversation WAITING.
     """
     decided = exists().where(
         AgentApprovalDecisionModel.conversation_id == MessageModel.conversation_id,
@@ -104,6 +99,9 @@ def pending_pause_conditions() -> list[ColumnElement[bool]]:
             [ConversationStatus.WAITING, ConversationStatus.RUNNING]
         )
     )
+    waiting = ConversationModel.status.in_(
+        conversation_status_values_for_db(ConversationStatus.WAITING)
+    )
     still_answerable = (
         MessageModel.created_at > func.now() - AGENT_HOST_PERMISSION_DECISION_WINDOW
     )
@@ -117,6 +115,10 @@ def pending_pause_conditions() -> list[ColumnElement[bool]]:
         or_(
             and_(~_is_host_permission(), waiting_or_running),
             and_(_is_host_permission(), running, still_answerable),
+            # A turn Lemma ended for this request (the parked window) answers
+            # it with a resume, not with the host, so the host's timeout no
+            # longer bounds it.
+            and_(_is_host_permission(), waiting, in_a_run_suspended_while_parked()),
         ),
     ]
 

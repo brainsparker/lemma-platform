@@ -378,6 +378,10 @@ class TestATurnEndedForASleepingAgent:
         )
         _stub_dispatch(harness, monkeypatch)
         monkeypatch.setattr(harness_events_module, "run_suspended_on", _awake())
+        # Nor ended by Lemma for a pause it sat parked on past its window.
+        monkeypatch.setattr(
+            harness_events_module, "run_suspended_while_parked", _awake()
+        )
 
         events = [event async for event in await _drive(harness, agent_run_id)]
 

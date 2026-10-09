@@ -92,6 +92,24 @@ class AgentSettings(BaseSettings):
         ),
     )
 
+    # A remote harness cannot end its turn from inside a tool call, so an
+    # `ask_user` or approval it raises is parked: the run stays RUNNING, and its
+    # worker job with it, while the person decides. Pauses never expire and
+    # nothing reminds anyone, so that wait can last hours -- holding a worker
+    # slot, swallowing every message typed meanwhile into a turn that cannot
+    # read them, and dying as "interrupted" at the next deploy. A person who
+    # answers within minutes is still answered inside the turn; past this, the
+    # turn is ended as WAITING and the answer resumes a fresh run.
+    agent_host_parked_window_seconds: float = Field(
+        default=600.0,
+        description=(
+            "Seconds an Agent Host run may hold its turn open on a question or "
+            "approval before it is ended as WAITING and the answer is left to "
+            "resume a new run. Kept well inside the host's own 30-minute "
+            "permission timeout. 0 disables it."
+        ),
+    )
+
     agent_run_stop_poll_interval_seconds: float = Field(
         default=1.0,
         description="Minimum interval between database polls of an agent run's stop flag.",

@@ -41,7 +41,10 @@ from app.modules.agent.domain.errors import (
     ApprovalNotOwnedError,
     UnknownApprovalError,
 )
-from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pausing_tools import (
+    PAUSING_TOOL_NAMES,
+    parked_suspension_of,
+)
 from app.modules.agent.domain.ports import ConversationRepository
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -351,11 +354,14 @@ class ApprovalCoordinator:
                 # return, so it stays up and a retry finishes this.
                 return
 
-        if agent_host_permission_request(tool_args) is not None:
+        host_permission = agent_host_permission_request(tool_args) is not None
+        if host_permission and not await self._turn_ended_while_parked(paused_run_id):
             # An Agent Host pauses *inside* a live run: the decision was just
             # handed to the host, which carries the same run on from where it
             # stopped. Starting a resume run here would dispatch a second,
-            # duplicate host run for the same turn.
+            # duplicate host run for the same turn. Unless Lemma ended that
+            # turn because the request sat past its parked window: then the
+            # decision reaches the agent only by resuming, like any pause.
             return
 
         if await self.pauses.resume_would_duplicate_a_live_turn(
@@ -372,6 +378,10 @@ class ApprovalCoordinator:
             agent_name=agent_name,
             source="approval_resume",
         )
+
+    async def _turn_ended_while_parked(self, paused_run_id: UUID) -> bool:
+        run = await self.conversation_repository.get_agent_run(paused_run_id)
+        return run is not None and parked_suspension_of(run.metadata) is not None
 
     async def _close_an_abandoned_execution(
         self,

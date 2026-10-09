@@ -418,8 +418,21 @@ def _patch_agent_host(
         "app.modules.agent.infrastructure.agent_host.dispatch_repository"
     )
     dispatch.AgentHostDispatchRepository = _Repository
+
+    class _Runs:
+        """A run Lemma never ended for a parked window: it has no mark."""
+
+        def __init__(self, uow) -> None:
+            del uow
+
+        async def get_agent_run(self, agent_run_id):
+            return SimpleNamespace(id=agent_run_id, metadata={})
+
+    repositories = types.ModuleType("app.modules.agent.infrastructure.repositories")
+    repositories.ConversationRepository = _Runs
     monkeypatch.setitem(sys.modules, channels.__name__, channels)
     monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
+    monkeypatch.setitem(sys.modules, repositories.__name__, repositories)
 
 
 class _ConversationRepository:

@@ -22,6 +22,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.agent_host import AgentHostRunState
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
@@ -57,6 +58,10 @@ from app.modules.agent.infrastructure.harnesses.agent_host.harness_events import
 from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
     enqueue_run,
     refresh_credential,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host.parked_window import (
+    DEFAULT_PARKED_CHECK_SECONDS,
+    ParkedWindow,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
     AgentHostRunConfig,
@@ -117,6 +122,7 @@ class _ConsumeState:
     accept_deadline: float
     lease_check_due_at: float
     steering: SteerSchedule
+    parked: ParkedWindow
     credential_expires_at: datetime | None
     terminal_checkpoint_seen_at: float | None = None
     stop_sent: bool = False
@@ -138,6 +144,8 @@ class RemoteHarness:
         stream_block_ms: int = DEFAULT_STREAM_BLOCK_MS,
         terminal_event_grace_seconds: float = DEFAULT_TERMINAL_EVENT_GRACE_SECONDS,
         steer_check_seconds: float = DEFAULT_STEER_CHECK_SECONDS,
+        parked_window_seconds: float | None = None,
+        parked_check_seconds: float = DEFAULT_PARKED_CHECK_SECONDS,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.uow_factory = uow_factory
@@ -149,6 +157,12 @@ class RemoteHarness:
         self.stream_block_ms = stream_block_ms
         self.terminal_event_grace_seconds = terminal_event_grace_seconds
         self.steer_check_seconds = steer_check_seconds
+        self.parked_window_seconds = (
+            agent_settings.agent_host_parked_window_seconds
+            if parked_window_seconds is None
+            else parked_window_seconds
+        )
+        self.parked_check_seconds = parked_check_seconds
         # Only the credential window is measured against a wall clock, and it
         # is an hour wide. Injecting it is what lets a test prove a run
         # outliving its original token without waiting out the real hour.
@@ -252,6 +266,13 @@ class RemoteHarness:
                 enabled=dispatch.steerable,
                 interval=self.steer_check_seconds,
                 now=loop.time(),
+            ),
+            parked=ParkedWindow(
+                window_seconds=self.parked_window_seconds,
+                interval=self.parked_check_seconds,
+                # Nothing can have been parked for minutes the moment a run is
+                # dispatched; a reclaimed one waits one interval at most.
+                next_check_at=loop.time() + self.parked_check_seconds,
             ),
             # Advances as refreshes land, so the run is bounded by the
             # credential it currently holds rather than the one it began with.
@@ -365,6 +386,14 @@ class RemoteHarness:
             return failure_events(normalizer, agent_run_id, state.deadline_message)
 
         await self._steer(state.steering, now=now, agent_run_id=agent_run_id)
+        # A turn parked on a person past its window is ended here, and comes
+        # back as a terminal read as WAITING; see `parked_window`.
+        await state.parked.check(
+            self.uow_factory,
+            now=now,
+            conversation_id=conversation.id,
+            agent_run_id=agent_run_id,
+        )
 
         if now < state.lease_check_due_at:
             return None

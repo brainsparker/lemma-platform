@@ -20,6 +20,7 @@ from app.modules.agent.domain.agent_host_permissions import (
     AgentHostPermissionRequest,
     agent_host_permission_request,
 )
+from app.modules.agent.domain.pausing_tools import parked_suspension_of
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
@@ -217,11 +218,17 @@ async def agent_host_permission_tool_return(
     )
     if host_id is not None:
         uow.after_commit(lambda: _wake_host(host_id))
+    # Read only once the enqueue has had the lease lock: a turn being ended for
+    # its parked window commits its mark under that same lock.
+    suspended = host_id is None and await _turn_ended_while_parked(uow, agent_run_id)
 
     content = RequestApprovalResponse(
         success=True,
         message=_permission_decision_message(
-            request, decision=decision, delivered=host_id is not None
+            request,
+            decision=decision,
+            delivered=host_id is not None,
+            suspended=suspended,
         ),
         decision=decision,
         executed=False,
@@ -237,13 +244,41 @@ async def _wake_host(host_id: UUID) -> None:
     await poke_host(host_id)
 
 
+async def _turn_ended_while_parked(
+    uow: SqlAlchemyUnitOfWork, agent_run_id: UUID
+) -> bool:
+    """Whether Lemma ended this run's turn because the request sat unanswered."""
+    # Lazy for the same reason as the dispatch repository above.
+    from app.modules.agent.infrastructure.repositories import ConversationRepository
+
+    run = await ConversationRepository(uow).get_agent_run(agent_run_id)
+    return run is not None and parked_suspension_of(run.metadata) is not None
+
+
 def _permission_decision_message(
     request: AgentHostPermissionRequest,
     *,
     decision: AgentRunApprovalDecision,
     delivered: bool,
+    suspended: bool = False,
 ) -> str:
     """What the agent reads about a decision on its permission request."""
+    if suspended:
+        # Read by a resumed run, in a new turn. The ACP request it answers
+        # was dropped with the turn that asked it, and nothing carries an
+        # approval into the next one: the agent asks again, and is answered
+        # again, if it does the thing at all.
+        if decision == AgentRunApprovalDecision.DENY:
+            return (
+                "Denied. Your earlier turn was paused while this waited for the "
+                "person, so the request lapsed and nothing ran. Do not do it."
+            )
+        return (
+            "Approved. Your earlier turn was paused while this waited for the "
+            "person, so the request lapsed and nothing ran. If it is still "
+            "needed, do it again now; the person will be asked to allow it once "
+            "more."
+        )
     if not delivered:
         return (
             "The local agent's run ended before this decision reached it, so "

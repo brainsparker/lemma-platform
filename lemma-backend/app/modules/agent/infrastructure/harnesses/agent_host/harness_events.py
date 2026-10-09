@@ -19,11 +19,16 @@ from app.modules.agent.domain.agent_host import (
 )
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
+from app.modules.agent.domain.pausing_tools import (
+    USER_PAUSING_TOOL_NAMES,
+    WAIT_TOOL_NAME,
+)
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
     JsonObject,
+    MessageDraft,
+    MessageKind,
 )
 from app.modules.agent.infrastructure.agent_host.event_stream import StreamedEvent
 from app.modules.agent.infrastructure.agent_host.final_answer import (
@@ -47,7 +52,10 @@ from app.modules.agent.infrastructure.harnesses.agent_host.steering import (
     record_steer_result,
 )
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
-from app.modules.agent.services.run_suspension import run_suspended_on
+from app.modules.agent.services.run_suspension import (
+    run_suspended_on,
+    run_suspended_while_parked,
+)
 
 _RICH_CONTENT_TYPES = frozenset(
     {
@@ -55,6 +63,8 @@ _RICH_CONTENT_TYPES = frozenset(
         AgentHostEventType.AGENT_THOUGHT_CHUNK.value,
     }
 )
+# The terminals a suspended turn can come back as; see `_as_suspension`.
+_ENDED_CLEANLY = frozenset({AgentEventType.COMPLETED, AgentEventType.STOPPED})
 
 
 class RunEventApplier:
@@ -207,15 +217,28 @@ class RunEventApplier:
         Failures are left alone. A run that hit its context ceiling or lost its
         host really did fail, and a wait row does not make that untrue; the
         timer still wakes the conversation either way.
+
+        A turn Lemma ended because it sat parked on a person past its window
+        (``parked_window``) is read the same way, from the mark that window
+        left on the run. Its pause stays open: the return the normalizer
+        synthesizes for a call the turn left unanswered is dropped for a
+        pausing call, which the person's decision answers later instead.
         """
-        if not any(
-            event.type in {AgentEventType.COMPLETED, AgentEventType.STOPPED}
-            for event in events
-        ):
+        if not any(event.type in _ENDED_CLEANLY for event in events):
             return events
         async with self.uow_factory() as uow:
             wait = await run_suspended_on(uow, agent_run_id=agent_run_id)
-        if wait is None:
+            parked = (
+                await run_suspended_while_parked(uow, agent_run_id=agent_run_id)
+                if wait is None
+                else None
+            )
+        if wait is not None:
+            pause_id, kind = wait.tool_call_id, WAIT_TOOL_NAME
+        elif parked is not None:
+            pause_id, kind = parked.tool_call_id, parked.tool_name
+            events = [event for event in events if not _closes_a_pause(event)]
+        else:
             return events
         return [
             AgentEvent(
@@ -223,17 +246,29 @@ class RunEventApplier:
                 # The shape the in-process pause yields, so that everything
                 # downstream of a paused turn reads one event, not two.
                 data={
-                    "tool_call_id": wait.tool_call_id,
-                    "kind": WAIT_TOOL_NAME,
+                    "tool_call_id": pause_id,
+                    "kind": kind,
                     "conversation_id": str(conversation.id),
                 },
                 agent_run_id=agent_run_id,
                 sequence=event.sequence,
             )
-            if event.type in {AgentEventType.COMPLETED, AgentEventType.STOPPED}
+            if event.type in _ENDED_CLEANLY
             else event
             for event in events
         ]
+
+
+def _closes_a_pause(event: AgentEvent) -> bool:
+    """A return made up at the turn's end for a call a person still has to answer."""
+    draft = event.data
+    return (
+        event.type is AgentEventType.MESSAGE
+        and isinstance(draft, MessageDraft)
+        and draft.kind is MessageKind.TOOL_RETURN
+        and draft.tool_name in USER_PAUSING_TOOL_NAMES
+        and bool((draft.metadata or {}).get("synthetic_tool_return"))
+    )
 
 
 __all__ = ["RunEventApplier"]

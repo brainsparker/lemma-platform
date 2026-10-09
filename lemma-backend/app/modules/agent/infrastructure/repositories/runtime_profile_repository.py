@@ -21,6 +21,7 @@ from app.modules.agent.infrastructure.runtime_models import (
     AgentRuntimeProfileModel,
 )
 from app.modules.connectors.contracts import SecretEncryptionPort
+from app.modules.identity.contracts.profiles import user_profile
 
 
 logger = get_logger(__name__)
@@ -217,6 +218,28 @@ class AgentRuntimeProfileRepository:
             )
         result = await self.session.execute(stmt.limit(1))
         return result.scalar_one_or_none()
+
+    async def get_personal_by_id(
+        self, *, profile_id: str, organization_id: UUID
+    ) -> AgentRuntimeProfile | None:
+        """A member's active personal profile, whoever is asking.
+
+        Only for saying *whose* it is when someone else's turn reaches it; it
+        must never be what a run resolves to.
+        """
+        instance = await self._load(
+            profile_id=profile_id, organization_id=organization_id
+        )
+        if instance is None or instance.scope != RuntimeProfileScope.PERSONAL.value:
+            return None
+        return self._to_entity(instance)
+
+    async def owner_first_name(self, user_id: UUID) -> str | None:
+        """The name a teammate knows this profile's owner by, when there is one."""
+        profile = await user_profile(self.session, user_id)
+        if profile is None:
+            return None
+        return (profile.first_name or "").strip() or None
 
     async def get_visible(
         self,

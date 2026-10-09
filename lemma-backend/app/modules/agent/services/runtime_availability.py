@@ -25,7 +25,6 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.errors import RuntimeUnavailableError
-from app.modules.agent.domain.runtime_profiles import RuntimeProfileScope
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.unavailable_models import (
     UnavailableModels,
@@ -57,15 +56,16 @@ async def check_runtime_selection(
     profiles: AgentRuntimeProfileService,
     organization_id: UUID | None,
     user_id: UUID,
-    shared: bool,
 ) -> SelectedModel | None:
-    """Refuse a runtime that cannot run, with a :class:`RuntimeUnavailableError`.
+    """Refuse a runtime ``user_id`` cannot run, with a :class:`RuntimeUnavailableError`.
 
-    ``shared`` is a runtime other people's turns will use -- a teammate the
-    pod sees -- which must not lean on one member's personal provider. Returns
-    the model it settled on, when one is pinned, for the provider-refusal check
-    a turn adds; reads only the database, so a save can run it on a request's
-    session.
+    Visibility is the whole rule for whose runtime it is. A member's own
+    personal profile -- their own Claude Code, their own key -- passes for them,
+    on a teammate the pod sees too: pinning one there is how a person puts their
+    own coding agent to work in a pod. Anybody else is refused, at save and at
+    their turn alike, with the owner named. Returns the model it settled on,
+    when one is pinned, for the provider-refusal check a turn adds; reads only
+    the database, so a save can run it on a request's session.
     """
     try:
         profile = await profiles.get_profile(
@@ -88,12 +88,6 @@ async def check_runtime_selection(
             runtime=runtime, organization_id=organization_id, user_id=user_id
         )
         raise runtime_profile_unavailable_error()
-    if shared and profile.scope is RuntimeProfileScope.PERSONAL:
-        raise RuntimeUnavailableError(
-            f"{profile.name} is a personal model, and this teammate is used by "
-            "the whole pod. Pick a model the organization shares.",
-            code="runtime_profile_not_shareable",
-        )
     model = selected_model(profile, runtime.model_name)
     if model is None:
         return None
@@ -140,7 +134,6 @@ class SaveRuntimeCheck(Protocol):
         *,
         pod_id: UUID,
         user_id: UUID,
-        shared: bool,
     ) -> None: ...
 
 
@@ -150,7 +143,6 @@ async def check_runtime_for_pod(
     *,
     pod_id: UUID,
     user_id: UUID,
-    shared: bool,
 ) -> None:
     """The save-time check: the runtime an agent or conversation is given."""
     if runtime is None:
@@ -160,7 +152,6 @@ async def check_runtime_for_pod(
         profiles=profile_service(uow),
         organization_id=await pod_organization_id(uow, pod_id),
         user_id=user_id,
-        shared=shared,
     )
 
 
@@ -201,6 +192,5 @@ async def ensure_turn_runtime_available(
         profiles=profile_service(uow),
         organization_id=organization_id,
         user_id=user_id,
-        shared=False,
     )
     await refuse_a_model_the_provider_refused(selected, unavailable_models())

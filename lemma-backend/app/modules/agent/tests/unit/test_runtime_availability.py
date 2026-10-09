@@ -1,9 +1,9 @@
 """Whether a teammate's model can run, decided before a run depends on it.
 
 The check behind save-time validation, turn start and retry: a profile that is
-gone or someone else's, a personal profile on a shared teammate, a model the
-catalog no longer lists, and a model a provider just answered 404 for are each
-refused with their own code -- never swapped for another model.
+gone, another member's own runtime, a model the catalog no longer lists, and a
+model a provider just answered 404 for are each refused with their own code --
+never swapped for another model. A member's own runtime passes for them.
 """
 
 from __future__ import annotations
@@ -53,10 +53,24 @@ class _Cache:
 
 
 class _Profiles:
-    """`get_visible_by_id` with the repository's visibility rule."""
+    """The repository's reads, with its visibility rule."""
 
-    def __init__(self, *profiles: AgentRuntimeProfile) -> None:
+    def __init__(
+        self, *profiles: AgentRuntimeProfile, first_names: dict[UUID, str] | None = None
+    ) -> None:
         self._profiles = {profile.id: profile for profile in profiles}
+        self._first_names = first_names or {}
+
+    async def get_personal_by_id(
+        self, *, profile_id: str, organization_id: UUID
+    ) -> AgentRuntimeProfile | None:
+        profile = self._profiles.get(profile_id)
+        if profile is None or profile.organization_id != organization_id:
+            return None
+        return profile if profile.scope is RuntimeProfileScope.PERSONAL else None
+
+    async def owner_first_name(self, user_id: UUID) -> str | None:
+        return self._first_names.get(user_id)
 
     async def get_visible_by_id(
         self, *, profile_id: str, organization_id: UUID, user_id: UUID
@@ -96,16 +110,15 @@ async def _refusal(
     *profiles: AgentRuntimeProfile,
     organization_id: UUID,
     user_id: UUID,
-    shared: bool = False,
+    first_names: dict[UUID, str] | None = None,
 ) -> RuntimeUnavailableError:
-    service = AgentRuntimeProfileService(_Profiles(*profiles))  # type: ignore[arg-type]  # TST-03: the one repository read the check makes
+    service = AgentRuntimeProfileService(_Profiles(*profiles, first_names=first_names))  # type: ignore[arg-type]  # TST-03: the repository reads the check makes
     with pytest.raises(RuntimeUnavailableError) as refused:
         await check_runtime_selection(
             runtime,
             profiles=service,
             organization_id=organization_id,
             user_id=user_id,
-            shared=shared,
         )
     return refused.value
 
@@ -140,19 +153,38 @@ async def test_a_profile_nobody_here_can_see_is_refused() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_personal_profile_on_a_shared_teammate_is_refused() -> None:
+async def test_a_member_may_run_on_their_own_personal_profile() -> None:
+    org, owner = uuid4(), uuid4()
+    personal = _profile(org, scope=RuntimeProfileScope.PERSONAL, user_id=owner)
+
+    selected = await check_runtime_selection(
+        AgentRuntimeConfig(profile_id=personal.id, model_name="kept"),
+        profiles=AgentRuntimeProfileService(_Profiles(personal)),  # type: ignore[arg-type]  # TST-03: as above
+        organization_id=org,
+        user_id=owner,
+    )
+
+    assert selected == SelectedModel(
+        profile_id=personal.id, profile_name="Vendor", model_name="kept"
+    )
+
+
+@pytest.mark.asyncio
+async def test_anyone_else_reaching_a_members_own_profile_is_told_whose_it_is() -> None:
     org, owner = uuid4(), uuid4()
     personal = _profile(org, scope=RuntimeProfileScope.PERSONAL, user_id=owner)
 
     refused = await _refusal(
-        AgentRuntimeConfig(profile_id=personal.id),
+        AgentRuntimeConfig(profile_id=personal.id, model_name="kept"),
         personal,
         organization_id=org,
-        user_id=owner,
-        shared=True,
+        user_id=uuid4(),
+        first_names={owner: "Ada"},
     )
 
     assert refused.code == "runtime_profile_not_shareable"
+    assert refused.status_code == 422
+    assert "Ada's own Vendor" in refused.message
 
 
 @pytest.mark.asyncio
@@ -179,7 +211,6 @@ async def test_a_listed_model_on_a_shared_profile_passes_and_is_named() -> None:
         profiles=AgentRuntimeProfileService(_Profiles(profile)),  # type: ignore[arg-type]  # TST-03: as above
         organization_id=org,
         user_id=uuid4(),
-        shared=True,
     )
 
     assert selected == SelectedModel(

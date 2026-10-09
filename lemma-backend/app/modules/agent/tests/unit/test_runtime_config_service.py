@@ -144,6 +144,20 @@ class _ProfileRepository:
                 return profile
         return None
 
+    async def get_personal_by_id(self, *, profile_id, organization_id):
+        for profile in self.profiles:
+            if (
+                profile.id == profile_id
+                and profile.organization_id == organization_id
+                and profile.scope is RuntimeProfileScope.PERSONAL
+                and profile.status is RuntimeProfileStatus.ACTIVE
+            ):
+                return profile
+        return None
+
+    async def owner_first_name(self, user_id):
+        return None
+
     async def create(self, profile):
         self.profiles.append(profile)
         return profile
@@ -457,7 +471,10 @@ async def test_someone_elses_personal_profile_is_a_typed_refusal():
             user_id=uuid4(),
         )
 
-    assert refused.value.code == "runtime_profile_unavailable"
+    # Whose it is, rather than a bare "unavailable": the owner may run it, and
+    # anyone else needs to know who to ask.
+    assert refused.value.code == "runtime_profile_not_shareable"
+    assert "someone's key" in refused.value.message
 
 
 def test_system_runtime_profiles_return_empty_without_server_credentials(monkeypatch):

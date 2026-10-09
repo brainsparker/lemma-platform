@@ -167,6 +167,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.runtime_profile.model_names_not_configured.observed': EventSpec('info', frozenset({'operator_hint'})),
     'agent.runtime_profile.model_not_configured.observed': EventSpec('info', frozenset({'operator_hint'})),
     'agent.runtime_profile.model_unavailable.refused': EventSpec('warning', frozenset({'profile_id', 'requested_model_name'})),
+    'agent.runtime_profile.owner_lookup_failed.degraded': EventSpec('warning', frozenset({'profile_id'})),
     'agent.runtime_profile.provider_origin.changed': EventSpec('info', frozenset({'organization_id', 'profile_id', 'user_id'})),
     'agent.runtime_profile.provider_origin_change.refused': EventSpec('warning', frozenset({'organization_id', 'profile_id', 'user_id'})),
     'agent.runtime_profile.unreadable.skipped': EventSpec('warning', frozenset({'error_locations', 'error_type', 'organization_id', 'profile_id'})),

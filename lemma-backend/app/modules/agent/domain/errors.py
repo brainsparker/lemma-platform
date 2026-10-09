@@ -103,8 +103,9 @@ class RuntimeUnavailableError(AgentModuleError):
       provider just answered that it does not serve it;
     * ``runtime_profile_unavailable`` -- the profile is archived, gone, or
       someone else's personal one;
-    * ``runtime_profile_not_shareable`` -- a personal profile on a teammate
-      the whole pod uses.
+    * ``runtime_profile_not_shareable`` -- another member's own runtime (their
+      Claude Code, their key), reached by someone who is not them. The owner
+      may pin it to any teammate, a pod-visible one included; it runs for them.
 
     422 when a save names it, and the same error, not a substitute model, when
     a run reaches it.

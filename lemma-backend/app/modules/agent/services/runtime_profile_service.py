@@ -302,6 +302,13 @@ class AgentRuntimeProfileService:
                     code="runtime_profile_archived",
                     status_code=409,
                 )
+            owned_elsewhere = await self._someone_elses_personal_profile(
+                profile_id=profile_id,
+                organization_id=organization_id,
+                user_id=user_id,
+            )
+            if owned_elsewhere is not None:
+                raise owned_elsewhere
             raise runtime_profile_unavailable_error()
         model = selected_model(profile, runtime.model_name)
         if model is None and profile.kind is not RuntimeProfileKind.HARNESS:
@@ -360,6 +367,41 @@ class AgentRuntimeProfileService:
         if harness is None:
             return False
         return (getattr(harness, "capabilities", None) or {}).get("images") is True
+
+    async def _someone_elses_personal_profile(
+        self,
+        *,
+        profile_id: str,
+        organization_id: UUID | None,
+        user_id: UUID,
+    ) -> RuntimeUnavailableError | None:
+        """Name the owner when this is another member's own runtime.
+
+        A member may pin a teammate the pod sees to their own Claude Code or
+        their own provider; it runs for them. When anybody else's turn reaches
+        it, the run must neither borrow the owner's runtime nor fail with no
+        reason given, so this says whose it is. Failure path only.
+        """
+        if self.repository is None or organization_id is None:
+            return None
+        try:
+            profile = await self.repository.get_personal_by_id(
+                profile_id=profile_id, organization_id=organization_id
+            )
+            if profile is None or profile.user_id in (None, user_id):
+                return None
+            owner = await self.repository.owner_first_name(profile.user_id)
+        except SQLAlchemyError:
+            # A better message is not worth masking why the run cannot start.
+            logger.warning(
+                "agent.runtime_profile.owner_lookup_failed.degraded",
+                profile_id=str(profile_id),
+                exc_info=True,
+            )
+            return None
+        return personal_runtime_not_shareable_error(
+            profile_name=profile.name, owner_name=owner
+        )
 
     async def _archived_profile(
         self,
@@ -441,15 +483,29 @@ def _profile_availability(
 
 
 def runtime_profile_unavailable_error() -> RuntimeUnavailableError:
-    """Not visible to the person whose run this is: gone, or someone else's.
+    """Not visible to the person whose run this is, and not known to be whose.
 
-    Typically a teammate the whole pod uses, pinned to one member's personal
-    provider. It used to be a bare RuntimeError -- an opaque failure for
-    everyone but that member.
+    Gone, or another member's own runtime when the lookup that would name them
+    failed (`personal_runtime_not_shareable_error` is the usual answer for
+    that). It used to be a bare RuntimeError -- an opaque failure for everyone
+    but the owner.
     """
     return RuntimeUnavailableError(
         "The model this teammate is set to use isn't available to you: it was "
         "removed, or it is someone's personal model. Pick another model for "
         "the teammate.",
         code="runtime_profile_unavailable",
+    )
+
+
+def personal_runtime_not_shareable_error(
+    *, profile_name: str, owner_name: str | None
+) -> RuntimeUnavailableError:
+    """Another member's own runtime, reached by someone who is not them."""
+    whose = f"{owner_name}'s" if owner_name else "a teammate's"
+    ask = f"Ask {owner_name}" if owner_name else "Ask its owner"
+    return RuntimeUnavailableError(
+        f"This teammate runs on {whose} own {profile_name}, which only they can "
+        f"use. {ask} to run it, or pick a model the organization shares.",
+        code="runtime_profile_not_shareable",
     )

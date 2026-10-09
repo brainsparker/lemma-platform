@@ -52,11 +52,6 @@ def _normalize_agent_visibility(value: ResourceVisibility | str | None) -> str:
     return visibility.value
 
 
-def _is_shared(visibility: str | None) -> bool:
-    """Whether other people's turns run on this agent's runtime."""
-    return visibility != ResourceVisibility.PERSONAL.value
-
-
 def _editor_id(
     agent: Agent, requester_user_id: UUID | None, ctx: Context | None
 ) -> UUID:
@@ -174,7 +169,6 @@ class AgentService:
             agent_runtime,
             pod_id=pod_id,
             user_id=user_id,
-            shared=_is_shared(normalized_visibility),
         )
 
         agent = await self.agent_repository.create(
@@ -343,17 +337,14 @@ class AgentService:
             agent.visibility = _normalize_agent_visibility(visibility)
         if not isinstance(metadata, UnsetType):
             agent.metadata = metadata
-        if not isinstance(agent_runtime, UnsetType) or not isinstance(
-            visibility, UnsetType
-        ):
-            # Only when the runtime, or who shares it, is what changed: a rename
-            # of a teammate on a retired model should not be held hostage to it.
+        if not isinstance(agent_runtime, UnsetType):
+            # Only when the runtime is what changed: a rename of a teammate on a
+            # retired model should not be held hostage to it.
             await self._check_runtime(
                 self.uow,
                 agent.agent_runtime,
                 pod_id=pod_id,
                 user_id=_editor_id(agent, requester_user_id, ctx),
-                shared=_is_shared(agent.visibility),
             )
 
         updated = await self.agent_repository.update(agent)

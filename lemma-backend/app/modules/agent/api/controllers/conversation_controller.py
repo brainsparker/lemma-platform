@@ -111,7 +111,7 @@ async def create_conversation(
 ) -> ConversationResponse:
     # Refused when saved, with the reason, rather than at the first turn.
     await check_runtime_for_pod(
-        service.uow, data.agent_runtime, pod_id=pod_id, user_id=user.id, shared=False
+        service.uow, data.agent_runtime, pod_id=pod_id, user_id=user.id
     )
     conversation = await service.create_conversation(
         pod_id=pod_id,
@@ -234,7 +234,6 @@ async def update_conversation(
             data.agent_runtime,
             pod_id=pod_id,
             user_id=user.id,
-            shared=False,
         )
     # Null is not a state a conversation can be in: the field is optional so
     # omitting it means "leave it alone", and an explicit null means the same.

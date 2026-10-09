@@ -278,6 +278,7 @@ class AgentRunnerService:
                     context_budget.summarization_token_limit
                 ),
                 history_hard_token_ceiling=context_budget.hard_token_ceiling,
+                context_window=context_budget.window,
                 extra={
                     "runtime_profile": runtime_profile_snapshot,
                     "runtime_credentials": runtime_credentials,

@@ -500,7 +500,9 @@ class TestTheHarnessDoesNotBill:
     async def test_a_completed_run_reports_no_usage_event(self, monkeypatch) -> None:
         attempts: list[int] = []
         events = await _run_harness(
-            FunctionModel(stream_function=_drop_then_succeed("partial ", "answer", attempts)),
+            FunctionModel(
+                stream_function=_drop_then_succeed("partial ", "answer", attempts)
+            ),
             monkeypatch=monkeypatch,
         )
 

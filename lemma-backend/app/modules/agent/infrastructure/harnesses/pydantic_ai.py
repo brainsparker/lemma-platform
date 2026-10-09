@@ -52,11 +52,9 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     to_json_value,
 )
-from pydantic_ai.capabilities import ProcessHistory
-
 from app.modules.agent.capabilities.outsider_gate import OutsiderToolGateCapability
 from app.modules.agent.capabilities.run_notices import RunNoticeCapability
-from app.modules.agent.infrastructure.harnesses.history import build_history_processors
+from app.modules.agent.infrastructure.harnesses.history import history_capabilities
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
 )
@@ -71,7 +69,7 @@ from app.modules.agent.services.runtime_model_factory import (
     provider_model_settings,
 )
 from app.modules.agent.services.summarization_model import (
-    resolve_summarization_model,
+    lazy_compaction_target,
 )
 from app.modules.agent.tools.final_answer.final_answer_text import final_answer_text
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
@@ -307,20 +305,14 @@ class PydanticAIHarness:
         # The graph driver owns stream resets, history recovery and retry limits.
         # Retrying inside the model would hide connection drops from that driver.
         model = with_external_stream_retries(model)
-        # History processors ride as ProcessHistory capabilities (the
-        # history_processors= kwarg is deprecated in pydantic-ai).
-        with run_phase("summarization_model"):
-            # Falls back to this run's model when HISTORY_SUMMARIZATION_MODEL is
-            # unset, so behaviour is unchanged unless a deployment opts in.
-            summarization_model = await resolve_summarization_model(
-                organization_id=conversation.organization_id,
-                user_id=conversation.user_id,
-                fallback=model,
-            )
-            summarization_model = _meter_compaction_model(summarization_model, options)
-        history_processors = build_history_processors(
-            options,
-            summarization_model=summarization_model,
+        # Falls back to this run's model when HISTORY_SUMMARIZATION_MODEL is
+        # unset, so behaviour is unchanged unless a deployment opts in.
+        summarization_model = lazy_compaction_target(
+            organization_id=conversation.organization_id,
+            user_id=conversation.user_id,
+            run_model=model,
+            run_model_settings=options.model_settings,
+            meter=lambda resolved: _meter_compaction_model(resolved, options),
         )
         capabilities = list(options.capabilities or [])
         # Before the history processors, not after. Capabilities run in
@@ -335,8 +327,12 @@ class PydanticAIHarness:
         # request -- soon enough, since it fires with a fifth of the history
         # budget still to fill.
         capabilities.append(RunNoticeCapability(options.notices))
+        # History processors ride as ProcessHistory capabilities (the
+        # history_processors= kwarg is deprecated in pydantic-ai), between the
+        # measurement of what else the request carries and the fitting of its
+        # reply budget to what is left.
         capabilities.extend(
-            ProcessHistory(processor) for processor in history_processors
+            history_capabilities(options, summarization_model=summarization_model)
         )
         # Last, so it sees the final tool list: on a stranger's run, whatever
         # every assembler above left in, only the allow-listed names survive.

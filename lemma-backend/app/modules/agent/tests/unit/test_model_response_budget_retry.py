@@ -66,7 +66,10 @@ async def _run(model: FunctionModel, *, spend: RunSpend | None = None):
     events: list[AgentEvent] = []
     async for event in PydanticAIHarness(model=model).run(
         agent=Agent(
-            pod_id=pod_id, user_id=conversation.user_id, name="assistant", instruction=""
+            pod_id=pod_id,
+            user_id=conversation.user_id,
+            name="assistant",
+            instruction="",
         ),
         conversation=conversation,
         messages=[],
@@ -99,7 +102,9 @@ def _resets(events: list[AgentEvent]) -> int:
 async def test_an_over_budget_answer_is_retried_once_asking_for_less() -> None:
     seen_max_tokens: list[object] = []
 
-    events = await _run(FunctionModel(stream_function=_always_over_budget(seen_max_tokens)))
+    events = await _run(
+        FunctionModel(stream_function=_always_over_budget(seen_max_tokens))
+    )
 
     assert seen_max_tokens == [16_000, 8_000], "one retry, with half the room"
     assert _resets(events) == 1
@@ -172,9 +177,7 @@ def test_the_shorter_answer_never_introduces_an_effort() -> None:
 
 def test_a_provider_retry_after_is_honoured_only_up_to_a_ceiling() -> None:
     """A misbehaving header must not park the conversation for an hour."""
-    hour = ModelHTTPError(
-        429, "test-model", body=None, headers={"Retry-After": "3600"}
-    )
+    hour = ModelHTTPError(429, "test-model", body=None, headers={"Retry-After": "3600"})
     short = ModelHTTPError(429, "test-model", body=None, headers={"Retry-After": "2"})
 
     assert _retry_delay(hour, attempt=1) == RETRY_AFTER_CAP_SECONDS

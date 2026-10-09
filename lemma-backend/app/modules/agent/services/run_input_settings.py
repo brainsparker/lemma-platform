@@ -77,6 +77,31 @@ MIN_REPLY_TOKENS = 1_024
 _LIGHT_EFFORTS = frozenset({"none", "minimal", "low"})
 
 
+#: Room for the compaction summary. The brief it is asked for is a page or two;
+#: an uncapped call on a reasoning model can think for as long as it likes first.
+SUMMARY_MAX_TOKENS = 4_096
+
+
+def compaction_model_settings(run_model_settings: JsonObject | None) -> JsonObject:
+    """Settings for the call that summarizes a run's history.
+
+    Summarizing a transcript is not the task an expensive reasoning setting was
+    chosen for, so the call asks for a capped answer and, where the run already
+    sends a reasoning effort, the lightest one this code knows every reasoning
+    model accepts. It never introduces an effort the run was not sending.
+
+    The seam for per-model generation settings: once a model can declare the
+    lightest effort it accepts, this is where that choice belongs.
+    """
+    settings: JsonObject = {"max_tokens": SUMMARY_MAX_TOKENS}
+    effort = (run_model_settings or {}).get("openai_reasoning_effort")
+    if isinstance(effort, str):
+        settings["openai_reasoning_effort"] = (
+            effort if effort in _LIGHT_EFFORTS else "low"
+        )
+    return settings
+
+
 def shorter_answer_settings(model_settings: JsonObject | None) -> JsonObject:
     """Settings for re-asking a request whose answer ran past the time budget.
 

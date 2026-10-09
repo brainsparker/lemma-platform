@@ -146,9 +146,7 @@ async def drive_with_retry(
     while True:
         state: dict[str, object] = {}
         try:
-            await drive_once(
-                resume_history, state, model_settings=retry_settings
-            )
+            await drive_once(resume_history, state, model_settings=retry_settings)
             return
         # Deliberately `Exception`, not `BaseException`: a CancelledError must
         # reach the caller untouched so pydantic-graph's scopes unwind in this

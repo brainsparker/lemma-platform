@@ -49,6 +49,10 @@ class HarnessOptions[DepsT = object]:
         DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES
     )
     history_hard_token_ceiling: int = DEFAULT_HISTORY_HARD_TOKEN_CEILING
+    #: The model's whole window, which a request's reply budget is fitted into
+    #: once its instructions, tools and history are known. 0 leaves the reply
+    #: budget as the settings give it.
+    context_window: int = 0
     should_stop: Callable[[], Awaitable[bool]] | None = None
     # What this run may spend before it pauses to ask whether to carry on. None
     # leaves it uncapped, which is what every caller did before budgets existed

@@ -14,14 +14,77 @@ behaviour instead of breaking every long conversation.
 from __future__ import annotations
 
 import os
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from uuid import UUID
 
 from pydantic_ai.models import Model
 
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.value_objects import JsonObject
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class CompactionTarget:
+    """The model a run's history is summarized on, and the settings to send it."""
+
+    model: Model | str
+    model_settings: JsonObject | None = None
+
+
+class LazyCompactionTarget:
+    """A compaction target resolved the first time a run actually compacts.
+
+    Resolving it reads the runtime profile, and most runs never compact: they
+    finish well inside the window. So the read happens on first use, once per
+    run, rather than at the start of every run.
+    """
+
+    def __init__(self, resolve: Callable[[], Awaitable[CompactionTarget]]) -> None:
+        self._resolve = resolve
+        self._target: CompactionTarget | None = None
+
+    async def get(self) -> CompactionTarget:
+        if self._target is None:
+            self._target = await self._resolve()
+        return self._target
+
+
+#: What a compactor may be handed: a model outright, or a target resolved later.
+type SummarizationModel = Model | str | LazyCompactionTarget
+
+
+def lazy_compaction_target(
+    *,
+    organization_id: UUID | None,
+    user_id: UUID,
+    run_model: Model,
+    run_model_settings: JsonObject | None,
+    meter: Callable[[Model | str], Model | str],
+) -> LazyCompactionTarget:
+    """The run's compaction target, resolved only if the run ever compacts.
+
+    The run's own settings travel with the run's own model, lightened for the
+    job; a separately configured summarization model gets only the summary cap,
+    since nothing says which of the run's settings it would accept.
+    """
+    from app.modules.agent.services.run_input_settings import (
+        compaction_model_settings,
+    )
+    from app.modules.agent.services.run_phase_spans import run_phase
+
+    async def resolve() -> CompactionTarget:
+        with run_phase("summarization_model"):
+            model = await resolve_summarization_model(
+                organization_id=organization_id, user_id=user_id, fallback=run_model
+            )
+        settings = run_model_settings if model is run_model else None
+        return CompactionTarget(meter(model), compaction_model_settings(settings))
+
+    return LazyCompactionTarget(resolve)
 
 
 def configured_summarization_model_name() -> str | None:

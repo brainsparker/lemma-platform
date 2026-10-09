@@ -177,6 +177,17 @@ class AgentSettings(BaseSettings):
             "one pass is gone from every pass after it."
         ),
     )
+    agent_history_compaction_timeout_seconds: float = Field(
+        default=120.0,
+        description=(
+            "How long one attempt at summarizing a run's history may take. The "
+            "summary is requested without streaming, so nothing else bounds the "
+            "wait for its answer but the per-chunk read timeout, and the run "
+            "waits on it. An attempt that times out is tried once more; if that "
+            "fails too, the history is left as it was while it still fits, and "
+            "replaced by a notice only past the hard ceiling. 0 disables it."
+        ),
+    )
     agent_model_context_windows: str = Field(
         default="",
         description=(

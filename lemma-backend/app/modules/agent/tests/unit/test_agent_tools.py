@@ -1872,18 +1872,21 @@ def test_history_processors_compact_then_enforce_a_hard_ceiling():
         summarization_model="openai:gpt-4.1",
     )
 
-    # Detach stale images, compact, the ceiling backstop, then the provider
-    # shape guarantee.
+    # Detach stale images, shrink stale tool output, compact, the ceiling
+    # backstop, drop any result a cut orphaned, then the provider shape
+    # guarantee.
     assert [
         getattr(processor, "__name__", type(processor).__name__)
         for processor in processors
     ] == [
         "_detach_stale_images",
+        "_clip_stale_tool_output",
         "HistoryCompactor",
         "_ceiling_guard",
+        "_drop_orphan_tool_results",
         "_ensure_leading_user_message",
     ]
-    compactor = processors[1]
+    compactor = processors[2]
     # Thresholds come from what the run's model affords
     # (services/context_budget), so assert against the resolved default rather
     # than a literal that has to be chased every time a window changes.
@@ -1892,8 +1895,8 @@ def test_history_processors_compact_then_enforce_a_hard_ceiling():
     assert compactor.model == "openai:gpt-4.1"
     # Load-bearing: pydantic-ai decides whether to hand the processor the run
     # context by inspecting the first parameter's annotation, and silently calls
-    # it with one argument when that annotation is anything else. Without the
-    # context the summarization call is unbilled -- which is what it was.
+    # it with one argument when that annotation is anything else -- which this
+    # signature would then reject.
     assert takes_run_context(compactor)
 
 
@@ -1909,7 +1912,9 @@ def test_disabling_summarization_keeps_the_ceiling_guard():
 
     assert [processor.__name__ for processor in processors] == [
         "_detach_stale_images",
+        "_clip_stale_tool_output",
         "_ceiling_guard",
+        "_drop_orphan_tool_results",
         "_ensure_leading_user_message",
     ]
 
@@ -1930,6 +1935,8 @@ def test_compaction_can_be_disabled_but_image_detachment_always_runs():
 
     assert [processor.__name__ for processor in processors] == [
         "_detach_stale_images",
+        "_clip_stale_tool_output",
+        "_drop_orphan_tool_results",
         "_ensure_leading_user_message",
     ]
 

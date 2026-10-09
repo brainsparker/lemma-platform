@@ -64,7 +64,10 @@ async def _run(model: FunctionModel, *, spend: RunSpend, toolsets=None):
     events: list[AgentEvent] = []
     async for event in PydanticAIHarness(model=model)._execute(
         agent=Agent(
-            pod_id=pod_id, user_id=conversation.user_id, name="assistant", instruction=""
+            pod_id=pod_id,
+            user_id=conversation.user_id,
+            name="assistant",
+            instruction="",
         ),
         conversation=conversation,
         messages=[],

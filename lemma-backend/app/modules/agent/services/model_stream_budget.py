@@ -89,7 +89,9 @@ class _BudgetedByteStream(httpx.AsyncByteStream):
                 else self._total_seconds - (time.monotonic() - sent_at)
             )
             first_chunk_left = self._first_chunk_seconds if first_chunk else None
-            limits = [left for left in (total_left, first_chunk_left) if left is not None]
+            limits = [
+                left for left in (total_left, first_chunk_left) if left is not None
+            ]
             try:
                 if not limits:
                     chunk = await iterator.__anext__()

@@ -12,6 +12,7 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.telegram.membership import (
     joined_group_event,
 )
+from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
@@ -26,6 +27,10 @@ from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
     get_callback_token,
 )
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.platforms.telegram.client import TelegramClient
+from app.modules.agent_surfaces.platforms.telegram.message_experience import (
+    retire_decision_card as retire_telegram_card,
+)
 from app.modules.agent_surfaces.platforms.telegram.parser import TelegramMessageParser
 from app.modules.agent_surfaces.platforms.telegram.service import (
     _OTHER_CALLBACK_VALUE,
@@ -222,6 +227,11 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
             show_alert=show_alert,
             clear_actions=clear_actions,
         )
+
+    async def retire_decision_card(
+        self, *, credentials: dict[str, object], handle: DecisionCardHandle
+    ) -> None:
+        await retire_telegram_card(TelegramClient.from_credentials(credentials), handle)
 
     async def add_processing_indicator(
         self,

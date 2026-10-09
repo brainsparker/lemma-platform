@@ -102,6 +102,19 @@ async def test_approve_after_moving_on_says_cancelled_and_runs_nothing(
 
     await stage.say("actually, what time is it in Lisbon?")
     assert await stage.saw("mid-afternoon in Lisbon")
+    # The card is retired as the new turn starts, before anybody taps it.
+    card = next(
+        sent
+        for sent in message_store.get_all("TELEGRAM")
+        if (sent.get("reply_markup") or {}).get("inline_keyboard")
+    )
+    retired = message_store.get_all("TELEGRAM_EDIT_MARKUP")
+    assert [edit["reply_markup"] for edit in retired] == [{"inline_keyboard": []}], (
+        "the cancelled card kept its live buttons after the new message"
+    )
+    assert str(retired[0]["message_id"]) == str(
+        message_store.get_all("TELEGRAM").index(card) + 1
+    )
 
     await stage.press(approve)
 

@@ -81,6 +81,9 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     SurfaceFileIngestService,
     every_attachment_failed,
 )
+from app.modules.agent_surfaces.services.card_retirement import (
+    retire_superseded_cards,
+)
 from app.modules.agent_surfaces.services.surface_inbound_message import (
     fetch_channel_context,
     transcribe_voice_attachments,
@@ -214,7 +217,16 @@ class SurfaceTurnStarter:
         # it is no longer true: `PendingUserMessagesCapability` steers these
         # into the run already going, which answers all of them at once.
         async with self.uow_factory() as uow:
-            await write_inbound_message(context, message_text, metadata, uow)
+            superseded = await write_inbound_message(
+                context, message_text, metadata, uow
+            )
+        if superseded:
+            await retire_superseded_cards(
+                adapter=adapter,
+                credentials=credentials,
+                conversation_id=context.conversation_id,
+                tool_call_ids=superseded,
+            )
 
     async def _ingest_files(
         self, context: SurfaceChatContext, credentials: dict[str, Any]

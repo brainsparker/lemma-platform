@@ -24,9 +24,12 @@ from app.modules.agent_surfaces.platforms.telegram import outbound
 from app.modules.agent_surfaces.platforms.telegram.attachment_naming import (
     resolve_attachment_name_and_mime,
 )
+from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
+from app.modules.agent_surfaces.platforms.decision_cards import remember_decision_card
 from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
     CALLBACK_STORE_ERRORS,
     put_callback_token,
+    retry_keyboard,
 )
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     TelegramSurfaceEventMetadata,
@@ -47,6 +50,7 @@ from app.modules.agent_surfaces.platforms.telegram.client import (
 from app.modules.agent_surfaces.platforms.telegram.message_experience import (
     acknowledge_interaction as acknowledge_telegram_interaction,
     end_progress as end_telegram_progress,
+    first_message_id,
     reply_parameters as telegram_reply_parameters,
     send_chunk,
     stream_progress as stream_telegram_progress,
@@ -83,24 +87,6 @@ def _get_bot_info_cache() -> RedisJsonCache:
             ttl_seconds=3600,
         )
     return _bot_info_cache
-
-
-async def _retry_keyboard() -> dict[str, list[list[dict[str, str]]]] | None:
-    """A "Try again" button, or ``None`` when its token cannot be stored.
-
-    The button is optional and the message it rides is not: it is the notice
-    that a run failed. Minting the token used to be unguarded, so a Redis blip
-    lost the notice along with the button, and the person heard nothing.
-    """
-    try:
-        retry_token = await put_callback_token({"action": "retry"})
-    except CALLBACK_STORE_ERRORS:
-        logger.warning(
-            "agent_surfaces.telegram.retry_button_unavailable.degraded",
-            exc_info=True,
-        )
-        return None
-    return {"inline_keyboard": [[{"text": "Try again", "callback_data": retry_token}]]}
 
 
 class TelegramPlatformService:
@@ -169,7 +155,7 @@ class TelegramPlatformService:
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
         """Send an assistant reply, rendered safely as MarkdownV2.
 
         The message is rendered to MarkdownV2 and split under Telegram's 4096
@@ -177,6 +163,9 @@ class TelegramPlatformService:
         failures. If MarkdownV2 fails to parse (``can't parse entities``) the
         chunk is retried once as plain text so a formatting edge case never
         drops the user's reply.
+
+        Returns the id of the first message sent -- the one any keyboard rides
+        on -- when Telegram named it.
         """
         chat_id = event.reply_target.get("chat_id") or event.external_channel_id
         thread_id = self._message_thread_id(event)
@@ -184,7 +173,7 @@ class TelegramPlatformService:
         reply_markup = (metadata or {}).get("reply_markup")
         retry_action = (metadata or {}).get("retry_action") is True
         if retry_action and not isinstance(reply_markup, dict):
-            reply_markup = await _retry_keyboard()
+            reply_markup = await retry_keyboard()
 
         # `chunk_text("")` is `[]`, and the `or [message or ""]` this replaces
         # made that one empty chunk: a blank bubble, and for an approval one
@@ -195,7 +184,8 @@ class TelegramPlatformService:
                 "agent_surfaces.telegram.empty_message_not_sent",
                 has_reply_markup=isinstance(reply_markup, dict),
             )
-            return
+            return None
+        sent: list[dict[str, object]] = []
         for index, raw_chunk in enumerate(raw_chunks):
             payload: dict[str, Any] = {"chat_id": chat_id}
             if thread_id is not None:
@@ -206,7 +196,7 @@ class TelegramPlatformService:
             if index == 0 and isinstance(reply_markup, dict):
                 payload["reply_markup"] = reply_markup
             try:
-                await self._send_chunk(payload, raw_chunk)
+                sent.append(await self._send_chunk(payload, raw_chunk))
             except PLATFORM_TRANSPORT_ERRORS:
                 if index:
                     # Earlier chunks are already in the chat. The caller only
@@ -218,6 +208,7 @@ class TelegramPlatformService:
                         exc_info=True,
                     )
                 raise
+        return first_message_id(sent)
 
     async def _render_choices(
         self,
@@ -333,15 +324,24 @@ class TelegramPlatformService:
             body_lines.append(approval_plan.reason)
         if approval_plan.action_summary:
             body_lines.append(f"Action: {approval_plan.action_summary}")
-        await self.send_message(
+        message_id = await self.send_message(
             event,
             "\n\n".join(body_lines),
             metadata={"reply_markup": {"inline_keyboard": rows}},
         )
+        if message_id is not None:
+            await remember_decision_card(
+                approval_plan.callback_id,
+                DecisionCardHandle(
+                    platform="TELEGRAM", channel=str(chat_id), message_id=message_id
+                ),
+            )
         return True
 
-    async def _send_chunk(self, payload: dict[str, Any], raw_text: str) -> None:
-        await send_chunk(self._call_with_retry, payload, raw_text)
+    async def _send_chunk(
+        self, payload: dict[str, Any], raw_text: str
+    ) -> dict[str, object]:
+        return await send_chunk(self._call_with_retry, payload, raw_text)
 
     async def acknowledge_interaction(
         self,

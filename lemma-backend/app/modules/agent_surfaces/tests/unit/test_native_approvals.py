@@ -210,7 +210,7 @@ async def test_telegram_render_decision_builds_an_inline_keyboard():
         patch(
             "app.modules.agent_surfaces.platforms.telegram.service."
             "TelegramPlatformService.send_message",
-            new=AsyncMock(),
+            new=AsyncMock(return_value=None),
         ) as send_message,
     ):
         ok = await adapter._render_decision(

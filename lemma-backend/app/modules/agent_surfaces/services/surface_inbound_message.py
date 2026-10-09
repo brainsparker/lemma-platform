@@ -135,7 +135,7 @@ async def write_inbound_message(
     message_text: str,
     metadata: dict[str, Any],
     uow: SqlAlchemyUnitOfWork,
-):
+) -> list[str]:
     """Persist the inbound message, or resume the run it answers.
 
     Free functions rather than a mixin, and the reason is visible in the
@@ -146,6 +146,10 @@ async def write_inbound_message(
     What went with the mixin is a mode. This used to pick between
     ``self._uow_factory`` and ``self.uow`` and raise ``RuntimeError`` when it had
     neither; the caller opens the scope it wants and hands it over.
+
+    Returns the pauses the new turn cancelled, by tool call id: starting a turn
+    denies every undecided pause on the person's behalf, and their cards are
+    still on screen. Empty when nothing was cancelled.
     """
     if context.pod_id is None:
         raise ValueError("Surface chat context requires a pod")
@@ -162,7 +166,7 @@ async def write_inbound_message(
         ):
             raise ValueError("The onboarding handoff is unavailable")
         if pending.message_committed_at is not None:
-            return None
+            return []
         # This marker commits with transcript persistence and the run's outbox
         # event. A queue retry cannot record or execute the request twice.
         pending.message_committed_at = datetime.now(timezone.utc)
@@ -176,7 +180,7 @@ async def write_inbound_message(
             conversation_id=str(context.conversation_id),
             platform=context.platform,
         )
-        return None
+        return []
     auth_ctx = await create_authorization_data_service(uow).build_user_context(
         user_id=context.user_id,
         pod_id=context.pod_id,
@@ -205,20 +209,34 @@ async def write_inbound_message(
             # there, so saying so and letting them answer again is the one
             # move that loses nothing.
             await _say_the_decision_was_not_recorded(context, uow)
-            return None
+            return []
         if outcome is ResumeOutcome.NOT_A_DECISION:
-            return await agent_conversations.start_surface_turn(
-                uow,
-                conversation_id=context.conversation_id,
-                user_id=context.user_id,
-                content=message_text,
-                pod_id=context.pod_id,
-                agent_name=context.agent_name,
-                message_metadata=metadata,
-            )
-        return None
+            return await _start_turn(context, message_text, metadata, uow)
+        return []
     finally:
         reset_current_context(token)
+
+
+async def _start_turn(
+    context: SurfaceChatContext,
+    message_text: str,
+    metadata: dict[str, object],
+    uow: SqlAlchemyUnitOfWork,
+) -> list[str]:
+    """Start the turn this message asks for; the pauses it cancelled."""
+    undecided = await agent_conversations.undecided_pauses(uow, context.conversation_id)
+    started = await agent_conversations.start_surface_turn(
+        uow,
+        conversation_id=context.conversation_id,
+        user_id=context.user_id,
+        content=message_text,
+        pod_id=context.pod_id,
+        agent_name=context.agent_name,
+        message_metadata=metadata,
+    )
+    # Only a turn that starts supersedes: a message arriving while a run is
+    # going joins that run, and the pauses it holds stay open.
+    return undecided if started is not None else []
 
 
 async def fetch_channel_context(

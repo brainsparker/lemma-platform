@@ -9,6 +9,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
+from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
 from app.modules.agent_surfaces.platforms.rendering import to_markdown_v2
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TELEGRAM_MESSAGE_LIMIT,
@@ -25,13 +26,13 @@ async def send_chunk(
     call_with_retry: TelegramCall,
     payload: dict[str, Any],
     raw_text: str,
-) -> None:
+) -> dict[str, object]:
+    """Send one chunk; the Bot API's answer, which names the message it made."""
     try:
-        await call_with_retry(
+        return await call_with_retry(
             "sendRichMessage",
             {**payload, "rich_message": {"markdown": raw_text}},
         )
-        return
     except TelegramApiError as exc:
         if not can_fallback_from_rich_message(exc):
             raise
@@ -41,11 +42,32 @@ async def send_chunk(
     if use_markdown:
         body["parse_mode"] = "MarkdownV2"
     try:
-        await call_with_retry("sendMessage", body)
+        return await call_with_retry("sendMessage", body)
     except TelegramApiError as exc:
         if not (use_markdown and exc.is_parse_entities_error):
             raise
-        await call_with_retry("sendMessage", {**payload, "text": raw_text})
+        return await call_with_retry("sendMessage", {**payload, "text": raw_text})
+
+
+def first_message_id(sent: list[dict[str, object]]) -> str | None:
+    """The message the first chunk became -- the one a keyboard rides on."""
+    result = sent[0].get("result") if sent else None
+    message_id = result.get("message_id") if isinstance(result, dict) else None
+    return str(message_id) if message_id is not None else None
+
+
+async def retire_decision_card(
+    client: TelegramClient, handle: DecisionCardHandle
+) -> None:
+    """Take a superseded card's buttons away. Its words stay, as written."""
+    await client.call(
+        "editMessageReplyMarkup",
+        {
+            "chat_id": handle.channel,
+            "message_id": int(handle.message_id),
+            "reply_markup": {"inline_keyboard": []},
+        },
+    )
 
 
 async def acknowledge_interaction(

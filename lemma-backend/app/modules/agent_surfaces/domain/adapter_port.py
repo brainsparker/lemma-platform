@@ -28,6 +28,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
     ParsedSurfaceLifecycleEvent,
 )
+from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, SurfaceEnvelope
 from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
 from app.modules.agent_surfaces.domain.models import (
@@ -121,6 +122,13 @@ class SurfacePlatformAdapterPort(Protocol):
 
     # Parse an interaction submission (Slack block_actions, Teams Action.Submit)
     # into a routable interaction, or None when the payload is not an interaction.
+
+    async def retire_decision_card(
+        self, *, credentials: dict[str, object], handle: DecisionCardHandle
+    ) -> None: ...
+
+    # Take the buttons off an approval card whose pause was cancelled by a new
+    # message. A no-op where the platform keeps no handle to edit by.
 
     async def set_thread_title(
         self,

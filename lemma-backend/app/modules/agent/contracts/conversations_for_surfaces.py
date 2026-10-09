@@ -55,6 +55,7 @@ from app.modules.agent.domain.outsiders import (
     OUTSIDERS,
     answers_outsiders,
 )
+from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
 from app.modules.agent.domain.private_notes import answers_lemma_message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -310,6 +311,21 @@ async def pending_interaction(
     )
 
 
+async def undecided_pauses(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+) -> list[str]:
+    """Every pause nobody has decided yet, by tool call id, oldest first.
+
+    Exactly what starting a new turn denies on the person's behalf, so a
+    surface that reads it first knows which of its cards the turn cancels.
+    """
+    calls = await ConversationRepository(uow).pausing_calls_awaiting_a_decision(
+        conversation_id=conversation_id,
+        pausing_tool_names=USER_PAUSING_TOOL_NAMES,
+    )
+    return [call.tool_call_id for call in calls if call.tool_call_id]
+
+
 async def pending_question(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> PendingInteraction | None:
@@ -535,4 +551,5 @@ __all__ = [
     "start_surface_turn",
     "surface_agent_identity",
     "surface_conversation",
+    "undecided_pauses",
 ]

@@ -82,6 +82,7 @@ def conversation_operations(monkeypatch):
         "pending_interaction": AsyncMock(return_value=None),
         "pending_question": AsyncMock(return_value=None),
         "pending_approval": AsyncMock(return_value=None),
+        "undecided_pauses": AsyncMock(return_value=[]),
         "resolve_pending_interaction": AsyncMock(side_effect=_the_tap_stands),
         "retry_failed_run": AsyncMock(),
         "surface_agent_identity": AsyncMock(return_value=None),

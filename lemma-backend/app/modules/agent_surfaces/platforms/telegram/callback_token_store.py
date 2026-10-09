@@ -27,6 +27,9 @@ from redis.exceptions import RedisError
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 _CALLBACK_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60
 
@@ -61,6 +64,24 @@ async def put_callback_token(payload: dict[str, Any]) -> str:
     token = secrets.token_hex(8)
     await _store().set_json(token, payload)
     return token
+
+
+async def retry_keyboard() -> dict[str, list[list[dict[str, str]]]] | None:
+    """A "Try again" button, or ``None`` when its token cannot be stored.
+
+    The button is optional and the message it rides is not: it is the notice
+    that a run failed. Minting the token used to be unguarded, so a Redis blip
+    lost the notice along with the button, and the person heard nothing.
+    """
+    try:
+        retry_token = await put_callback_token({"action": "retry"})
+    except CALLBACK_STORE_ERRORS:
+        logger.warning(
+            "agent_surfaces.telegram.retry_button_unavailable.degraded",
+            exc_info=True,
+        )
+        return None
+    return {"inline_keyboard": [[{"text": "Try again", "callback_data": retry_token}]]}
 
 
 async def get_callback_token(token: str) -> dict[str, Any] | None:

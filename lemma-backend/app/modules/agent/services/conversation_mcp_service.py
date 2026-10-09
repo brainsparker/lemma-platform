@@ -342,13 +342,8 @@ class ConversationMCPService:
                 workspace_location=workspace_location,
             )
         # Outside the unit of work: it opens its own, and holding this one
-        # across it would pin a pooled connection for nothing. Imported here to
-        # keep selection out of the startup import graph.
-        from app.modules.agent.services.host_execution_selection import (
-            host_runs_native_commands,
-        )
-
-        ctx.host_runs_native_commands = await host_runs_native_commands(conversation)
+        # across it would pin a pooled connection for nothing.
+        ctx.host_runs_native_commands = await _native_commands(conversation, run)
         return agent, conversation, ctx
 
     async def _resolved_runtime_profile(
@@ -406,6 +401,29 @@ class ConversationMCPService:
             )
             return stored
         return resolved.public_snapshot()
+
+
+async def _native_commands(conversation: Conversation, run: AgentRun | None) -> bool:
+    """What the run decided when its context was first built, read back.
+
+    Recomputing it here let a host-execution toggle mid-run change the toolset
+    under a prompt that said otherwise (``host_native_commands``). Only a run
+    with no record -- one dispatched before runs kept it -- is asked afresh.
+    Imported here to keep selection out of the startup import graph.
+    """
+    from app.modules.agent.services.host_native_commands import (
+        recorded_native_commands,
+    )
+
+    if run is not None:
+        recorded = await recorded_native_commands(run.id)
+        if recorded is not None:
+            return recorded
+    from app.modules.agent.services.host_execution_selection import (
+        host_runs_native_commands,
+    )
+
+    return await host_runs_native_commands(conversation)
 
 
 def _tool_context(

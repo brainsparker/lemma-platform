@@ -17,6 +17,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.services.usage_preflight import assert_usage_preflight_allowed
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
@@ -295,11 +296,7 @@ class TurnCoordinator:
         user_id: UUID,
         message_metadata: dict[str, object] | None,
     ) -> AgentRun:
-        selected_agent_runtime = (
-            conversation.agent_runtime
-            or agent.agent_runtime
-            or await default_agent_runtime_for_pod(self.uow, pod_id=conversation.pod_id)
-        )
+        selected_agent_runtime = await turn_runtime(self.uow, conversation, agent)
         await self.runtime_check(
             self.uow,
             selected_agent_runtime,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from enum import Enum
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -18,6 +18,12 @@ from pydantic import (
     model_validator,
 )
 
+# Re-exported: the portable settings are a core type because workflow steps
+# carry them too, but they are read here, beside the catalog that gates them.
+from app.core.domain.generation import (
+    GenerationSettings as GenerationSettings,
+    ReasoningEffort as ReasoningEffort,
+)
 from app.modules.agent.domain.value_objects import HarnessKind, JsonObject
 
 
@@ -98,6 +104,10 @@ class RuntimeModelCatalogEntry(BaseModel):
     display_name: str | None = None
     provider_model_name: str = Field(min_length=1)
     capabilities: list[RuntimeModelCapability] = Field(default_factory=list)
+    # The lowest layer of a run's generation settings: what this model wants
+    # unless the profile, agent or step says otherwise. Portable
+    # ``GenerationSettings`` keys, plus any pydantic-ai wire key passed through
+    # as written -- see ``services/generation_settings``.
     default_model_settings: JsonObject = Field(default_factory=dict)
     metadata: JsonObject = Field(default_factory=dict)
 
@@ -108,6 +118,25 @@ class RuntimeModelCatalogEntry(BaseModel):
         if not normalized:
             raise ValueError("value cannot be empty")
         return normalized
+
+    @field_validator("default_model_settings")
+    @classmethod
+    def portable_defaults_are_valid(cls, value: JsonObject) -> JsonObject:
+        # Checked where it is written, not at the run that reads it: a bad
+        # value here would otherwise fail every run on this model.
+        GenerationSettings.model_validate(
+            {
+                key: item
+                for key, item in value.items()
+                if key in GenerationSettings.model_fields and item is not None
+            }
+        )
+        return value
+
+    @property
+    def reasons(self) -> bool:
+        """Whether this model takes a reasoning effort or thinking budget."""
+        return RuntimeModelCapability.REASONING in self.capabilities
 
 
 class ApiKeyRuntimeCredentials(BaseModel):
@@ -310,6 +339,36 @@ class AgentRuntimeProfile(BaseModel):
             catalog_names.add(entry.name)
         if catalog_names and self.default_model_name not in catalog_names:
             raise ValueError("default_model_name must match a model catalog name")
+
+
+def with_reasoning_declared(
+    catalog: list[RuntimeModelCatalogEntry], reasoning_model_names: Collection[str]
+) -> list[RuntimeModelCatalogEntry]:
+    """``catalog`` with exactly the named models marked ``REASONING``.
+
+    Declared by the person adding the provider, as with vision: a
+    ``/models`` listing does not say which models reason, and the mark is what
+    lets a reasoning effort reach the wire at all.
+    """
+    names = {name.strip() for name in reasoning_model_names if name.strip()}
+    declared: list[RuntimeModelCatalogEntry] = []
+    for entry in catalog:
+        others = [
+            capability
+            for capability in entry.capabilities
+            if capability is not RuntimeModelCapability.REASONING
+        ]
+        capabilities = (
+            [*others, RuntimeModelCapability.REASONING]
+            if entry.name in names
+            else others
+        )
+        declared.append(entry.model_copy(update={"capabilities": capabilities}))
+    return declared
+
+
+def declared_reasoning_models(catalog: list[RuntimeModelCatalogEntry]) -> set[str]:
+    return {entry.name for entry in catalog if entry.reasons}
 
 
 REDACTED_VALUE = "<redacted>"

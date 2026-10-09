@@ -28,9 +28,12 @@ from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
     HarnessRuntimeConfig,
     OpenAICompatibleRuntimeConfig,
+    RuntimeModelCatalogEntry,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
+    declared_reasoning_models,
+    with_reasoning_declared,
 )
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.services.runtime_profile_service import (
@@ -79,6 +82,25 @@ def _provider_config(
             return AnthropicCompatibleRuntimeConfig.model_validate(profile.config)
         return OpenAICompatibleRuntimeConfig.model_validate(profile.config)
     raise ValueError("This runtime profile has no provider configuration")
+
+
+def _with_reasoning(
+    profile: AgentRuntimeProfile,
+    catalog: list[RuntimeModelCatalogEntry],
+    requested: list[str] | UnsetType,
+) -> list[RuntimeModelCatalogEntry]:
+    """The catalog with its reasoning models marked.
+
+    Omitted keeps what was declared before, a model refresh included: the
+    provider's listing never says which models reason, so rebuilding the
+    catalog from it would otherwise forget them.
+    """
+    names = (
+        declared_reasoning_models(profile.model_catalog)
+        if isinstance(requested, UnsetType)
+        else set(requested)
+    )
+    return with_reasoning_declared(catalog, names)
 
 
 def _audited_patch(
@@ -276,6 +298,7 @@ class AgentRuntimeProfileEditor:
         model_names: list[str] | UnsetType = UNSET,
         headers: dict[str, str] | UnsetType = UNSET,
         model_settings: dict[str, object] | UnsetType = UNSET,
+        reasoning_model_names: list[str] | UnsetType = UNSET,
         refresh_models: bool = False,
     ) -> AgentRuntimeProfile:
         return await self._update_provider(
@@ -291,6 +314,7 @@ class AgentRuntimeProfileEditor:
             model_names=model_names,
             headers=headers,
             model_settings=model_settings,
+            reasoning_model_names=reasoning_model_names,
             refresh_models=refresh_models,
         )
 
@@ -308,6 +332,7 @@ class AgentRuntimeProfileEditor:
         model_names: list[str] | UnsetType = UNSET,
         headers: dict[str, str] | UnsetType = UNSET,
         model_settings: dict[str, object] | UnsetType = UNSET,
+        reasoning_model_names: list[str] | UnsetType = UNSET,
         refresh_models: bool = False,
     ) -> AgentRuntimeProfile:
         return await self._update_provider(
@@ -323,6 +348,7 @@ class AgentRuntimeProfileEditor:
             model_names=model_names,
             headers=headers,
             model_settings=model_settings,
+            reasoning_model_names=reasoning_model_names,
             refresh_models=refresh_models,
         )
 
@@ -341,6 +367,7 @@ class AgentRuntimeProfileEditor:
         model_names: list[str] | UnsetType,
         headers: dict[str, str] | UnsetType,
         model_settings: dict[str, object] | UnsetType,
+        reasoning_model_names: list[str] | UnsetType,
         refresh_models: bool,
     ) -> AgentRuntimeProfile:
         profile = await self._load_editable(
@@ -393,6 +420,9 @@ class AgentRuntimeProfileEditor:
             }
         else:
             catalog = list(profile.model_catalog)
+        catalog = _with_reasoning(profile, catalog, reasoning_model_names)
+        if catalog != list(profile.model_catalog):
+            changes["model_catalog"] = catalog
 
         catalog_names = {entry.name for entry in catalog}
         if not isinstance(default_model_name, UnsetType):

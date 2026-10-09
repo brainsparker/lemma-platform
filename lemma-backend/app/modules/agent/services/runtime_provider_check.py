@@ -39,6 +39,7 @@ from app.modules.agent.infrastructure.transport_errors import (
     local_model_server_name,
 )
 from app.modules.agent.services import runtime_model_factory
+from app.modules.agent.services.generation_settings import run_generation_settings
 from app.modules.agent.services import runtime_provider_discovery as discovery
 from app.modules.agent.services.runtime_profile_service import ResolvedAgentRuntime
 
@@ -184,7 +185,7 @@ async def _answer_one_message(
             await model_request(
                 model,
                 [ModelRequest.user_text_prompt("Reply with the word OK.")],
-                model_settings=ModelSettings(max_tokens=_COMPLETION_MAX_TOKENS),
+                model_settings=_check_model_settings(resolved),
             )
     except ModelHTTPError as exc:
         _log_failure(resolved, exc)
@@ -204,6 +205,25 @@ async def _answer_one_message(
         if server is not None:
             raise _CheckFailed(_unreachable_message(profile.name, server)) from exc
         raise _CheckFailed(_did_not_answer_message(resolved)) from exc
+
+
+def _check_model_settings(resolved: ResolvedAgentRuntime) -> ModelSettings | None:
+    """The saved settings a run would send, with the reply kept tiny.
+
+    Sending only an output cap reported a profile as working while every run
+    on it failed on a setting the provider refuses; the test has to ask with
+    what a run asks with.
+    """
+    saved = run_generation_settings(resolved, None).model_settings
+    reply_cap = _COMPLETION_MAX_TOKENS
+    thinking = saved.get("anthropic_thinking")
+    if isinstance(thinking, dict) and isinstance(thinking.get("budget_tokens"), int):
+        # A thinking budget must sit under the output cap, or the provider
+        # refuses the request for a reason no run would hit.
+        reply_cap += thinking["budget_tokens"]
+    return runtime_model_factory.provider_model_settings(
+        {**saved, "max_tokens": reply_cap}
+    )
 
 
 def _config_data(config: object) -> object:

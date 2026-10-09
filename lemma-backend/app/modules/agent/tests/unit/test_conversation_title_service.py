@@ -25,6 +25,10 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+from app.modules.agent.domain.runtime_profiles import (
+    RuntimeModelCapability,
+    RuntimeProfileProtocol,
+)
 import structlog
 
 from app.core.log.log import setup_logging
@@ -484,6 +488,12 @@ async def test_counter_says_which_title_path_ran(
 class _FakeResolved:
     credentials: dict[str, object] = {}
     model_name_for_harness = "deepseek-v4-flash"
+    profile = SimpleNamespace(protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE)
+
+    def __init__(self, *, reasons: bool = True) -> None:
+        self.capabilities = [RuntimeModelCapability.TEXT] + (
+            [RuntimeModelCapability.REASONING] if reasons else []
+        )
 
     def runtime_snapshot(self) -> RuntimeSnapshot:
         return RuntimeSnapshot(
@@ -498,8 +508,9 @@ class _FakeResolved:
 
 
 class _FakeProfileService:
-    def __init__(self) -> None:
+    def __init__(self, *, reasons: bool = True) -> None:
         self.resolved: list[dict] = []
+        self.reasons = reasons
 
     async def resolve(self, *, runtime, organization_id, user_id):
         self.resolved.append(
@@ -510,11 +521,14 @@ class _FakeProfileService:
                 "user_id": user_id,
             }
         )
-        return _FakeResolved()
+        return _FakeResolved(reasons=self.reasons)
 
 
 def _generator(
-    *, output: str = "A nice title", raise_on_run: bool = False
+    *,
+    output: str = "A nice title",
+    raise_on_run: bool = False,
+    reasons: bool = True,
 ) -> tuple[ConversationTitleGenerator, dict]:
     """The real generator with only the model boundary faked."""
     capture: dict[str, object] = {"run_calls": 0, "usage": []}
@@ -533,7 +547,7 @@ def _generator(
                 raise RuntimeError("llm boom")
             return SimpleNamespace(output=output)
 
-    profiles = _FakeProfileService()
+    profiles = _FakeProfileService(reasons=reasons)
     capture["profiles"] = profiles
     return (
         ConversationTitleGenerator(
@@ -569,7 +583,7 @@ async def test_generator_sanitizes_what_the_model_returned() -> None:
 @pytest.mark.asyncio
 async def test_generator_does_not_pay_for_a_hidden_reasoning_trace() -> None:
     """A reasoning model must not spend the token budget on a chain-of-thought
-    trace for a 3-6 word title (see the module docstring / _TITLE_MODEL_SETTINGS)."""
+    trace for a 3-6 word title (see `title_model_settings`)."""
     generator, capture = _generator()
 
     await _ask(generator, user_text="Plan a trip to Japan")
@@ -577,6 +591,21 @@ async def test_generator_does_not_pay_for_a_hidden_reasoning_trace() -> None:
     assert capture["model_settings"] == {"openai_reasoning_effort": "none"}
     assert capture["usage_limits"].request_limit == 1
     assert capture["system_prompt"] == cts._TITLE_SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_a_title_on_a_model_that_does_not_reason_asks_for_no_effort() -> None:
+    """A non-reasoning OpenAI-compatible model rejects `reasoning_effort`.
+
+    The title used to send `none` to whatever resolved -- the workspace
+    fallback included -- and a strict endpoint's 400 fell back, silently, to
+    the first message as the title.
+    """
+    generator, capture = _generator(reasons=False)
+
+    await _ask(generator, user_text="Plan a trip to Japan")
+
+    assert "openai_reasoning_effort" not in (capture["model_settings"] or {})
 
 
 @pytest.mark.asyncio

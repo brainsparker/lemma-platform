@@ -32,21 +32,6 @@ def run_input_text(messages: Sequence[Message]) -> str | None:
     return None
 
 
-def profile_model_settings(
-    runtime_profile_snapshot: dict[str, object | None] | None,
-) -> JsonObject | None:
-    """Pull the model_settings dict out of a resolved runtime profile snapshot."""
-    if not isinstance(runtime_profile_snapshot, dict):
-        return None
-    config = runtime_profile_snapshot.get("config")
-    if not isinstance(config, dict):
-        return None
-    model_settings = config.get("model_settings")
-    return (
-        model_settings if isinstance(model_settings, dict) and model_settings else None
-    )
-
-
 def with_reply_budget(
     model_settings: JsonObject | None, budget: ContextBudget
 ) -> JsonObject | None:
@@ -64,16 +49,21 @@ def with_reply_budget(
     which is the room the budget had already set aside for exactly this and
     never spent.
 
-    An operator who set `max_tokens` on the runtime profile outranks this: they
-    know something about their model that a fraction of a window does not. Any
-    value they set counts, including a zero -- a provider will reject that and
-    say so, which is a better answer than quietly substituting a number they
-    did not choose and leaving them to wonder why their setting did nothing.
-    Absent and explicitly null both mean unset, and are filled.
+    A cap somebody chose -- on the model's catalog entry, the profile, the
+    agent or the workflow step, merged before this -- is kept when it fits and
+    clamped when it does not: they know something about their model that a
+    fraction of a window does not, but a cap past the room the window leaves
+    is a request the provider refuses. Any value they set counts, including a
+    zero -- a provider will reject that and say so, which is a better answer
+    than quietly substituting a number they did not choose. Absent and
+    explicitly null both mean unset, and are filled.
     """
-    if model_settings and model_settings.get("max_tokens") is not None:
-        return model_settings
     reply = budget.reply_token_budget
+    chosen = (model_settings or {}).get("max_tokens")
+    if chosen is not None:
+        if reply > 0 and isinstance(chosen, int) and chosen > reply:
+            return {**(model_settings or {}), "max_tokens": reply}
+        return model_settings
     if reply <= 0:
         return model_settings
     return {**(model_settings or {}), "max_tokens": reply}

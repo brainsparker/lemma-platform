@@ -158,12 +158,18 @@ async def check_runtime_for_pod(
 async def turn_runtime(
     uow: SqlAlchemyUnitOfWork, conversation: Conversation, agent: Agent
 ) -> AgentRuntimeConfig:
-    """The runtime a new turn on this conversation runs on, as it stands now."""
-    return (
+    """The runtime a new turn on this conversation runs on, as it stands now.
+
+    A conversation that picked its own model keeps the agent's generation
+    settings unless it chose its own: switching the model for one chat is not
+    a decision to forget how the agent was told to think.
+    """
+    selected = (
         conversation.agent_runtime
         or agent.agent_runtime
         or await default_agent_runtime_for_pod(uow, pod_id=conversation.pod_id)
     )
+    return selected.inheriting_settings_from(agent.agent_runtime)
 
 
 class TurnRuntimeCheck(Protocol):

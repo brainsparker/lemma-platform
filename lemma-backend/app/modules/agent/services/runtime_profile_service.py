@@ -201,6 +201,7 @@ class AgentRuntimeProfileService:
         default_model_name: str | None = None,
         model_names: list[str] | None = None,
         vision_model_names: list[str] | None = None,
+        reasoning_model_names: list[str] | None = None,
         headers: dict[str, str] | None = None,
         model_settings: dict[str, object] | None = None,
     ) -> AgentRuntimeProfile:
@@ -214,6 +215,7 @@ class AgentRuntimeProfileService:
             default_model_name=default_model_name,
             model_names=model_names,
             vision_model_names=vision_model_names,
+            reasoning_model_names=reasoning_model_names,
             headers=headers,
             model_settings=model_settings,
         )
@@ -228,6 +230,7 @@ class AgentRuntimeProfileService:
         description: str | None = None,
         default_model_name: str | None = None,
         model_names: list[str] | None = None,
+        reasoning_model_names: list[str] | None = None,
         headers: dict[str, str] | None = None,
         model_settings: dict[str, object] | None = None,
     ) -> AgentRuntimeProfile:
@@ -240,6 +243,7 @@ class AgentRuntimeProfileService:
             description=description,
             default_model_name=default_model_name,
             model_names=model_names,
+            reasoning_model_names=reasoning_model_names,
             headers=headers,
             model_settings=model_settings,
         )

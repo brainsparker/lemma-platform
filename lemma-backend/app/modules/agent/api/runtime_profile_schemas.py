@@ -98,6 +98,10 @@ class CreateOpenAICompatibleRuntimeProfileRequest(BaseModel):
     # input, and the catalog treats silence as "cannot"; this is how the person
     # adding the provider says otherwise.
     vision_model_names: list[str] = Field(default_factory=list)
+    # Which models reason -- take a reasoning effort or thinking budget. A
+    # `/models` listing does not say, and an OpenAI-compatible endpoint rejects
+    # the field on a model that does not, so it is declared, like vision.
+    reasoning_model_names: list[str] = Field(default_factory=list)
     headers: dict[str, str] = Field(default_factory=dict)
     model_settings: JsonObject = Field(default_factory=dict)
 
@@ -110,6 +114,10 @@ class CreateAnthropicCompatibleRuntimeProfileRequest(BaseModel):
     description: str | None = None
     default_model_name: str | None = Field(default=None, min_length=1)
     model_names: list[str] = Field(default_factory=list)
+    # Which models reason -- take a reasoning effort or thinking budget. A
+    # `/models` listing does not say, and an OpenAI-compatible endpoint rejects
+    # the field on a model that does not, so it is declared, like vision.
+    reasoning_model_names: list[str] = Field(default_factory=list)
     headers: dict[str, str] = Field(default_factory=dict)
     model_settings: JsonObject = Field(default_factory=dict)
 
@@ -148,6 +156,9 @@ class UpdateOpenAICompatibleRuntimeProfileRequest(BaseModel):
     default_model_name: str | None = Field(default=None, min_length=1)
     model_names: list[str] | None = None
     model_settings: JsonObject | None = None
+    # Replaces the declared reasoning models; omitted keeps them, even across
+    # a model refresh.
+    reasoning_model_names: list[str] | None = None
     refresh_models: bool = False
 
 
@@ -162,6 +173,9 @@ class UpdateAnthropicCompatibleRuntimeProfileRequest(BaseModel):
     default_model_name: str | None = Field(default=None, min_length=1)
     model_names: list[str] | None = None
     model_settings: JsonObject | None = None
+    # Replaces the declared reasoning models; omitted keeps them, even across
+    # a model refresh.
+    reasoning_model_names: list[str] | None = None
     refresh_models: bool = False
 
 

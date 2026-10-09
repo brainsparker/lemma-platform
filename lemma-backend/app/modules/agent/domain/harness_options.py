@@ -39,6 +39,10 @@ class HarnessOptions[DepsT = object]:
     usage_limits: UsageLimits | None = None
     output_type: OutputSpec[object] | None = None
     model_settings: JsonObject | None = None
+    #: Request parameters for the history-compaction call: the run's own,
+    #: turned down to low effort and a summary-sized output cap. See
+    #: ``services/generation_settings.compaction_generation_settings``.
+    compaction_model_settings: JsonObject | None = None
     history_summarization_enabled: bool = True
     history_summarization_token_limit: int = DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT
     history_summarization_keep_messages: int = (

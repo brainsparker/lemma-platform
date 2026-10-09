@@ -28,7 +28,6 @@ from uuid import UUID
 from opentelemetry import metrics
 from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
 from pydantic_ai.models import Model
-from pydantic_ai.models.openai import OpenAIChatModelSettings
 
 from app.modules.agent.config import agent_settings
 from app.core.domain.errors import DomainError
@@ -46,7 +45,9 @@ from app.modules.agent.services.realtime import (
     publish_conversation_event,
     title_updated_payload,
 )
+from app.modules.agent.services.generation_settings import title_model_settings
 from app.modules.agent.services.runtime_model_factory import (
+    provider_model_settings,
     require_pydantic_ai_model_from_runtime_profile,
     usage_limits_for,
 )
@@ -88,14 +89,6 @@ _TITLE_USAGE_LIMITS = UsageLimits(
     total_tokens_limit=12_256,
     count_tokens_before_request=True,
 )
-
-# The title itself is 3-6 words (well under 20 tokens). Reasoning models spend
-# the rest of the budget above on a hidden chain-of-thought trace nobody
-# reads: verified directly against deepseek-v4-flash-0731 that the exact
-# title prompt used 246 completion tokens with 239 of them reasoning, and the
-# same call with reasoning_effort='none' produced the identical title in 5.
-# Providers that don't recognize this key ignore it.
-_TITLE_MODEL_SETTINGS: OpenAIChatModelSettings = {"openai_reasoning_effort": "none"}
 
 _TITLE_SYSTEM_PROMPT = (
     "You generate a concise title for a chat conversation. "
@@ -236,7 +229,9 @@ class ConversationTitleGenerator:
             result = await agent.run(
                 _build_user_prompt(user_text, reply_text),
                 usage_limits=usage_limits_for(model, _TITLE_USAGE_LIMITS),
-                model_settings=_TITLE_MODEL_SETTINGS,
+                # No reasoning for a few words -- said only to a model that
+                # declares it reasons; see `title_model_settings`.
+                model_settings=provider_model_settings(title_model_settings(resolved)),
             )
 
         return _sanitize_title(str(result.output))

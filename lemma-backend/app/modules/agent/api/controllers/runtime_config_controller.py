@@ -260,6 +260,7 @@ async def create_runtime_profile(
                 default_model_name=data.default_model_name,
                 model_names=data.model_names,
                 vision_model_names=data.vision_model_names,
+                reasoning_model_names=data.reasoning_model_names,
                 headers=data.headers,
                 model_settings=data.model_settings,
             )
@@ -272,6 +273,7 @@ async def create_runtime_profile(
                 description=data.description,
                 default_model_name=data.default_model_name,
                 model_names=data.model_names,
+                reasoning_model_names=data.reasoning_model_names,
                 headers=data.headers,
                 model_settings=data.model_settings,
             )

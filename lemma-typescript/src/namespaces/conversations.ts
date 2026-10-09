@@ -9,6 +9,7 @@ import type { ConversationStatus } from "../openapi_client/models/ConversationSt
 import type { ConversationType } from "../openapi_client/models/ConversationType.js";
 import type { CreateConversationRequest } from "../openapi_client/models/CreateConversationRequest.js";
 import type { HarnessKind } from "../openapi_client/models/HarnessKind.js";
+import type { PendingInteractionListResponse } from "../openapi_client/models/PendingInteractionListResponse.js";
 import type { ResolveUserApprovalRequest } from "../openapi_client/models/ResolveUserApprovalRequest.js";
 import type { SendMessageRequest } from "../openapi_client/models/SendMessageRequest.js";
 import type { UpdateConversationRequest } from "../openapi_client/models/UpdateConversationRequest.js";
@@ -430,6 +431,25 @@ export class ConversationsNamespace {
       });
     },
   };
+
+  /**
+   * Questions, approvals and Agent Host permission requests waiting on the
+   * caller, across their own conversations in the pod, longest-waiting first.
+   * Answer one with `approvals.resolve`, passing its `tool_call_id` as the
+   * approval id. Mirrors the Python SDK's `pending_interactions`.
+   */
+  pendingInteractions(options: {
+    pod_id?: string | null;
+    limit?: number;
+    page_token?: string | null;
+  } = {}): Promise<PendingInteractionListResponse> {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.request<PendingInteractionListResponse>(
+      "GET",
+      `/pods/${podId}/conversations/pending-interactions`,
+      { params: { limit: options.limit ?? 50, page_token: options.page_token } },
+    );
+  }
 
   readonly approvals = {
     list: (

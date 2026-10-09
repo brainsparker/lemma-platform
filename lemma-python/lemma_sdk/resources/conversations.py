@@ -12,6 +12,7 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_message_list,
     agent_conversation_message_send,
     agent_conversation_message_withdraw,
+    agent_conversation_pending_interaction_list,
     agent_conversation_retry,
     agent_conversation_stream,
     agent_conversation_stop,
@@ -27,6 +28,9 @@ from ..openapi_client.models.create_conversation_request import (
     CreateConversationRequest,
 )
 from ..openapi_client.models.message_list_response import MessageListResponse
+from ..openapi_client.models.pending_interaction_list_response import (
+    PendingInteractionListResponse,
+)
 from ..openapi_client.models.resolve_user_approval_request import (
     ResolveUserApprovalRequest,
 )
@@ -245,6 +249,22 @@ class PodConversations(BoundResource):
             agent_conversation_approval_list,
             self._pod_uuid(),
             as_uuid(conversation_id),
+        )
+
+    def pending_interactions(
+        self, *, page_token: str | None = None, limit: int = 50
+    ) -> PendingInteractionListResponse:
+        """Questions, approvals and Agent Host permission requests waiting on you.
+
+        Across your own conversations in the pod, longest-waiting first. Answer
+        one with `resolve_approval`, passing its `tool_call_id` as the approval
+        id.
+        """
+        return self._call(
+            agent_conversation_pending_interaction_list,
+            self._pod_uuid(),
+            page_token=page_token if page_token is not None else UNSET,
+            limit=limit,
         )
 
     def resolve_approval(

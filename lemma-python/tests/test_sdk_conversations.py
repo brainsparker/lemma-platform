@@ -79,6 +79,19 @@ def test_create_for_agent_omits_parent_id_when_not_a_subagent():
     assert "parent_id" not in transport.calls[0]["body"]
 
 
+def test_pending_interactions_asks_the_pod_and_pages_by_token():
+    pod, transport = _pod()
+
+    pod.conversations.pending_interactions(page_token="next-page", limit=10)
+    pod.conversations.pending_interactions()
+
+    first, second = transport.calls
+    assert first["endpoint"].endswith(".agent_conversation_pending_interaction_list")
+    assert first["path_args"] == (UUID("22222222-2222-4222-8222-222222222222"),)
+    assert first["kwargs"] == {"page_token": "next-page", "limit": 10}
+    assert second["kwargs"] == {"page_token": UNSET, "limit": 50}
+
+
 def test_list_without_agent_name_lists_across_the_pod():
     pod, transport = _pod()
 

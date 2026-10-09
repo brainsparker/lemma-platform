@@ -14,7 +14,6 @@ from app.core.authorization.dependencies import (
     assert_pod_membership,
     require_pod_membership,
 )
-from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
 from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -32,6 +31,7 @@ from app.modules.agent.api.controllers.shared import (
     _parse_metadata_filters,
     conversation_channel,
     iter_subscription,
+    parse_conversation_agent_selection,
     with_keepalive,
 )
 from app.modules.agent.api.controllers.conversation_page_token import (
@@ -60,7 +60,6 @@ from app.modules.agent.domain.errors import (
 )
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
-    ConversationAgentSelection,
     ConversationStatus,
     ConversationType,
 )
@@ -87,21 +86,6 @@ _CONVERSATION_ACCESS = "use conversations in this pod"
 #: to take a ``PodContextDep`` they never read, purely to make that happen.
 CONVERSATION_MEMBERSHIP = require_pod_membership(_CONVERSATION_ACCESS)
 CONVERSATION_ENUMERATION = require_pod_membership(_CONVERSATION_ACCESS, enumerates=True)
-
-
-def _parse_conversation_agent_selection(
-    agent_name: str | None,
-) -> ConversationAgentSelection[str]:
-    if agent_name is None:
-        return ConversationAgentSelection.all()
-    if not agent_name.strip():
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="agent_name cannot be empty",
-        )
-    if agent_name in POD_DEFAULT_AGENT_SELECTOR_ALIASES:
-        return ConversationAgentSelection.pod_default()
-    return ConversationAgentSelection.named(agent_name)
 
 
 @router.post(
@@ -174,7 +158,7 @@ async def list_conversations(
 ) -> ConversationListResponse:
     conversations, next_cursor = await service.queries.list_conversations(
         pod_id=pod_id,
-        agent_selection=_parse_conversation_agent_selection(agent_name),
+        agent_selection=parse_conversation_agent_selection(agent_name),
         user_id=user.id,
         status=run_status,
         type=conversation_type,

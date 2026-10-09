@@ -21,7 +21,6 @@ from __future__ import annotations
 import sys
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -35,7 +34,6 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
 )
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
@@ -46,22 +44,10 @@ from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store 
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
-    SqlAlchemySurfaceRoutingResolutionAdapter,
-)
-from app.modules.agent_surfaces.infrastructure.adapters.user_directory_adapter import (
-    IdentityUserDirectoryAdapter,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
-from app.modules.agent_surfaces.platforms.resend.email_recipients import (
-    reply_all_recipients,
-)
 from app.modules.agent_surfaces.services.credential_resolver import (
     PooledNumberReader,
     SurfaceCredentialResolver,
@@ -69,18 +55,6 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 )
 from app.modules.agent_surfaces.services.fallback_reply_service import (
     deliver_fallback_reply,
-)
-from app.modules.agent_surfaces.services.group_log import (
-    GroupBackground,
-    for_member_run,
-    group_background,
-    keeps_group_log,
-)
-from app.modules.agent_surfaces.services.group_audience import (
-    Audience,
-    chat_audience,
-    email_audience,
-    outside_names,
 )
 from app.modules.agent_surfaces.services.attachment_ingest_memo import (
     AttachmentIngestMemo,
@@ -94,8 +68,11 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
 from app.modules.agent_surfaces.services.card_retirement import (
     retire_superseded_cards,
 )
+from app.modules.agent_surfaces.services.run_background import (
+    reply_all_audience,
+    run_background,
+)
 from app.modules.agent_surfaces.services.surface_inbound_message import (
-    fetch_channel_context,
     transcribe_voice_attachments,
     write_inbound_message,
 )
@@ -117,15 +94,6 @@ type Reprepare = Callable[
 
 _COULD_NOT_READ = "I couldn't read that message. Could you send it again?"
 PROCESSING_FAILED_REPLY = "I couldn't process that message. Please send it again."
-
-
-@dataclass(frozen=True, slots=True)
-class _RunBackground:
-    """The group as one run is shown it."""
-
-    lines: list[dict[str, object]]
-    withheld: int = 0
-    audience: Audience | None = None
 
 
 class SurfaceTurnStarter:
@@ -222,8 +190,8 @@ class SurfaceTurnStarter:
         # the last few thread/channel messages fresh for THIS run and hand them to
         # the agent as background context. Best-effort; never blocks the run.
         if not context.event.is_dm:
-            background = await self._background(
-                context, adapter=adapter, credentials=credentials
+            background = await run_background(
+                self.uow_factory, context, adapter=adapter, credentials=credentials
             )
             if background.lines:
                 metadata["channel_context"] = background.lines
@@ -234,7 +202,7 @@ class SurfaceTurnStarter:
         elif not context.answers_outsider:
             # Email is a DM to the pod's mailbox, but a reply-all reaches
             # everybody on the thread.
-            audience = await self._email_audience(context)
+            audience = await reply_all_audience(self.uow_factory, context)
             if audience is not None:
                 metadata["outside_audience"] = audience.to_metadata()
 
@@ -399,100 +367,6 @@ class SurfaceTurnStarter:
             return every_attachment_failed(
                 context.event, reason="Lemma could not receive this file"
             )
-
-    async def _background(
-        self,
-        context: SurfaceChatContext,
-        *,
-        adapter: SurfacePlatformAdapterPort,
-        credentials: dict[str, object],
-    ) -> _RunBackground:
-        """What this run is shown of the group, and who outside the pod reads it.
-
-        The pod's own log where it keeps one (Telegram, WhatsApp); otherwise the
-        platform's history, read live. Either way a member's run is not shown
-        what strangers wrote (``group_log``), and is told that they are there.
-        """
-        group, logged = await self._group_background(context)
-        if logged is not None:
-            lines = [line.model_dump(mode="json") for line in logged.lines]
-            withheld, outside = logged.withheld, list(logged.outside_authors)
-        else:
-            lines = await fetch_channel_context(
-                adapter=adapter, context=context, credentials=credentials
-            )
-            outside = outside_names(lines)
-            withheld = 0
-            if not context.answers_outsider:
-                lines, withheld = for_member_run(lines)
-        # The message being answered was logged on its way in and is already
-        # the prompt; repeating it as background shows the agent the question
-        # twice. It is the latest line in all but a race, so only that one goes.
-        if lines and lines[-1].get("text") == context.event.message_text.strip():
-            lines.pop()
-        audience = (
-            None
-            if context.answers_outsider
-            else chat_audience(
-                platform=context.platform,
-                group=group,
-                parsed=context.event,
-                outside_authors=outside,
-            )
-        )
-        return _RunBackground(lines=lines, withheld=withheld, audience=audience)
-
-    async def _group_background(
-        self, context: SurfaceChatContext
-    ) -> tuple[SurfaceGroup | None, GroupBackground | None]:
-        """The group the pod keeps a log for, and that log; else nothing.
-
-        Nothing where the platform can read its history (Slack, Teams) or the
-        group is not one the pod keeps a log for -- the caller then asks the
-        platform, as it always has, and reads a shared Slack channel off the
-        event itself.
-        """
-        channel_id = context.event.external_channel_id
-        if (
-            context.surface_id is None
-            or not channel_id
-            or not keeps_group_log(context.platform.value)
-        ):
-            return None, None
-        async with self.uow_factory() as uow:
-            group = await SurfaceGroupRepository(uow.session).get(
-                surface_id=context.surface_id, external_channel_id=channel_id
-            )
-            if group is None:
-                return None, None
-            logged = await group_background(
-                uow,
-                group=group,
-                membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
-                agent_display_name=context.agent_display_name,
-                for_stranger=context.answers_outsider,
-            )
-        return group, logged
-
-    async def _email_audience(self, context: SurfaceChatContext) -> Audience | None:
-        """Who outside the pod a reply on this email thread also reaches."""
-        if context.platform is not SurfacePlatform.RESEND or context.pod_id is None:
-            return None
-        recipients = reply_all_recipients(context.event)
-        if not recipients:
-            return None
-        pod_id = context.pod_id
-        async with self.uow_factory() as uow:
-            people = IdentityUserDirectoryAdapter(uow)
-            membership = SqlAlchemySurfaceRoutingResolutionAdapter(uow)
-
-            async def is_member(address: str) -> bool:
-                user_id = await people.user_id_by_email(address)
-                return user_id is not None and pod_id in set(
-                    await membership.get_user_pod_ids(user_id)
-                )
-
-            return await email_audience(recipients=recipients, is_member=is_member)
 
     async def _name_new_thread(
         self,

@@ -204,7 +204,7 @@ async def test_telegram_render_decision_builds_an_inline_keyboard():
     tokens = iter(["tok-approve", "tok-session", "tok-deny"])
     with (
         patch(
-            "app.modules.agent_surfaces.platforms.telegram.service.put_callback_token",
+            "app.modules.agent_surfaces.platforms.telegram.choice_cards.put_callback_token",
             new=AsyncMock(side_effect=lambda payload: next(tokens)),
         ),
         patch(

@@ -25,7 +25,9 @@ from app.modules.agent_surfaces.api.controllers.webhook_controller import (
     _decode_webhook_payload,
 )
 from app.modules.agent_surfaces.platforms.telegram.adapter import TelegramSurfaceAdapter
-from app.modules.agent_surfaces.platforms.telegram.service import _OTHER_CALLBACK_VALUE
+from app.modules.agent_surfaces.platforms.telegram.choice_cards import (
+    OTHER_CALLBACK_VALUE,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.adapter import WhatsAppSurfaceAdapter
 
 
@@ -258,7 +260,7 @@ async def test_telegram_send_questions_builds_inline_keyboard():
     tokens = iter(["tok0", "tok1", "tokother"])
     with (
         patch(
-            "app.modules.agent_surfaces.platforms.telegram.service.put_callback_token",
+            "app.modules.agent_surfaces.platforms.telegram.choice_cards.put_callback_token",
             new=AsyncMock(side_effect=lambda payload: next(tokens)),
         ),
         patch(
@@ -374,7 +376,7 @@ async def test_telegram_parse_inbound_interaction_other_and_unknown_are_acknowle
     other = {
         "callback_id": "conv-1|tool-1",
         "header": "country",
-        "value": _OTHER_CALLBACK_VALUE,
+        "value": OTHER_CALLBACK_VALUE,
     }
     with patch(
         "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",

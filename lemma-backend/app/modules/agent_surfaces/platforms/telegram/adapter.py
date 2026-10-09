@@ -32,8 +32,10 @@ from app.modules.agent_surfaces.platforms.telegram.message_experience import (
     retire_decision_card as retire_telegram_card,
 )
 from app.modules.agent_surfaces.platforms.telegram.parser import TelegramMessageParser
+from app.modules.agent_surfaces.platforms.telegram.choice_cards import (
+    OTHER_CALLBACK_VALUE,
+)
 from app.modules.agent_surfaces.platforms.telegram.service import (
-    _OTHER_CALLBACK_VALUE,
     TelegramPlatformService,
 )
 
@@ -96,7 +98,7 @@ def _interaction_from_token(
     if decision:
         return ParsedSurfaceInteraction(approval_decision=decision, **origin)
     value = stored.get("value")
-    if value == _OTHER_CALLBACK_VALUE:
+    if value == OTHER_CALLBACK_VALUE:
         return ParsedSurfaceInteraction(interaction_state="other", **origin)
     if not str(stored.get("header") or "").strip():
         return ParsedSurfaceInteraction(interaction_state="expired", **origin)

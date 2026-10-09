@@ -22,9 +22,11 @@ from uuid import UUID
 
 from pydantic import ValidationError
 from redis.exceptions import RedisError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import AgentRunStartResult
 
@@ -75,25 +77,35 @@ def window_key(
 class SendWindow:
     """Starts a send once per window; a repeat gets the first one's result."""
 
-    def __init__(self, cache: RedisJsonCache[str] | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession | None = None,
+        cache: RedisJsonCache[str] | None = None,
+    ) -> None:
+        # The caller's session, handed back to the pool around each Redis round
+        # trip: a send arrives with its authorization already read, and holding
+        # that connection across Redis is what the session-scope gate forbids.
+        self._session = session
         self._cache = cache
 
     @property
     def cache(self) -> RedisJsonCache[str]:
         return self._cache or _window_cache()
 
-    async def start_once(
+    async def start_send_once(
         self,
         key: str,
         start: Callable[[], Awaitable[AgentRunStartResult]],
     ) -> AgentRunStartResult:
         try:
-            first = await self.cache.set_raw_if_absent(key, _PENDING)
+            async with connection_released(self._session):
+                first = await self.cache.set_raw_if_absent(key, _PENDING)
         except RedisError, OSError:
             logger.warning("agent.send_window.unavailable.degraded", exc_info=True)
             return await start()
         if not first:
-            earlier = await self._result_of_first(key)
+            async with connection_released(self._session):
+                earlier = await self._result_of_first_send(key)
             if earlier is not None:
                 return earlier.model_copy(
                     update={"started_new_run": False, "deduplicated": True}
@@ -104,15 +116,17 @@ class SendWindow:
         try:
             result = await start()
         except BaseException:
-            await self._forget(key)
+            async with connection_released(self._session):
+                await self._forget_pending_send(key)
             raise
         try:
-            await self.cache.set_raw(key, result.model_dump_json())
+            async with connection_released(self._session):
+                await self.cache.set_raw(key, result.model_dump_json())
         except RedisError, OSError:
             logger.warning("agent.send_window.unavailable.degraded", exc_info=True)
         return result
 
-    async def _result_of_first(self, key: str) -> AgentRunStartResult | None:
+    async def _result_of_first_send(self, key: str) -> AgentRunStartResult | None:
         waited = 0.0
         while True:
             try:
@@ -131,7 +145,7 @@ class SendWindow:
             await asyncio.sleep(_WAIT_STEP_SECONDS)
             waited += _WAIT_STEP_SECONDS
 
-    async def _forget(self, key: str) -> None:
+    async def _forget_pending_send(self, key: str) -> None:
         """Let a retry of a send that failed go through at once."""
         try:
             await self.cache.delete_if_value(key, _PENDING)

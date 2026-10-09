@@ -111,7 +111,7 @@ async def test_a_redis_outage_never_stops_a_send(scenario):
 
     async with owner_uow(seeded) as uow:
         service = conversation_service(uow)
-        service.send_window = SendWindow(unreachable)
+        service.send_window = SendWindow(uow.session, unreachable)
         result = await service.send_from_lemma(
             conversation_id=seeded.conversation_id,
             user_id=seeded.user_id,

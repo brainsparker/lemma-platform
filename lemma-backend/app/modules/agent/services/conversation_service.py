@@ -90,7 +90,7 @@ class ConversationService:
         self.authorization_service = authorization_service
         self.fallback_model_name = fallback_model_name
         self.usage_service = usage_service
-        self.send_window = SendWindow()
+        self.send_window = SendWindow(getattr(uow, "session", None))
         self.resume_returns = ResumeToolReturnBuilder(uow, agent_repository)
         self.pauses = PauseResume(
             uow, conversation_repository, agent_repository, usage_service
@@ -460,7 +460,7 @@ class ConversationService:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        return await self.send_window.start_once(key, start)
+        return await self.send_window.start_send_once(key, start)
 
     async def _add_user_message_and_start_run(
         self,

@@ -274,9 +274,11 @@ def _unresponsive_engines(payload: dict[str, object]) -> list[str]:
         return []
     named: list[str] = []
     for entry in entries:
-        if isinstance(entry, (list, tuple)) and entry:
-            reason = f" ({entry[1]})" if len(entry) > 1 and entry[1] else ""
-            named.append(f"{entry[0]}{reason}")
+        # JSON from SearXNG: each entry is `[engine, reason]`.
+        parts = [str(part) for part in entry] if isinstance(entry, list) else []
+        if parts:
+            reason = f" ({parts[1]})" if len(parts) > 1 and parts[1] else ""
+            named.append(f"{parts[0]}{reason}")
     return named
 
 

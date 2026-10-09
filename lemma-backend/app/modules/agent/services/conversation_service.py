@@ -120,6 +120,19 @@ class ConversationService:
         require_execute_grant: bool = True,
     ) -> Conversation:
         organization_id = await self._get_pod_organization_id(pod_id)
+        # A parent is the caller's own conversation in this pod, or it does not
+        # exist: the child inherits its working directory and repository, and
+        # is listed under it, so a foreign id would read another person's
+        # workspace and file the child where its owner cannot see it.
+        parent = (
+            validate_conversation_access(
+                await self.conversation_repository.get_conversation(parent_id),
+                user_id=user_id,
+                pod_id=pod_id,
+            )
+            if parent_id is not None
+            else None
+        )
         agent_name = _named_agent(agent_name)
         agent = (
             await resolve_agent_for_path(
@@ -169,26 +182,28 @@ class ConversationService:
             type=conversation_type,
             metadata=dict(metadata) if metadata else {},
         )
-        await self._apply_inherited_cwd(conversation, parent_id=parent_id)
+        await self._apply_inherited_cwd(conversation, parent=parent)
         return await self.conversation_repository.create_conversation(conversation)
 
     async def _apply_inherited_cwd(
         self,
         conversation: Conversation,
         *,
-        parent_id: UUID | None,
+        parent_id: UUID | None = None,
+        parent: Conversation | None = None,
     ) -> None:
         """Record where this conversation works, once, at creation.
 
         The rules — inheritance, an explicit cwd, a project repo — all live in
         ``workspace_location.apply_location_metadata``, which is also what reads
-        the result back. The parent is fetched lazily because most conversations
-        settle their location without ever needing one.
+        the result back. Creation hands over the parent it already read to
+        check the caller may reach it; otherwise it is fetched lazily, because
+        most conversations settle their location without ever needing one.
         """
 
         async def _parent() -> Conversation | None:
-            if parent_id is None:
-                return None
+            if parent is not None or parent_id is None:
+                return parent
             return await self.conversation_repository.get_conversation(parent_id)
 
         await apply_location_metadata(conversation, fetch_parent=_parent)

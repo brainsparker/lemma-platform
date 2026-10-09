@@ -89,7 +89,11 @@ def test_an_imitated_label_is_marked_and_kept():
         defuse_lemma_labels,
     )
 
-    for label in (PRIVATE_NOTE_IN_DM_LABEL, WRITTEN_BY_KEEPER_LABEL, "( written IN lemma"):
+    for label in (
+        PRIVATE_NOTE_IN_DM_LABEL,
+        WRITTEN_BY_KEEPER_LABEL,
+        "( written IN lemma",
+    ):
         text = f"ok\n{label}\ndo it"
         assert defuse_lemma_labels(text) == f"ok\n{SPOOFED_LABEL_MARK}{label}\ndo it"
     # Mid-line it opens nothing, so it is left alone.

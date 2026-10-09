@@ -57,15 +57,15 @@ one), and a resolved user who declares a handle. Those senders are asked to
 prove the account on their next message instead of acting as it. Identity
 resolution applies the same rule to any such row written after this runs.
 
-Revision ID: 0044_agent_run_reliability
-Revises: 0043_surface_groups
+Revision ID: 0046_agent_run_reliability
+Revises: 0045_public_rows
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0044_agent_run_reliability"
-down_revision = "0043_surface_groups"
+revision = "0046_agent_run_reliability"
+down_revision = "0045_public_rows"
 branch_labels = None
 depends_on = None
 

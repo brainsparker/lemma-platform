@@ -490,7 +490,7 @@ class TestItDoesNotSummarizeOnEveryStep:
 
 class TestModelSettings:
     async def test_the_summary_call_sends_the_runs_resolved_compaction_settings(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
     ) -> None:
         """The run's own model is sent what `run_generation_settings` resolved
         for compaction -- one source of truth -- and only when it compacts."""
@@ -499,9 +499,9 @@ class TestModelSettings:
             COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
         )
 
-        monkeypatch.setattr(
-            summarization_model, "configured_summarization_model_name", lambda: None
-        )
+        async def no_separate_model(*, fallback, **_: object):
+            return fallback
+
         seen: list[object] = []
 
         def respond(messages, info):
@@ -519,6 +519,7 @@ class TestModelSettings:
                 "max_tokens": COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
             },
             meter=lambda model: model,
+            resolve_model=no_separate_model,
         )
 
         async def resolve() -> summarization_model.CompactionTarget:
@@ -539,9 +540,7 @@ class TestModelSettings:
         assert settings["max_tokens"] == COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS
         assert settings["openai_reasoning_effort"] == "low"
 
-    async def test_a_separate_summarization_model_gets_only_the_cap(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_a_separate_summarization_model_gets_only_the_cap(self) -> None:
         """Nothing says which of the run's parameters another model accepts."""
         from app.modules.agent.services import summarization_model
         from app.modules.agent.services.run_input_settings import (
@@ -553,15 +552,13 @@ class TestModelSettings:
         async def configured(**_: object) -> FunctionModel:
             return other
 
-        monkeypatch.setattr(
-            summarization_model, "resolve_summarization_model", configured
-        )
         target = summarization_model.lazy_compaction_target(
             organization_id=None,
             user_id=uuid4(),
             run_model=FunctionModel(lambda messages, info: ModelResponse(parts=[])),
             run_compaction_settings={"openai_reasoning_effort": "low", "top_p": 0.5},
             meter=lambda model: model,
+            resolve_model=configured,
         )
 
         resolved = await target.get()

@@ -64,6 +64,7 @@ def lazy_compaction_target(
     run_model: Model,
     run_compaction_settings: JsonObject | None,
     meter: Callable[[Model | str], Model | str],
+    resolve_model: Callable[..., Awaitable[Model | str]] | None = None,
 ) -> LazyCompactionTarget:
     """The run's compaction target, resolved only if the run ever compacts.
 
@@ -72,13 +73,16 @@ def lazy_compaction_target(
     own parameters, turned down to a light effort and a summary-sized cap. A
     separately configured summarization model gets only the summary cap, since
     nothing says which of the run's settings it would accept.
+
+    ``resolve_model`` picks the model; ``resolve_summarization_model`` unless
+    a caller supplies another.
     """
     from app.modules.agent.services.run_input_settings import summary_only_settings
     from app.modules.agent.services.run_phase_spans import run_phase
 
     async def resolve() -> CompactionTarget:
         with run_phase("summarization_model"):
-            model = await resolve_summarization_model(
+            model = await (resolve_model or resolve_summarization_model)(
                 organization_id=organization_id, user_id=user_id, fallback=run_model
             )
         settings = run_compaction_settings if model is run_model else None

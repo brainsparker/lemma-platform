@@ -27,20 +27,23 @@ from typing import Protocol
 from opentelemetry.util.types import AttributeValue
 from pydantic import ValidationError
 
-from app.core.domain.generation import GenerationSettings, ReasoningEffort
+from app.core.domain.generation import (
+    GenerationSettings,
+    ReasoningEffort,
+    lighter_effort,
+)
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeProfileProtocol,
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, JsonObject
+from app.modules.agent.services.run_input_settings import (
+    COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+    with_light_reasoning,
+)
 from app.modules.agent.services.runtime_resolution import ResolvedAgentRuntime
 
 PORTABLE_KEYS = frozenset(GenerationSettings.model_fields)
-
-#: What a compaction summary may spend. A summary is a few thousand tokens of
-#: prose; the cap keeps a reasoning model from thinking its way through the
-#: whole window before it writes one.
-COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS = 8_192
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +175,10 @@ class RunGenerationSettings:
     model_settings: JsonObject
     #: Request parameters for the run's history-compaction call.
     compaction_model_settings: JsonObject
+    #: A light reasoning effort, as this model takes one: empty unless its
+    #: catalog entry declares REASONING. What the shorter retry of an over-long
+    #: answer lays over the run's settings (``shorter_answer_settings``).
+    lighter_reasoning_settings: JsonObject
 
 
 def run_generation_settings(
@@ -193,14 +200,25 @@ def run_generation_settings(
     model_settings = merged_wire_settings(
         layers, protocol=protocol, capabilities=capabilities
     )
-    compaction_model_settings = {
-        **model_settings,
-        **wire_settings(
-            compaction_generation_settings(effective),
-            protocol=protocol,
-            capabilities=capabilities,
-        ),
-    }
+    lighter_reasoning_settings = wire_settings(
+        GenerationSettings(reasoning_effort=lighter_effort(effective.reasoning_effort)),
+        protocol=protocol,
+        capabilities=capabilities,
+    )
+    # An effort the portable settings did not name -- an operator's raw wire
+    # switch -- is turned down too, though never introduced on a model that
+    # does not declare it reasons.
+    compaction_model_settings = with_light_reasoning(
+        {
+            **model_settings,
+            **wire_settings(
+                compaction_generation_settings(effective),
+                protocol=protocol,
+                capabilities=capabilities,
+            ),
+        },
+        lighter_reasoning_settings,
+    )
     # The run's thinking budget does not carry into a summary: no thinking is
     # what a summary wants, and leaving the key out is how that is said.
     compaction_model_settings.pop("anthropic_thinking", None)
@@ -208,6 +226,7 @@ def run_generation_settings(
         effective=effective,
         model_settings=model_settings,
         compaction_model_settings=compaction_model_settings,
+        lighter_reasoning_settings=lighter_reasoning_settings,
     )
 
 
@@ -215,15 +234,16 @@ def compaction_generation_settings(merged: GenerationSettings) -> GenerationSett
     """The run's settings, turned down for writing a history summary.
 
     Low effort rather than ``none``: ``none`` is not a value every reasoning
-    model accepts, and ``low`` is. The output cap is the summary's own, or the
-    run's when that is smaller.
+    model accepts, and ``low`` is. An effort the run already keeps lighter than
+    that stays as it is. The output cap is the summary's own, or the run's when
+    that is smaller.
     """
     summary_cap = COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS
     if merged.max_output_tokens is not None:
         summary_cap = min(summary_cap, merged.max_output_tokens)
     return merged.model_copy(
         update={
-            "reasoning_effort": ReasoningEffort.LOW,
+            "reasoning_effort": lighter_effort(merged.reasoning_effort),
             "thinking_budget_tokens": None,
             "max_output_tokens": summary_cap,
         }

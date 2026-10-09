@@ -41,8 +41,13 @@ class HarnessOptions[DepsT = object]:
     model_settings: JsonObject | None = None
     #: Request parameters for the history-compaction call: the run's own,
     #: turned down to low effort and a summary-sized output cap. See
-    #: ``services/generation_settings.compaction_generation_settings``.
+    #: ``services/generation_settings.compaction_generation_settings``. None
+    #: when nothing resolved them; the summary then gets only its cap.
     compaction_model_settings: JsonObject | None = None
+    #: A light reasoning effort as this model takes one, laid over the run's
+    #: settings when an over-long answer is asked for again: empty unless the
+    #: model declares REASONING. See ``run_input_settings.shorter_answer_settings``.
+    lighter_reasoning_settings: JsonObject | None = None
     history_summarization_enabled: bool = True
     history_summarization_token_limit: int = DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT
     history_summarization_keep_messages: int = (

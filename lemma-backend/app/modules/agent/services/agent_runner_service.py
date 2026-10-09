@@ -219,6 +219,7 @@ class AgentRunnerService:
             harness_capabilities: list[AgentCapability[ConversationContext]] = []
             harness_model_settings: JsonObject | None = None
             compaction_model_settings: JsonObject | None = None
+            lighter_reasoning_settings: JsonObject | None = None
             # Agent Host harnesses run their own model loop, so none of this
             # reaches them; the settings stay on the run as a record only.
             generation = run_generation_settings(
@@ -227,6 +228,7 @@ class AgentRunnerService:
             if resolved_runtime.harness_kind == HarnessKind.LEMMA:
                 harness_model_settings = generation.model_settings
                 compaction_model_settings = generation.compaction_model_settings
+                lighter_reasoning_settings = generation.lighter_reasoning_settings
                 # The in-process harness realizes every tool surface as a
                 # capability, so its toolset list is empty.
                 harness_capabilities = await build_lemma_harness_tooling(
@@ -268,6 +270,7 @@ class AgentRunnerService:
                     harness_model_settings, context_budget
                 ),
                 compaction_model_settings=compaction_model_settings,
+                lighter_reasoning_settings=lighter_reasoning_settings,
                 usage_limits=enforced_usage_limits,
                 output_type=self._resolve_output_type(agent, conversation),
                 should_stop=make_stop_checker(

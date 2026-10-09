@@ -44,7 +44,7 @@ from app.modules.agent.infrastructure.harnesses.history import (
     is_pinned_message,
     is_tool_result_part,
 )
-from app.modules.agent.services.run_input_settings import compaction_model_settings
+from app.modules.agent.services.run_input_settings import summary_only_settings
 from app.modules.agent.services.runtime_model_factory import provider_model_settings
 from app.modules.agent.services.summarization_model import (
     CompactionTarget,
@@ -427,7 +427,7 @@ class HistoryCompactor:
     async def _target(self) -> CompactionTarget:
         if isinstance(self.model, LazyCompactionTarget):
             return await self.model.get()
-        return CompactionTarget(self.model, compaction_model_settings(None))
+        return CompactionTarget(self.model, summary_only_settings())
 
     async def _summarize(self, transcript: str, *, folded: int = 0) -> str | None:
         """The summary, or None when no attempt produced one.

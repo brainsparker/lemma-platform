@@ -135,7 +135,8 @@ class NodeLoop[DepsT]:
         return shorter_answer_settings(
             self._attempt_settings
             if self._attempt_settings is not None
-            else self.options.model_settings
+            else self.options.model_settings,
+            lighter_reasoning=self.options.lighter_reasoning_settings,
         )
 
     async def drive_once(

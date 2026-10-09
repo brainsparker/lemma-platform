@@ -319,7 +319,7 @@ class PydanticAIHarness:
             organization_id=conversation.organization_id,
             user_id=conversation.user_id,
             run_model=model,
-            run_model_settings=options.model_settings,
+            run_compaction_settings=options.compaction_model_settings,
             meter=lambda resolved: _meter_compaction_model(resolved, options),
         )
         capabilities = list(options.capabilities or [])

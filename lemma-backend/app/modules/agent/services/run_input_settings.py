@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from app.core.domain.generation import LIGHT_REASONING_EFFORTS, lighter_effort
 from app.modules.agent.domain.entities import Message, MessageKind, MessageRole
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.services.context_budget import ContextBudget
@@ -73,49 +74,92 @@ def with_reply_budget(
 #: small to hold a tool call is a guaranteed failure, not a shorter answer.
 MIN_REPLY_TOKENS = 1_024
 
-#: Efforts already as light as the shorter retry would ask for.
-_LIGHT_EFFORTS = frozenset({"none", "minimal", "low"})
+
+#: What a compaction summary may spend. A summary is a page or two of prose;
+#: the cap keeps a reasoning model from thinking its way through the whole
+#: window before it writes one.
+COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS = 8_192
+
+_EFFORT_KEY = "openai_reasoning_effort"
+_THINKING_KEY = "anthropic_thinking"
+#: Anthropic's smallest extended-thinking budget.
+_MIN_THINKING_BUDGET = 1_024
 
 
-#: Room for the compaction summary. The brief it is asked for is a page or two;
-#: an uncapped call on a reasoning model can think for as long as it likes first.
-SUMMARY_MAX_TOKENS = 4_096
+def summary_only_settings() -> JsonObject:
+    """Settings for a summary on a model nothing else is known about.
 
-
-def compaction_model_settings(run_model_settings: JsonObject | None) -> JsonObject:
-    """Settings for the call that summarizes a run's history.
-
-    Summarizing a transcript is not the task an expensive reasoning setting was
-    chosen for, so the call asks for a capped answer and, where the run already
-    sends a reasoning effort, the lightest one this code knows every reasoning
-    model accepts. It never introduces an effort the run was not sending.
-
-    The seam for per-model generation settings: once a model can declare the
-    lightest effort it accepts, this is where that choice belongs.
+    Only the cap: a separately configured summarization model, or a run whose
+    compaction settings were never resolved, gives no grounds for any other
+    parameter. A run's own model gets the ``compaction_model_settings`` that
+    ``generation_settings.run_generation_settings`` resolved for it.
     """
-    settings: JsonObject = {"max_tokens": SUMMARY_MAX_TOKENS}
-    effort = (run_model_settings or {}).get("openai_reasoning_effort")
-    if isinstance(effort, str):
-        settings["openai_reasoning_effort"] = (
-            effort if effort in _LIGHT_EFFORTS else "low"
-        )
+    return {"max_tokens": COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS}
+
+
+def with_light_reasoning(
+    model_settings: JsonObject, lighter_reasoning: JsonObject | None
+) -> JsonObject:
+    """``model_settings`` with an OpenAI-compatible reasoning effort turned down.
+
+    ``lighter_reasoning`` is what ``generation_settings`` translated a light
+    effort into for this model. It names an effort only where the model's
+    catalog entry declares REASONING, which is what makes sending one safe on
+    a run that was not sending one. Without it an effort is only ever lowered
+    (an operator's raw wire switch, say), never introduced. An effort that is
+    already light is never raised.
+    """
+    settings: JsonObject = dict(model_settings)
+    current = settings.get(_EFFORT_KEY)
+    if isinstance(current, str) and current in LIGHT_REASONING_EFFORTS:
+        return settings
+    target = (lighter_reasoning or {}).get(_EFFORT_KEY)
+    if target is None and isinstance(current, str):
+        target = lighter_effort(current).value
+    if target is not None:
+        settings[_EFFORT_KEY] = target
     return settings
 
 
-def shorter_answer_settings(model_settings: JsonObject | None) -> JsonObject:
+def shorter_answer_settings(
+    model_settings: JsonObject | None,
+    *,
+    lighter_reasoning: JsonObject | None = None,
+) -> JsonObject:
     """Settings for re-asking a request whose answer ran past the time budget.
 
     Sending the same request again takes the same time and expires again, so
-    the retry asks for less: half the output budget and, where this run already
-    sets a reasoning effort, a light one. The effort is only lowered, never
-    introduced: a model that was not sent one may reject the parameter, and
-    whether it accepts one is the runtime profile's to declare.
+    the retry asks for less: half the output budget and a light reasoning
+    effort, on a model that declares REASONING (``lighter_reasoning``) or
+    wherever the run already sends one. An extended-thinking budget is halved
+    with the cap, and dropped when what is left is under Anthropic's minimum.
     """
     settings: JsonObject = dict(model_settings or {})
     current = settings.get("max_tokens")
     if isinstance(current, int) and not isinstance(current, bool) and current > 0:
         settings["max_tokens"] = min(current, max(MIN_REPLY_TOKENS, current // 2))
-    effort = settings.get("openai_reasoning_effort")
-    if isinstance(effort, str) and effort not in _LIGHT_EFFORTS:
-        settings["openai_reasoning_effort"] = "low"
+    settings = with_light_reasoning(settings, lighter_reasoning)
+    _halve_thinking(settings)
     return settings
+
+
+def _halve_thinking(settings: JsonObject) -> None:
+    """Halve a thinking budget in place, keeping it inside the answer's cap.
+
+    Thinking tokens are output tokens: a budget at or above ``max_tokens`` is a
+    request the provider refuses, and halving the cap alone can make one.
+    """
+    thinking = settings.get(_THINKING_KEY)
+    if not isinstance(thinking, dict):
+        return
+    budget = thinking.get("budget_tokens")
+    if not isinstance(budget, int) or isinstance(budget, bool):
+        return
+    halved = budget // 2
+    cap = settings.get("max_tokens")
+    if isinstance(cap, int) and not isinstance(cap, bool):
+        halved = min(halved, cap - 1)
+    if halved < _MIN_THINKING_BUDGET:
+        del settings[_THINKING_KEY]
+        return
+    settings[_THINKING_KEY] = {**thinking, "budget_tokens": halved}

@@ -34,7 +34,10 @@ from app.modules.agent.services.generation_settings import (
     title_model_settings,
     validated_stored_settings,
 )
-from app.modules.agent.services.run_input_settings import with_reply_budget
+from app.modules.agent.services.run_input_settings import (
+    shorter_answer_settings,
+    with_reply_budget,
+)
 from app.modules.agent.services.runtime_profile_creation import (
     normalize_model_settings,
 )
@@ -293,6 +296,96 @@ class TestBudgetAndCompaction:
             "openai_reasoning_effort": "low",
             "max_tokens": COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
         }
+
+    def test_compaction_keeps_an_effort_already_lighter_than_low(self):
+        """`minimal` on the run says the model takes it; raising it to `low`
+        would make the summary dearer than the run's own turns."""
+        settings = run_generation_settings(
+            _resolved(), _runtime(reasoning_effort="minimal")
+        )
+
+        assert settings.compaction_model_settings["openai_reasoning_effort"] == (
+            "minimal"
+        )
+
+    def test_compaction_lowers_a_raw_wire_effort_but_never_introduces_one(self):
+        """An operator's raw `openai_reasoning_effort` is not a portable field,
+        so the REASONING gate never saw it; the summary still turns it down."""
+        plain = _resolved(
+            capabilities=_PLAIN,
+            profile_settings={"openai_reasoning_effort": "high"},
+        )
+
+        assert run_generation_settings(plain, None).compaction_model_settings == {
+            "openai_reasoning_effort": "low",
+            "max_tokens": COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+        }
+        assert "openai_reasoning_effort" not in (
+            run_generation_settings(
+                _resolved(capabilities=_PLAIN), None
+            ).compaction_model_settings
+        )
+
+
+class TestShorterAnswerRetry:
+    """The retry of an over-long answer asks for less thinking through the same
+    translation every other request uses: only a model declaring REASONING is
+    sent an effort it was not already being sent."""
+
+    def test_a_reasoning_model_is_given_a_light_effort_to_retry_with(self):
+        settings = run_generation_settings(_resolved(), None)
+
+        assert settings.model_settings == {}
+        assert settings.lighter_reasoning_settings == {"openai_reasoning_effort": "low"}
+        retry = shorter_answer_settings(
+            {"max_tokens": 4_000},
+            lighter_reasoning=settings.lighter_reasoning_settings,
+        )
+        assert retry == {"max_tokens": 2_000, "openai_reasoning_effort": "low"}
+
+    def test_a_model_that_does_not_reason_is_not(self):
+        settings = run_generation_settings(_resolved(capabilities=_PLAIN), None)
+
+        assert settings.lighter_reasoning_settings == {}
+        retry = shorter_answer_settings(
+            {"max_tokens": 4_000},
+            lighter_reasoning=settings.lighter_reasoning_settings,
+        )
+        assert "openai_reasoning_effort" not in retry
+
+    def test_an_effort_already_light_is_not_raised(self):
+        settings = run_generation_settings(
+            _resolved(), _runtime(reasoning_effort="minimal")
+        )
+
+        retry = shorter_answer_settings(
+            settings.model_settings,
+            lighter_reasoning=settings.lighter_reasoning_settings,
+        )
+        assert retry["openai_reasoning_effort"] == "minimal"
+
+    def test_a_thinking_budget_shrinks_with_the_cap(self):
+        """Halving the cap alone can leave the budget at or above it, which an
+        Anthropic-compatible provider refuses."""
+        anthropic = _resolved(protocol=RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE)
+        settings = run_generation_settings(
+            anthropic, _runtime(max_output_tokens=8_000, thinking_budget_tokens=6_000)
+        )
+
+        retry = shorter_answer_settings(
+            settings.model_settings,
+            lighter_reasoning=settings.lighter_reasoning_settings,
+        )
+        assert retry["max_tokens"] == 4_000
+        assert retry["anthropic_thinking"]["budget_tokens"] == 3_000
+
+        small = shorter_answer_settings(
+            {
+                "max_tokens": 2_048,
+                "anthropic_thinking": {"type": "enabled", "budget_tokens": 1_500},
+            }
+        )
+        assert "anthropic_thinking" not in small
 
 
 def test_the_run_span_records_what_was_asked_and_what_was_sent():

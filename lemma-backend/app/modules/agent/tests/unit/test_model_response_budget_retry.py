@@ -60,7 +60,12 @@ def _always_over_budget(seen_max_tokens: list[object]):
     return stream_fn
 
 
-async def _run(model: FunctionModel, *, spend: RunSpend | None = None):
+async def _run(
+    model: FunctionModel,
+    *,
+    spend: RunSpend | None = None,
+    lighter_reasoning: dict[str, object] | None = None,
+):
     pod_id = uuid4()
     conversation = Conversation(pod_id=pod_id, user_id=uuid4())
     events: list[AgentEvent] = []
@@ -82,6 +87,7 @@ async def _run(model: FunctionModel, *, spend: RunSpend | None = None):
             model_name="test-model",
             history_summarization_enabled=False,
             model_settings={"max_tokens": 16_000},
+            lighter_reasoning_settings=lighter_reasoning,
             spend=spend,
         ),
         agent_run_id=uuid4(),
@@ -111,6 +117,25 @@ async def test_an_over_budget_answer_is_retried_once_asking_for_less() -> None:
     (error,) = [e for e in events if e.type is AgentEventType.ERROR]
     assert "took longer than 15 minutes" in str(error.data)
     assert "dropping" not in str(error.data)
+
+
+async def test_the_retry_lowers_effort_on_a_model_that_declares_reasoning() -> None:
+    """The run sent no effort, but its model declares REASONING: the retry
+    asks for a light one, as `generation_settings` translated it."""
+    seen: list[object] = []
+
+    async def stream_fn(messages, info: AgentInfo) -> AsyncIterator[str]:
+        del messages
+        seen.append((info.model_settings or {}).get("openai_reasoning_effort"))
+        yield "a long answer "
+        raise _expired()
+
+    await _run(
+        FunctionModel(stream_function=stream_fn),
+        lighter_reasoning={"openai_reasoning_effort": "low"},
+    )
+
+    assert seen == [None, "low"]
 
 
 async def test_an_over_budget_answer_late_in_the_run_is_not_retried() -> None:

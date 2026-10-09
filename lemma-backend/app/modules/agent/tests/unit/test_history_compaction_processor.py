@@ -11,6 +11,7 @@ remaining context, and told the user that task was the one they had requested.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from pydantic_ai.messages import (
@@ -488,17 +489,19 @@ class TestItDoesNotSummarizeOnEveryStep:
 
 
 class TestModelSettings:
-    async def test_the_summary_call_is_capped_and_asks_for_light_reasoning(
-        self,
+    async def test_the_summary_call_sends_the_runs_resolved_compaction_settings(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from app.modules.agent.services.summarization_model import (
-            CompactionTarget,
-            LazyCompactionTarget,
-        )
-        from app.modules.agent.services.run_input_settings import (
-            compaction_model_settings,
+        """The run's own model is sent what `run_generation_settings` resolved
+        for compaction -- one source of truth -- and only when it compacts."""
+        from app.modules.agent.services import summarization_model
+        from app.modules.agent.services.generation_settings import (
+            COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
         )
 
+        monkeypatch.setattr(
+            summarization_model, "configured_summarization_model_name", lambda: None
+        )
         seen: list[object] = []
 
         def respond(messages, info):
@@ -507,16 +510,25 @@ class TestModelSettings:
             return ModelResponse(parts=[TextPart("the brief")])
 
         resolved: list[int] = []
+        target = summarization_model.lazy_compaction_target(
+            organization_id=None,
+            user_id=uuid4(),
+            run_model=FunctionModel(respond),
+            run_compaction_settings={
+                "openai_reasoning_effort": "low",
+                "max_tokens": COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+            },
+            meter=lambda model: model,
+        )
 
-        async def resolve() -> CompactionTarget:
+        async def resolve() -> summarization_model.CompactionTarget:
             resolved.append(1)
-            return CompactionTarget(
-                FunctionModel(respond),
-                compaction_model_settings({"openai_reasoning_effort": "high"}),
-            )
+            return await target.get()
 
         compactor = HistoryCompactor(
-            model=LazyCompactionTarget(resolve), trigger_tokens=2_000, keep_messages=6
+            model=summarization_model.LazyCompactionTarget(resolve),
+            trigger_tokens=2_000,
+            keep_messages=6,
         )
         await compactor(_ctx(), [_user("short")])
         assert resolved == [], "a run that never compacts never resolves a model"
@@ -524,8 +536,38 @@ class TestModelSettings:
         await compactor(_ctx(), _history())
 
         (settings,) = seen
-        assert settings["max_tokens"] <= 4_096
+        assert settings["max_tokens"] == COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS
         assert settings["openai_reasoning_effort"] == "low"
+
+    async def test_a_separate_summarization_model_gets_only_the_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing says which of the run's parameters another model accepts."""
+        from app.modules.agent.services import summarization_model
+        from app.modules.agent.services.run_input_settings import (
+            summary_only_settings,
+        )
+
+        other = FunctionModel(lambda messages, info: ModelResponse(parts=[]))
+
+        async def configured(**_: object) -> FunctionModel:
+            return other
+
+        monkeypatch.setattr(
+            summarization_model, "resolve_summarization_model", configured
+        )
+        target = summarization_model.lazy_compaction_target(
+            organization_id=None,
+            user_id=uuid4(),
+            run_model=FunctionModel(lambda messages, info: ModelResponse(parts=[])),
+            run_compaction_settings={"openai_reasoning_effort": "low", "top_p": 0.5},
+            meter=lambda model: model,
+        )
+
+        resolved = await target.get()
+
+        assert resolved.model is other
+        assert resolved.model_settings == summary_only_settings()
 
 
 class TestNotCountedAgainstTheRun:

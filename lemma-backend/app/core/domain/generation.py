@@ -29,6 +29,22 @@ class ReasoningEffort(StrEnum):
     HIGH = "high"
 
 
+#: Efforts already as light as a cheap call -- a history summary, the shorter
+#: retry of an answer that ran too long -- would ask for. ``low`` is the
+#: lightest every reasoning model accepts; ``none`` and ``minimal`` are kept
+#: only where the run already sends them, which says the model takes them.
+LIGHT_REASONING_EFFORTS = frozenset(
+    {ReasoningEffort.NONE, ReasoningEffort.MINIMAL, ReasoningEffort.LOW}
+)
+
+
+def lighter_effort(effort: ReasoningEffort | str | None) -> ReasoningEffort:
+    """``effort`` turned down for a cheap call: kept when already light, else low."""
+    if effort in LIGHT_REASONING_EFFORTS:
+        return ReasoningEffort(effort)
+    return ReasoningEffort.LOW
+
+
 class GenerationSettings(BaseModel):
     """Portable generation settings. Every field unset means "provider default".
 
@@ -98,4 +114,9 @@ class GenerationSettings(BaseModel):
         return self.model_copy(update=override.model_dump(exclude_none=True))
 
 
-__all__ = ["GenerationSettings", "ReasoningEffort"]
+__all__ = [
+    "LIGHT_REASONING_EFFORTS",
+    "GenerationSettings",
+    "ReasoningEffort",
+    "lighter_effort",
+]

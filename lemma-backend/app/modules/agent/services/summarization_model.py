@@ -62,18 +62,18 @@ def lazy_compaction_target(
     organization_id: UUID | None,
     user_id: UUID,
     run_model: Model,
-    run_model_settings: JsonObject | None,
+    run_compaction_settings: JsonObject | None,
     meter: Callable[[Model | str], Model | str],
 ) -> LazyCompactionTarget:
     """The run's compaction target, resolved only if the run ever compacts.
 
-    The run's own settings travel with the run's own model, lightened for the
-    job; a separately configured summarization model gets only the summary cap,
-    since nothing says which of the run's settings it would accept.
+    The run's own model gets the compaction settings resolved with the run's
+    generation settings (``generation_settings.run_generation_settings``): its
+    own parameters, turned down to a light effort and a summary-sized cap. A
+    separately configured summarization model gets only the summary cap, since
+    nothing says which of the run's settings it would accept.
     """
-    from app.modules.agent.services.run_input_settings import (
-        compaction_model_settings,
-    )
+    from app.modules.agent.services.run_input_settings import summary_only_settings
     from app.modules.agent.services.run_phase_spans import run_phase
 
     async def resolve() -> CompactionTarget:
@@ -81,8 +81,10 @@ def lazy_compaction_target(
             model = await resolve_summarization_model(
                 organization_id=organization_id, user_id=user_id, fallback=run_model
             )
-        settings = run_model_settings if model is run_model else None
-        return CompactionTarget(meter(model), compaction_model_settings(settings))
+        settings = run_compaction_settings if model is run_model else None
+        return CompactionTarget(
+            meter(model), settings if settings is not None else summary_only_settings()
+        )
 
     return LazyCompactionTarget(resolve)
 

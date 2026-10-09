@@ -227,6 +227,15 @@ class UserRepository(UserRepositoryPort):
         )
         return await self.session.scalar(stmt)
 
+    async def get_live_telegram_lower(self, user_id: UUID) -> Optional[str]:
+        """The handle this live user declares, lower-cased; None when they are gone."""
+        stmt = select(func.lower(User.telegram_username)).where(
+            User.id == user_id,
+            User.is_active.is_(True),
+            User.is_deleted.is_(False),
+        )
+        return await self.session.scalar(stmt)
+
     async def get_live_id(self, user_id: UUID) -> Optional[UUID]:
         """This id, if it still names somebody who is here.
 

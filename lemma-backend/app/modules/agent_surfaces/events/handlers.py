@@ -68,7 +68,11 @@ from app.modules.agent_surfaces.services.surface_inbound import (
     release_ingress_claim,
 )
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
-from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
+from app.modules.identity.domain.events import (
+    IdentityEvents,
+    UserMobileChangedEvent,
+    UserTelegramUsernameChangedEvent,
+)
 from app.core.log.log import get_logger
 
 from app.modules.agent_surfaces.domain.delivery_limits import CONSUMER_ATTEMPTS
@@ -424,6 +428,9 @@ async def on_identity_event(
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ) -> None:
+    if event.get("event_type") == UserTelegramUsernameChangedEvent.get_event_type():
+        await _forget_telegram_handle_matches(event, uow_factory, inbox)
+        return
     if event.get("event_type") != UserMobileChangedEvent.get_event_type():
         return
 
@@ -436,6 +443,23 @@ async def on_identity_event(
             await ExternalSurfaceUserRepository(uow).clear_resolved_user(parsed.user_id)
             await VerifiedSurfaceIdentityRepository(uow).revoke_phone_bound_except(
                 parsed.user_id, phone
+            )
+
+    await inbox.process(
+        "agent-surfaces.identity", event, process, max_attempts=CONSUMER_ATTEMPTS
+    )
+
+
+async def _forget_telegram_handle_matches(
+    event: dict, uow_factory: UnitOfWorkFactory, inbox: EventInboxPort
+) -> None:
+    async def process() -> None:
+        parsed = UserTelegramUsernameChangedEvent.model_validate(event)
+        if not parsed.previous_username:
+            return
+        async with uow_factory() as uow:
+            await ExternalSurfaceUserRepository(uow).clear_telegram_handle_resolutions(
+                parsed.user_id, parsed.previous_username
             )
 
     await inbox.process(

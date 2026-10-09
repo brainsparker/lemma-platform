@@ -9,7 +9,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import (
@@ -517,6 +517,65 @@ async def test_telegram_username_resolves_user_without_contact_share(
     assert conversation is not None
     telegram_messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
     assert "E2E agent reply" in telegram_messages[-1]["text"]
+    # The handle is a claim on a profile, so it routes this message without
+    # binding the Telegram account to that user for every message after it.
+    cached = await db_session.scalar(
+        select(AgentSurfaceExternalUser.resolved_user_id).where(
+            AgentSurfaceExternalUser.platform == "TELEGRAM",
+            AgentSurfaceExternalUser.external_user_id == "55501234",
+        )
+    )
+    assert cached is None
+
+
+async def test_a_profile_giving_up_a_telegram_handle_forgets_who_it_matched(
+    db_session: AsyncSession,
+    fixed_test_user,
+):
+    """Only senders who wrote as the old handle lose the resolution it made."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent_surfaces.events.handlers import on_identity_event
+    from app.modules.identity.domain.events import UserTelegramUsernameChangedEvent
+    from app.modules.test_support.fakes import PassthroughEventInbox
+
+    user_id = UUID(fixed_test_user["id"])
+    for external_id, handle in (("70001", "@Asha"), ("70002", "someone_else")):
+        db_session.add(
+            AgentSurfaceExternalUser(
+                platform="TELEGRAM",
+                tenant_id=None,
+                external_user_id=external_id,
+                raw_profile={"sender_username": handle},
+                resolved_user_id=user_id,
+            )
+        )
+    await db_session.commit()
+
+    await on_identity_event(
+        UserTelegramUsernameChangedEvent(
+            user_id=user_id, previous_username="asha"
+        ).model_dump(mode="json"),
+        uow_factory=SessionUnitOfWorkFactory(
+            async_sessionmaker(db_session.bind, expire_on_commit=False)
+        ),
+        inbox=PassthroughEventInbox(),
+    )
+
+    rows = dict(
+        (
+            await db_session.execute(
+                select(
+                    AgentSurfaceExternalUser.external_user_id,
+                    AgentSurfaceExternalUser.resolved_user_id,
+                )
+                .where(AgentSurfaceExternalUser.external_user_id.in_(["70001", "70002"]))
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
+    assert rows == {"70001": None, "70002": user_id}
 
 
 async def test_telegram_contact_share_links_user_then_allows_chat(

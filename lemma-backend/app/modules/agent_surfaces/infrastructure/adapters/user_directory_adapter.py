@@ -10,6 +10,7 @@ from app.modules.identity.contracts.surfaces import (
     live_user_id_by_email,
     live_user_id_by_telegram_username,
     live_user_ids_by_mobile_numbers,
+    live_user_telegram_username,
     set_user_preferences,
     user_preferences,
 )
@@ -24,6 +25,9 @@ class IdentityUserDirectoryAdapter(SurfaceUserDirectoryPort):
 
     async def user_id_by_telegram_username(self, username: str) -> UUID | None:
         return await live_user_id_by_telegram_username(self._uow, username)
+
+    async def telegram_username_of(self, user_id: UUID) -> str | None:
+        return await live_user_telegram_username(self._uow, user_id)
 
     async def user_ids_by_mobile_numbers(
         self, numbers: list[str], *, verified: bool

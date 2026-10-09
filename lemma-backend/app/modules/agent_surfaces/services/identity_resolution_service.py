@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -264,6 +264,8 @@ class SurfaceIdentityResolutionService:
             return None
         if await self._cache_rests_on_an_unverified_number(external_user, known, event):
             return None
+        if await self._cache_outlived_its_telegram_handle(external_user, known, event):
+            return None
         return ResolvedSurfaceUser(
             internal_user_id=external_user.resolved_user_id,
             external_user_id=external_user.external_user_id,
@@ -359,6 +361,39 @@ class SurfaceIdentityResolutionService:
             return False
         return True
 
+    async def _cache_outlived_its_telegram_handle(
+        self,
+        external_user: _CachedSender,
+        known: "_KnownSender",
+        event: ParsedInboundSurfaceEvent,
+    ) -> bool:
+        """Did a Telegram handle that no longer matches make this resolution?
+
+        A handle is free text on a profile that nobody confirms, so a match on it
+        is no longer cached. Rows written before that rule still stand on it,
+        and the row does not record what proved it -- so where the cached user
+        declares a handle, the sender's must still be that handle, unless a
+        number the user verified supports the row instead. A user who declares
+        no handle cannot have been matched by one, which keeps a managed bot's
+        owner (bound at setup, not by handle) recognised.
+
+        The profile-change event clears these rows when it is delivered; this is
+        what holds when it has not been yet.
+        """
+        if event.platform is not SurfacePlatform.TELEGRAM:
+            return False
+        cached_user_id = external_user.resolved_user_id
+        if cached_user_id is None:
+            return False
+        declared = await self._users.telegram_username_of(cached_user_id)
+        if not declared:
+            return False
+        sender_handle = str(_telegram_username(event) or "").lstrip("@").lower()
+        if sender_handle == declared.lstrip("@").lower():
+            return False
+        with_row_phone = replace(known, phone=known.phone or external_user.phone)
+        return not await self._cache_is_attested(with_row_phone, cached_user_id)
+
     async def _match_proven_sender(
         self, event: ParsedInboundSurfaceEvent, known: _KnownSender
     ) -> _UserMatch:
@@ -398,11 +433,13 @@ class SurfaceIdentityResolutionService:
         telegram_username: str | None = None,
     ) -> _UserMatch:
         # Telegram username first: a direct @username match links the sender
-        # without the contact-share (phone) flow.
+        # without the contact-share (phone) flow. Never cached: the handle is a
+        # claim on the profile, so each message asks it again rather than
+        # binding this Telegram account to whoever held the handle once.
         if telegram_username:
             user_id = await self._match_user_by_telegram_username(telegram_username)
             if user_id:
-                return _UserMatch(user_id)
+                return _UserMatch(user_id, cacheable=False)
 
         if email:
             user_id = await self._users.user_id_by_email(email)

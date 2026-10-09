@@ -174,6 +174,32 @@ class ExternalSurfaceUserRepository:
         instance = result.scalar_one_or_none()
         return instance.to_entity() if instance else None
 
+    async def clear_telegram_handle_resolutions(
+        self, resolved_user_id: UUID, handle: str
+    ) -> int:
+        """Forget Telegram senders this user's former handle could have matched.
+
+        The row does not record what proved it, so the handle the sender last
+        wrote with stands in: a sender who wrote as the handle the profile just
+        gave up is one a handle match may have bound here.
+        """
+        result = await self.session.execute(
+            update(AgentSurfaceExternalUser)
+            .where(
+                AgentSurfaceExternalUser.resolved_user_id == resolved_user_id,
+                AgentSurfaceExternalUser.platform == "TELEGRAM",
+                func.lower(
+                    func.ltrim(
+                        AgentSurfaceExternalUser.raw_profile["sender_username"].astext,
+                        "@",
+                    )
+                )
+                == handle.lstrip("@").lower(),
+            )
+            .values(resolved_user_id=None)
+        )
+        return int(result.rowcount or 0)
+
     async def clear_resolved_user(self, resolved_user_id) -> int:
         """Clear cached platform identities after a Lemma profile phone change."""
         result = await self.session.execute(

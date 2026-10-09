@@ -27,6 +27,28 @@ def test_changing_mobile_clears_verification_and_emits_cache_invalidation_event(
     assert events[0].user_id == user.id
 
 
+def test_changing_the_telegram_handle_names_the_handle_given_up():
+    """Surfaces clear Telegram senders the old handle matched, so they need it."""
+    user = UserEntity(email="test+tg@example.com", telegram_username="Asha")
+
+    user.update_profile(telegram_username="asha_new")
+
+    events = user.collect_events()
+    assert [event.event_type for event in events] == [
+        "identity.user.telegram_username.changed"
+    ]
+    assert events[0].user_id == user.id
+    assert events[0].previous_username == "asha"
+
+
+def test_resubmitting_the_same_telegram_handle_is_not_a_change():
+    user = UserEntity(email="test+tg@example.com", telegram_username="Asha")
+
+    user.update_profile(telegram_username="asha")
+
+    assert user.collect_events() == []
+
+
 @pytest.mark.asyncio
 async def test_create_user_emits_signup_event_without_personal_org(
     user_service: UserService,

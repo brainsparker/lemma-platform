@@ -354,6 +354,10 @@ class SurfaceUserDirectoryPort(Protocol):
         """
         raise NotImplementedError
 
+    async def telegram_username_of(self, user_id: UUID) -> str | None:
+        """The handle this live user's profile declares, lower-cased, or None."""
+        raise NotImplementedError
+
     async def user_ids_by_mobile_numbers(
         self, numbers: list[str], *, verified: bool
     ) -> list[UUID]:

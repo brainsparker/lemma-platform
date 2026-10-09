@@ -66,7 +66,9 @@ class _FakeUsers:
         by_telegram=None,
         by_phone_ids=None,
         by_unverified_phone_ids=None,
+        declared_handles=None,
     ):
+        self._declared_handles = declared_handles or {}
         self._by_email = by_email
         self._by_telegram = by_telegram
         self._by_phone_ids = by_phone_ids or []
@@ -79,6 +81,9 @@ class _FakeUsers:
     async def user_id_by_telegram_username(self, username):
         self.telegram_lookups.append(username)
         return self._by_telegram
+
+    async def telegram_username_of(self, user_id):
+        return self._declared_handles.get(user_id)
 
     async def user_ids_by_mobile_numbers(self, candidates, *, verified=True):
         return list(self._by_phone_ids if verified else self._by_unverified_phone_ids)
@@ -156,6 +161,58 @@ async def test_resolves_by_telegram_username():
     assert resolved.internal_user_id == user_id
     # Username is normalized (stripped @, lowercased) before lookup.
     assert users.telegram_lookups == ["asha"]
+
+
+async def test_a_telegram_handle_match_is_never_cached():
+    """The handle is a claim on a profile; it must not bind this account for good."""
+    holder = uuid4()
+    external = _FakeExternalRepo()
+
+    resolved = await _service(_FakeUsers(by_telegram=holder), external).resolve(
+        event=_event(username="asha")
+    )
+
+    assert resolved.internal_user_id == holder
+    assert all(call.get("resolved_user_id") is None for call in external.calls)
+
+
+async def test_a_telegram_account_matched_by_a_handle_its_user_gave_up_is_nobody():
+    """The handle moved on Telegram; the profile kept the old one.
+
+    Somebody else now writes as the handle the profile still declares, or the
+    profile changed and the sender kept writing as the old one. Either way the
+    only thing that bound this row no longer holds.
+    """
+    cached = uuid4()
+    users = _FakeUsers(declared_handles={cached: "asha"})
+
+    resolved = await _service(users, _FakeExternalRepo(cached_user_id=cached)).resolve(
+        event=_event(username="someone_else")
+    )
+
+    assert resolved.internal_user_id is None
+
+
+async def test_a_telegram_resolution_a_verified_number_backs_survives_a_handle_change():
+    cached = uuid4()
+    users = _FakeUsers(by_phone_ids=[cached], declared_handles={cached: "asha"})
+
+    resolved = await _service(users, _FakeExternalRepo(cached_user_id=cached)).resolve(
+        event=_event(username="asha_new", phone="+1 555 0100")
+    )
+
+    assert resolved.internal_user_id == cached
+
+
+async def test_a_telegram_resolution_whose_user_declares_no_handle_stands():
+    """A managed bot's owner is bound at setup, not by a handle."""
+    cached = uuid4()
+
+    resolved = await _service(
+        _FakeUsers(), _FakeExternalRepo(cached_user_id=cached)
+    ).resolve(event=_event(username="owner"))
+
+    assert resolved.internal_user_id == cached
 
 
 async def test_resolves_by_email():

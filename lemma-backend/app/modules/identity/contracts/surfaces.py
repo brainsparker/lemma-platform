@@ -34,6 +34,11 @@ async def live_user_id_by_telegram_username(uow, username: str) -> UUID | None:
     return await UserRepository(uow).get_live_id_by_telegram_lower(username)
 
 
+async def live_user_telegram_username(uow, user_id: UUID) -> str | None:
+    """The Telegram handle a live user's profile declares, lower-cased, or None."""
+    return await UserRepository(uow).get_live_telegram_lower(user_id)
+
+
 async def live_user_ids_by_mobile_numbers(
     uow, numbers: list[str], *, verified: bool
 ) -> list[UUID]:
@@ -78,6 +83,7 @@ __all__ = [
     "live_user_id",
     "live_user_id_by_email",
     "live_user_id_by_telegram_username",
+    "live_user_telegram_username",
     "live_user_ids_by_mobile_numbers",
     "set_user_preferences",
     "user_preferences",

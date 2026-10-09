@@ -80,7 +80,29 @@ class UserEntity(AggregateRoot):
                         # A verified number remains in its canonical E.164 form
                         # even if a profile client submits cosmetic formatting.
                         value = f"+{digits}"
+                if field == "telegram_username":
+                    self._note_telegram_username_change(value)
                 setattr(self, field, value)
+
+    def _note_telegram_username_change(self, value: object) -> None:
+        """Tell surfaces a handle they may have matched no longer names this user.
+
+        A handle is free text nobody confirms, and a chat sender once matched
+        by it stays bound to this account until something says otherwise.
+        """
+        from app.core.helpers.identifiers import normalize_telegram
+        from app.modules.identity.domain.events import (
+            UserTelegramUsernameChangedEvent,
+        )
+
+        previous = normalize_telegram(self.telegram_username)
+        if normalize_telegram(str(value) if value is not None else None) == previous:
+            return
+        self.add_event(
+            UserTelegramUsernameChangedEvent(
+                user_id=self.id, previous_username=previous
+            )
+        )
 
     def mark_email_verified(self) -> bool:
         """Mark the first verified transition and emit the one-time welcome event."""

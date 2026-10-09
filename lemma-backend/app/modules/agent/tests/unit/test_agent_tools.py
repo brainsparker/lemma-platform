@@ -32,7 +32,10 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHar
 from app.modules.agent.services.workspace_location import ProjectRepo
 from app.modules.agent.services.conversation_access import resolve_agent
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
+from app.modules.agent.services.runtime_history import (
+    ELISION_BLOCK_RUNS,
+    FULL_HISTORY_AGENT_RUN_COUNT,
+)
 from app.modules.agent.tools.callable_tool_factory import (
     AgentCallableToolFactory,
     inline_schema,
@@ -1835,9 +1838,10 @@ def test_waiting_final_answer_tool_output_sets_waiting_metadata():
 
 
 def test_runner_keeps_last_five_agent_runs_in_full_and_elides_older_runs():
+    # Older runs go a block at a time, so this is the fewest that elides one.
     runs = [
         _agent_run_with_messages(run_index)
-        for run_index in range(FULL_HISTORY_AGENT_RUN_COUNT + 1)
+        for run_index in range(FULL_HISTORY_AGENT_RUN_COUNT + ELISION_BLOCK_RUNS)
     ]
     runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
 

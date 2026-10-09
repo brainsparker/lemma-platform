@@ -77,6 +77,13 @@ class WebFetchPage(BaseModel):
             "tell whether the page is worth reading in full."
         ),
     )
+    content: Optional[str] = Field(
+        default=None,
+        description=(
+            "The page's text itself, clipped to a budget. Only for an agent "
+            "with no tool that can read a saved file; otherwise read the file."
+        ),
+    )
     characters: Optional[int] = Field(
         default=None, description="Length of the extracted markdown."
     )

@@ -21,7 +21,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
-from app.modules.agent.domain.value_objects import HarnessKind
+from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.repositories import ConversationRepository
@@ -136,6 +136,7 @@ async def build_run_context(
         is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
         memory_enabled=memory_is_active(run_toolsets),
         run_toolsets=run_toolsets,
+        workspace_readable=AgentToolset.WORKSPACE_CLI in run_toolsets,
         grant_summary=grant_summary,
         audience=audience,
         delivers_to_surface=not run_is_private(agent_run.metadata),

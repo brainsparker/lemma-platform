@@ -889,12 +889,12 @@
             }
           ],
           "default": null,
-          "description": "Milliseconds to wait for output before returning."
+          "description": "Return after this many milliseconds even if the command is still running (you get its `process_id`). Defaults to 30000; when you set `timeout_seconds` instead, the call waits that long."
         },
         "timeout_seconds": {
           "anyOf": [
             {
-              "maximum": 300,
+              "maximum": 600,
               "minimum": 10,
               "type": "integer"
             },
@@ -903,7 +903,7 @@
             }
           ],
           "default": null,
-          "description": "How long to wait for the command before returning, instead of the default 30s. This is THIS CALL'S patience, not a limit on the command: if the command is still running when the wait is up you get `completed: false` and a `process_id`, and the command keeps running in the background. Hand that id to `wait_for` rather than raising this \u2014 waiting there costs nothing and costs no model calls. Never re-run the command."
+          "description": "How long to wait for the command before returning, up to 600s, instead of the default 60s. This is THIS CALL'S patience, not a limit on the command: if the command is still running when the wait is up you get `completed: false` and a `process_id`, and the command keeps running in the background. Hand that id to `wait_for` rather than raising this \u2014 waiting there costs nothing and costs no model calls. Never re-run the command."
         }
       },
       "required": [
@@ -4092,7 +4092,7 @@
   {
     "tool_name": "web_fetch",
     "toolset": "WEB_SEARCH",
-    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them, and\n`view_image` for a screenshot. Both take the workspace path you were given.\n`pod_view_document_pages` takes a path *in the pod*, so it only works on a\ncaptured PDF after you have uploaded it. This is the right way to read\nanything longer than a search snippet.",
+    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them, and\n`view_image` for a screenshot. Both take the workspace path you were given.\n`pod_view_document_pages` takes a path *in the pod*, so it only works on a\ncaptured PDF after you have uploaded it. If you have no `exec_command`,\neach page's text comes back in its `content` instead, clipped to a budget.\nJSON and plain-text URLs are saved as they came. This is the right way to\nread anything longer than a search snippet.",
     "input_schema": {
       "properties": {
         "urls": {
@@ -4185,6 +4185,18 @@
               ],
               "default": null,
               "description": "First few hundred characters of the extracted text \u2014 enough to tell whether the page is worth reading in full."
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The page's text itself, clipped to a budget. Only for an agent with no tool that can read a saved file; otherwise read the file."
             },
             "characters": {
               "anyOf": [

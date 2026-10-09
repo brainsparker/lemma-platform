@@ -178,43 +178,30 @@ class ConversationBinder:
         if resolved_user.internal_user_id is None:
             raise ValueError("A conversation cannot be bound to an unresolved sender")
         external_user_id = resolved_user.external_user_id
-        link = await self.conversation_link_repository.get_by_external_thread(
+        # Serialise on the chat before deciding anything, then read. A missing
+        # link is not the only decision two messages can race on: a cold DM or
+        # a changed agent makes every concurrent message open a conversation of
+        # its own, and a burst after a quiet day became that many answers from
+        # that many contexts. The lock is held to commit, so the loser reads
+        # the winner's link -- already warm -- and continues it.
+        await self.conversation_link_repository.lock_thread(
             surface_id=surface.id,
             platform=surface.surface_type.value,
             external_channel_id=parsed.external_channel_id,
             external_thread_id=parsed.external_thread_id,
             external_user_id=external_user_id,
         )
+        link = await self._link_at(surface, parsed, external_user_id)
         if link is None:
-            # Two rapid first messages both read "no link" above. Serialise on
-            # the chat and read again: the loser then finds the winner's link
-            # instead of opening a second conversation and inserting a second
-            # link. The lock is held to commit, so the winner's row is visible
-            # by the time the loser gets past it.
-            await self.conversation_link_repository.lock_thread(
-                surface_id=surface.id,
-                platform=surface.surface_type.value,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_user_id=external_user_id,
+            link = await adopt_earlier_dm_link(
+                self.uow,
+                surface_repository=self.surface_repository,
+                links=self.conversation_link_repository,
+                surface=surface,
+                parsed=parsed,
+                resolved_user=resolved_user,
+                route=route,
             )
-            link = await self.conversation_link_repository.get_by_external_thread(
-                surface_id=surface.id,
-                platform=surface.surface_type.value,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_user_id=external_user_id,
-            )
-            if link is None:
-                link = await adopt_earlier_dm_link(
-                    self.uow,
-                    surface_repository=self.surface_repository,
-                    links=self.conversation_link_repository,
-                    surface=surface,
-                    parsed=parsed,
-                    resolved_user=resolved_user,
-                    route=route,
-                )
         event_payload = parsed.model_dump(mode="json")
         if link is not None:
             if (
@@ -239,6 +226,7 @@ class ConversationBinder:
                 )
                 updated = await self.conversation_link_repository.update_conversation(
                     link_id=link.id,
+                    expected_conversation_id=link.conversation_id,
                     conversation_id=conversation.id,
                     last_event=event_payload,
                     last_message_id=parsed.external_message_id,
@@ -246,7 +234,17 @@ class ConversationBinder:
                     conversation_kind=route.conversation_kind,
                     route_key=route.route_key,
                 )
-                return (updated or link), conversation.title
+                if updated is not None:
+                    return updated, conversation.title
+                # A writer that does not take the thread lock -- a notification
+                # opening a conversation on this cold thread -- repointed it
+                # first. Continue theirs rather than split one thread in two.
+                logger.info(
+                    "agent_surfaces.conversation_binder.fresh_conversation_superseded.observed",
+                    surface_id=str(surface.id),
+                    conversation_id=str(conversation.id),
+                )
+                link = await self._link_at(surface, parsed, external_user_id) or link
             updated = await self.conversation_link_repository.update_last_event(
                 link_id=link.id,
                 last_event=event_payload,
@@ -289,7 +287,7 @@ class ConversationBinder:
                 # This row exists because they just wrote to us.
                 last_inbound_at=datetime.now(timezone.utc),
             ),
-            # Locked and re-read above, before the conversation was opened.
+            # Locked and read above, before the conversation was opened.
             locked=True,
         )
         if created_link.conversation_id != conversation.id:
@@ -298,6 +296,20 @@ class ConversationBinder:
             # was started on this turn from the platform's point of view.
             return created_link, None
         return created_link, conversation.title
+
+    async def _link_at(
+        self,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        external_user_id: str | None,
+    ) -> AgentSurfaceConversationLink | None:
+        return await self.conversation_link_repository.get_by_external_thread(
+            surface_id=surface.id,
+            platform=surface.surface_type.value,
+            external_channel_id=parsed.external_channel_id,
+            external_thread_id=parsed.external_thread_id,
+            external_user_id=external_user_id,
+        )
 
     async def _still_the_outsiders_thread(
         self, link: AgentSurfaceConversationLink, user_id: UUID

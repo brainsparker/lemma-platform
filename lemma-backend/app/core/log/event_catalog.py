@@ -244,6 +244,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.consent.cache_read_failed.degraded': EventSpec('warning', frozenset({'tenant_id'})),
     'agent_surfaces.consent.graph_probe_failed.degraded': EventSpec('warning', frozenset({'tenant_id'})),
     'agent_surfaces.consent.token_request_failed.degraded': EventSpec('warning', frozenset({'tenant_id'})),
+    'agent_surfaces.conversation_binder.fresh_conversation_superseded.observed': EventSpec('info', frozenset({'conversation_id', 'surface_id'})),
     'agent_surfaces.conversation_binder.reset_held_for_notification.observed': EventSpec('info', frozenset({'conversation_id', 'surface_id'})),
     'agent_surfaces.conversation_binder.reset_held_for_pause.observed': EventSpec('info', frozenset({'conversation_id', 'surface_id'})),
     'agent_surfaces.credential_resolver.could_not_refresh_credentials_account.diagnostic': EventSpec('debug', frozenset({'account_id'})),

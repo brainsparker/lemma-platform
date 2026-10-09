@@ -22,7 +22,7 @@ from typing import Any
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -510,6 +510,7 @@ class SurfaceConversationLinkRepository(DmLinkQueries):
         self,
         *,
         link_id: UUID,
+        expected_conversation_id: UUID,
         conversation_id: UUID,
         last_event: dict[str, Any],
         last_message_id: str | None,
@@ -517,17 +518,36 @@ class SurfaceConversationLinkRepository(DmLinkQueries):
         conversation_kind: str | None = None,
         route_key: str | None = None,
     ) -> AgentSurfaceConversationLink | None:
-        model = await self.session.get(AgentSurfaceConversationLinkModel, link_id)
-        if model is None:
-            return None
-        model.conversation_id = conversation_id
-        model.last_event = last_event
-        model.last_message_id = last_message_id
-        model.routed_agent_id = routed_agent_id
+        """Point the link at a fresh conversation, if it still names the old one.
+
+        Compare-and-set in the database, on the conversation the caller read:
+        a writer that got there first -- another inbound, or a notification
+        repointing a cold thread -- has already moved the link, and writing
+        over it would split one thread across two conversations. Losing
+        returns None.
+        """
+        values: dict[str, Any] = {
+            "conversation_id": conversation_id,
+            "last_event": last_event,
+            "last_message_id": last_message_id,
+            "routed_agent_id": routed_agent_id,
+            "route_key": route_key,
+            # See ``update_last_event``: this is an inbound writer.
+            "last_inbound_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
         if conversation_kind is not None:
-            model.conversation_kind = conversation_kind
-        model.route_key = route_key
-        # See ``update_last_event``: this is an inbound writer.
-        model.last_inbound_at = datetime.now(timezone.utc)
-        await self.session.flush()
-        return model.to_entity()
+            values["conversation_kind"] = conversation_kind
+        stmt = (
+            update(AgentSurfaceConversationLinkModel)
+            .where(
+                AgentSurfaceConversationLinkModel.id == link_id,
+                AgentSurfaceConversationLinkModel.conversation_id
+                == expected_conversation_id,
+            )
+            .values(**values)
+            .returning(AgentSurfaceConversationLinkModel)
+            .execution_options(populate_existing=True)
+        )
+        model = (await self.session.execute(stmt)).scalar_one_or_none()
+        return model.to_entity() if model else None

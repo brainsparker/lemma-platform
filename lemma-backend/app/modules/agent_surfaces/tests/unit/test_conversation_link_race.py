@@ -103,8 +103,14 @@ async def test_the_loser_of_the_race_finds_the_winners_link_and_opens_nothing():
         last_event={},
     )
     binder, links = _binder(surface)
-    # First read: nothing yet. Second read, after the lock: the winner committed.
-    links.get_by_external_thread.side_effect = [None, winner]
+    calls: list[str] = []
+    links.lock_thread.side_effect = lambda **_: calls.append("lock")
+
+    async def read_after_the_winner_committed(**_):
+        calls.append("read")
+        return winner
+
+    links.get_by_external_thread.side_effect = read_after_the_winner_committed
     links.update_last_event.side_effect = lambda **_: winner
 
     link, created_title = await binder.bind_conversation(
@@ -118,12 +124,20 @@ async def test_the_loser_of_the_race_finds_the_winners_link_and_opens_nothing():
 
     assert link.id == winner.id
     assert created_title is None
+    # The chat is locked before it is read, never read and then locked.
+    assert calls[:2] == ["lock", "read"]
     links.lock_thread.assert_awaited_once()
     links.create.assert_not_awaited()
     agent_conversations.open_surface_conversation.assert_not_awaited()
 
 
-async def test_an_existing_link_takes_no_lock():
+async def test_an_existing_link_is_locked_before_its_conversation_is_decided():
+    """A cold link is a decision two messages can race on, like a missing one.
+
+    Only a missing link used to be locked, so a burst after a quiet day each
+    found the cold link, each opened a fresh conversation, and the person got
+    as many answers as messages.
+    """
     surface = _slack_surface()
     event = _slack_event()
     existing = AgentSurfaceConversationLink(
@@ -139,7 +153,14 @@ async def test_an_existing_link_takes_no_lock():
         last_event={},
     )
     binder, links = _binder(surface)
-    links.get_by_external_thread.return_value = existing
+    calls: list[str] = []
+    links.lock_thread.side_effect = lambda **_: calls.append("lock")
+
+    async def read(**_):
+        calls.append("read")
+        return existing
+
+    links.get_by_external_thread.side_effect = read
     links.update_last_event.side_effect = lambda **_: existing
 
     await binder.bind_conversation(
@@ -151,7 +172,7 @@ async def test_an_existing_link_takes_no_lock():
         route=_route(surface),
     )
 
-    links.lock_thread.assert_not_awaited()
+    assert calls[:2] == ["lock", "read"]
 
 
 # --- the repository ------------------------------------------------------

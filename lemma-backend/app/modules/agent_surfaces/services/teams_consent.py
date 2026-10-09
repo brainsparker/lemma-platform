@@ -33,10 +33,33 @@ def _get_cache() -> RedisJsonCache:
     return _cache
 
 
+async def _live_nonce(surface_id: UUID) -> str:
+    """The surface's outstanding nonce, minted only when none is outstanding.
+
+    Minted once and reused until it is spent or expires: reading setup state
+    used to mint a fresh one each time, which voided the link an editor had
+    already sent to their tenant administrator whenever anyone opened the
+    setup panel again.
+    """
+    cache = _get_cache()
+    key = str(surface_id)
+    # Twice, because the outstanding nonce can expire between the refused
+    # SET NX and the read that follows it.
+    for _ in range(2):
+        candidate = secrets.token_urlsafe(32)
+        if await cache.set_raw_if_absent(key, candidate, ttl_seconds=_TTL_SECONDS):
+            return candidate
+        outstanding = await cache.get_raw(key)
+        if outstanding:
+            return outstanding
+    candidate = secrets.token_urlsafe(32)
+    await cache.set_raw(key, candidate, ttl_seconds=_TTL_SECONDS)
+    return candidate
+
+
 async def build_consent_url(surface_id: UUID, tenant_id: str) -> str:
     """The Microsoft consent URL, with `state` bound to a single-use nonce."""
-    nonce = secrets.token_urlsafe(32)
-    await _get_cache().set_raw(str(surface_id), nonce)
+    nonce = await _live_nonce(surface_id)
     callback_base = settings.api_url.rstrip("/")
     params = urlencode(
         {

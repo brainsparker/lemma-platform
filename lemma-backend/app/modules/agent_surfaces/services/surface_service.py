@@ -191,6 +191,7 @@ class AgentSurfaceService(
                 )
             entity.surface_identity_email = surface_identity_email
         self._validate_runtime_supported(entity)
+        await self.activate_if_tenant_consented(entity)
         await ensure_one_surface_per_agent(
             entity, surface_repository=self.surface_repository
         )

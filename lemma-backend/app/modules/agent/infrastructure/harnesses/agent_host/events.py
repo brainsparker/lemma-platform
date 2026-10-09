@@ -136,6 +136,17 @@ class AgentHostEventNormalizer:
         self._final_answer: JsonObject | None = None
         self._final_answer_tool_call_id: str | None = None
 
+    @property
+    def quiescent(self) -> bool:
+        """Whether everything read so far has become a message.
+
+        True between the agent's words: after a step was flushed and before
+        the next chunk. A worker that resumes the run's stream from a point
+        where this held loses nothing, because nothing read before it was
+        still waiting to be persisted (``stream_resume``).
+        """
+        return self._message.empty and self._thought.empty
+
     def adopt_final_answer(
         self, record: JsonObject | None, *, tool_call_id: str | None = None
     ) -> None:
@@ -455,7 +466,9 @@ class AgentHostEventNormalizer:
     def _tool_call_result(
         self, row: AgentHostEventEnvelope, call_id: str
     ) -> list[AgentEvent]:
-        if call_id in self.tool_calls.dropped:
+        if call_id in self.tool_calls.dropped or call_id in self.tool_calls.closed:
+            # A closed call's result is already on the record: a second one
+            # from the host, or one a resumed run reads again past its cursor.
             # The other half of the pausing-tool drop: with no call on the
             # record under this id, a return under it pairs with nothing. What
             # the model was actually told -- a park's answer, a wait's "you are

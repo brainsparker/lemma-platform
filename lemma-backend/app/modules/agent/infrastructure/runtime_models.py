@@ -237,6 +237,12 @@ class AgentHostRunLeaseModel(Base):
     terminal_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Where a reclaimed worker resumes the run's event stream, and the expiry
+    # of the credential the host holds; see `agent_host/run_resume.py`.
+    consumed_stream_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    credential_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

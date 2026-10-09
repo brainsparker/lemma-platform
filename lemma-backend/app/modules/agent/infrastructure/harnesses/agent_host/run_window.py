@@ -83,6 +83,10 @@ class DispatchedRun:
     # The harness advertised ACP steering, so messages sent mid-turn go to the
     # host as they arrive rather than waiting for the follow-up turn.
     steerable: bool = False
+    # Where to start reading the run's event stream, and whether this worker
+    # is picking up a dispatch another one made (``stream_resume``).
+    stream_cursor: str = "0-0"
+    resumed: bool = False
 
     @property
     def deadline_message(self) -> str:

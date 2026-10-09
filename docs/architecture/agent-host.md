@@ -577,6 +577,15 @@ guarantee:
   rewound a refused run for replay, is followed by another without waiting for
   a new event. Connecting kicks delivery once, so a run that finished while
   the host was offline is delivered in full, terminal event included.
+- **Worker restarts.** The worker reading a run's stream records on the run's
+  lease the last entry whose messages it has persisted
+  (`consumed_stream_id`), at a point where nothing it read is still waiting to
+  become a message. A worker that reclaims the run after a deploy resumes
+  there, with the tool calls already on the record restored, instead of
+  dispatching again and re-reading the stream from its start
+  (`harnesses/agent_host/stream_resume.py`). The stream is trimmed only below
+  that cursor, never by length, and each event's payload is capped at 8 MiB
+  at intake.
 - **Control updates** are idempotent and stale ones are ignored.
   `control_ok.refused` names any update Lemma could not parse, and it is the
   only way one is refused. Lemma applies each update separately, so one bad

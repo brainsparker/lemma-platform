@@ -60,6 +60,10 @@ def permission_request_events(
     The host releases the call this request gates before sending it, so the
     call is already on the record and the approval card follows it.
     """
+    approval_id = permission_approval_tool_call_id(request_id)
+    if run.tool_calls.known(approval_id):
+        # Already on the record: a run resumed past this request reads it again.
+        return []
     gated = payload.get("tool_call_id")
     gated_call = run.tool_calls.calls.get(gated) if isinstance(gated, str) else None
     # Tracked like any other open call, so a run that ends without an answer
@@ -68,10 +72,7 @@ def permission_request_events(
     # still offers buttons, and pressing one lands on a run that ended hours
     # ago. Answering it *does* write a return, and a synthesized return
     # never replaces a real one, so this closes only the abandoned ones.
-    run.tool_calls.open(
-        permission_approval_tool_call_id(request_id),
-        OpenToolCall(name="request_approval"),
-    )
+    run.tool_calls.open(approval_id, OpenToolCall(name="request_approval"))
     return [
         *run.flush_messages(final=False),
         *permission_approval_events(

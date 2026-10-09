@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import aclosing
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -24,13 +26,18 @@ from app.modules.agent.domain.agent_host import AgentHostRunState
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.value_objects import AgentEvent, HarnessKind
+from app.modules.agent.domain.value_objects import (
+    AgentEvent,
+    AgentEventType,
+    HarnessKind,
+)
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
 from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
+    StreamBatch,
     agent_host_event_stream,
 )
 from app.modules.agent.infrastructure.agent_host.repository_common import (
@@ -75,6 +82,10 @@ from app.modules.agent.infrastructure.harnesses.agent_host.stream_reader import 
     StreamReader,
     StreamUnavailable,
 )
+from app.modules.agent.infrastructure.harnesses.agent_host.stream_resume import (
+    ConsumedCursor,
+    restore_normalizer,
+)
 from app.modules.agent.infrastructure.agent_host.final_answer import (
     adopt_recorded_final_answer,
 )
@@ -95,6 +106,20 @@ DEFAULT_TERMINAL_EVENT_GRACE_SECONDS = 5.0
 # than the lease check because it is what a person waits on, and cheap because
 # it is one indexed UPDATE that nearly always matches nothing.
 DEFAULT_STEER_CHECK_SECONDS = 1.0
+
+
+@dataclass(slots=True)
+class _ConsumeState:
+    """The consume loop's clocks and flags, between one batch and the next."""
+
+    deadline: float
+    deadline_message: str
+    accept_deadline: float
+    lease_check_due_at: float
+    steering: SteerSchedule
+    credential_expires_at: datetime | None
+    terminal_checkpoint_seen_at: float | None = None
+    stop_sent: bool = False
 
 
 class RemoteHarness:
@@ -200,7 +225,9 @@ class RemoteHarness:
         """Drive one dispatched run to a terminal event.
 
         Returns only when the run is over, one way or another; every exit
-        yields something terminal first.
+        yields something terminal first. A run another worker dispatched
+        (``dispatch.resumed``) is picked up at the cursor that worker recorded,
+        with the tool calls it put on the record restored (``stream_resume``).
         """
         normalizer = AgentHostEventNormalizer(
             agent_run_id=agent_run_id,
@@ -211,24 +238,33 @@ class RemoteHarness:
             ),
             output_schema=agent_output_schema(agent),
         )
+        if dispatch.resumed:
+            await restore_normalizer(
+                self.uow_factory, normalizer, agent_run_id=agent_run_id
+            )
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + dispatch.event_timeout_seconds
-        accept_deadline = loop.time() + run_config.wait_timeout_seconds
-        lease_check_due_at = loop.time()
-        steering = SteerSchedule(
-            enabled=dispatch.steerable,
-            interval=self.steer_check_seconds,
-            now=loop.time(),
+        state = _ConsumeState(
+            deadline=loop.time() + dispatch.event_timeout_seconds,
+            deadline_message=dispatch.deadline_message,
+            accept_deadline=loop.time() + run_config.wait_timeout_seconds,
+            lease_check_due_at=loop.time(),
+            steering=SteerSchedule(
+                enabled=dispatch.steerable,
+                interval=self.steer_check_seconds,
+                now=loop.time(),
+            ),
+            # Advances as refreshes land, so the run is bounded by the
+            # credential it currently holds rather than the one it began with.
+            credential_expires_at=dispatch.credential_expires_at,
         )
-        terminal_checkpoint_seen_at: float | None = None
-        stop_sent = False
-        # Advances as refreshes land, so the run is bounded by the credential it
-        # currently holds rather than by the one it was dispatched with.
-        credential_expires_at = dispatch.credential_expires_at
         reader = StreamReader(
             stream=self.events,
             run_id=agent_run_id,
             block_ms=self.stream_block_ms,
+            cursor=dispatch.stream_cursor,
+        )
+        cursor = ConsumedCursor(
+            self.uow_factory, self.events, agent_run_id, saved=dispatch.stream_cursor
         )
 
         while True:
@@ -242,91 +278,169 @@ class RemoteHarness:
                     yield event
                 return
 
-            for entry in batch:
-                for event in await self._applier.apply(
-                    normalizer,
-                    entry,
-                    ctx=ctx,
-                    conversation=conversation,
-                    agent_run_id=agent_run_id,
-                ):
-                    terminal = is_terminal_event(event)
+            applied = self._apply_batch(
+                batch,
+                normalizer=normalizer,
+                cursor=cursor,
+                ctx=ctx,
+                conversation=conversation,
+                agent_run_id=agent_run_id,
+            )
+            async with aclosing(applied):
+                async for event in applied:
                     yield event
-                    if terminal:
+                    if is_terminal_event(event):
                         return
 
-            now = loop.time()
-            if now >= deadline:
-                # The deadline we advertised has passed, so the host is either
-                # gone or still working on a run we can no longer report. Cancel
-                # it: without this the ACP agent keeps burning tokens and running
-                # tools for a turn Lemma has already failed.
-                await self._enqueue_host_cancel(agent_run_id)
-                for event in failure_events(
-                    normalizer, agent_run_id, dispatch.deadline_message
-                ):
-                    yield event
-                return
-
-            await self._steer(steering, now=now, agent_run_id=agent_run_id)
-
-            if now < lease_check_due_at:
-                continue
-            lease_check_due_at = now + self.lease_check_seconds
-
-            wall_clock = self._now()
-            if credential_refresh_due(expires_at=credential_expires_at, now=wall_clock):
-                refreshed = await refresh_credential(
-                    uow_factory=self.uow_factory,
-                    agent_run_id=agent_run_id,
-                    ctx=ctx,
-                    options=options,
-                    agent=agent,
-                    conversation=conversation,
-                )
-                if refreshed is not None:
-                    credential_expires_at = refreshed
-            if credential_exhausted(expires_at=credential_expires_at, now=wall_clock):
-                # Every refresh failed. Ending the run here is what keeps this
-                # from becoming a run whose tools silently 401 for the rest of
-                # its life without anything being reported to anyone.
-                await self._enqueue_host_cancel(agent_run_id)
-                for event in failure_events(
-                    normalizer, agent_run_id, CREDENTIAL_DEADLINE_MESSAGE
-                ):
-                    yield event
-                return
-
-            stop_sent = await self._cancel_if_requested(
+            ending = await self._between_batches(
+                state,
+                normalizer=normalizer,
+                cursor=cursor,
                 agent_run_id=agent_run_id,
+                agent=agent,
+                ctx=ctx,
+                conversation=conversation,
                 options=options,
-                stop_sent=stop_sent,
             )
-            outcome = await self._check_lease(
-                agent_run_id=agent_run_id,
-                seen_at=terminal_checkpoint_seen_at,
-                accept_deadline=accept_deadline,
-                now=loop.time(),
-            )
-            terminal_checkpoint_seen_at = outcome.seen_at
-
-            if outcome.terminal_state is not None:
-                # The run reached a terminal state without a terminal event, so
-                # this is the only chance to pick up a final answer the tool
-                # recorded before the stream went quiet.
-                await adopt_recorded_final_answer(
-                    self.uow_factory, normalizer, agent_run_id=agent_run_id
-                )
-                for event in normalizer.finish_without_terminal(
-                    state=outcome.terminal_state,
-                    detail=outcome.terminal_detail,
-                ):
+            if ending is not None:
+                for event in ending:
                     yield event
                 return
 
-            if outcome.expired_state is not None:
-                yield error_event(agent_run_id, expiry_message(outcome.expired_state))
-                return
+    async def _apply_batch(
+        self,
+        batch: StreamBatch,
+        *,
+        normalizer: AgentHostEventNormalizer,
+        cursor: ConsumedCursor,
+        ctx: AgentContext,
+        conversation: Conversation,
+        agent_run_id: UUID,
+    ) -> AsyncIterator[AgentEvent]:
+        """Each entry's events, then -- once all are handed on -- its place.
+
+        Code after a ``yield`` runs only when the consumer asks for the next
+        event, by which time it has persisted the last one; that is what lets
+        the cursor say an entry's messages are on the record.
+        """
+        for entry in batch:
+            events = await self._applier.apply(
+                normalizer,
+                entry,
+                ctx=ctx,
+                conversation=conversation,
+                agent_run_id=agent_run_id,
+            )
+            for event in events:
+                yield event
+            if cursor.passed(
+                entry.stream_id,
+                quiescent=normalizer.quiescent,
+                persisted=any(event.type is AgentEventType.MESSAGE for event in events),
+            ):
+                await cursor.save()
+
+    async def _between_batches[DepsT: AgentContext](
+        self,
+        state: _ConsumeState,
+        *,
+        normalizer: AgentHostEventNormalizer,
+        cursor: ConsumedCursor,
+        agent_run_id: UUID,
+        agent: Agent,
+        ctx: DepsT,
+        conversation: Conversation,
+        options: HarnessOptions[DepsT],
+    ) -> list[AgentEvent] | None:
+        """What the loop checks while no event arrives; the last events if one
+        of those checks ends the run."""
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        if now >= state.deadline:
+            # The deadline we advertised has passed, so the host is either
+            # gone or still working on a run we can no longer report. Cancel
+            # it: without this the ACP agent keeps burning tokens and running
+            # tools for a turn Lemma has already failed.
+            await self._enqueue_host_cancel(agent_run_id)
+            return failure_events(normalizer, agent_run_id, state.deadline_message)
+
+        await self._steer(state.steering, now=now, agent_run_id=agent_run_id)
+
+        if now < state.lease_check_due_at:
+            return None
+        state.lease_check_due_at = now + self.lease_check_seconds
+        await cursor.save()
+
+        if await self._credential_spent(
+            state,
+            agent_run_id=agent_run_id,
+            agent=agent,
+            ctx=ctx,
+            conversation=conversation,
+            options=options,
+        ):
+            # Every refresh failed. Ending the run here is what keeps this
+            # from becoming a run whose tools silently 401 for the rest of
+            # its life without anything being reported to anyone.
+            await self._enqueue_host_cancel(agent_run_id)
+            return failure_events(normalizer, agent_run_id, CREDENTIAL_DEADLINE_MESSAGE)
+
+        state.stop_sent = await self._cancel_if_requested(
+            agent_run_id=agent_run_id,
+            options=options,
+            stop_sent=state.stop_sent,
+        )
+        outcome = await self._check_lease(
+            agent_run_id=agent_run_id,
+            seen_at=state.terminal_checkpoint_seen_at,
+            accept_deadline=state.accept_deadline,
+            now=loop.time(),
+        )
+        state.terminal_checkpoint_seen_at = outcome.seen_at
+
+        if outcome.terminal_state is not None:
+            # The run reached a terminal state without a terminal event, so
+            # this is the only chance to pick up a final answer the tool
+            # recorded before the stream went quiet.
+            await adopt_recorded_final_answer(
+                self.uow_factory, normalizer, agent_run_id=agent_run_id
+            )
+            return normalizer.finish_without_terminal(
+                state=outcome.terminal_state,
+                detail=outcome.terminal_detail,
+            )
+        if outcome.expired_state is not None:
+            return [error_event(agent_run_id, expiry_message(outcome.expired_state))]
+        return None
+
+    async def _credential_spent[DepsT: AgentContext](
+        self,
+        state: _ConsumeState,
+        *,
+        agent_run_id: UUID,
+        agent: Agent,
+        ctx: DepsT,
+        conversation: Conversation,
+        options: HarnessOptions[DepsT],
+    ) -> bool:
+        """Renew the run's credential when due; True once it cannot continue."""
+        wall_clock = self._now()
+        if credential_refresh_due(
+            expires_at=state.credential_expires_at, now=wall_clock
+        ):
+            refreshed = await refresh_credential(
+                uow_factory=self.uow_factory,
+                agent_run_id=agent_run_id,
+                ctx=ctx,
+                options=options,
+                agent=agent,
+                conversation=conversation,
+            )
+            if refreshed is not None:
+                state.credential_expires_at = refreshed
+        return credential_exhausted(
+            expires_at=state.credential_expires_at, now=wall_clock
+        )
 
     async def _steer(
         self, steering: SteerSchedule, *, now: float, agent_run_id: UUID

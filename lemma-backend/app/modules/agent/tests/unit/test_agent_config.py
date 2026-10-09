@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.domain.generation import ReasoningEffort
+
 from app.core.config import reveal_secret
 from app.modules.agent.config import AgentSettings
 
@@ -93,6 +95,9 @@ EXPECTED = [
     ("web_fetch_impersonate_browser", "WEB_FETCH_IMPERSONATE_BROWSER", True),
 ]
 FACTORY_FIELDS = {"local_agent_runtime_config_path"}
+# An enum, so the generic "sentinel" override cannot exercise it; read from
+# its environment variable in `test_reasoning_effort_reads_its_env_var`.
+ENUM_FIELDS = {"lemma_openai_reasoning_effort"}
 
 
 def _clear(monkeypatch):
@@ -130,6 +135,7 @@ MOVED_FROM_CORE = [
     ("lemma_openai_default_model", "LEMMA_OPENAI_DEFAULT_MODEL", ""),
     ("lemma_openai_model_names", "LEMMA_OPENAI_MODEL_NAMES", ""),
     ("lemma_openai_vision_model_names", "LEMMA_OPENAI_VISION_MODEL_NAMES", ""),
+    ("lemma_openai_reasoning_model_names", "LEMMA_OPENAI_REASONING_MODEL_NAMES", ""),
 ]
 
 
@@ -144,7 +150,24 @@ def test_agent_settings_field_set_is_exact():
         *(f for f, _e, _d in EXPECTED),
         *(f for f, _e, _d in MOVED_FROM_CORE),
         *FACTORY_FIELDS,
+        *ENUM_FIELDS,
     }
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("low", ReasoningEffort.LOW), (" HIGH ", ReasoningEffort.HIGH), ("", None)],
+)
+def test_reasoning_effort_reads_its_env_var(monkeypatch, raw, expected):
+    """Blank is unset, as an empty variable in a deployment manifest means."""
+    monkeypatch.setenv("LEMMA_OPENAI_REASONING_EFFORT", raw)
+    assert AgentSettings().lemma_openai_reasoning_effort == expected
+
+
+def test_an_unknown_reasoning_effort_fails_at_startup(monkeypatch):
+    monkeypatch.setenv("LEMMA_OPENAI_REASONING_EFFORT", "extreme")
+    with pytest.raises(ValueError):
+        AgentSettings()
 
 
 def test_agent_runtime_config_path_default_and_env(monkeypatch):

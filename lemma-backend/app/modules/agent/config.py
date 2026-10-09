@@ -13,8 +13,9 @@ the test harness, not purely agent-internal.
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.core.domain.generation import ReasoningEffort
 from app.core.settings_env import dotenv_path
 
 
@@ -375,6 +376,35 @@ class AgentSettings(BaseSettings):
             "when the provider advertises it.)"
         ),
     )
+
+    lemma_openai_reasoning_effort: ReasoningEffort | None = Field(
+        default=None,
+        description=(
+            "Default reasoning effort (none, minimal, low, medium, high) for the "
+            "reasoning models of the OpenAI-compatible system model profile. It "
+            "is the catalog default: a profile, agent or workflow step that sets "
+            "its own wins. Unset keeps the provider's default. Setting it "
+            "declares the profile's models reasoning models unless "
+            "LEMMA_OPENAI_REASONING_MODEL_NAMES narrows that."
+        ),
+    )
+    lemma_openai_reasoning_model_names: str = Field(
+        default="",
+        description=(
+            "Comma-separated subset of LEMMA_OPENAI_MODEL_NAMES that are reasoning "
+            "models. Only these are sent a reasoning effort: OpenAI-compatible "
+            "endpoints reject the field on a model that does not reason. Empty "
+            "with LEMMA_OPENAI_REASONING_EFFORT set means every configured model."
+        ),
+    )
+
+    @field_validator("lemma_openai_reasoning_effort", mode="before")
+    @classmethod
+    def _blank_effort_is_unset(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip().lower()
+            return value or None
+        return value
 
 
 agent_settings = AgentSettings()

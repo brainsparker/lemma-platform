@@ -29,7 +29,9 @@ from app.modules.agent.services import runtime_system_profiles as system_profile
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
-    _selected_model,
+)
+from app.modules.agent.services.runtime_resolution import (
+    selected_model as _selected_model,
 )
 from app.modules.agent.services.runtime_provider_discovery import DiscoveredModel
 from app.modules.agent.services.runtime_profile_editor import (

@@ -201,7 +201,36 @@ async def test_questions_approvals_and_permissions_are_listed_longest_first(
 async def test_only_pauses_still_waiting_on_this_person_are_listed(
     authenticated_client, pod_id, fixed_test_user
 ) -> None:
-    """Decided, answered, overtaken, timed out by the host, or somebody else's."""
+    """Decided, answered, dismissed, overtaken, timed out by the host, or not theirs."""
+    answered = await _conversation(authenticated_client, pod_id, "Answered")
+    answered_call = await _pause(
+        answered,
+        tool_name="ask_user",
+        tool_args=_QUESTION_ARGS,
+        status=ConversationStatus.WAITING,
+    )
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await ConversationRepository(uow).append_message(
+            conversation_id=answered,
+            agent_run_id=None,
+            draft=MessageDraft.of_tool_return(
+                tool_call_id=answered_call,
+                tool_name="ask_user",
+                tool_result={"answers": {"region": "EMEA"}},
+            ),
+        )
+        await uow.commit()
+    dismissed = await _conversation(authenticated_client, pod_id, "Dismissed")
+    await _pause(
+        dismissed,
+        tool_name="ask_user",
+        tool_args=_QUESTION_ARGS,
+        status=ConversationStatus.WAITING,
+    )
+    archived = await authenticated_client.patch(
+        f"/pods/{pod_id}/conversations/{dismissed}", json={"is_archived": True}
+    )
+    assert archived.status_code == 200, archived.text
     decided = await _conversation(authenticated_client, pod_id, "Decided")
     await _decide(
         decided,

@@ -71,7 +71,8 @@ def parse_pending_page_token(page_token: str | None) -> PendingInteractionCursor
     description=(
         "List every ask_user question, request_approval and Agent Host "
         "permission request waiting on the caller, across their own "
-        "conversations in the pod, sub-agent conversations included. "
+        "conversations in the pod, sub-agent conversations included and "
+        "archived ones left out. "
         "Longest-waiting first. Resolve one through the conversation's "
         "approval decision endpoint, using tool_call_id as the approval id. "
         "A permission request drops off once the Agent Host has stopped "

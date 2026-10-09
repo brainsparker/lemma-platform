@@ -159,6 +159,10 @@ async def list_pending_interactions(
         .where(
             ConversationModel.user_id == user_id,
             ConversationModel.pod_id == pod_id,
+            # Archiving is how a person says "not this one" -- Home's dismiss
+            # does exactly that -- and a list that brought it straight back
+            # would have no way to be cleared. A new message unarchives.
+            ConversationModel.is_archived.is_(False),
             *pending_pause_conditions(),
         )
     )

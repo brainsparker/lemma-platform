@@ -60,7 +60,11 @@ class _Session:
         return self.conversation
 
     async def execute(self, _statement):
-        return SimpleNamespace(scalar_one_or_none=lambda: self.run)
+        # `one_or_none` answers the status read, `scalar_one_or_none` the
+        # compare-and-set that moves the run.
+        return SimpleNamespace(
+            scalar_one_or_none=lambda: self.run, one_or_none=lambda: self.run
+        )
 
     def add(self, _model) -> None:
         return None

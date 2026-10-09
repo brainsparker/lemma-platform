@@ -47,7 +47,6 @@ during the handshake, long before they read a `User-Agent`.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import shlex
 from urllib.parse import urlparse
 
@@ -55,13 +54,19 @@ from app.core.log.log import get_logger
 from app.core.net.impersonating_client import web_page_policy
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.web.capture_result import (
-    PREVIEW_CHARS as _PREVIEW_CHARS,
+from app.modules.agent.tools.web.browser_capture import (
+    MAX_BROWSER_RENDERS,
+    capture_with_browser,
+    needs_browser,
 )
 from app.modules.agent.tools.web.capture_result import (
     THIN_CONTENT_CHARS as _THIN_CONTENT_CHARS,
 )
-from app.modules.agent.tools.web.capture_result import finish as _finish
+from app.modules.agent.tools.web.http_capture import (
+    Refusal,
+    refusal_for,
+    write_extracted,
+)
 from app.modules.agent.tools.web.models import (
     WebFetchPage,
     WebFetchRequest,
@@ -71,20 +76,13 @@ from app.modules.agent.tools.web.page_extract import (
     ExtractedPage,
     PageFetchError,
     fetch_and_clean,
-    render_document,
 )
-from sandbox_runtime.paths import OVERLAY_FIRST_ON_PATH
 from app.modules.agent.tools.workspace_cli.workspace_cli import (
     get_workspace_session,
     workspace_runtime_context,
 )
 
 logger = get_logger(__name__)
-
-# A plain fetch is quick; a browser render has to start Chrome and wait for the
-# network to settle.
-_HTTP_TIMEOUT_SECONDS = 45
-_BROWSER_TIMEOUT_SECONDS = 75
 
 # The batch as a whole, and a hard one: the tool returns at this point whatever
 # it has, because nothing above it will stop it.
@@ -101,36 +99,12 @@ _BROWSER_TIMEOUT_SECONDS = 75
 # and a note about the fourth can act; an agent whose run disappears cannot.
 _BATCH_BUDGET_SECONDS = 240
 
-# Browser renders are the serialised, expensive path, and the batch budget is
-# the only thing bounding them.
-#
-# This is deliberately the same number as `WebFetchRequest.urls`' `max_length`,
-# and `test_web_fetch_limits_agree` fails if the two ever drift: the cap is
-# only honest when the tool cannot accept more pages than it will render. It
-# used to accept ten and render three, so a caller who sent ten JS-heavy pages
-# discovered seven were skipped only after paying for the call.
-#
-# Raising it does not endanger the cheap pages the old comment worried about --
-# the http path runs to completion first, concurrently, before any render
-# starts. What bounds the pathological case is the batch deadline, which
-# reports every page it did not reach. Measured, a real render is ~5s, so five
-# of them sit an order of magnitude inside that budget.
-_MAX_BROWSER_RENDERS = 5
-
 # Enough to saturate the network wait without opening twenty sockets to twenty
 # sites at once.
 _MAX_CONCURRENT_FETCHES = 5
 
 
 _ALLOWED_SCHEMES = {"http", "https"}
-
-
-def _slugify(url: str) -> str:
-    parsed = urlparse(url)
-    raw = f"{parsed.netloc}{parsed.path}".strip("/") or "page"
-    slug = "".join(char if char.isalnum() or char in "-._" else "-" for char in raw)
-    slug = "-".join(part for part in slug.split("-") if part)
-    return slug[:100].lower() or "page"
 
 
 def _validate(url: str) -> str | None:
@@ -141,46 +115,6 @@ def _validate(url: str) -> str | None:
     if not parsed.netloc:
         return "That URL has no host."
     return None
-
-
-def _needs_browser(formats: list[str], render: bool) -> bool:
-    # A PDF or screenshot is a render by definition; markdown alone is not.
-    return render or any(fmt in {"pdf", "jpeg", "png"} for fmt in formats)
-
-
-async def _write_markdown(session, *, path: str, content: str) -> None:
-    """Write already-cleaned markdown into the workspace.
-
-    Through the runtime's file API, not a shell heredoc. The heredoc could not
-    work for the pages that most need capturing: it puts the whole document in a
-    single `sh -c` argument, and Linux caps one argument at `MAX_ARG_STRLEN`
-    (32 pages = 128KB) no matter how large `ARG_MAX` is. A full Wikipedia
-    article extracts to ~185KB of markdown, so it failed with E2BIG — and the
-    caller read that failure as "this page needs a browser" and spent a Chrome
-    render re-fetching a page it had already read correctly.
-
-    Streaming the bytes also removes the quoting question entirely: no shell
-    parses this, so nothing on the page can terminate the document early.
-
-    The directory is created once for the batch by the caller, not here: this
-    runs under the write lock, once per page, against a directory that is the
-    same for every page in the call. Five pages meant five `mkdir` round trips
-    to create one directory — measured at ~80ms each, half of all the sandbox
-    chatter in a batch.
-    """
-    await session.write_file(
-        path, content.encode("utf-8"), timeout=_HTTP_TIMEOUT_SECONDS
-    )
-
-
-def _browser_script(url: str, out_dir: str, name: str, formats: list[str]) -> str:
-    """The capture, by name: the runtime overlay's `save-webpage`, else the image's."""
-    return (
-        OVERLAY_FIRST_ON_PATH + f"mkdir -p {shlex.quote(out_dir)} && "
-        f"save-webpage {shlex.quote(url)} "
-        f"--formats {shlex.quote(','.join(formats))} "
-        f"--out {shlex.quote(out_dir)} --name {shlex.quote(name)}"
-    )
 
 
 async def web_fetch_internal(
@@ -322,12 +256,12 @@ async def _capture_batch(
     Written to mutate a dict the caller owns so that a batch cut short by the
     deadline above still returns everything captured before it.
     """
-    needs_browser: list[str] = []
+    to_render: list[str] = []
 
     await _reject_unsafe_urls(urls, pages)
 
     cheap = [
-        url for url in urls if url not in pages and not _needs_browser(formats, render)
+        url for url in urls if url not in pages and not needs_browser(formats, render)
     ]
     if cheap:
         # Once for the batch, before any page is written. Every page in a call
@@ -355,9 +289,9 @@ async def _capture_batch(
             async with limit:
                 page = await _clean_or_none(url)
             if page is None:
-                needs_browser.append(url)
+                to_render.append(url)
                 return
-            if isinstance(page, _Refusal):
+            if isinstance(page, Refusal):
                 pages[url] = WebFetchPage(
                     url=url,
                     success=False,
@@ -368,106 +302,37 @@ async def _capture_batch(
                 )
                 return
             async with writing:
-                written = await _write_extracted(
+                written = await write_extracted(
                     session, url=url, page=page, out_dir=out_dir
                 )
             if written is None:
-                needs_browser.append(url)
+                to_render.append(url)
             else:
                 pages[url] = written
 
         await asyncio.gather(*(_capture(url) for url in cheap))
 
-    needs_browser.extend(
-        url for url in urls if url not in pages and url not in needs_browser
-    )
+    to_render.extend(url for url in urls if url not in pages and url not in to_render)
 
-    for index, url in enumerate(needs_browser):
-        if index >= _MAX_BROWSER_RENDERS:
+    for index, url in enumerate(to_render):
+        if index >= MAX_BROWSER_RENDERS:
             pages[url] = WebFetchPage(
                 url=url,
                 success=False,
                 error=(
                     f"Skipped: this page needs the full browser, and a single "
-                    f"call renders at most {_MAX_BROWSER_RENDERS} (the sandbox "
+                    f"call renders at most {MAX_BROWSER_RENDERS} (the sandbox "
                     "has one browser, so they run one at a time). Ask for it "
                     "again on its own."
                 ),
             )
             continue
-        pages[url] = await _capture_with_browser(
+        pages[url] = await capture_with_browser(
             session, url=url, out_dir=out_dir, formats=formats
         )
 
 
-async def _capture_with_browser(
-    session,
-    *,
-    url: str,
-    out_dir: str,
-    formats: list[str],
-) -> WebFetchPage:
-    name = _slugify(url)
-    browser_formats = formats if "markdown" in formats else [*formats, "markdown"]
-    result = await session.exec_command(
-        cmd=_browser_script(url, out_dir, name, browser_formats),
-        timeout=_BROWSER_TIMEOUT_SECONDS,
-    )
-    return await _finish(
-        session,
-        url=url,
-        out_dir=out_dir,
-        name=name,
-        formats=browser_formats,
-        fetched_with="browser",
-        failure_output=(result.get("stderr") or result.get("stdout") or ""),
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class _Refusal:
-    """A "do not try the browser" answer, with the reason for the agent.
-
-    The third outcome the cheap path needed and did not have. It used to
-    collapse every failure to `None`, which means "escalate" -- so a site
-    that refuses our address was retried through a browser it refuses
-    identically, at seven seconds and one of only five render slots.
-    """
-
-    message: str
-    status: int | None
-    blocked_by: str | None
-
-
-def _refusal_for(url: str, exc: PageFetchError) -> _Refusal | None:
-    """What to tell the agent, when the browser would not help."""
-    verdict = exc.verdict
-    if verdict is not None and verdict.blocked:
-        if verdict.browser_may_help:
-            return None
-        return _Refusal(
-            message=(
-                f"{url} was refused by a bot defence ({verdict.vendor}). The "
-                "sandbox browser reaches the site from the same address and "
-                "was measured to be refused identically, so it was not tried. "
-                "Use a different source, or ask the person for the page."
-            ),
-            status=exc.status,
-            blocked_by=verdict.vendor,
-        )
-    if exc.status in (404, 410):
-        return _Refusal(
-            message=(
-                f"The page is not there (HTTP {exc.status}). The browser was "
-                "not tried -- it would get the same answer."
-            ),
-            status=exc.status,
-            blocked_by=None,
-        )
-    return None
-
-
-async def _clean_or_none(url: str) -> ExtractedPage | _Refusal | None:
+async def _clean_or_none(url: str) -> ExtractedPage | Refusal | None:
     """Fetch and clean in-process. `None` means "try the browser".
 
     Cheap path: no browser start-up and no container round-trip to fetch, so raw
@@ -488,7 +353,7 @@ async def _clean_or_none(url: str) -> ExtractedPage | _Refusal | None:
             signal=exc.verdict.signal if exc.verdict else None,
             exc_info=True,
         )
-        return _refusal_for(url, exc)
+        return refusal_for(url, exc)
     except Exception as exc:  # noqa: BLE001 - one URL must not sink the batch
         # These run under `gather`, so anything unhandled here fails every other
         # page in the call too. A malformed charset or an extractor crash is one
@@ -511,50 +376,3 @@ async def _clean_or_none(url: str) -> ExtractedPage | _Refusal | None:
     if len(page.markdown) < _THIN_CONTENT_CHARS:
         return None
     return page
-
-
-async def _write_extracted(
-    session, *, url: str, page: ExtractedPage, out_dir: str
-) -> WebFetchPage | None:
-    """Save a cleaned page, or None when the write itself failed."""
-    document = render_document(page)
-    markdown_path = f"{out_dir}/{_slugify(url)}.md"
-    try:
-        await _write_markdown(session, path=markdown_path, content=document)
-    except Exception:  # noqa: BLE001 - falls back to the browser path
-        # Logged rather than swallowed: the caller will spend a browser render
-        # recovering from this, and a recurring write failure is a workspace
-        # problem, not a property of the page.
-        logger.warning(
-            "agent.web_fetch.workspace_write_failed.degraded",
-            characters=len(document),
-            exc_info=True,
-        )
-        return None
-
-    return WebFetchPage(
-        url=url,
-        success=True,
-        title=page.title,
-        files={"markdown": markdown_path},
-        preview=document[:_PREVIEW_CHARS],
-        characters=len(document),
-        fetched_with="http",
-        status=page.status,
-        notice=_status_notice(page),
-    )
-
-
-def _status_notice(page: ExtractedPage) -> str | None:
-    """Said only when the status and the page disagree.
-
-    Measured: reuters.com/technology/ answered 429 and served the whole
-    article. Throwing that away because of the number would cost a browser
-    render for a page we already had.
-    """
-    if page.status < 400:
-        return None
-    return (
-        f"The site answered HTTP {page.status} but served the article anyway, "
-        "so it was saved. Re-request with `render=true` if it looks short."
-    )

@@ -24,7 +24,7 @@ from app.core.web_search.search_client import (
     SearXNGSearchClient,
     apply_domain_operators,
 )
-from app.modules.agent.tools.web import capture_result
+from app.modules.agent.tools.web import browser_capture, capture_result
 from app.modules.agent.tools.web import web_fetch as web_fetch_module
 from pydantic import ValidationError
 
@@ -610,19 +610,19 @@ class TestBrowserCaptureHelpers:
     """
 
     def test_needs_browser_for_a_render_request_regardless_of_formats(self) -> None:
-        assert web_fetch_module._needs_browser(["markdown"], render=True) is True
+        assert browser_capture.needs_browser(["markdown"], render=True) is True
 
     def test_needs_browser_for_a_pdf_or_image_format(self) -> None:
-        assert web_fetch_module._needs_browser(["pdf"], render=False) is True
-        assert web_fetch_module._needs_browser(["jpeg"], render=False) is True
-        assert web_fetch_module._needs_browser(["png"], render=False) is True
+        assert browser_capture.needs_browser(["pdf"], render=False) is True
+        assert browser_capture.needs_browser(["jpeg"], render=False) is True
+        assert browser_capture.needs_browser(["png"], render=False) is True
 
     def test_markdown_alone_does_not_need_a_browser(self) -> None:
-        assert web_fetch_module._needs_browser(["markdown"], render=False) is False
-        assert web_fetch_module._needs_browser([], render=False) is False
+        assert browser_capture.needs_browser(["markdown"], render=False) is False
+        assert browser_capture.needs_browser([], render=False) is False
 
     def test_browser_script_shape(self) -> None:
-        cmd = web_fetch_module._browser_script(
+        cmd = browser_capture.browser_script(
             "https://example.com/a", "research", "example-a", ["markdown", "pdf"]
         )
         assert cmd == (
@@ -648,7 +648,7 @@ class TestBrowserCaptureHelpers:
             script.write_text(f"#!/bin/sh\necho {who}\n", encoding="utf-8")
             script.chmod(0o755)
 
-        cmd = web_fetch_module._browser_script(
+        cmd = browser_capture.browser_script(
             "https://example.com/a", str(tmp_path / "out"), "a", ["markdown"]
         ).replace("/opt/lemma-runtime/current/bin", str(overlay))
 
@@ -675,7 +675,7 @@ class TestBrowserCaptureHelpers:
         sandbox shell a second command to run.
         """
         hostile_url = "https://example.com/a?x=1;rm -rf / && echo pwned"
-        cmd = web_fetch_module._browser_script(
+        cmd = browser_capture.browser_script(
             hostile_url, "research", "safe-name", ["markdown"]
         )
         # shlex.split proves the shell would see it as one argument, not as
@@ -685,7 +685,7 @@ class TestBrowserCaptureHelpers:
         assert "rm" not in parts and "pwned" not in parts
 
     def test_browser_script_quotes_a_hostile_out_dir_and_name(self) -> None:
-        cmd = web_fetch_module._browser_script(
+        cmd = browser_capture.browser_script(
             "https://example.com/a",
             "research/$(whoami)",
             "name`id`",
@@ -971,7 +971,7 @@ class TestTheToolAlwaysReturns:
             item.max_length for item in accepted if hasattr(item, "max_length")
         )
 
-        assert max_urls == web_fetch_module._MAX_BROWSER_RENDERS
+        assert max_urls == browser_capture.MAX_BROWSER_RENDERS
 
     @pytest.mark.asyncio
     async def test_a_full_batch_of_js_pages_skips_nothing(self, monkeypatch) -> None:
@@ -986,7 +986,7 @@ class TestTheToolAlwaysReturns:
         _patch_extraction(monkeypatch, markdown=None)  # everything needs a browser
         urls = [
             f"https://spa{index}.example/app"
-            for index in range(web_fetch_module._MAX_BROWSER_RENDERS)
+            for index in range(browser_capture.MAX_BROWSER_RENDERS)
         ]
 
         result = await web_fetch_module.web_fetch_internal(
@@ -1024,7 +1024,7 @@ class TestTheToolAlwaysReturns:
 
     def test_the_url_list_is_capped(self) -> None:
         """At exactly what the tool can render -- see test_web_fetch_limits_agree."""
-        limit = web_fetch_module._MAX_BROWSER_RENDERS
+        limit = browser_capture.MAX_BROWSER_RENDERS
         WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(limit)])
         with pytest.raises(ValidationError):
             WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(limit + 1)])

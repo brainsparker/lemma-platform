@@ -13,7 +13,7 @@ class WebFetchRequest(BaseModel):
     urls: list[str] = Field(
         ...,
         min_length=1,
-        # Must equal `_MAX_BROWSER_RENDERS`, and `test_web_fetch_limits_agree`
+        # Must equal `MAX_BROWSER_RENDERS`, and `test_web_fetch_limits_agree`
         # holds the two together. Advertising ten while rendering three meant a
         # caller who sent ten JS-heavy pages was told, only after paying for
         # the call, that seven of them were skipped -- a limit the schema had

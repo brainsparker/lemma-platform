@@ -58,6 +58,9 @@ from app.modules.agent.infrastructure.harnesses.history import history_capabilit
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
 )
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
+    replays_prior_run_reasoning,
+)
 from app.modules.agent.infrastructure.harnesses.provider_error_log import (
     user_facing_error_message,
     log_model_http_error,
@@ -291,7 +294,12 @@ class PydanticAIHarness:
     ) -> AsyncIterator[AgentEvent]:
         with run_phase("history_convert") as history_span:
             history, user_prompt = self._history_and_prompt(
-                messages, protocol=_runtime_profile_protocol(options)
+                messages,
+                protocol=_runtime_profile_protocol(options),
+                current_run_id=agent_run_id,
+                replay_prior_run_reasoning=replays_prior_run_reasoning(
+                    options.extra.get("runtime_profile")
+                ),
             )
             history_span.set_attribute("lemma.history.model_messages", len(history))
         # e2e mock mode swaps only the model — the rest of the harness (tool
@@ -471,8 +479,15 @@ class PydanticAIHarness:
         messages: Sequence[Message],
         *,
         protocol: str | None = None,
+        current_run_id: UUID | None = None,
+        replay_prior_run_reasoning: bool = False,
     ) -> tuple[list[ModelMessage], str | None]:
-        return history_and_prompt(messages, protocol=protocol)
+        return history_and_prompt(
+            messages,
+            protocol=protocol,
+            current_run_id=current_run_id,
+            replay_prior_run_reasoning=replay_prior_run_reasoning,
+        )
 
     def _final_output_message(
         self,

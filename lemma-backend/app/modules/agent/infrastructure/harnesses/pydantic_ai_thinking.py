@@ -22,9 +22,20 @@ So a thought is replayed only when both of these hold, and dropped otherwise:
 
 Dropping is always the safe direction: it costs the model sight of its own
 earlier reasoning, and the alternative costs the user an answer made of it.
+
+On an OpenAI-compatible model there is a third rule: a thought from an earlier
+*run* is dropped too, unless the model's catalog entry asks for it. Reasoning is
+most of a reasoning model's output, so carrying every past run's thoughts made
+them most of every later request's input and brought compaction forward -- and
+the providers that document it (DeepSeek among them) say to drop prior-turn
+reasoning. A model that wants it back sets ``replay_prior_run_reasoning`` in its
+catalog entry's metadata.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
+from uuid import UUID
 
 from pydantic_ai.messages import ThinkingPart
 
@@ -47,15 +58,31 @@ class PendingThoughts:
     and that message has not been reached yet when the thought is.
     """
 
-    def __init__(self, protocol: str | None) -> None:
+    def __init__(
+        self,
+        protocol: str | None,
+        *,
+        current_run_id: UUID | None = None,
+        replay_prior_runs: bool = False,
+    ) -> None:
         self._protocol = protocol
+        self._current_run_id = current_run_id
+        self._replay_prior_runs = replay_prior_runs
         self._parts: list[ThinkingPart] = []
 
     def offer(self, msg: object) -> None:
         """Keep this message's thought, if it can be replayed at all."""
+        if self._is_prior_run_thought_to_drop(msg):
+            return
         part = thinking_part_from_message(msg, self._protocol)
         if part is not None:
             self._parts.append(part)
+
+    def _is_prior_run_thought_to_drop(self, msg: object) -> bool:
+        if self._protocol != _OPENAI_PROTOCOL or self._replay_prior_runs:
+            return False
+        run_id = getattr(msg, "agent_run_id", None)
+        return run_id is None or run_id != self._current_run_id
 
     def take(self) -> list[ThinkingPart]:
         """The held thoughts, for the response now being built."""
@@ -72,6 +99,18 @@ class PendingThoughts:
             dropped_count=len(self._parts),
         )
         self._parts = []
+
+
+def replays_prior_run_reasoning(runtime_profile: object) -> bool:
+    """Whether this run's model asked, in its catalog entry, for earlier runs'
+    reasoning to be replayed. Off unless the entry says ``true``."""
+    if not isinstance(runtime_profile, Mapping):
+        return False
+    metadata = runtime_profile.get("model_metadata")
+    return (
+        isinstance(metadata, Mapping)
+        and metadata.get("replay_prior_run_reasoning") is True
+    )
 
 
 def thinking_part_from_message(

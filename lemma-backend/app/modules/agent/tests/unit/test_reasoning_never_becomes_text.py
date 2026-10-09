@@ -19,7 +19,7 @@ below, because fixing any one of them alone leaves the others live.
 from __future__ import annotations
 
 import asyncio
-from uuid import uuid4, uuid7
+from uuid import UUID, uuid4, uuid7
 
 import pytest
 from pydantic_ai.models import ModelRequestParameters
@@ -36,6 +36,9 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageKind,
     MessageRole,
+)
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
+    replays_prior_run_reasoning,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
@@ -89,14 +92,26 @@ def _conversation(thinking_metadata: dict | None) -> list[Message]:
     ]
 
 
-def _openai_wire(messages: list[Message]) -> list[dict]:
+def _openai_wire(
+    messages: list[Message],
+    *,
+    current_run_id: UUID | None = None,
+    replay_prior_runs: bool = True,
+) -> list[dict]:
+    """Prior-run thoughts replayed by default: most of these are about the
+    shape a replayed thought takes, not about which ones are replayed."""
     model = OpenAIChatModel(
         "accounts/fireworks/models/minimax-m3",
         provider=OpenAIProvider(
             base_url="https://api.fireworks.ai/inference/v1/", api_key="x"
         ),
     )
-    history, _ = history_and_prompt(messages, protocol="OPENAI_COMPATIBLE")
+    history, _ = history_and_prompt(
+        messages,
+        protocol="OPENAI_COMPATIBLE",
+        current_run_id=current_run_id,
+        replay_prior_run_reasoning=replay_prior_runs,
+    )
     return asyncio.run(model._map_messages(history, ModelRequestParameters()))
 
 
@@ -469,3 +484,73 @@ async def test_a_token_the_harness_already_classified_passes_through(monkeypatch
             "data": f'{{"q":"{OPEN}"}}',
         }
     ]
+
+
+# --- 3. whose thoughts are replayed ------------------------------------------
+
+
+def _thought_then_answer(run_id: UUID, sequence: int, thought: str) -> list[Message]:
+    def row(offset: int, role, kind, text, metadata=None) -> Message:
+        return Message.create(
+            conversation_id=uuid7(),
+            sequence=sequence + offset,
+            agent_run_id=run_id,
+            role=role,
+            kind=kind,
+            text=text,
+            metadata=metadata,
+        )
+
+    return [
+        row(0, MessageRole.USER, MessageKind.TEXT, f"question {sequence}"),
+        row(1, MessageRole.ASSISTANT, MessageKind.THINKING, thought, OPENAI_IDENTITY),
+        row(2, MessageRole.ASSISTANT, MessageKind.TEXT, f"answer {sequence}"),
+    ]
+
+
+def _reasoning_sent(payload: list[dict]) -> list[str]:
+    return [
+        entry["reasoning_content"]
+        for entry in payload
+        if entry["role"] == "assistant" and entry.get("reasoning_content")
+    ]
+
+
+def test_only_this_runs_own_thoughts_are_replayed_by_default():
+    """Reasoning is most of a reasoning model's output; carried forward from
+    every earlier run it became most of every later request's input."""
+    first, second, current = uuid7(), uuid7(), uuid7()
+    messages = [
+        *_thought_then_answer(first, 10, "thinking in run one"),
+        *_thought_then_answer(second, 20, "thinking in run two"),
+        *_thought_then_answer(current, 30, "thinking in this run"),
+        _message(40, MessageRole.USER, MessageKind.TEXT, "and now?"),
+    ]
+
+    payload = _openai_wire(messages, current_run_id=current, replay_prior_runs=False)
+
+    assert _reasoning_sent(payload) == ["thinking in this run"]
+    _assert_no_reasoning_in_content(payload)
+
+
+def test_a_model_that_asks_for_earlier_reasoning_gets_it():
+    first, current = uuid7(), uuid7()
+    messages = [
+        *_thought_then_answer(first, 10, "thinking in run one"),
+        _message(40, MessageRole.USER, MessageKind.TEXT, "and now?"),
+    ]
+
+    payload = _openai_wire(messages, current_run_id=current, replay_prior_runs=True)
+
+    assert _reasoning_sent(payload) == ["thinking in run one"]
+
+
+def test_the_choice_is_read_from_the_models_catalog_entry():
+    assert replays_prior_run_reasoning(
+        {"model_metadata": {"replay_prior_run_reasoning": True}}
+    )
+    assert not replays_prior_run_reasoning({"model_metadata": {}})
+    assert not replays_prior_run_reasoning(
+        {"model_metadata": {"replay_prior_run_reasoning": "yes"}}
+    )
+    assert not replays_prior_run_reasoning(None)

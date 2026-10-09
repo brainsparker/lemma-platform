@@ -13,6 +13,7 @@ beside the credential check it depends on.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from uuid import UUID
 
 import pydantic_core
 from pydantic_ai.messages import (
@@ -49,13 +50,17 @@ def history_and_prompt(
     messages: Sequence[Message],
     *,
     protocol: str | None = None,
+    current_run_id: UUID | None = None,
+    replay_prior_run_reasoning: bool = False,
 ) -> tuple[list[ModelMessage], str | None]:
     """``protocol`` names where the history is going, and gates thought replay.
 
     Optional, and defaulting to None on purpose: a caller that does not say
     replays no reasoning at all. That is the safe direction — the cost is a
     model that cannot see its own earlier thinking, and the alternative is
-    reasoning written into an answer.
+    reasoning written into an answer. ``current_run_id`` and
+    ``replay_prior_run_reasoning`` say which of the thoughts that pass that
+    test are this run's own; see `pydantic_ai_thinking`.
     """
     ordered = sorted(messages, key=lambda message: message.sequence)
     user_prompt: str | None = None
@@ -71,9 +76,14 @@ def history_and_prompt(
     # The trailing user turn is carried as the prompt rather than in history,
     # so the builder cannot see it -- and it is exactly what tells an unanswered
     # question apart from one still being asked.
+    thoughts = PendingThoughts(
+        protocol,
+        current_run_id=current_run_id,
+        replay_prior_runs=replay_prior_run_reasoning,
+    )
     return (
         _to_pydantic_ai_messages(
-            history_messages, protocol, user_turn_follows=user_prompt is not None
+            history_messages, thoughts, user_turn_follows=user_prompt is not None
         ),
         user_prompt,
     )
@@ -81,14 +91,13 @@ def history_and_prompt(
 
 def _to_pydantic_ai_messages(
     messages: Iterable[object],
-    protocol: str | None = None,
+    pending: PendingThoughts,
     *,
     user_turn_follows: bool = False,
 ) -> list[ModelMessage]:
     items = list(messages)
     converted: list[ModelMessage] = []
     consumed_tool_return_indexes: set[int] = set()
-    pending = PendingThoughts(protocol)
     index = 0
 
     while index < len(items):

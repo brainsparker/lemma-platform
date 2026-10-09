@@ -14,7 +14,7 @@ from typing import Any
 from uuid import UUID
 
 
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.modules.agent_surfaces.platforms.common import (
     public_https_api_url_available,
 )
@@ -72,7 +72,11 @@ def _telegram_transition(
     binding_changed = previous.account_id != current.account_id
     return _TelegramWebhookTransition(
         register=is_enabled
-        and (not was_enabled or binding_changed or not current.webhook_secret),
+        and (
+            not was_enabled
+            or binding_changed
+            or not reveal_secret(current.webhook_secret)
+        ),
         disable=was_enabled and (not is_enabled or binding_changed),
     )
 

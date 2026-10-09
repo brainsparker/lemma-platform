@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.core.config import reveal_secret
+
 import hashlib
 
 from collections.abc import Collection
@@ -408,7 +410,9 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             surface_identity_username=entity.surface_identity_username,
             status=entity.status.value,
             surface_identity_email=entity.surface_identity_email,
-            webhook_secret=get_secret_cipher().encrypt_str(entity.webhook_secret),
+            webhook_secret=get_secret_cipher().encrypt_str(
+                reveal_secret(entity.webhook_secret)
+            ),
         )
         self.session.add(model)
         await self.session.flush()
@@ -436,7 +440,9 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model.surface_identity_username = entity.surface_identity_username
         model.status = entity.status.value
         model.surface_identity_email = entity.surface_identity_email
-        model.webhook_secret = get_secret_cipher().encrypt_str(entity.webhook_secret)
+        model.webhook_secret = get_secret_cipher().encrypt_str(
+            reveal_secret(entity.webhook_secret)
+        )
         await self.session.flush()
         self._collect_events(entity)
         return entity

@@ -402,7 +402,7 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
     register.assert_awaited_once_with(
         credentials={"bot_token": "telegram-token"},
         webhook_url=webhook_url,
-        webhook_secret=result.webhook_secret,
+        webhook_secret=result.webhook_secret.get_secret_value(),
     )
 
 
@@ -688,11 +688,12 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
     result = await service.update_surface(surface_id=entity.id, is_active=True)
 
     assert result.is_active is True
-    assert result.webhook_secret and result.webhook_secret != "old-secret"
+    assert result.webhook_secret
+    assert result.webhook_secret.get_secret_value() != "old-secret"
     register.assert_awaited_once_with(
         credentials={"bot_token": "telegram-token"},
         webhook_url=f"https://api.example.test/surfaces/{entity.id}/webhook",
-        webhook_secret=result.webhook_secret,
+        webhook_secret=result.webhook_secret.get_secret_value(),
     )
 
 

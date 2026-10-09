@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.core.config import reveal_secret
+
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -205,7 +207,7 @@ class AgentSurfaceService(
             await self._register_telegram_webhook(
                 credentials=telegram_credentials,
                 webhook_url=self._build_public_surface_webhook_url(created.id),
-                webhook_secret=created.webhook_secret or "",
+                webhook_secret=reveal_secret(created.webhook_secret) or "",
             )
         await self._notify_receivers_after_commit(created.id)
         return created
@@ -357,7 +359,7 @@ class AgentSurfaceService(
             await self._register_telegram_webhook(
                 credentials=telegram_credentials,
                 webhook_url=self._build_public_surface_webhook_url(updated.id),
-                webhook_secret=updated.webhook_secret or "",
+                webhook_secret=reveal_secret(updated.webhook_secret) or "",
             )
         await self._notify_receivers_after_commit(updated.id)
         return updated

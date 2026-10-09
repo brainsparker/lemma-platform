@@ -187,7 +187,7 @@ class SurfaceWebhookSecurityService:
         if surface.surface_type is SurfacePlatform.TELEGRAM:
             self._verify_telegram_secret(
                 headers=headers,
-                webhook_secret=surface.webhook_secret,
+                webhook_secret=reveal_secret(surface.webhook_secret),
             )
             return
         if surface.surface_type is SurfacePlatform.WHATSAPP:
@@ -199,7 +199,7 @@ class SurfaceWebhookSecurityService:
             )
             return
         if surface.surface_type is SurfacePlatform.SLACK:
-            signing_secret = surface.webhook_secret or reveal_secret(
+            signing_secret = reveal_secret(surface.webhook_secret) or reveal_secret(
                 surface_settings.slack_signing_secret
             )
             async with self._resolver() as resolver:

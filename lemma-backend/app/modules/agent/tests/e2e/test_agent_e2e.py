@@ -3155,9 +3155,10 @@ class TestFinalAnswerToolset:
             )
         )
 
-        # A fresh toolset per phase: the rejection counter lives on the
-        # toolset closure, and each phase's assertions depend on starting at
-        # zero rejections.
+        # A fresh toolset for every call, because that is what the MCP bridge
+        # does: it assembles the toolsets per `tools/call`. The rejection count
+        # used to live on the toolset, so under the bridge it was always one
+        # and the cap never tripped; it belongs to the run.
         def _build_tool():
             toolset = build_final_answer_toolset(
                 agent=domain_agent, uow_factory=uow_factory
@@ -3169,9 +3170,8 @@ class TestFinalAnswerToolset:
         # Phase 1: within the rejection budget. Rejected, and nothing is
         # persisted yet -- an agent mid-argument with its own schema must not
         # have a bad answer recorded as authoritative.
-        final_answer = _build_tool()
         for _ in range(3):
-            rejected = await final_answer(
+            rejected = await _build_tool()(
                 ctx, status="COMPLETED", output=invalid_output
             )
             assert rejected["success"] is False
@@ -3181,7 +3181,7 @@ class TestFinalAnswerToolset:
 
         # Phase 2: past the budget. The tool takes the bad answer rather than
         # spend the rest of the run arguing with the validator, and flags it.
-        accepted = await final_answer(ctx, status="COMPLETED", output=invalid_output)
+        accepted = await _build_tool()(ctx, status="COMPLETED", output=invalid_output)
         assert accepted["success"] is True
         assert accepted["schema_violation"]
 
@@ -3190,9 +3190,8 @@ class TestFinalAnswerToolset:
         assert flagged_record["schema_violation"]
         assert flagged_record["output"] == invalid_output
 
-        # Phase 3: a fresh toolset (a new run's counter starts at zero) with a
-        # schema-conformant answer persists cleanly, overwriting the flagged
-        # record -- last write wins.
+        # Phase 3: a schema-conformant answer persists cleanly, overwriting
+        # the flagged record -- last write wins.
         clean_final_answer = _build_tool()
         clean = await clean_final_answer(
             ctx, status="COMPLETED", output={"answer": "42"}

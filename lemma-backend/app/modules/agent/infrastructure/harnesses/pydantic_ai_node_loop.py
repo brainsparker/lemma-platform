@@ -164,7 +164,7 @@ class NodeLoop[DepsT]:
             # a terminal event bills before queueing it (the pump finalizes on
             # sight of one and drops whatever follows), and a fatal exception
             # bills in `drive_with_retry` before it re-raises.
-            self.emit_usage()
+            await self.emit_usage()
 
     async def _spend_a_model_request(self) -> None:
         """Count this step, and stop the run if it has spent its allowance.
@@ -215,25 +215,28 @@ class NodeLoop[DepsT]:
         )
         raise AgentInputRequired(tool_call_id, "request_approval")
 
-    def emit_usage(self) -> None:
+    async def emit_usage(self) -> None:
         """Report what this attempt spent, including attempts already abandoned.
 
         Must reach the queue BEFORE any terminal event. `RunEventPump` finalizes
         the run the moment it sees one and drops everything after it, so usage
         queued afterwards is read by nobody and the run bills zero.
 
-        Idempotent per attempt: the terminal branches call it explicitly and the
-        `finally` calls it again for the paths that raise instead of ending.
+        Idempotent per attempt: the terminal branches call it explicitly, and
+        `drive_with_retry` calls it again for the paths that raise instead of
+        ending.
 
-        `put_nowait` rather than `await put`: the `finally` may already be
-        unwinding a cancellation, where awaiting can raise before the event
-        lands. The queue is unbounded, so it cannot be full.
+        Awaited, because the queue is bounded: a consumer that fell behind a
+        long streamed answer leaves it full, and `put_nowait` then raised
+        `QueueFull` -- after marking usage emitted, so the fallback was a no-op
+        and a finished answer was reported as a provider failure. The mark is
+        set only once the event is on the queue, so a put cancelled while
+        waiting leaves the caller free to try again.
         """
         if self._usage_emitted or self._run is None:
             return
-        self._usage_emitted = True
         totals = usage_totals(self._run.usage, self._carried_usage)
-        self.queue.put_nowait(
+        await self.queue.put(
             (
                 "event",
                 AgentEvent(
@@ -256,6 +259,7 @@ class NodeLoop[DepsT]:
                 ),
             )
         )
+        self._usage_emitted = True
 
     async def _pump_model_request(
         self,
@@ -311,7 +315,7 @@ class NodeLoop[DepsT]:
                 # the terminal event so the user keeps it.
                 for held in buffered:
                     await self.queue.put(("event", held))
-                self.emit_usage()
+                await self.emit_usage()
                 await self.queue.put(("event", event))
                 return True
             await self.queue.put(("event", event))
@@ -336,7 +340,7 @@ class NodeLoop[DepsT]:
                 AgentEventType.STOPPED,
             }
             if terminal:
-                self.emit_usage()
+                await self.emit_usage()
             await self.queue.put(("event", event))
             if terminal:
                 return True
@@ -385,7 +389,7 @@ class NodeLoop[DepsT]:
                     )
                 )
                 if await self.streamer.stop_requested():
-                    self.emit_usage()
+                    await self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
             final_message = self.final_output_message(
@@ -405,7 +409,7 @@ class NodeLoop[DepsT]:
                     )
                 )
                 if await self.streamer.stop_requested():
-                    self.emit_usage()
+                    await self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
 
@@ -427,7 +431,7 @@ class NodeLoop[DepsT]:
                     )
                 )
                 if await self.streamer.stop_requested():
-                    self.emit_usage()
+                    await self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
         return False

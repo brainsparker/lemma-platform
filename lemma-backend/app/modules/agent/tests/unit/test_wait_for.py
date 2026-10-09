@@ -20,6 +20,7 @@ from app.modules.agent.domain.wait import (
     AgentWaitWakeReason,
 )
 from app.modules.agent.tools.waiting.models import (
+    DEFAULT_TARGET_DEADLINE_SECONDS,
     MAX_WAIT_SECONDS,
     MIN_WAIT_SECONDS,
     WaitForRequest,
@@ -122,6 +123,26 @@ async def test_wait_for_refuses_a_pointless_short_sleep():
     )
     assert response.success is False
     assert "Minimum wait" in (response.error or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_seconds", [0, MIN_WAIT_SECONDS - 1])
+async def test_a_ceiling_below_the_minimum_is_refused_not_read_as_the_default(
+    max_seconds,
+):
+    """`max_seconds=0` fell through `or` to the default ceiling: the agent asked
+    not to wait at all and was left waiting for the longest time on offer."""
+    response = await wait_for(
+        _ctx(),
+        WaitForRequest(reason="build", process_id="proc-1", max_seconds=max_seconds),
+    )
+
+    assert response.success is False
+    assert "max_seconds" in (response.error or "")
+
+
+def test_a_target_wait_gives_up_in_minutes_by_default_not_an_hour():
+    assert DEFAULT_TARGET_DEADLINE_SECONDS == 15 * 60
 
 
 @pytest.mark.asyncio

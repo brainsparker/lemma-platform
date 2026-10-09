@@ -12,10 +12,10 @@ configured; this is one suspended execution that will resolve exactly once.
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from app.core.domain.aggregate import AggregateRoot
 
@@ -94,6 +94,71 @@ class AgentWaitWakeReason(str, Enum):
     # answered: a sub-agent that paused on ask_user or request_approval. Not
     # finished, so not TARGET_FINISHED, and nobody else can see its question.
     TARGET_NEEDS_INPUT = "TARGET_NEEDS_INPUT"
+    # The target could not be read for long enough that waiting on is waiting
+    # blind: its sandbox did not answer. Says nothing about whether it ended.
+    TARGET_UNREADABLE = "TARGET_UNREADABLE"
+
+
+def _lenient(parse):
+    """A spec field parsed when it can be, None when it cannot.
+
+    The spec is stored JSON written by every release since waits existed. One
+    unreadable field must not make the whole wait unreadable -- a wait that
+    cannot be parsed cannot be woken, and an agent that is never woken is lost.
+    """
+
+    def validate(value: object) -> object:
+        if value is None:
+            return None
+        try:
+            return parse(value)
+        except TypeError, ValueError:
+            return None
+
+    return BeforeValidator(validate)
+
+
+def _as_datetime(value: object) -> datetime:
+    parsed = (
+        value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    )
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _as_uuid(value: object) -> UUID:
+    return value if isinstance(value, UUID) else UUID(str(value))
+
+
+LenientDatetime = Annotated[datetime | None, _lenient(_as_datetime)]
+
+
+class WaitSpec(BaseModel):
+    """What a wait recorded about itself, typed.
+
+    Stored as the row's JSON ``spec``. Unknown keys are kept rather than
+    dropped, so a field an older or newer release wrote survives a re-arm.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    reason: str | None = None
+    note_to_self: str | None = None
+    started_at: LenientDatetime = None
+    #: When the wait gives up. None means it cannot say, which reads as due.
+    deadline_at: LenientDatetime = None
+    target_ref: str | None = None
+    user_id: Annotated[UUID | None, _lenient(_as_uuid)] = None
+    #: The unclamped asks, kept so the resolution can see what the model wanted.
+    requested_seconds: int | None = None
+    requested_max_seconds: int | None = None
+    poll_attempt: int = 0
+    #: When the target first stopped answering, cleared when it answers again.
+    unreadable_since: LenientDatetime = None
+    woke_because: str | None = None
+    abandoned_because: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
 
 
 class AgentConversationWaitEntity(AggregateRoot):
@@ -113,11 +178,18 @@ class AgentConversationWaitEntity(AggregateRoot):
     # so it survives the rollback of the attempt it is counting.
     wake_attempts: int = 0
 
-    # The wait request verbatim, plus whatever the resolution recorded.
+    # The wait request verbatim, plus whatever the resolution recorded. Stored
+    # as JSON; read it through ``wait_spec``.
     spec: dict[str, Any] = Field(default_factory=dict)
     completed_at: datetime | None = None
 
-    def rearm(self, next_at: datetime) -> None:
+    @property
+    def wait_spec(self) -> WaitSpec:
+        return WaitSpec.model_validate(self.spec or {})
+
+    def rearm(
+        self, next_at: datetime, *, unreadable_since: datetime | None = None
+    ) -> None:
         """Push a polled wait's next check out, without waking the agent.
 
         ``wake_attempts`` is reset because it counts *failed wakes*, and a
@@ -126,13 +198,20 @@ class AgentConversationWaitEntity(AggregateRoot):
         that only ever climbed would cross ``MAX_WAKE_ATTEMPTS`` on three
         unrelated transient errors spread across that hour and abandon a wait
         whose target was perfectly healthy.
+
+        ``unreadable_since`` is carried for as long as the target keeps not
+        answering and cleared the first time it does, so only an unbroken run
+        of failed reads can wake the agent with TARGET_UNREADABLE.
         """
         self.scheduled_at = next_at
         self.wake_attempts = 0
-        self.spec = {
-            **self.spec,
-            "poll_attempt": int(self.spec.get("poll_attempt", 0)) + 1,
-        }
+        spec = self.wait_spec
+        self.spec = spec.model_copy(
+            update={
+                "poll_attempt": spec.poll_attempt + 1,
+                "unreadable_since": unreadable_since,
+            }
+        ).to_json()
 
     def complete(self, reason: AgentWaitWakeReason) -> None:
         self.status = AgentWaitStatus.COMPLETED

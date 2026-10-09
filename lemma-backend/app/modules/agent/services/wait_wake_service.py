@@ -35,7 +35,7 @@ from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
-from app.modules.agent.services.wait_targets import read_target
+from app.modules.agent.services.wait_targets import TargetOutcome, read_target
 from app.modules.agent.tools.waiting.models import (
     build_wait_result,
     elapsed_seconds,
@@ -66,20 +66,31 @@ class AgentWaitService:
             return False
 
         now = datetime.now(timezone.utc)
+        spec = claimed.wait_spec
+        # The first failed read starts the clock; any read that answers stops
+        # it. Only an unbroken stretch of silence counts against the grace.
+        unreadable_since: datetime | None = None
+        if outcome.unreadable:
+            unreadable_since = spec.unreadable_since or now
+            logger.warning(
+                "agent.wait.target_unreadable.degraded",
+                wait_id=str(claimed.id),
+                conversation_id=str(claimed.conversation_id),
+                unreadable_seconds=int((now - unreadable_since).total_seconds()),
+            )
         decision = decide_wait(
             claimed,
             target_reason=outcome.reason,
             now=now,
-            poll_delay_seconds=next_poll_delay(
-                int(claimed.spec.get("poll_attempt", 0))
-            ),
+            poll_delay_seconds=next_poll_delay(spec.poll_attempt),
+            unreadable_since=unreadable_since,
         )
         if isinstance(decision, WakeNow):
             return await self._wake_claimed(
                 claimed, decision.reason, exit_code=outcome.exit_code
             )
 
-        claimed.rearm(decision.next_at)
+        claimed.rearm(decision.next_at, unreadable_since=unreadable_since)
         await self.waits.update(claimed)
         await self.uow.commit()
         return False
@@ -103,22 +114,20 @@ class AgentWaitService:
 
     # -- internals ---------------------------------------------------------------
 
-    async def _read_target(self, wait: AgentConversationWaitEntity):
-        spec = wait.spec or {}
-        user_id = spec.get("user_id")
-        if not user_id:
+    async def _read_target(self, wait: AgentConversationWaitEntity) -> TargetOutcome:
+        spec = wait.wait_spec
+        user_id = spec.user_id
+        if user_id is None:
             conversation = await self.conversations.get_conversation(
                 wait.conversation_id, include_runs=False
             )
-            user_id = str(conversation.user_id) if conversation else None
-        if not user_id:
-            from app.modules.agent.services.wait_targets import TargetOutcome
-
+            user_id = conversation.user_id if conversation else None
+        if user_id is None:
             return TargetOutcome(reason=None)
         return await read_target(
             wait_type=wait.wait_type,
-            target_ref=spec.get("target_ref"),
-            user_id=UUID(str(user_id)),
+            target_ref=spec.target_ref,
+            user_id=user_id,
             pod_id=wait.pod_id,
             conversation_id=wait.conversation_id,
         )
@@ -178,13 +187,13 @@ class AgentWaitService:
         wait: AgentConversationWaitEntity,
         reason: AgentWaitWakeReason,
         exit_code: int | None,
-    ) -> dict:
-        spec = wait.spec or {}
+    ) -> dict[str, object]:
+        spec = wait.wait_spec
         return build_wait_result(
             wait_type=wait.wait_type,
             reason=reason,
-            waited_seconds=elapsed_seconds(spec.get("started_at")),
-            note_to_self=spec.get("note_to_self"),
+            waited_seconds=elapsed_seconds(spec.started_at),
+            note_to_self=spec.note_to_self,
             exit_code=exit_code,
         )
 

@@ -3973,7 +3973,7 @@
             }
           ],
           "default": null,
-          "description": "Give up waiting after this long and wake anyway, for `process_id` / `subagent_run_id`. Defaults to 60 minutes."
+          "description": "Give up waiting after this long and wake anyway, for `process_id` / `subagent_run_id`. Defaults to 15 minutes; at least 30s, at most 24h. Set it longer for a build or test suite you expect to run past the default."
         },
         "note_to_self": {
           "anyOf": [
@@ -4036,7 +4036,8 @@
                 "DEADLINE",
                 "ANSWERED",
                 "CANCELLED",
-                "TARGET_NEEDS_INPUT"
+                "TARGET_NEEDS_INPUT",
+                "TARGET_UNREADABLE"
               ],
               "type": "string"
             },

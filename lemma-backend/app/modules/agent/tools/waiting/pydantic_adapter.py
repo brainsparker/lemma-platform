@@ -32,7 +32,11 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
-from app.modules.agent.domain.wait import AgentConversationWaitEntity, AgentWaitType
+from app.modules.agent.domain.wait import (
+    AgentConversationWaitEntity,
+    AgentWaitType,
+    WaitSpec,
+)
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
@@ -131,6 +135,18 @@ async def wait_for(
             ),
         )
 
+    if request.max_seconds is not None and request.max_seconds < MIN_WAIT_SECONDS:
+        # `max_seconds=0` used to fall through to the default and silently mean
+        # the whole default ceiling -- the opposite of what was asked.
+        return WaitForResponse(
+            success=False,
+            error=(
+                f"`max_seconds` must be at least {MIN_WAIT_SECONDS}s. Leave it out "
+                f"for the default of {DEFAULT_TARGET_DEADLINE_SECONDS // 60} "
+                "minutes, or set it to how long you are prepared to wait."
+            ),
+        )
+
     now = datetime.now(timezone.utc)
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         existing = await AgentConversationWaitRepository(uow).find_active_for_run(
@@ -186,18 +202,16 @@ async def wait_for(
         wait_type=wait_type,
         external_ref=str(wait_ref),
         scheduled_at=scheduled_at,
-        spec={
-            "reason": request.reason,
-            "note_to_self": request.note_to_self,
-            "started_at": now.isoformat(),
-            "deadline_at": deadline_at.isoformat(),
-            "target_ref": external_ref,
-            "user_id": str(deps.user_id),
-            # The unclamped ask, kept so the resolution can see what the model
-            # actually wanted rather than only what it was allowed.
-            "requested_seconds": request.seconds,
-            "requested_max_seconds": request.max_seconds,
-        },
+        spec=WaitSpec(
+            reason=request.reason,
+            note_to_self=request.note_to_self,
+            started_at=now,
+            deadline_at=deadline_at,
+            target_ref=external_ref,
+            user_id=deps.user_id,
+            requested_seconds=request.seconds,
+            requested_max_seconds=request.max_seconds,
+        ).to_json(),
     )
     suspends_itself = bool(getattr(deps, "supports_pause_signal", False))
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:

@@ -1199,6 +1199,12 @@
             "title": "Conversation Id",
             "type": "string"
           },
+          "deduplicated": {
+            "default": false,
+            "description": "True when this send was already received -- the same client_message_id, or the same text from the same person a moment ago. Nothing new was stored; agent_run_id is the run already answering it.",
+            "title": "Deduplicated",
+            "type": "boolean"
+          },
           "started_new_run": {
             "title": "Started New Run",
             "type": "boolean"
@@ -4212,6 +4218,12 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "has_pending_interaction": {
+            "default": false,
+            "description": "A question, approval or Agent Host permission request here is waiting on the conversation's owner. Not implied by status: a WAITING conversation may be waiting on a timer, and a permission request waits inside a RUNNING one.",
+            "title": "Has Pending Interaction",
+            "type": "boolean"
           },
           "id": {
             "format": "uuid",
@@ -10982,6 +10994,7 @@
         "description": "Where the *channel* is: did the message physically get to them?\n\nDeliberately a second column rather than more members on\n:class:`NotificationStatus`. The two axes are independent \u2014 a notification\ncan be DELIVERED and still OPEN (they haven't answered), or UNDELIVERABLE\nand still RESPONDED (they saw it in the app and replied there). Smearing\nthem into one enum is how you end up unable to answer \"who did we fail to\nreach?\", which is the only question this column exists for.",
         "enum": [
           "PENDING",
+          "SENDING",
           "DELIVERED",
           "UNDELIVERABLE",
           "FAILED"
@@ -12502,6 +12515,136 @@
           "resumable"
         ],
         "title": "PartialApplyResponse",
+        "type": "object"
+      },
+      "PendingInteractionKind": {
+        "description": "What the person is being asked for.",
+        "enum": [
+          "QUESTION",
+          "APPROVAL",
+          "PERMISSION"
+        ],
+        "title": "PendingInteractionKind",
+        "type": "string"
+      },
+      "PendingInteractionListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PendingInteractionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
+          }
+        },
+        "required": [
+          "items",
+          "limit"
+        ],
+        "title": "PendingInteractionListResponse",
+        "type": "object"
+      },
+      "PendingInteractionResponse": {
+        "description": "One pause waiting on the caller, and the conversation it is in.",
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent for the pod's own assistant on older conversations.",
+            "title": "Agent Id"
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "conversation_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conversation_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Title"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PendingInteractionKind"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The question asked, or the approval's title, on one line.",
+            "title": "Summary"
+          },
+          "tool_call_id": {
+            "description": "The paused call, which is also the approval id the decision endpoint takes.",
+            "title": "Tool Call Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "tool_call_id",
+          "kind",
+          "created_at"
+        ],
+        "title": "PendingInteractionResponse",
         "type": "object"
       },
       "PendingSignInResponse": {
@@ -15125,7 +15268,23 @@
       },
       "SendMessageRequest": {
         "properties": {
+          "client_message_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The sender's own id for this send, generated once per message the person sends and reused on every retry of it. A second send with an id already used in this conversation stores nothing and returns the first send's run, with deduplicated=true.",
+            "title": "Client Message Id"
+          },
           "content": {
+            "maxLength": 60000,
+            "minLength": 1,
             "title": "Content",
             "type": "string"
           },
@@ -28439,6 +28598,85 @@
         }
       }
     },
+    "/pods/{pod_id}/conversations/pending-interactions": {
+      "get": {
+        "description": "List every ask_user question, request_approval and Agent Host permission request waiting on the caller, across their own conversations in the pod, sub-agent conversations included and archived ones left out. Longest-waiting first. Resolve one through the conversation's approval decision endpoint, using tool_call_id as the approval id. A permission request drops off once the Agent Host has stopped waiting for it.",
+        "operationId": "agent.conversation.pending_interaction.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingInteractionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Interactions Waiting On You",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "agent.conversation.pending_interaction",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
     "/pods/{pod_id}/conversations/{conversation_id}": {
       "get": {
         "description": "Get a single pod-scoped assistant or agent conversation by id.",
@@ -28906,7 +29144,7 @@
     },
     "/pods/{pod_id}/conversations/{conversation_id}/messages/append": {
       "post": {
-        "description": "Append a user message without opening a Server-Sent Events stream. When a run is already active for the conversation, the message joins that run and the next harness step sees it in persisted history -- any stream already subscribed to the conversation surfaces the resulting events, so callers steering an in-flight run should attach to that stream rather than opening a second one here. When no run is active, this starts a new one exactly like the streaming send route, just without attaching a stream to it.",
+        "description": "Append a user message without opening a Server-Sent Events stream. When a run is already active for the conversation, the message joins that run and the next harness step sees it in persisted history -- any stream already subscribed to the conversation surfaces the resulting events, so callers steering an in-flight run should attach to that stream rather than opening a second one here. When no run is active, this starts a new one like the streaming send route, unstreamed.",
         "operationId": "agent.conversation.message.append",
         "parameters": [
           {
@@ -38334,7 +38572,7 @@
         }
       },
       "post": {
-        "description": "Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint.",
+        "description": "Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same workflow, returns the run it already created.",
         "operationId": "workflow.run.create",
         "parameters": [
           {
@@ -38354,6 +38592,24 @@
             "schema": {
               "title": "Workflow Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
             }
           }
         ],

@@ -377,6 +377,9 @@ _NAME_TO_MODULE = {
     'OrganizationSlugAvailabilityResponse': 'organization_slug_availability_response',
     'OrganizationUpdateRequest': 'organization_update_request',
     'PartialApplyResponse': 'partial_apply_response',
+    'PendingInteractionKind': 'pending_interaction_kind',
+    'PendingInteractionListResponse': 'pending_interaction_list_response',
+    'PendingInteractionResponse': 'pending_interaction_response',
     'PendingSignInResponse': 'pending_sign_in_response',
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
@@ -987,6 +990,9 @@ if TYPE_CHECKING:
     from .organization_slug_availability_response import OrganizationSlugAvailabilityResponse
     from .organization_update_request import OrganizationUpdateRequest
     from .partial_apply_response import PartialApplyResponse
+    from .pending_interaction_kind import PendingInteractionKind
+    from .pending_interaction_list_response import PendingInteractionListResponse
+    from .pending_interaction_response import PendingInteractionResponse
     from .pending_sign_in_response import PendingSignInResponse
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
@@ -1610,6 +1616,9 @@ __all__ = [
     'OrganizationSlugAvailabilityResponse',
     'OrganizationUpdateRequest',
     'PartialApplyResponse',
+    'PendingInteractionKind',
+    'PendingInteractionListResponse',
+    'PendingInteractionResponse',
     'PendingSignInResponse',
     'PlanStepResponse',
     'PlanStepResponseDetail',

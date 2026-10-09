@@ -31,6 +31,11 @@ def webhook_source_event_id(
     for the shared platform-level endpoint. The pair is unique across the
     deployment; neither half is on its own.
     """
+    if platform.lower() == "whatsapp":
+        wamids = _whatsapp_delivery_ids(payload)
+        if wamids:
+            digest = hashlib.sha256("\n".join(wamids).encode()).hexdigest()
+            return f"{platform}:{receiver}:wamids-sha256:{digest}"
     candidates: list[object] = [
         payload.get("event_id"),
         payload.get("update_id"),
@@ -45,6 +50,33 @@ def webhook_source_event_id(
             return f"{platform}:{receiver}:{candidate}"
     digest = hashlib.sha256(raw_body).hexdigest()
     return f"{platform}:{receiver}:content-sha256:{digest}"
+
+
+def _whatsapp_delivery_ids(payload: Mapping[str, Any]) -> list[str]:
+    """What a WhatsApp delivery is about, sorted, however Meta batched it.
+
+    A WhatsApp webhook has no id of its own, so the body hash stood in -- and
+    Meta retries for days and may re-batch a retry, which hashes differently and
+    started a second run once the short Redis claim had expired. A message's
+    ``wamid`` is stable across retries. A status names the outbound message it
+    is about, so it is keyed with its state: "delivered" and "read" for one
+    message are two deliveries.
+    """
+    found: set[str] = set()
+    entries = payload.get("entry")
+    for entry in entries if isinstance(entries, list) else []:
+        changes = entry.get("changes") if isinstance(entry, dict) else None
+        for change in changes if isinstance(changes, list) else []:
+            value = change.get("value") if isinstance(change, dict) else None
+            if not isinstance(value, dict):
+                continue
+            for message in value.get("messages") or []:
+                if isinstance(message, dict) and message.get("id"):
+                    found.add(f"message:{message['id']}")
+            for status in value.get("statuses") or []:
+                if isinstance(status, dict) and status.get("id"):
+                    found.add(f"status:{status['id']}:{status.get('status') or ''}")
+    return sorted(found)
 
 
 def native_source_event_id(

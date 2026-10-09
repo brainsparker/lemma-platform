@@ -28,9 +28,15 @@ from app.core.infrastructure.jobs.streaq_runtime import (
 )
 from app.modules.agent_surfaces.composition import (
     build_app_event_handler,
+    build_surface_egress,
     build_surface_ingress,
     build_surface_service,
     build_surface_turn_starter,
+)
+from app.modules.agent_surfaces.services.owed_reply import (
+    DELIVER_OWED_REPLY_JOB,
+    OwedReply,
+    deliver_owed_reply,
 )
 from app.modules.agent_surfaces.domain.events import (
     SurfaceWebhookReceivedEvent,
@@ -75,7 +81,10 @@ from app.modules.identity.domain.events import (
 )
 from app.core.log.log import get_logger
 
-from app.modules.agent_surfaces.domain.delivery_limits import CONSUMER_ATTEMPTS
+from app.modules.agent_surfaces.domain.delivery_limits import (
+    CONSUMER_ATTEMPTS,
+    OWED_REPLY_JOB_TRIES,
+)
 
 logger = get_logger(__name__)
 
@@ -481,3 +490,15 @@ async def process_surface_message(
     # connection is held during that I/O.
     starter = build_surface_turn_starter(worker_ctx.uow_factory)
     await starter.execute_chat(task_payload.context)
+
+
+# One try: the job reschedules itself with the wait the platform asked for, and
+# a streaq retry would send again on its own clock instead.
+@streaq_task(name=DELIVER_OWED_REPLY_JOB, max_tries=OWED_REPLY_JOB_TRIES)
+async def deliver_owed_reply_task(payload: dict[str, object]) -> None:
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    await deliver_owed_reply(
+        OwedReply.model_validate(payload),
+        uow_factory=worker_ctx.uow_factory,
+        egress_factory=build_surface_egress,
+    )

@@ -15,15 +15,28 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
+from redis.exceptions import RedisError
+
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import Conversation
+from app.modules.agent_surfaces.platforms.delivery import SendOutcome, track_sends
+from app.modules.agent_surfaces.services.owed_reply import (
+    OwedReply,
+    owe_reply,
+    owes_a_retry,
+)
+from app.modules.agent_surfaces.services.pending_envelope import RunFiles
 
 logger = get_logger(__name__)
+
+#: What enqueueing the deferred retry can fail with: the queue is Redis.
+_SCHEDULE_ERRORS: tuple[type[BaseException], ...] = (RedisError, OSError)
 
 
 class ReplyState(Protocol):
     """What of the observer the reply reads and records."""
 
+    _run_files: RunFiles
     _final_delivered: bool
     _final_send_failed: bool
     _final_answer_text: str | None
@@ -81,28 +94,56 @@ async def deliver_final_answer(state: ReplyState, conversation: Conversation) ->
     # Marked delivered only once it was, not before the send: latching first
     # meant a send that failed still counted as the answer having gone out, and
     # nothing that read the flag afterwards could tell the difference.
-    try:
-        delivered = await state._send_agent_message(
-            conversation_id=conversation.id,
-            message=message,
-        )
-    except Exception:
-        logger.warning(
-            "agent_surfaces.progress_observer.final_answer_not_delivered.degraded",
-            conversation_id=str(conversation.id),
-            exc_info=True,
-        )
-        state._final_send_failed = True
-        return
+    with track_sends() as outcome:
+        try:
+            delivered = await state._send_agent_message(
+                conversation_id=conversation.id,
+                message=message,
+            )
+        except Exception:
+            logger.warning(
+                "agent_surfaces.progress_observer.final_answer_not_delivered.degraded",
+                conversation_id=str(conversation.id),
+                exc_info=True,
+            )
+            delivered = False
     if delivered:
         state._final_delivered = True
-    else:
-        state._final_send_failed = True
-        # The send path says why -- no surface link, a platform refusal -- so
-        # this only records that the answer did not go out.
-        logger.debug(
-            "agent_surfaces.progress_observer.final_answer_unsent.diagnostic",
+        return
+    state._final_send_failed = True
+    if owes_a_retry(outcome):
+        await _owe(state, conversation, message, outcome)
+        return
+    # The send path says why -- no surface link, a platform refusal -- so this
+    # only records that the answer did not go out.
+    logger.debug(
+        "agent_surfaces.progress_observer.final_answer_unsent.diagnostic",
+        conversation_id=str(conversation.id),
+    )
+
+
+async def _owe(
+    state: ReplyState, conversation: Conversation, message: str, outcome: SendOutcome
+) -> None:
+    """Hand an answer the platform would not take yet to a deferred retry.
+
+    The run's held files stay held for it: ``on_run_finished`` keeps them when
+    the send failed, and the retry is the reply that carries them.
+    """
+    try:
+        await owe_reply(
+            OwedReply(
+                conversation_id=conversation.id,
+                agent_run_id=state._run_files.agent_run_id,
+                message=message,
+            ),
+            retry_after=outcome.retry_after,
+        )
+    except _SCHEDULE_ERRORS:
+        logger.warning(
+            "agent_surfaces.progress_observer.owed_reply_not_scheduled.degraded",
             conversation_id=str(conversation.id),
+            exc_info=True,
         )
 
 

@@ -22,7 +22,10 @@ from app.core.log.log import get_logger
 from app.core.net.aiohttp_client import new_aiohttp_session
 from app.core.observability.dependency_incident import DependencyIncident
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
-from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
+from app.modules.agent_surfaces.platforms.delivery import (
+    DeliveryClassification,
+    classify_transport_failure,
+)
 from app.modules.agent_surfaces.platforms.teams.attachment_urls import (
     is_bot_framework_service_url,
 )
@@ -276,9 +279,9 @@ def classify_teams_error(exc: Exception) -> DeliveryClassification:
         if exc.status == 429 or exc.status >= 500:
             return DeliveryClassification.TRANSIENT
         return DeliveryClassification.PERMANENT
-    if isinstance(exc, (aiohttp.ClientError, TimeoutError)):
-        return DeliveryClassification.TRANSIENT
-    return DeliveryClassification.PERMANENT
+    # A posted activity is not idempotent: a timeout after it went out may
+    # have posted it.
+    return classify_transport_failure(exc)
 
 
 def teams_retry_after(exc: Exception) -> float | None:

@@ -28,7 +28,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestion,
 )
 from app.modules.agent_surfaces.platforms.attachment_limits import media_kind_for_mime
-from app.modules.agent_surfaces.platforms.rendering import chunk_text
+from app.modules.agent_surfaces.platforms.rendering import chunk_text, utf16_length
 from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
     balance_whatsapp_delimiters,
     to_plain_text,
@@ -311,7 +311,11 @@ def whatsapp_message_bodies(message: str) -> list[str]:
         balanced
         for balanced in (
             balance_whatsapp_delimiters(chunk)
-            for chunk in chunk_text(body, limit=WHATSAPP_TEXT_LIMIT)
+            # UTF-16 units: never more than Meta's character count, and the
+            # safe side of it for emoji-heavy text.
+            for chunk in chunk_text(
+                body, limit=WHATSAPP_TEXT_LIMIT, length=utf16_length
+            )
         )
         if balanced.strip()
     ]

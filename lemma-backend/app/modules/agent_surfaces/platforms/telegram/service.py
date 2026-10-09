@@ -38,8 +38,12 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     TelegramSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms import common
-from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
-from app.modules.agent_surfaces.platforms.rendering import chunk_text
+from app.modules.agent_surfaces.platforms.delivery import (
+    RetryPolicy,
+    note_partial_delivery,
+    with_retry,
+)
+from app.modules.agent_surfaces.platforms.rendering import chunk_text, utf16_length
 from app.modules.agent_surfaces.platforms.common import (
     PLATFORM_TRANSPORT_ERRORS,
     assert_safe_api_base,
@@ -47,7 +51,7 @@ from app.modules.agent_surfaces.platforms.common import (
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TELEGRAM_MESSAGE_LIMIT,
     TelegramClient,
-    classify_telegram_error,
+    classify_telegram_send_error,
     telegram_retry_after,
 )
 from app.modules.agent_surfaces.platforms.telegram.message_experience import (
@@ -201,7 +205,9 @@ class TelegramPlatformService:
         # `chunk_text("")` is `[]`, and the `or [message or ""]` this replaces
         # made that one empty chunk: a blank bubble, and for an approval one
         # with no words and no buttons.
-        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT)
+        raw_chunks = chunk_text(
+            message, limit=TELEGRAM_MESSAGE_LIMIT, length=utf16_length
+        )
         if not raw_chunks:
             logger.warning(
                 "agent_surfaces.telegram.empty_message_not_sent",
@@ -224,6 +230,7 @@ class TelegramPlatformService:
                 if index:
                     # Earlier chunks are already in the chat. The caller only
                     # sees "not delivered", so say what actually happened.
+                    note_partial_delivery()
                     logger.warning(
                         "agent_surfaces.telegram.message_partially_delivered.degraded",
                         sent_chunks=index,
@@ -388,7 +395,7 @@ class TelegramPlatformService:
         return await with_retry(
             lambda: self._client.call(method, payload),
             policy=self._retry_policy,
-            classify=classify_telegram_error,
+            classify=classify_telegram_send_error,
             retry_after=telegram_retry_after,
         )
 

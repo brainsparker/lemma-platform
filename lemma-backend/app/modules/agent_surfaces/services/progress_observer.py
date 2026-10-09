@@ -127,7 +127,8 @@ class SurfaceAgentRunProgressObserver(
         self._reset_text_on_next = False
         self._final_delivered = False
         # The reply was attempted and did not go out. The run's held files stay
-        # for the retry of that reply instead of being discarded with the run.
+        # for the deferred retry of that reply (`owed_reply`) instead of being
+        # discarded with the run.
         self._final_send_failed = False
         # Whose held files this observer's replies carry; set from the run's
         # context, which is the only place the run's id is known.
@@ -377,8 +378,9 @@ class SurfaceAgentRunProgressObserver(
         # Anything display_resource held for a single reply belongs to this run,
         # and is released with the reply that carried it. It is discarded here
         # only when nothing is left to recover: a reply that failed to send keeps
-        # its files, under this run's key, for the retry of that same reply --
-        # no other run reads them, and they expire on their own.
+        # its files, under this run's key, for the deferred retry `owed_reply`
+        # makes of a transient failure -- which discards them when it is done.
+        # No other run reads them, and a reply nobody retries lets them expire.
         if not self._final_send_failed:
             await discard_display_paths(conversation.id, self._run_files)
 

@@ -29,7 +29,11 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
-from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
+from app.modules.agent_surfaces.platforms.delivery import (
+    RetryPolicy,
+    note_partial_delivery,
+    with_retry,
+)
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.teams import client
@@ -136,6 +140,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                 await self._post_activity(url, token=token, body=body)
             except PLATFORM_TRANSPORT_ERRORS:
                 if index:
+                    note_partial_delivery()
                     logger.warning(
                         "agent_surfaces.adapter.teams_message_partially_delivered.degraded",
                         sent_chunks=index,

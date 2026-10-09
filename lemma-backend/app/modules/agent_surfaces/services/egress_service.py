@@ -37,7 +37,11 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
-from app.modules.agent_surfaces.domain.envelope import EnvelopeVoice, SurfaceEnvelope
+from app.modules.agent_surfaces.domain.envelope import (
+    EnvelopeVoice,
+    PartDelivery,
+    SurfaceEnvelope,
+)
 from app.modules.agent_surfaces.domain.ports import ColdEmailThread
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.cold_email_thread import (
@@ -66,6 +70,7 @@ from app.modules.agent_surfaces.services.one_reply_attachments import (
     release_held_files,
 )
 from app.modules.agent_surfaces.services.pending_envelope import RunFiles
+from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 from app.modules.agent.contracts.interaction_replies import ask_user_request_dict
 from app.modules.agent_surfaces.services.surface_sign_in import (
     sign_in_prompt_envelope,
@@ -170,20 +175,49 @@ class SurfaceEgress:
                 run=attach_files_of,
             )
         )
-        delivered = await self.delivery.deliver_envelope(
+        return await self._deliver_with_held_files(
             target,
             envelope=SurfaceEnvelope(text=clean_message, files=files),
             metadata=await self.delivery.egress_metadata(target, metadata),
             conversation_id=conversation_id,
+            run=attach_files_of,
+            held=held,
         )
-        if delivered and held and attach_files_of is not None:
+
+    async def _deliver_with_held_files(
+        self,
+        target: SurfaceEgressTarget,
+        *,
+        envelope: SurfaceEnvelope,
+        metadata: dict[str, object],
+        conversation_id: UUID,
+        run: RunFiles | None,
+        held: list[str],
+    ) -> bool:
+        """Deliver an envelope; release the held files only if theirs arrived.
+
+        A reply can land while its attachments do not, and releasing on "the
+        envelope arrived" dropped those files from the hold: the reply the person
+        got did not have them, and nothing that came after could carry them.
+        """
+        receipt = await self.delivery.deliver_envelope_receipt(
+            target,
+            envelope=envelope,
+            metadata=metadata,
+            conversation_id=conversation_id,
+        )
+        if receipt is None:
+            return False
+        files_arrived = all(
+            outcome is not PartDelivery.UNDELIVERED
+            for part, outcome in receipt.parts.items()
+            if part == "files" or part.startswith("files[")
+        )
+        if held and run is not None and files_arrived:
             await release_held_files(
-                uow=self.uow,
-                conversation_id=conversation_id,
-                run=attach_files_of,
-                paths=held,
+                uow=self.uow, conversation_id=conversation_id, run=run, paths=held
             )
-        return delivered
+        return True
 
     async def send_display_resource_for_conversation(
         self,
@@ -317,7 +351,7 @@ class SurfaceEgress:
             conversation_id=conversation_id,
             run=attach_files_of,
         )
-        delivered = await self.delivery.deliver_envelope(
+        return await self._deliver_with_held_files(
             target,
             # The lead-in and the question are one thing the person receives.
             # Sent as two, they arrive as two on a chat surface and as two
@@ -325,15 +359,9 @@ class SurfaceEgress:
             envelope=SurfaceEnvelope(text=narration, choices=plan, files=files),
             metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
+            run=attach_files_of,
+            held=held,
         )
-        if delivered and held and attach_files_of is not None:
-            await release_held_files(
-                uow=self.uow,
-                conversation_id=conversation_id,
-                run=attach_files_of,
-                paths=held,
-            )
-        return delivered
 
     async def send_prompt_as_text_for_conversation(
         self,
@@ -486,7 +514,7 @@ class SurfaceEgress:
             conversation_id=conversation_id,
             run=attach_files_of,
         )
-        delivered = await self.delivery.deliver_envelope(
+        return await self._deliver_with_held_files(
             target,
             envelope=SurfaceEnvelope(
                 text=narration,
@@ -497,15 +525,9 @@ class SurfaceEgress:
             ),
             metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
+            run=attach_files_of,
+            held=held,
         )
-        if delivered and held and attach_files_of is not None:
-            await release_held_files(
-                uow=self.uow,
-                conversation_id=conversation_id,
-                run=attach_files_of,
-                paths=held,
-            )
-        return delivered
 
     async def send_voice_note_for_conversation(
         self,

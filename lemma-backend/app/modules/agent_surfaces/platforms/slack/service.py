@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 import httpx
 from app.modules.agent_surfaces.platforms.slack.reply_blocks import reply_blocks
@@ -36,7 +37,11 @@ from app.modules.agent_surfaces.platforms.slack.message_blocks import (
     question_blocks_fit,
     slack_acknowledgement_body,
 )
-from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
+from app.modules.agent_surfaces.platforms.delivery import (
+    RetryPolicy,
+    note_partial_delivery,
+    with_retry,
+)
 from app.modules.agent_surfaces.platforms.slack.streaming import (
     remove_processing_reaction,
 )
@@ -102,6 +107,10 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
         wrong one for anything that has to be answered later.
         """
         user = str(payload.pop("ephemeral_user", "") or "")
+        if not user:
+            # One id for every attempt at this message, so a retry after a
+            # 5xx Slack had in fact accepted names the post it repeats.
+            payload.setdefault("client_msg_id", str(uuid4()))
         send = (
             (lambda: client.chat_postEphemeral(user=user, **payload))
             if user
@@ -202,6 +211,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
         chunks = chunk_text(message, limit=MARKDOWN_BLOCK_CHAR_LIMIT) or [message]
         # Empty for a normal channel post; `_post_message` decides on it.
         ephemeral_user = _ephemeral_target(metadata)
+        index = 0
         try:
             for index, chunk in enumerate(chunks):
                 blocks = reply_blocks(
@@ -221,6 +231,8 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                 payload["ephemeral_user"] = ephemeral_user
                 await self._post_message(client, payload)
         except Exception:
+            if index:
+                note_partial_delivery()
             logger.debug(
                 "agent_surfaces.service.slack_send_message_channel_s.propagated",
                 exc_info=True,

@@ -24,6 +24,7 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
 )
 from app.modules.agent_surfaces.platforms import common
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.delivery import note_partial_delivery
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.whatsapp import media
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
@@ -158,6 +159,7 @@ class WhatsAppPlatformService:
                     # this as "not delivered" and there is no rung below plain
                     # text to fall back to, so what it cannot say is that half
                     # the answer is on their phone.
+                    note_partial_delivery()
                     logger.warning(
                         "agent_surfaces.service.whatsapp_message_partially_delivered.degraded",
                         sent_parts=index,

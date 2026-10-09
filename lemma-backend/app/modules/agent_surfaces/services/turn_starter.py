@@ -94,6 +94,7 @@ from app.modules.agent_surfaces.services.surface_inbound_message import (
 )
 from app.modules.agent_surfaces.services.telegram_command_service import (
     handle_telegram_command,
+    handle_typed_retry,
 )
 
 logger = get_logger(__name__)
@@ -165,13 +166,14 @@ class SurfaceTurnStarter:
             return
 
         credentials = await self._credentials_for(context)
-        if await handle_telegram_command(
-            context=context,
-            adapter=adapter,
-            credentials=credentials,
-            uow_factory=self.uow_factory,
-        ):
-            return
+        for handled_here in (handle_telegram_command, handle_typed_retry):
+            if await handled_here(
+                context=context,
+                adapter=adapter,
+                credentials=credentials,
+                uow_factory=self.uow_factory,
+            ):
+                return
         with suppress(*PLATFORM_TRANSPORT_ERRORS):
             await adapter.add_processing_indicator(
                 credentials=credentials,

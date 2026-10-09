@@ -55,7 +55,9 @@ from app.modules.agent_surfaces.services.progress_events import (
     _join_text,
     _safe_run_error_text,
     _surface_platform,
+    failure_notice,
 )
+from app.modules.agent.contracts.run_failures import user_safe_failure_reason
 
 logger = get_logger(__name__)
 
@@ -210,7 +212,9 @@ class SurfaceAgentRunProgressObserver(
             return
         if event.type in {AgentEventType.ERROR, AgentEventType.REJECTED}:
             self._run_errored = True
-            self._run_error_text = _safe_run_error_text(event)
+            self._run_error_text = _safe_run_error_text(
+                event, _surface_platform(conversation)
+            )
             return
 
         if event.type == AgentEventType.WAITING:
@@ -384,13 +388,11 @@ class SurfaceAgentRunProgressObserver(
         error: Exception,
     ) -> None:
         """Deliver failures raised before the harness can emit an error event."""
-        del error
         if self._stays_in_lemma:
             return
         self._run_errored = True
-        self._run_error_text = (
-            "I couldn’t finish that request. "
-            "Try it again without resending your message."
+        self._run_error_text = failure_notice(
+            user_safe_failure_reason(error), _surface_platform(conversation)
         )
         task = self._typing_task
         self._typing_task = None

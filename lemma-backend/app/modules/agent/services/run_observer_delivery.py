@@ -56,7 +56,12 @@ async def notify_run_started(
     ctx: ConversationContext,
     agent_run_id: UUID,
 ) -> bool:
-    """True when the observer accepted the start, so the finish is owed to it."""
+    """True when the observer accepted the start.
+
+    The finish is owed to the observer either way: a start that failed (a typing
+    bubble, a stream that would not open) leaves the run's answer still to be
+    delivered, and it used to be skipped along with the start.
+    """
     if observer is None:
         return False
     return await _deliver(

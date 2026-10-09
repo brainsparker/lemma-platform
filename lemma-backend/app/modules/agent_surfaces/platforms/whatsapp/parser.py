@@ -19,6 +19,7 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     WHATSAPP_APPROVAL_HEADER,
     WHATSAPP_INTERACTION_SEP,
+    WHATSAPP_RETRY_HEADER,
 )
 
 
@@ -196,6 +197,27 @@ def _replies_to(msg: dict[str, object], business_number: str) -> bool:
     return bool(digits) and "".join(c for c in quoted_from if c.isdigit()) == digits
 
 
+def _retry_tap(
+    common: dict[str, Any], sender_wa_id: str, phone_number_id: object
+) -> ParsedSurfaceInteraction:
+    """A "Try again" tap, located the way the chat's DM link is keyed.
+
+    That is the number it arrived on and the sender at that number -- not the
+    bare sender every other tap carries, which finds no link for a retry.
+    """
+    number = str(phone_number_id or "")
+    return ParsedSurfaceInteraction(
+        action="retry",
+        **{
+            **common,
+            "external_channel_id": number or None,
+            "external_thread_id": (
+                f"{sender_wa_id}@{number}" if sender_wa_id and number else None
+            ),
+        },
+    )
+
+
 def _envelope(payload: dict[str, Any]) -> _WhatsAppEnvelope | None:
     """The message inside a webhook delivery, or None when it carries none."""
     entry_list = payload.get("entry") or []
@@ -267,6 +289,8 @@ class WhatsAppMessageParser:
                 "dedup_id": payload_text(msg, "id") or None,
                 "raw_payload": payload,
             }
+            if header == WHATSAPP_RETRY_HEADER:
+                return _retry_tap(common, sender_wa_id, phone_number_id)
             # An approval button reply carries the decision in place of an
             # answer; everything else is an ask_user answer keyed by header.
             if header == WHATSAPP_APPROVAL_HEADER:

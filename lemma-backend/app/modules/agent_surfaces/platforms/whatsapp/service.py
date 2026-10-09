@@ -38,6 +38,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     WhatsAppRecipient,
     build_whatsapp_approval_interactive,
     build_whatsapp_interactive,
+    build_whatsapp_retry_interactive,
     whatsapp_cta_url_payload,
     whatsapp_display_resource_text,
     flow_with_message,
@@ -133,6 +134,12 @@ class WhatsAppPlatformService:
             )
             return
         bodies = whatsapp_message_bodies(message)
+        retry = _retry_notice(bodies, metadata, recipient)
+        if retry is not None:
+            await self._client.send_interactive(
+                phone_number_id=phone_number_id, to=recipient.to, interactive=retry
+            )
+            return
         for index, body in enumerate(bodies):
             try:
                 await self._client.send_message_payload(
@@ -570,3 +577,18 @@ class WhatsAppPlatformService:
 def _recipient(event: ParsedInboundSurfaceEvent) -> WhatsAppRecipient | None:
     """Who a reply to this event goes to: its group, else the person."""
     return whatsapp_recipient(event.reply_target, fallback_wa_id=event.sender_phone)
+
+
+def _retry_notice(
+    bodies: list[str],
+    metadata: dict[str, Any] | None,
+    recipient: WhatsAppRecipient,
+) -> dict[str, Any] | None:
+    """A failure notice as a message with a Try again button, where it fits.
+
+    A DM only: in a group anyone could tap it, and the tap is keyed to the
+    person's own chat.
+    """
+    if not (metadata or {}).get("retry_action") or recipient.is_group:
+        return None
+    return build_whatsapp_retry_interactive(bodies[0]) if len(bodies) == 1 else None

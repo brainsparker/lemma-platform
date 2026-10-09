@@ -177,6 +177,10 @@ class PlatformCapabilities:
     # its own `ts` -- and adopting the person's last link there collapsed every
     # DM thread into one and moved replies between them.
     dm_address_may_move: bool = False
+    # Can a failure notice carry a "Try again" control that re-runs the failed
+    # request (``retry_action`` in the message metadata)? Where it cannot, the
+    # notice asks for a typed "retry", which works on every platform.
+    supports_native_retry: bool = False
 
     @property
     def delivery_cardinality(self) -> DeliveryCardinality:
@@ -276,6 +280,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_SLACK_FORMATTING,
         soft_char_limit=3000,
         progress_style=ProgressStyle.STREAM,
+        supports_native_retry=True,
     ),
     "TEAMS": PlatformCapabilities(
         platform="TEAMS",
@@ -294,6 +299,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_TEAMS_FORMATTING,
         soft_char_limit=4000,
         progress_style=ProgressStyle.EDIT,
+        supports_native_retry=True,
     ),
     "WHATSAPP": PlatformCapabilities(
         platform="WHATSAPP",
@@ -315,6 +321,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # in the person's chat. Rationed hard by the observer: a plan when the
         # agent has one, otherwise a single "still going" on a long run.
         progress_style=ProgressStyle.POST,
+        supports_native_retry=True,
         # Meta closes free-form messaging 24h after the person's last message.
         # A notification past that window needs an approved template, which we
         # do not have, so delivery falls through to the next channel.
@@ -363,6 +370,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         has_shared_system_bot=True,
         supports_native_voice=True,
         progress_style=ProgressStyle.EDIT,
+        supports_native_retry=True,
         # A DM's live update is a thinking chip — one line, newlines collapsed.
         # A group's is a plain edited message, which would hold a checklist, but
         # a platform showing two different shapes of the same update is worth

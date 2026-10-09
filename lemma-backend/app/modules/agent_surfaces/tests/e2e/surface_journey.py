@@ -68,6 +68,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     resume_latest_scripted_run,
 )
+from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.models import AgentModel
 
 #: Every chat platform the "every platform gets the full product" promise
@@ -129,7 +130,11 @@ class SurfaceStage:
     # ── saying something ──────────────────────────────────────────────────
 
     async def say(
-        self, text: str, *, script: list[ScriptTurn] | None = None
+        self,
+        text: str,
+        *,
+        script: list[ScriptTurn] | None = None,
+        expected_status: AgentRunStatus = AgentRunStatus.COMPLETED,
     ) -> SurfaceChatContext:
         """Deliver one inbound message and drive the run it starts."""
         self._turn += 1
@@ -141,6 +146,7 @@ class SurfaceStage:
                 headers={},
             ),
             script=script,
+            expected_status=expected_status,
         )
         assert isinstance(context, SurfaceChatContext), (
             f"{self.platform.value}: the message did not become a conversation"
@@ -407,7 +413,10 @@ _CONTROL_READERS = {
 
 _PRESS_BUILDERS = {
     SurfacePlatform.SLACK: lambda stage, control: slack_payloads.button_press(
-        value=control.value, action_id=control.action, sender=stage.sender_id
+        value=control.value,
+        action_id=control.action,
+        sender=stage.sender_id,
+        thread_ts=stage._thread or None,
     ),
     SurfacePlatform.TEAMS: lambda stage, control: teams_payloads.card_submit(
         service_url=stage.surface["_service_url"], values=control.data

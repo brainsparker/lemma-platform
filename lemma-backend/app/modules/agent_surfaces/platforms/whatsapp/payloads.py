@@ -57,6 +57,33 @@ WHATSAPP_INTERACTION_SEP = "~"
 # approval decision instead of an ask_user answer.
 WHATSAPP_APPROVAL_HEADER = "__approval__"
 
+# The same sentinel slot for a failure notice's "Try again" button. A retry
+# carries no callback: the chat it is tapped in names the failed request.
+WHATSAPP_RETRY_HEADER = "__retry__"
+_WHATSAPP_RETRY_BUTTON_ID = (
+    f"retry{WHATSAPP_INTERACTION_SEP}{WHATSAPP_RETRY_HEADER}"
+    f"{WHATSAPP_INTERACTION_SEP}retry"
+)
+
+
+def build_whatsapp_retry_interactive(body: str) -> dict[str, Any] | None:
+    """A reply button under a failure notice, or None when the notice is too
+    long to be an interactive body and must go as plain text."""
+    if not body.strip() or len(body) > INTERACTIVE_BODY_LIMIT:
+        return None
+    return {
+        "type": "button",
+        "body": {"text": body},
+        "action": {
+            "buttons": [
+                {
+                    "type": "reply",
+                    "reply": {"id": _WHATSAPP_RETRY_BUTTON_ID, "title": "Try again"},
+                }
+            ]
+        },
+    }
+
 
 @dataclass(frozen=True, slots=True)
 class WhatsAppRecipient:

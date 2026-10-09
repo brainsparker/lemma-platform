@@ -265,7 +265,6 @@ class AgentRunnerService:
                     "runtime_credentials": runtime_credentials,
                 },
             )
-            observer_started = False
             harness_agent = self._agent_with_resolved_runtime_metadata(
                 agent,
                 resolved_runtime=resolved_runtime,
@@ -296,9 +295,7 @@ class AgentRunnerService:
                     )
                     # Trace summaries let operators identify a turn without opening it.
                     record_span_input(span, run_input_text(messages))
-                    observer_started = await notify_run_started(
-                        observer, conversation, ctx, agent_run_id
-                    )
+                    await notify_run_started(observer, conversation, ctx, agent_run_id)
                     raised = False
                     try:
                         run_usage_context = usage_context_from_agent_context(
@@ -337,8 +334,9 @@ class AgentRunnerService:
                         # Not announced as finished when it threw: the failure
                         # path below announces that, and "finished" would first
                         # send whatever narration the model buffered as though
-                        # it were the answer.
-                        if observer_started and not raised:
+                        # it were the answer. Announced even when the start
+                        # failed: the finish is what sends the answer.
+                        if not raised:
                             await notify_run_finished(
                                 observer, conversation, ctx, agent_run_id
                             )

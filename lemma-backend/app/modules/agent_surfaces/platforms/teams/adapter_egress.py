@@ -37,6 +37,7 @@ from app.modules.agent_surfaces.platforms.teams.cards import (
     _teams_approval_card,
     _teams_display_resource_card,
     _teams_question_card,
+    teams_retry_card,
 )
 
 logger = get_logger(__name__)
@@ -122,6 +123,13 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                     {
                         "contentType": "application/vnd.microsoft.card.adaptive",
                         "content": card,
+                    }
+                ]
+            if index == len(chunks) - 1 and (metadata or {}).get("retry_action"):
+                body["attachments"] = [
+                    {
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "content": teams_retry_card(event.external_thread_id),
                     }
                 ]
             try:

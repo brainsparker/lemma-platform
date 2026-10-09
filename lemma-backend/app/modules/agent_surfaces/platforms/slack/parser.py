@@ -22,6 +22,7 @@ from app.modules.agent_surfaces.platforms.slack.config_parser import (
 from app.modules.agent_surfaces.platforms.slack.models import (
     SLACK_APPROVAL_DECISION_BY_ACTION_ID as _APPROVAL_DECISION_BY_ACTION_ID,
     SLACK_FORM_SUBMIT_ACTION_ID as _FORM_SUBMIT_ACTION_ID,
+    SLACK_RETRY_ACTION_ID as _RETRY_ACTION_ID,
     SlackChannelMessageSnapshot,
     SlackFileAttachment,
 )
@@ -143,7 +144,7 @@ def _tapped_action(actions: Any) -> tuple[dict[str, Any] | None, str | None]:
         if action_id in _APPROVAL_DECISION_BY_ACTION_ID:
             return action, _APPROVAL_DECISION_BY_ACTION_ID[action_id]
     for action in candidates:
-        if action.get("action_id") == _FORM_SUBMIT_ACTION_ID:
+        if action.get("action_id") in (_FORM_SUBMIT_ACTION_ID, _RETRY_ACTION_ID):
             return action, None
     return None, None
 
@@ -392,6 +393,9 @@ class SlackMessageParser(SlackConfigurationParserMixin):
                 external_thread_id=target.thread_ts,
                 external_user_id=payload_text(user, "id").strip() or None,
                 callback_id=callback_id,
+                action=(
+                    "retry" if action.get("action_id") == _RETRY_ACTION_ID else None
+                ),
                 values=values,
                 approval_decision=approval_decision,
                 reply_target={

@@ -67,6 +67,7 @@ from app.modules.agent.services.mcp_pausing_calls import (
     record_pausing_tool_call,
 )
 from app.modules.agent.services.workspace_location import (
+    WorkspaceLocation,
     ensure_recorded_location,
     pod_cwd_from_workspace_cwd,
 )
@@ -379,56 +380,13 @@ class ConversationMCPService:
                 organization_id=conversation.organization_id,
                 user_id=conversation.user_id,
             )
-            ctx = BaseAgentContext(
-                user_id=conversation.user_id,
-                org_id=conversation.organization_id,
-                pod_id=conversation.pod_id,
-                conversation_id=conversation.id,
-                agent_name=agent.name if agent is not None else None,
-                # All three, exactly as `services/run_context_builder` sets
-                # them for the in-process harness. `workload_id` is the principal
-                # `pod_data_access` builds its delegated context from, and left
-                # unset it means "the pod default assistant" -- which runs with
-                # the invoking *user's* pod permissions rather than this agent's
-                # grants, so every Agent Host tool call authorized wider than the
-                # agent it belonged to. `is_pod_default_agent` is the separate
-                # question of whether this *is* the assistant, which is now
-                # answered by the row's kind rather than by a sentinel id.
-                workload_type="agent",
-                workload_id=agent.id if agent is not None else None,
-                is_pod_default_agent=(
-                    agent is None or agent.kind is AgentKind.POD_DEFAULT
-                ),
-                agent_run_id=agent_run_id or (run.id if run is not None else None),
+            ctx = _tool_context(
+                conversation=conversation,
+                agent=agent,
+                run=run,
+                agent_run_id=agent_run_id,
                 runtime_profile=runtime_profile,
-                # The same answer the runner gives: a remote harness answering
-                # somebody outside the pod authorizes as nobody too.
-                answers_outsider=answers_outsiders(conversation),
-                # And a run a private note started delivers nothing to the
-                # platform from here either -- `display_resource` included.
-                delivers_to_surface=not run_is_private(
-                    run.metadata if run is not None else None
-                ),
-                # The runner computes these for the in-process harness, and this
-                # bridge has to as well -- it is the tool path for *every*
-                # remote harness, so anything left at its default is a default
-                # the whole of Agent Host runs on.
-                #
-                # `vision_mode`: or a harness that reads images natively is
-                # treated as text-only and delegates work it could do itself.
-                vision_mode=vision_mode_from_runtime_profile(runtime_profile),
-                # The location fields: without them `get_workspace_cwd()` falls
-                # back to `/workspace/conversations/<uuid>`, so tools ran in a
-                # directory the agent's own prompt does not name -- the prompt
-                # says `/workspace/c/<date>/<slug>`, which is where the resolver
-                # actually put the conversation, and which is where a previous
-                # turn's files are. `pod_cwd` has the same effect on the pod
-                # filesystem, scattering writes under `/me/conversations/<uuid>`.
-                workspace_id=workspace_location.workspace_id,
-                workspace_cwd=workspace_location.cwd,
-                workspace_repo=workspace_location.repo,
-                pod_cwd=pod_cwd_from_workspace_cwd(workspace_location.cwd),
-                **surface_context_from_conversation(conversation),
+                workspace_location=workspace_location,
             )
         # Outside the unit of work: it opens its own, and holding this one
         # across it would pin a pooled connection for nothing. Imported here to
@@ -495,6 +453,67 @@ class ConversationMCPService:
             )
             return stored
         return resolved.public_snapshot()
+
+
+def _tool_context(
+    *,
+    conversation: Conversation,
+    agent: Agent | None,
+    run: AgentRun | None,
+    agent_run_id: UUID | None,
+    runtime_profile: JsonObject | None,
+    workspace_location: WorkspaceLocation,
+) -> BaseAgentContext:
+    """The context one relayed tool call runs against."""
+    return BaseAgentContext(
+        user_id=conversation.user_id,
+        org_id=conversation.organization_id,
+        pod_id=conversation.pod_id,
+        conversation_id=conversation.id,
+        agent_name=agent.name if agent is not None else None,
+        # All three, exactly as `services/run_context_builder` sets
+        # them for the in-process harness. `workload_id` is the principal
+        # `pod_data_access` builds its delegated context from, and left
+        # unset it means "the pod default assistant" -- which runs with
+        # the invoking *user's* pod permissions rather than this agent's
+        # grants, so every Agent Host tool call authorized wider than the
+        # agent it belonged to. `is_pod_default_agent` is the separate
+        # question of whether this *is* the assistant, which is now
+        # answered by the row's kind rather than by a sentinel id.
+        workload_type="agent",
+        workload_id=agent.id if agent is not None else None,
+        is_pod_default_agent=(agent is None or agent.kind is AgentKind.POD_DEFAULT),
+        agent_run_id=agent_run_id or (run.id if run is not None else None),
+        runtime_profile=runtime_profile,
+        # The same answer the runner gives: a remote harness answering
+        # somebody outside the pod authorizes as nobody too.
+        answers_outsider=answers_outsiders(conversation),
+        # And a run a private note started delivers nothing to the
+        # platform from here either -- `display_resource` included.
+        delivers_to_surface=not run_is_private(
+            run.metadata if run is not None else None
+        ),
+        # The runner computes these for the in-process harness, and this
+        # bridge has to as well -- it is the tool path for *every*
+        # remote harness, so anything left at its default is a default
+        # the whole of Agent Host runs on.
+        #
+        # `vision_mode`: or a harness that reads images natively is
+        # treated as text-only and delegates work it could do itself.
+        vision_mode=vision_mode_from_runtime_profile(runtime_profile),
+        # The location fields: without them `get_workspace_cwd()` falls
+        # back to `/workspace/conversations/<uuid>`, so tools ran in a
+        # directory the agent's own prompt does not name -- the prompt
+        # says `/workspace/c/<date>/<slug>`, which is where the resolver
+        # actually put the conversation, and which is where a previous
+        # turn's files are. `pod_cwd` has the same effect on the pod
+        # filesystem, scattering writes under `/me/conversations/<uuid>`.
+        workspace_id=workspace_location.workspace_id,
+        workspace_cwd=workspace_location.cwd,
+        workspace_repo=workspace_location.repo,
+        pod_cwd=pod_cwd_from_workspace_cwd(workspace_location.cwd),
+        **surface_context_from_conversation(conversation),
+    )
 
 
 conversation_mcp_service = ConversationMCPService()

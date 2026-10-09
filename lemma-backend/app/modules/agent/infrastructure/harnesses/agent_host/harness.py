@@ -20,31 +20,17 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.agent_host import (
-    AgentHostEventType,
-    AgentHostRunState,
-    AgentHostRunCheckpoint,
-)
+from app.modules.agent.domain.agent_host import AgentHostRunState
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.value_objects import (
-    AgentEvent,
-    AgentEventType,
-    HarnessKind,
-    JsonObject,
-)
+from app.modules.agent.domain.value_objects import AgentEvent, HarnessKind
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
-from app.modules.agent.infrastructure.agent_host.session_memory import (
-    remember_provider_session,
-)
-from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
 from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
-    StreamedEvent,
     agent_host_event_stream,
 )
 from app.modules.agent.infrastructure.agent_host.repository_common import (
@@ -54,11 +40,12 @@ from app.modules.agent.infrastructure.harnesses.agent_host.artifacts import (
     AgentHostArtifactWriter,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.events import (
-    AgentHostEventEnvelope,
     AgentHostEventNormalizer,
     error_event,
-    event_text,
     is_terminal_event,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host.harness_events import (
+    RunEventApplier,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
     enqueue_run,
@@ -67,10 +54,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
 from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
     AgentHostRunConfig,
     agent_host_run_config,
-    resolve_pod_cwd,
 )
-from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
-from app.modules.agent.services.run_suspension import run_suspended_on
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     CREDENTIAL_DEADLINE_MESSAGE,
     DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
@@ -86,7 +70,6 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
 from app.modules.agent.infrastructure.harnesses.agent_host.steering import (
     SteerSchedule,
     forward_queued_messages,
-    record_steer_result,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.stream_reader import (
     StreamReader,
@@ -112,12 +95,6 @@ DEFAULT_TERMINAL_EVENT_GRACE_SECONDS = 5.0
 # than the lease check because it is what a person waits on, and cheap because
 # it is one indexed UPDATE that nearly always matches nothing.
 DEFAULT_STEER_CHECK_SECONDS = 1.0
-_RICH_CONTENT_TYPES = frozenset(
-    {
-        AgentHostEventType.AGENT_MESSAGE_CHUNK.value,
-        AgentHostEventType.AGENT_THOUGHT_CHUNK.value,
-    }
-)
 
 
 class RemoteHarness:
@@ -140,6 +117,7 @@ class RemoteHarness:
     ) -> None:
         self.uow_factory = uow_factory
         self.artifact_writer = artifact_writer
+        self._applier = RunEventApplier(uow_factory, artifact_writer)
         self.events = event_stream or agent_host_event_stream()
         self.event_timeout_seconds = event_timeout_seconds
         self.lease_check_seconds = lease_check_seconds
@@ -265,7 +243,7 @@ class RemoteHarness:
                 return
 
             for entry in batch:
-                for event in await self._normalize(
+                for event in await self._applier.apply(
                     normalizer,
                     entry,
                     ctx=ctx,
@@ -395,143 +373,6 @@ class RemoteHarness:
             agent_run_id=agent_run_id,
         )
         return LeaseOutcome(seen_at=seen_at, expired_state=expired_state)
-
-    async def _normalize(
-        self,
-        normalizer: AgentHostEventNormalizer,
-        entry: StreamedEvent,
-        *,
-        ctx: AgentContext,
-        conversation: Conversation,
-        agent_run_id: UUID,
-    ) -> list[AgentEvent]:
-        envelope = AgentHostEventEnvelope(
-            sequence=entry.sequence,
-            type=entry.type,
-            object_id=entry.object_id,
-            payload=entry.payload,
-        )
-        events: list[AgentEvent] = []
-        payload_override: JsonObject | None = None
-        # Only a text chunk carries rich content blocks
-        # (docs/architecture/agent-host-events.md#text); every other event is
-        # already normalized, so there is nothing in it to save as a pod file.
-        if self.artifact_writer is not None and entry.type in _RICH_CONTENT_TYPES:
-            materialized = await self.artifact_writer.materialize_event(
-                payload=entry.payload,
-                pod_id=conversation.pod_id,
-                user_context=ctx,
-                directory_path=f"{resolve_pod_cwd(conversation)}/agent-output",
-                agent_run_id=agent_run_id,
-                event_sequence=entry.sequence,
-                harness_key=normalizer.harness_key,
-            )
-            if materialized.markdown:
-                payload_override = dict(entry.payload)
-                existing = event_text(payload_override)
-                payload_override["text"] = (
-                    f"{existing}\n\n{materialized.markdown}"
-                    if existing
-                    else materialized.markdown
-                )
-            for warning in materialized.warnings:
-                events.append(
-                    AgentEvent(
-                        type=AgentEventType.STATUS,
-                        data={
-                            "status": "agent_host.artifact_warning",
-                            "detail": warning,
-                            "agent_host_sequence": entry.sequence,
-                        },
-                        agent_run_id=agent_run_id,
-                        sequence=entry.sequence,
-                    )
-                )
-        if entry.type == AgentHostEventType.RUN_STATE.value:
-            session_id = entry.payload.get("provider_session_id")
-            state = entry.payload.get("state")
-            if isinstance(session_id, str) and session_id and isinstance(state, str):
-                # Session establishment precedes the prompt in the ordered
-                # event stream. Save it before consuming any answer events.
-                async with self.uow_factory() as uow:
-                    lease = await uow.session.get(AgentHostRunLeaseModel, agent_run_id)
-                    if lease is not None:
-                        await remember_provider_session(
-                            uow,
-                            AgentHostRunCheckpoint(
-                                run_id=agent_run_id,
-                                lease_epoch=lease.lease_epoch,
-                                state=AgentHostRunState(state),
-                                detail=entry.payload,
-                            ),
-                        )
-                        await uow.commit()
-        if entry.type == AgentHostEventType.STEER_RESULT.value:
-            await record_steer_result(
-                self.uow_factory,
-                agent_run_id=agent_run_id,
-                conversation_id=conversation.id,
-                message_id=entry.object_id,
-                payload=entry.payload,
-            )
-        if entry.type == AgentHostEventType.TERMINAL.value:
-            await adopt_recorded_final_answer(
-                self.uow_factory, normalizer, agent_run_id=agent_run_id
-            )
-        events.extend(normalizer.normalize(envelope, payload_override=payload_override))
-        if entry.type == AgentHostEventType.TERMINAL.value:
-            events = await self._as_suspension(
-                events, agent_run_id=agent_run_id, conversation=conversation
-            )
-        return events
-
-    async def _as_suspension(
-        self,
-        events: list[AgentEvent],
-        *,
-        agent_run_id: UUID,
-        conversation: Conversation,
-    ) -> list[AgentEvent]:
-        """Re-read a turn that ended as one that was suspended, if it was.
-
-        ``wait_for`` on a remote harness cannot end the turn from inside its own
-        tool call, so Lemma asks the host to stop it. The host has no idea why
-        and reports what it saw: ``CANCELLED`` when the stop arrived first,
-        ``SUCCEEDED`` when the agent finished talking before it did. Neither is
-        what happened. The durable wait row is, and it says the agent is asleep
-        — which is ``WAITING``, exactly as the in-process harness reports the
-        same tool.
-
-        Failures are left alone. A run that hit its context ceiling or lost its
-        host really did fail, and a wait row does not make that untrue; the
-        timer still wakes the conversation either way.
-        """
-        if not any(
-            event.type in {AgentEventType.COMPLETED, AgentEventType.STOPPED}
-            for event in events
-        ):
-            return events
-        async with self.uow_factory() as uow:
-            wait = await run_suspended_on(uow, agent_run_id=agent_run_id)
-        if wait is None:
-            return events
-        return [
-            AgentEvent(
-                type=AgentEventType.WAITING,
-                # The shape the in-process pause yields, so that everything
-                # downstream of a paused turn reads one event, not two.
-                data={
-                    "tool_call_id": wait.tool_call_id,
-                    "kind": WAIT_TOOL_NAME,
-                    "conversation_id": str(conversation.id),
-                },
-                agent_run_id=agent_run_id,
-                sequence=event.sequence,
-            )
-            if event.type in {AgentEventType.COMPLETED, AgentEventType.STOPPED}
-            else event
-            for event in events
-        ]
 
     async def _cancel_if_requested[DepsT](
         self,

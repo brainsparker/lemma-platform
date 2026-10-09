@@ -29,6 +29,7 @@ from app.modules.agent.domain.sentinels import UnsetType
 from app.modules.agent.services.runtime_profile_creation import (
     normalize_profile_name,
     normalize_headers,
+    normalize_model_settings,
 )
 
 
@@ -85,7 +86,7 @@ def resolve_provider_patch(
     next_settings = (
         stored.model_settings
         if isinstance(model_settings, UnsetType)
-        else (model_settings or {})
+        else normalize_model_settings(model_settings)
     )
 
     origin_changed = base_url_changed and provider_origin(

@@ -42,6 +42,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
+    refuse_redacted_values,
 )
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
@@ -64,7 +65,15 @@ def normalize_profile_name(name: str) -> str:
     return normalized
 
 
+def normalize_model_settings(
+    model_settings: dict[str, object] | None,
+) -> dict[str, object]:
+    refuse_redacted_values(model_settings, field="model_settings")
+    return dict(model_settings or {})
+
+
 def normalize_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    refuse_redacted_values(headers, field="headers")
     normalized: dict[str, str] = {}
     for key, value in (headers or {}).items():
         header_name = key.strip()
@@ -203,6 +212,7 @@ class RuntimeProfileCreation:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = normalize_profile_name(name)
         normalized_headers = normalize_headers(headers)
+        normalized_settings = normalize_model_settings(model_settings)
         # Nothing has been read or written yet, so the caller's connection goes
         # back for the provider round trip -- an HTTP call to a base URL the
         # caller supplied, which is as slow as whatever answers it. The writes
@@ -241,7 +251,7 @@ class RuntimeProfileCreation:
             config=OpenAICompatibleRuntimeConfig(
                 base_url=HttpUrl(base_url),
                 headers=normalized_headers,
-                model_settings=model_settings or {},
+                model_settings=normalized_settings,
             ),
             credentials=(
                 ApiKeyRuntimeCredentials(api_key=SecretStr(api_key.strip()))
@@ -273,6 +283,7 @@ class RuntimeProfileCreation:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = normalize_profile_name(name)
         normalized_headers = normalize_headers(headers)
+        normalized_settings = normalize_model_settings(model_settings)
         # Nothing has been read or written yet, so the caller's connection goes
         # back for the provider round trip -- an HTTP call to a base URL the
         # caller supplied, which is as slow as whatever answers it. The writes
@@ -313,7 +324,7 @@ class RuntimeProfileCreation:
             config=AnthropicCompatibleRuntimeConfig(
                 base_url=HttpUrl(base_url) if base_url is not None else None,
                 headers=normalized_headers,
-                model_settings=model_settings or {},
+                model_settings=normalized_settings,
             ),
             credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key.strip())),
             status=RuntimeProfileStatus.ACTIVE,

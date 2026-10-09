@@ -981,17 +981,12 @@ async def test_create_openai_compatible_profile_discovers_provider_models(monkey
     public = profile.public_dict()
     assert public["has_credentials"] is True
     assert public["config"]["base_url"] == "https://openrouter.ai/api/v1"
-    assert public["config"]["headers"] == {
-        "HTTP-Referer": "https://lemma.test",
-        "Authorization": "<redacted>",
-    }
-    assert public["config"]["model_settings"] == {
-        "temperature": 0.2,
-        "nested": {
-            "api_key": "<redacted>",
-            "items": [{"refresh_token": "<redacted>"}],
-        },
-    }
+    # Header values are write-only; only their names are listed.
+    assert "headers" not in public["config"]
+    assert public["config"]["header_names"] == ["Authorization", "HTTP-Referer"]
+    assert "old-secret" not in str(public)
+    # Tuning is returned as stored, never masked.
+    assert public["config"]["model_settings"]["temperature"] == 0.2
 
 
 @pytest.mark.asyncio

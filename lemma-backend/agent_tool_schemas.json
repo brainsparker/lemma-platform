@@ -2483,7 +2483,7 @@
         },
         "max_chars": {
           "default": 50000,
-          "maximum": 400000,
+          "maximum": 50000,
           "minimum": 1,
           "type": "integer"
         }

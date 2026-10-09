@@ -216,8 +216,17 @@ class NotificationService:
                 expires_at=expires_at or default_expiry(),
             )
         )
-        # An idempotency hit returns the original, already-delivered row. Sending
-        # again is the exact double-post the key exists to prevent.
+        # An idempotency hit returns the original row. Sending again is the
+        # exact double-post the key exists to prevent -- whether it was
+        # delivered, or its send was started and never recorded, which is when
+        # the platform may well have it and only the bookkeeping failed.
+        if idempotency_key and notification.send_outcome_unknown:
+            logger.warning(
+                "agent_surfaces.notification_service.send_outcome_unknown.degraded",
+                notification_id=str(notification.id),
+                pod_id=str(pod_id),
+            )
+            return notification
         if idempotency_key and notification.delivered_at is not None:
             logger.info(
                 "agent_surfaces.notification_service.duplicate_suppressed.observed",

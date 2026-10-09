@@ -372,6 +372,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.notification_rate_limiter.unavailable.degraded': EventSpec('warning', frozenset({'error'})),
     'agent_surfaces.notification_service.channel_send_failed.degraded': EventSpec('warning', frozenset({'error', 'notification_id', 'platform'})),
     'agent_surfaces.notification_service.duplicate_suppressed.observed': EventSpec('info', frozenset({'notification_id', 'pod_id'})),
+    'agent_surfaces.notification_service.send_outcome_unknown.degraded': EventSpec('warning', frozenset({'notification_id', 'pod_id'})),
     'agent_surfaces.notification_service.undeliverable.observed': EventSpec('info', frozenset({'notification_id', 'reason'})),
     'agent_surfaces.notifications.expired.observed': EventSpec('info', frozenset({'count'})),
     'agent_surfaces.notifications.open_lookup_degraded': EventSpec('warning', frozenset({'conversation_id'})),

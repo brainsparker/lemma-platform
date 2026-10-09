@@ -10,6 +10,7 @@ the outbound message are durable before the platform is called.
 from __future__ import annotations
 
 from typing import Protocol
+from uuid import UUID
 
 from httpx import HTTPError
 
@@ -54,19 +55,13 @@ async def send_on_first_channel(
     """
     last_error: str | None = None
     for channel in channels:
+        conversation_id: UUID | None = None
+        sent = False
         try:
-            if can_cold_open(channel.surface) and rate_limiter is not None:
-                # Charged per email, not per notification: a message that went
-                # out on Slack costs the shared sending domain nothing. Refusing
-                # here rather than raising leaves the notification in the
-                # recipient's inbox with an explanation, which is the right
-                # outcome for a budget being spent — the thing is real, we just
-                # will not mail it.
-                try:
-                    await rate_limiter.check_email(pod_id=notification.pod_id)
-                except EmailSendLimitExceeded as exc:
-                    last_error = str(exc)
-                    continue
+            refusal = await _email_budget_refusal(channel, notification, rate_limiter)
+            if refusal is not None:
+                last_error = refusal
+                continue
 
             conversation_id = await egress.conversation_for(
                 channel, notification=notification
@@ -83,6 +78,15 @@ async def send_on_first_channel(
                 notification=notification,
                 message=message,
             )
+            # And say the send is under way, in the same commit. A send that
+            # landed but whose outcome was never written (the update below
+            # failed, the worker died) leaves the row SENDING, which a retry
+            # with the same key reads as "may already be on their phone"
+            # rather than as never sent.
+            notification.mark_sending(
+                surface_id=channel.surface.id, platform=channel.platform.value
+            )
+            notification = await notifications.update(notification)
             # Commit before the platform call, for two reasons that point the
             # same way. It makes "persist before send" mean it — an uncommitted
             # row is not a message anyone can read. And it hands the pooled
@@ -108,14 +112,6 @@ async def send_on_first_channel(
                     if channel.link is None
                     else f"{channel.platform.value} send returned no delivery."
                 )
-                continue
-
-            notification.mark_delivered(
-                surface_id=channel.surface.id,
-                conversation_id=conversation_id,
-                platform=channel.platform.value,
-            )
-            return await notifications.update(notification)
         except (AgentSurfaceError, HTTPError, OSError) as exc:
             # Deliberately NOT bare `Exception`: a bug in our own code must
             # surface rather than be reported as "that channel didn't work".
@@ -126,6 +122,65 @@ async def send_on_first_channel(
                 platform=channel.platform.value,
                 error=str(exc),
             )
+        else:
+            if sent and conversation_id is not None:
+                # Outside the channel-failure handler: the message is on the
+                # platform now, so a failure to record that is not "this
+                # channel did not work" -- the row stays SENDING instead.
+                notification.mark_delivered(
+                    surface_id=channel.surface.id,
+                    conversation_id=conversation_id,
+                    platform=channel.platform.value,
+                )
+                return await notifications.update(notification)
+        await _give_the_thread_back(egress, channel, conversation_id)
 
     notification.mark_delivery_failed(last_error or "No channel accepted the message.")
     return await notifications.update(notification)
+
+
+async def _email_budget_refusal(
+    channel: DeliveryChannel,
+    notification: NotificationEntity,
+    rate_limiter: NotificationRateLimiter | None,
+) -> str | None:
+    """Why this channel may not carry it, when the email budget is spent.
+
+    Charged per email, not per notification: a message that went out on Slack
+    costs the shared sending domain nothing. Refusing rather than raising leaves
+    the notification in the recipient's inbox with an explanation, which is the
+    right outcome for a budget being spent -- the thing is real, we just will
+    not mail it.
+    """
+    if not can_cold_open(channel.surface) or rate_limiter is None:
+        return None
+    try:
+        await rate_limiter.check_email(pod_id=notification.pod_id)
+    except EmailSendLimitExceeded as exc:
+        return str(exc)
+    return None
+
+
+async def _give_the_thread_back(
+    egress: NotificationEgress,
+    channel: DeliveryChannel,
+    conversation_id: UUID | None,
+) -> None:
+    """Undo the repoint a send that did not land made to the person's thread.
+
+    ``conversation_for`` may have moved the thread's link to a conversation it
+    opened for this notification. If nothing arrived there, the person's next
+    message belongs where their thread was. Compare-and-set on the conversation
+    the link was moved to, so a thread an inbound has since moved is left alone.
+    """
+    link = channel.link
+    if link is None or conversation_id is None:
+        return
+    if conversation_id == link.conversation_id:
+        return
+    await egress.links.repoint_conversation_for_outbound(
+        link_id=link.id,
+        conversation_id=link.conversation_id,
+        expected_conversation_id=conversation_id,
+        routed_agent_id=link.routed_agent_id,
+    )

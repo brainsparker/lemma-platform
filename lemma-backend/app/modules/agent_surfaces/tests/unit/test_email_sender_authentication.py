@@ -85,6 +85,27 @@ def test_relaxed_alignment_accepts_a_subdomain_of_the_signing_domain() -> None:
     )
 
 
+def test_a_domain_under_a_tld_the_suffix_list_does_not_know_still_aligns() -> None:
+    """The list's implicit ``*`` rule: the last label is the suffix.
+
+    Without it every address under an unlisted TLD aligned with nothing, so a
+    receiver's pass for it was read as no verdict at all.
+    """
+    assert (
+        _verdict(
+            "mx; dkim=pass header.d=client.example", sender="a@mail.client.example"
+        )
+        is EmailAuthenticationVerdict.PASS
+    )
+
+
+def test_a_bare_unlisted_tld_aligns_with_nothing_under_it() -> None:
+    assert (
+        _verdict("mx; dkim=pass header.d=example", sender="a@client.example")
+        is EmailAuthenticationVerdict.UNKNOWN
+    )
+
+
 def test_spf_pass_is_read_from_the_envelope_sender() -> None:
     assert (
         _verdict("mx; spf=pass smtp.mailfrom=bounce@example.com")

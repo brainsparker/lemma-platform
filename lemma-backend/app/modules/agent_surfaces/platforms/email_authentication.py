@@ -229,8 +229,19 @@ def _domain_of(address: str | None) -> str:
 
 
 def _organizational_domain(domain: str) -> str:
-    """The registrable domain ``domain`` sits under, or ``""`` for a bare suffix."""
-    return _PUBLIC_SUFFIXES(domain).top_domain_under_public_suffix.lower()
+    """The registrable domain ``domain`` sits under, or ``""`` for a bare suffix.
+
+    A domain no rule in the list matches still has one: the list's algorithm
+    then applies its implicit ``*`` rule, so the last label is the suffix and
+    ``mail.client.example`` sits under ``client.example``. tldextract leaves
+    that rule out and answers ``""``, which would make every domain under a TLD
+    the list does not know -- a new gTLD, an intranet's -- align with nothing.
+    """
+    parts = _PUBLIC_SUFFIXES(domain)
+    if parts.suffix:
+        return parts.top_domain_under_public_suffix.lower()
+    labels = [label for label in domain.lower().split(".") if label]
+    return ".".join(labels[-2:]) if len(labels) >= 2 else ""
 
 
 def _aligned(candidate: str, from_domain: str) -> bool:

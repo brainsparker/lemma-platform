@@ -32,6 +32,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.services.mcp_pausing_calls import record_pausing_tool_call
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     conversation,
@@ -255,6 +256,50 @@ async def test_a_message_after_stop_is_answered_and_one_before_it_is_not(
     after = next(m for m in found.values() if "README" in (m.text or ""))
     assert after.metadata["steered_into_run"] == str(followup)
     assert "steered_into_run" not in (found[before.id].metadata or {})
+
+
+async def test_a_remote_harness_question_is_answered_inside_its_own_run(
+    scenario,
+) -> None:
+    """A3-F2, the other half: a question a remote harness asked over MCP is
+    parked in a run that keeps going, and its answer is read by that run. That
+    -- and only that -- is what keeps a resume from starting beside it, so the
+    mark is Lemma's, written when it records the call."""
+    seeded = await seeded_conversation(scenario)
+    working = await running_run(seeded)
+    question = await record_pausing_tool_call(
+        uow_factory(),
+        conversation_id=seeded.conversation_id,
+        agent_run_id=working,
+        tool_name="ask_user",
+        arguments={"questions": ["Which branch?"]},
+    )
+    waiting = await record_pausing_tool_call(
+        uow_factory(),
+        conversation_id=seeded.conversation_id,
+        agent_run_id=working,
+        tool_name="wait_for",
+        arguments={"seconds": 60},
+    )
+    marks = {
+        m.tool_call_id: (m.metadata or {}).get("parked_in_run")
+        for m in await messages(seeded.conversation_id)
+        if m.kind is MessageKind.TOOL_CALL
+    }
+    assert marks == {question: True, waiting: None}
+
+    async with owner_uow(seeded) as uow:
+        await conversation_service(uow).resolve_user_approval_internal(
+            conversation=await conversation(seeded.conversation_id),
+            approval_id=question,
+            user_id=seeded.user_id,
+            pod_id=seeded.pod_id,
+            decision=AgentRunApprovalDecision.APPROVE_ONCE,
+            response={"answers": {"Which branch?": "main"}},
+        )
+
+    assert len(_returns_for(await messages(seeded.conversation_id), question)) == 1
+    assert [run.id for run in await runs(seeded.conversation_id)] == [working]
 
 
 async def test_stop_keeps_an_already_approved_pause_from_waking_the_agent(

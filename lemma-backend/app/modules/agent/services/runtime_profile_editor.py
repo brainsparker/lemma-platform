@@ -39,9 +39,11 @@ from app.modules.agent.services.runtime_profile_creation import (
     normalize_profile_name,
 )
 from app.modules.agent.services.runtime_provider_patch import (
+    KeyMustBeReenteredError,
     resolve_catalog_names,
     resolve_provider_patch,
 )
+from app.core.log.log import get_logger
 from app.modules.agent.services.runtime_system_profiles import (
     agent_host_model_catalog,
 )
@@ -49,6 +51,8 @@ from app.modules.agent.services.runtime_system_profiles import (
 # Imported as a module so a patched discovery function is the one that runs.
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent.services import runtime_provider_discovery as discovery
+
+logger = get_logger(__name__)
 
 
 def _harness_config(profile: AgentRuntimeProfile) -> HarnessRuntimeConfig:
@@ -318,19 +322,36 @@ class AgentRuntimeProfileEditor:
         assert self._service.repository is not None
         is_anthropic = protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE
         stored = _provider_config(profile)
-        patch = resolve_provider_patch(
-            profile,
-            stored,
-            is_anthropic=is_anthropic,
-            name=name,
-            description=description,
-            base_url=base_url,
-            api_key=api_key,
-            model_names=model_names,
-            headers=headers,
-            model_settings=model_settings,
-            refresh_models=refresh_models,
-        )
+        try:
+            patch = resolve_provider_patch(
+                profile,
+                stored,
+                is_anthropic=is_anthropic,
+                name=name,
+                description=description,
+                base_url=base_url,
+                api_key=api_key,
+                model_names=model_names,
+                headers=headers,
+                model_settings=model_settings,
+                refresh_models=refresh_models,
+            )
+        except KeyMustBeReenteredError:
+            # Audit: an attempt to send a stored key somewhere new.
+            logger.warning(
+                "agent.runtime_profile.provider_origin_change.refused",
+                profile_id=profile.id,
+                organization_id=str(organization_id),
+                user_id=str(user_id),
+            )
+            raise
+        if patch.origin_changed:
+            logger.info(
+                "agent.runtime_profile.provider_origin.changed",
+                profile_id=profile.id,
+                organization_id=str(organization_id),
+                user_id=str(user_id),
+            )
         changes = patch.changes
 
         if patch.base_url_changed and patch.base_url is not None:

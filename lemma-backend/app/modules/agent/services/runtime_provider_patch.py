@@ -15,6 +15,7 @@ already been settled, so they can be read and tested separately from it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from pydantic import HttpUrl, SecretStr
 
@@ -38,6 +39,7 @@ class ProviderProfilePatch:
     changes: dict[str, object]
     base_url: str | HttpUrl | None
     base_url_changed: bool
+    origin_changed: bool
     headers: dict[str, str]
     model_settings: dict[str, object]
     credentials: RuntimeCredentials | None
@@ -86,6 +88,17 @@ def resolve_provider_patch(
         else (model_settings or {})
     )
 
+    origin_changed = base_url_changed and provider_origin(
+        next_base_url, is_anthropic=is_anthropic
+    ) != provider_origin(stored.base_url, is_anthropic=is_anthropic)
+    # Custom headers count: once the listing shows only their names, a header
+    # value is as write-only as the key, and as often a credential.
+    keeps_secret = (
+        isinstance(api_key, UnsetType) and profile.credentials is not None
+    ) or (isinstance(headers, UnsetType) and bool(stored.headers))
+    if origin_changed and keeps_secret:
+        raise KeyMustBeReenteredError()
+
     next_credentials = _next_credentials(
         api_key=api_key,
         stored_credentials=profile.credentials,
@@ -101,6 +114,7 @@ def resolve_provider_patch(
         changes=changes,
         base_url=next_base_url,
         base_url_changed=base_url_changed,
+        origin_changed=origin_changed,
         headers=next_headers,
         model_settings=next_settings,
         credentials=next_credentials,
@@ -116,6 +130,49 @@ def resolve_provider_patch(
             or not isinstance(model_settings, UnsetType)
         ),
     )
+
+
+class KeyMustBeReenteredError(ValueError):
+    """A new provider address with the old key: refused, the key never moves.
+
+    The stored key is write-only -- nobody who can edit a profile can read it
+    back. Pointing the profile somewhere else and keeping the key would send it,
+    on the very next discovery, run or test, to whatever the editor chose, which
+    is the key read back by another route. So a key only ever goes to an
+    address it was entered for.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The provider address moved to a different host. Re-enter the API "
+            "key, and any custom headers, for the new address."
+        )
+
+
+ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def provider_origin(
+    base_url: str | HttpUrl | None, *, is_anthropic: bool
+) -> tuple[str, str, int | None]:
+    """Scheme, host and port: where a credential sent to ``base_url`` lands.
+
+    The path is not part of it -- moving ``/v1`` to ``/v2`` on the same host
+    sends the key to the same party. Anthropic's absent URL is its default
+    endpoint, so clearing it is a move like any other.
+    """
+    raw = str(base_url) if base_url else ""
+    if not raw and is_anthropic:
+        raw = ANTHROPIC_DEFAULT_BASE_URL
+    parts = urlsplit(raw)
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return scheme, (parts.hostname or "").lower(), port or _DEFAULT_PORTS.get(scheme)
 
 
 def _next_base_url(base_url, stored, *, is_anthropic: bool):

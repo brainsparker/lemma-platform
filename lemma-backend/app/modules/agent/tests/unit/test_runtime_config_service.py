@@ -1351,6 +1351,9 @@ async def test_changing_the_base_url_is_ssrf_checked_even_without_rediscovery(
             organization_id=organization_id,
             user_id=user_id,
             base_url="http://169.254.169.254/",
+            # A new host needs its own key; without one the edit is refused
+            # before the guard is reached.
+            api_key="sk-for-the-new-host",
         )
     assert validated == ["http://169.254.169.254/"]
 

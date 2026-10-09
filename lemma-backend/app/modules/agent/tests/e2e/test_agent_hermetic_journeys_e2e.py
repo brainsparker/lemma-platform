@@ -2445,6 +2445,9 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
         json={
             "source": "OPENAI_COMPATIBLE",
             "base_url": "http://169.254.169.254/latest",
+            # A new host needs its own key, or the move is refused before the
+            # address is even checked.
+            "api_key": "sk-for-the-new-host",
         },
     )
     assert unsafe_move.status_code == status.HTTP_400_BAD_REQUEST

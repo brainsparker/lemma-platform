@@ -18,6 +18,7 @@ import pytest
 from app.core.web_search.search_client import (
     BraveSearchClient,
     DuckDuckGoSearchClient,
+    ProviderAnswer,
     SearchClient,
     SearchFreshness,
     SearchVertical,
@@ -97,7 +98,7 @@ class TestUnsupportedVerticalDegradesHonestly:
 
         async def fake_search(query, max_results=5, *, vertical, freshness):
             captured["vertical"] = vertical
-            return []
+            return ProviderAnswer([])
 
         client.search_engine.search = fake_search
 
@@ -117,7 +118,7 @@ class TestUnsupportedVerticalDegradesHonestly:
         client._pinned = "searxng"
 
         async def fake_search(query, max_results=5, *, vertical, freshness):
-            return []
+            return ProviderAnswer([])
 
         client.search_engine.search = fake_search
 

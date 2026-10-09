@@ -4381,6 +4381,8 @@
         "max_results": {
           "default": 10,
           "description": "Maximum number of search results to return",
+          "maximum": 20,
+          "minimum": 1,
           "type": "integer"
         },
         "vertical": {
@@ -4565,7 +4567,7 @@
             }
           ],
           "default": null,
-          "description": "Set when the search could not be run exactly as asked \u2014 for example a vertical this provider does not serve."
+          "description": "Set when the search could not be run exactly as asked \u2014 for example a vertical this provider does not serve \u2014 or when it found nothing, which is not always the same as nothing existing."
         },
         "error": {
           "anyOf": [

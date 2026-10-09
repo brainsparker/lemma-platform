@@ -22,14 +22,9 @@ async def web_search(
     Use it for current information, news, and finding online assets. Query with
     specific keywords rather than questions.
     """
-    try:
-        return await web_search_internal(ctx.deps, request)
-    except Exception as e:
-        logger.warning("agent.web_search.failed.degraded", exc_info=True)
-        return WebSearchResponse(
-            success=False,
-            error=f"Web search failed: {e}",
-        )
+    # No handler here: `search_web` turns every failure into a result with its
+    # reason, so one wrapped around it only ever caught what it already had.
+    return await web_search_internal(ctx.deps, request)
 
 
 async def web_fetch(

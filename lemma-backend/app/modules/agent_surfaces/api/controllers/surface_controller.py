@@ -374,16 +374,18 @@ async def update_surface(
     # be created in -- it used to be, and that is what let one column mean both
     # "who answers here" and "whose bot is this".
     agent_id = agent_name_id or pod_id
-    await require_surface_agent_action(
-        ctx=ctx,
-        pod_id=pod_id,
-        agent_id=agent_id,
-        action=Permissions.AGENT_UPDATE,
-    )
-
     existing = await service.get_surface_by_name_in_pod(
         pod_id=pod_id, name=surface_name
     )
+    # The agent the surface answers as now, always: a patch that names no agent
+    # still disables or rebinds this one. And the agent it moves to, if any.
+    for checked_agent_id in {existing.agent_id, agent_id if update_agent_id else None}:
+        await require_surface_agent_action(
+            ctx=ctx,
+            pod_id=pod_id,
+            agent_id=checked_agent_id,
+            action=Permissions.AGENT_UPDATE,
+        )
     config = await merge_surface_config(
         uow=uow,
         existing=existing.config,

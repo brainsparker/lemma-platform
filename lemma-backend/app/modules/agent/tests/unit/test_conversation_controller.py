@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -704,7 +704,12 @@ def test_conversation_page_token_round_trips_both_sort_keys() -> None:
         "not base64 at all!",
         # Well-formed, but a naive timestamp is no position in a tz-aware order.
         encode_conversation_page_token(
-            ConversationListCursor(last_activity_at=datetime(2026, 9, 25), id=uuid4())
+            ConversationListCursor(
+                last_activity_at=datetime(2026, 9, 25),
+                # Fixed: the token is the test's id, and pytest-xdist workers
+                # must all collect the same ids.
+                id=UUID("00000000-0000-4000-8000-000000000001"),
+            )
         ),
     ],
 )

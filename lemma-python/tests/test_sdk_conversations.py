@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import MagicMock
 from uuid import UUID
@@ -245,3 +246,30 @@ def test_create_for_agent_without_a_name_leaves_it_to_the_pod_assistant(agent_na
     pod.conversations.create_for_agent(agent_name, title="hello")
 
     assert "agent_name" not in transport.calls[0]["body"]
+
+
+def test_every_send_carries_a_client_message_id_and_a_retry_can_reuse_it():
+    """The server stores one message per id per conversation, so a send the
+    caller retries with the same id is not stored, or answered, twice."""
+    pod, seen = _streaming_pod(
+        lambda _: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=b""
+        )
+    )
+
+    pod.conversations.send(CONVERSATION_ID, "Classify ticket rec-1")
+    pod.conversations.send(
+        CONVERSATION_ID, "Classify ticket rec-1", client_message_id="retry-me"
+    )
+
+    generated, chosen = (json.loads(request.content) for request in seen)
+    assert generated["client_message_id"]
+    assert chosen["client_message_id"] == "retry-me"
+
+
+def test_append_carries_a_client_message_id():
+    pod, transport = _pod()
+
+    pod.conversations.append(CONVERSATION_ID, "and the totals", client_message_id="m1")
+
+    assert transport.calls[-1]["body"]["client_message_id"] == "m1"

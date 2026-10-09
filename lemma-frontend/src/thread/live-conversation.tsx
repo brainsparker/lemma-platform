@@ -938,7 +938,9 @@ export function LiveConversation({
                 queuedNote={
                     queued.length === 0
                         ? undefined
-                        : teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " as soon as the work in progress allows"
+                        : queued.some(one => one.waitingOnAnswer)
+                          ? "Waiting on your answer: " + teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " once you reply to its question"
+                          : teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " as soon as the work in progress allows"
                 }
                 onWithdraw={withdrawStable}
                 fill={refill ?? fill}

@@ -42,6 +42,31 @@ type ConversationUpdateInput = UpdateConversationRequest & {
   profile_id?: string | null;
 };
 
+/** A message to send, and the id that makes sending it again safe.
+ *
+ *  `client_message_id` names this send: the server stores a message once per
+ *  id per conversation, and answers a repeat with the first send's run and
+ *  `deduplicated: true`. Reuse it when retrying the same message; leave it out
+ *  and one is made for each call. An id already in the metadata -- where the
+ *  web app first carried it -- is used as is. */
+export type SendMessageInput = SendMessageRequest & { client_message_id?: string | null };
+
+function newClientMessageId(): string {
+  const crypto = globalThis.crypto;
+  if (crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/** The payload with its client message id settled, once, before it is sent. */
+export function withClientMessageId(payload: SendMessageInput): SendMessageInput {
+  if (payload.client_message_id) return payload;
+  const carried = payload.metadata?.client_message_id;
+  return {
+    ...payload,
+    client_message_id: typeof carried === "string" && carried ? carried : newClientMessageId(),
+  };
+}
+
 type UserApprovalDecision = ResolveUserApprovalRequest["decision"] | "APPROVE_ONCE" | "APPROVE_FOR_SESSION" | "DENY";
 
 type ResolveUserApprovalInput = Omit<ResolveUserApprovalRequest, "decision"> & {
@@ -303,13 +328,13 @@ export class ConversationsNamespace {
 
   sendMessageStream(
     conversationId: string,
-    payload: SendMessageRequest,
+    payload: SendMessageInput,
     options: { pod_id?: string | null; signal?: AbortSignal } = {},
   ) {
     const podId = this.requirePodId(options.pod_id);
     return this.http.stream(`/pods/${podId}/conversations/${conversationId}/messages`, {
       method: "POST",
-      body: payload,
+      body: withClientMessageId(payload),
       signal: options.signal,
       headers: {
         "Content-Type": "application/json",
@@ -320,7 +345,7 @@ export class ConversationsNamespace {
 
   appendMessage(
     conversationId: string,
-    payload: SendMessageRequest,
+    payload: SendMessageInput,
     options: { pod_id?: string | null; signal?: AbortSignal } = {},
   ): Promise<AgentRunStartResponse> {
     const podId = this.requirePodId(options.pod_id);
@@ -328,7 +353,7 @@ export class ConversationsNamespace {
       "POST",
       `/pods/${podId}/conversations/${conversationId}/messages/append`,
       {
-        body: payload,
+        body: withClientMessageId(payload),
         signal: options.signal,
       },
     );
@@ -422,12 +447,12 @@ export class ConversationsNamespace {
 
     send: (
       conversationId: string,
-      payload: SendMessageRequest,
+      payload: SendMessageInput,
       options: { pod_id?: string | null } = {},
     ): Promise<unknown> => {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request<unknown>("POST", `/pods/${podId}/conversations/${conversationId}/messages`, {
-        body: payload,
+        body: withClientMessageId(payload),
       });
     },
   };

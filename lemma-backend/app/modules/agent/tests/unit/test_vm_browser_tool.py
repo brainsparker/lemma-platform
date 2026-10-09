@@ -81,8 +81,10 @@ async def test_it_runs_in_the_vm_even_on_a_host_run():
     assert result.success, result.error
     assert runtime.vm_sessions == 1 and runtime.host_sessions == 0
     assert runtime.session.commands == [
-        "flock -o -w 45 -E 75 /tmp/lemma-capture.lock "
-        "agent-browser open http://localhost:3000"
+        (
+            "flock -o -w 45 -E 75 /tmp/lemma-capture.lock "
+            "agent-browser open http://localhost:3000"
+        )
     ]
 
 

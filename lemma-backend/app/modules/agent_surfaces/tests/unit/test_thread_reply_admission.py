@@ -53,6 +53,7 @@ def _surface() -> AgentSurfaceEntity:
         agent_id=uuid4(),
         surface_type=SurfacePlatform.SLACK,
         account_id=None,
+        external_workspace_id="T1",
         config=SurfaceConfig(channels=[SurfaceChannelRoute(channel_id="C1")]),
         is_active=True,
         surface_identity_id="U-BOT",
@@ -62,6 +63,7 @@ def _surface() -> AgentSurfaceEntity:
 def _reply(*, mentioned: bool) -> ParsedInboundSurfaceEvent:
     return ParsedInboundSurfaceEvent(
         platform="SLACK",
+        tenant_id="T1",
         conversation_type=ConversationType.EXTERNAL_GROUP,
         external_channel_id="C1",
         external_thread_id="1700000000.1",

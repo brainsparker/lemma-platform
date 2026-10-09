@@ -686,6 +686,9 @@ def _surface_for(agent_id, platform=SurfacePlatform.TELEGRAM, *, pod_id=None):
         surface_type=platform,
         config=SurfaceConfig(),
         agent_id=agent_id,
+        # Tenant-scoped platforms match only their own tenant's identities.
+        external_workspace_id="T123" if platform is SurfacePlatform.SLACK else None,
+        external_tenant_id="tenant-1" if platform is SurfacePlatform.TEAMS else None,
     )
 
 
@@ -820,7 +823,7 @@ async def test_a_chat_channel_does_not_spend_the_email_budget(
     chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
     service = _notification_service(
         surfaces=(chat_surface,),
-        external_user=SimpleNamespace(external_user_id="U123", tenant_id=None),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
     )
     link = _link_for(chat_surface)
     service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
@@ -913,7 +916,7 @@ async def test_the_connection_is_released_before_the_platform_send(
     chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
     service = _notification_service(
         surfaces=(chat_surface,),
-        external_user=SimpleNamespace(external_user_id="U123", tenant_id=None),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
     )
     link = _link_for(chat_surface)
     service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
@@ -1022,7 +1025,7 @@ async def test_an_unknown_agent_name_is_absent_rather_than_None():
 def _identity(external_user_id: str, *, user_id=None):
     """One cached platform identity. ``tenant_id`` is what scopes it."""
     return SimpleNamespace(
-        external_user_id=external_user_id, tenant_id=None, resolved_user_id=user_id
+        external_user_id=external_user_id, tenant_id="T123", resolved_user_id=user_id
     )
 
 

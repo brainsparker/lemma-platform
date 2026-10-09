@@ -131,6 +131,7 @@ def _slack_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
         agent_id=agent_id if agent_id is not None else uuid4(),
         surface_type=SurfacePlatform.SLACK,
         account_id=uuid4(),
+        external_workspace_id="T123",
         surface_identity_id="U-BOT",
         config=SurfaceConfig(),
         is_active=True,

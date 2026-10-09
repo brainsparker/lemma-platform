@@ -431,13 +431,21 @@ class AgentSurfaceEntity(AggregateRoot):
         return self.surface_type.value == str(platform).upper()
 
     def matches_tenant(self, tenant_id: str | None) -> bool:
+        """Whether an event from this tenant (or workspace) is this surface's.
+
+        Fails closed on the two platforms whose installations are scoped to a
+        tenant: a surface that never recorded its tenant, or an event that
+        names none, matches nothing. Reading either as "any" let a tenantless
+        row accept every tenant's events, and an event with no tenant reach
+        every surface.
+        """
         if self.surface_type is SurfacePlatform.TEAMS:
             expected = self.external_tenant_id
-            return not expected or not tenant_id or expected == tenant_id
-        if self.surface_type is SurfacePlatform.SLACK:
+        elif self.surface_type is SurfacePlatform.SLACK:
             expected = self.external_workspace_id
-            return not expected or not tenant_id or expected == tenant_id
-        return True
+        else:
+            return True
+        return bool(expected) and bool(tenant_id) and expected == tenant_id
 
     def should_ignore_sender(self, sender_external_user_id: str | None) -> bool:
         if self.surface_type is SurfacePlatform.SLACK:

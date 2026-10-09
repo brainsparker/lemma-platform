@@ -29,6 +29,7 @@ from app.core.authorization.context import Context
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
 from app.core.config import settings
+from app.core.infrastructure.db.session_uow import commit_now
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
@@ -258,6 +259,11 @@ class AppEventHandler:
         self, adapter, credentials, setup, surface, ctx, channel_id
     ) -> None:
         agent_name = await self._surface_agent_name(surface)
+        # Committed, not only released: resolving who clicked may have upserted
+        # their external-user row, and `connection_released` declines to let go
+        # of a session with writes in it. This runs inside the webhook request,
+        # so the pooled connection would be held across `views.open`.
+        await commit_now(self.uow)
         async with connection_released(self.uow.session):
             await adapter.open_channel_setup_modal(
                 credentials=credentials,

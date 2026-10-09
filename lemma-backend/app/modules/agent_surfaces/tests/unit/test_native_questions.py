@@ -202,6 +202,25 @@ def test_decode_webhook_payload_handles_form_encoded_and_json():
     assert _decode_webhook_payload(b"", {}) == {}
 
 
+@pytest.mark.parametrize(
+    ("body", "content_type"),
+    [
+        (b"{not json", "application/json"),
+        (b"\xff\xfe", "application/json"),
+        (b"[1, 2]", "application/json"),
+        (b"payload=%7Bbroken", "application/x-www-form-urlencoded"),
+    ],
+    ids=["bad-json", "not-utf8", "not-an-object", "bad-form-payload"],
+)
+def test_an_undecodable_webhook_body_is_refused_not_read_as_empty(body, content_type):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as refused:
+        _decode_webhook_payload(body, {"content-type": content_type})
+
+    assert refused.value.status_code == 400
+
+
 # ── Telegram native inline keyboards ─────────────────────────────────────────
 
 

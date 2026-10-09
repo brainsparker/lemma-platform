@@ -317,8 +317,9 @@ class TeamsMessageParser:
                 payload_first(message, "serviceUrl")
                 or payload_text(payload, "serviceUrl")
             ).rstrip("/"),
-            # No entities array in this shape, so an <at> tag is the only signal.
-            mentioned="<at>" in text.lower(),
+            # No entities array in this shape, so an <at> tag is the only signal
+            # -- read from the raw HTML, since `strip_html` removes the tag.
+            mentioned="<at" in payload_text(message, "text").lower(),
         )
 
     def _event_from_activity(

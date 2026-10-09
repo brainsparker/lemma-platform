@@ -57,9 +57,15 @@ def needs_mention_verification(
     """
     if platform != SurfacePlatform.TELEGRAM.value:
         return False
-    if parsed.is_dm or parsed.mentioned_agent or not surfaces:
+    if parsed.is_dm or not surfaces:
         return False
     metadata = parsed.metadata or {}
+    if metadata.get("reply_to_user_id"):
+        # A reply to a bot reads as addressed, and which bot is only known
+        # once getMe has said who we are.
+        return True
+    if parsed.mentioned_agent:
+        return False
     return bool(
         metadata.get("mentioned_usernames")
         or metadata.get("text_mention_user_ids")

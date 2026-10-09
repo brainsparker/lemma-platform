@@ -33,6 +33,7 @@ from app.modules.agent_surfaces.platforms.slack.message_blocks import (
     PROCESSING_LOADING_TEXT,
     PROCESSING_STATUS_TEXT,
     _question_blocks,
+    question_blocks_fit,
     slack_acknowledgement_body,
 )
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
@@ -320,7 +321,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
         """Render ask_user questions as Block Kit selects + a Submit button."""
         token = slack_access_token(self.credentials)
         channel = event.reply_target.get("channel")
-        if not token or not channel:
+        if not token or not channel or not question_blocks_fit(question_plan):
             return False
         client = await build_slack_client(self.credentials)
         payload: dict[str, Any] = {

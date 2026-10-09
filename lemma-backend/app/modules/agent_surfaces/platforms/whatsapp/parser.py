@@ -133,6 +133,57 @@ def _undeliverable_notice(msg: dict[str, Any]) -> str:
     )
 
 
+# The message types that carry a downloadable media object. Anything else that
+# is not text, a button, or a shared place or contact is not content Lemma can
+# read, and must not be read as its own type name.
+_MEDIA_TYPES = frozenset({"image", "audio", "video", "document", "sticker", "voice"})
+
+# Deliveries that are not somebody writing to the agent: a reaction to one of
+# its messages, and WhatsApp's own notices (a number changed). Read as messages
+# they started a model run whose whole input was the word "reaction".
+_NOT_A_MESSAGE = frozenset({"reaction", "system"})
+
+
+def _location_text(location: dict[str, Any]) -> str:
+    latitude = location.get("latitude")
+    longitude = location.get("longitude")
+    place = ", ".join(
+        part
+        for part in (payload_text(location, "name"), payload_text(location, "address"))
+        if part
+    )
+    coordinates = f"{latitude},{longitude}" if latitude is not None else ""
+    if coordinates and place:
+        return f"Shared a location: {coordinates} ({place})"
+    described = coordinates or place
+    return f"Shared a location: {described}" if described else "Shared a location"
+
+
+def _contacts_text(contacts: object) -> str:
+    entries: list[str] = []
+    for contact in contacts if isinstance(contacts, list) else []:
+        if not isinstance(contact, dict):
+            continue
+        name = payload_text(payload_section(contact, "name"), "formatted_name")
+        phones = [
+            payload_text(phone, "phone")
+            for phone in contact.get("phones") or []
+            if isinstance(phone, dict) and payload_text(phone, "phone")
+        ]
+        numbers = f"({', '.join(phones)})" if phones else ""
+        entry = " ".join(part for part in (name, numbers) if part)
+        if entry:
+            entries.append(entry)
+    return f"Shared contacts: {'; '.join(entries)}" if entries else "Shared a contact"
+
+
+def _unreadable_notice(msg_type: str) -> str:
+    return (
+        "(System notice, not the person's words: they sent a WhatsApp "
+        f"{msg_type.replace('_', ' ')} message, which Lemma cannot read.)"
+    )
+
+
 def _replies_to(msg: dict[str, object], business_number: str) -> bool:
     """Whether the message quotes one the business sent.
 
@@ -236,6 +287,8 @@ class WhatsAppMessageParser:
 
         msg = envelope.message
         value = envelope.value
+        if msg.get("type") in _NOT_A_MESSAGE:
+            return None
         message_text, attachments = self._message_body(msg)
 
         contacts = value.get("contacts") or []
@@ -369,6 +422,20 @@ class WhatsAppMessageParser:
             return self._interactive_title(payload_section(msg, "interactive")), []
         if _is_undeliverable(msg):
             return _undeliverable_notice(msg), []
+        if msg_type == "button":
+            # A template quick-reply. What the person tapped is its label; the
+            # payload stands in only when the label is missing.
+            button = payload_section(msg, "button")
+            label = payload_text(button, "text") or payload_text(button, "payload")
+            return label, []
+        if msg_type == "location":
+            return _location_text(payload_section(msg, "location")), []
+        if msg_type == "contacts":
+            return _contacts_text(msg.get("contacts")), []
+        if msg_type not in _MEDIA_TYPES:
+            # An order, a product enquiry, or a type added after this was
+            # written: its type name used to stand in as the person's words.
+            return _unreadable_notice(str(msg_type)), []
         attachment = self._parse_attachment(msg, msg_type)
         caption = (
             str(payload_section(msg, msg_type).get("caption") or "").strip() or msg_type

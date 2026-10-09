@@ -162,7 +162,10 @@ class SlackMessageParser(SlackConfigurationParserMixin):
             "message_deleted",
             "channel_join",
             "channel_leave",
-            "thread_broadcast",
+            # Not `thread_broadcast`: that is a person's thread reply with "Also
+            # send to channel" ticked, and dropping it lost every reply in the
+            # bot's thread that was also shared. A parallel `app_mention` for
+            # the same message is collapsed by the per-message claim.
         }
     )
 

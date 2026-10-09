@@ -27,6 +27,9 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.tool_errors import safe_error_text
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 RECONCILE_APPROVAL_JOB = "reconcile_agent_approval"
 
@@ -299,6 +302,14 @@ async def execute_approved_tool_as_user(
             }
         return {"ok": True, "value": value}
     except Exception as exc:  # noqa: BLE001 - reported to the model, not fatal
+        # The model only ever sees the redacted line below, so without this an
+        # approved action that failed left nothing anyone could debug from.
+        logger.error(
+            "agent.approval.approved_tool_execution.failed",
+            tool_name=tool_name,
+            approval_id=approval_id,
+            exc_info=True,
+        )
         # Redacted, not `str(exc)`: this string is persisted as the approval's
         # tool return, replayed into the model on every later turn and read by
         # anyone with the conversation. An approved tool is the class of call

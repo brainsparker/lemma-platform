@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Protocol
+from app.modules.agent.contracts.run_observer import RunObserver
 from uuid import UUID
 from pydantic_ai.output import OutputSpec
 from pydantic_ai.capabilities import AgentCapability
@@ -36,7 +36,6 @@ from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
-    AgentEvent,
     AgentRuntimeConfig,
     AgentRunStatus,
     ConversationType,
@@ -113,32 +112,8 @@ logger = get_logger(__name__)
 _FINALIZATION_TIMEOUT_SECONDS = 8.0
 
 
-class AgentRunObserver(Protocol):
-    async def on_run_started(
-        self,
-        conversation: Conversation,
-        ctx: ConversationContext,
-    ) -> None: ...
-
-    async def on_event(
-        self,
-        event: AgentEvent,
-        conversation: Conversation,
-        ctx: ConversationContext,
-    ) -> None: ...
-
-    async def on_run_finished(
-        self,
-        conversation: Conversation,
-        ctx: ConversationContext,
-    ) -> None: ...
-
-    async def on_run_failed(
-        self,
-        conversation: Conversation,
-        error: Exception,
-    ) -> None:
-        raise NotImplementedError
+#: The contract the surface layer implements; kept under the old name here.
+AgentRunObserver = RunObserver
 
 
 class AgentRunnerService:

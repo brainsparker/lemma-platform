@@ -258,3 +258,81 @@ def test_the_trusted_receiver_is_named_out_of_the_box() -> None:
     from app.modules.agent_surfaces.config import SurfaceSettings
 
     assert SurfaceSettings().surface_email_trusted_authserv_ids == "amazonses.com"
+
+
+# --- one address, end to end ----------------------------------------------
+
+
+def _fetched(from_header: object, *, received_from: str) -> dict[str, object]:
+    """A Received Emails API response whose receiver vouched for corp.com."""
+    return {
+        "from": received_from,
+        "text": "Wire the money.",
+        "headers": {
+            "from": from_header,
+            "authentication-results": "amazonses.com; dmarc=pass header.from=corp.com",
+        },
+    }
+
+
+def _webhook_event(sender: str) -> ParsedInboundSurfaceEvent:
+    return ParsedInboundSurfaceEvent(
+        platform="RESEND",
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="thread-1",
+        sender_external_user_id=sender,
+        sender_email=sender,
+        message_text="",
+        metadata={"email_id": "email-1"},
+    )
+
+
+def test_the_verdict_is_for_the_address_identity_resolution_reads() -> None:
+    from app.modules.agent_surfaces.platforms.resend.parser import (
+        merge_received_email,
+    )
+
+    merged = merge_received_email(
+        _webhook_event("ceo@corp.com"),
+        _fetched("CEO <ceo@corp.com>", received_from="CEO <ceo@corp.com>"),
+    )
+
+    assert merged is not None
+    assert merged.sender_email == merged.sender_external_user_id == "ceo@corp.com"
+    assert merged.sender_authentication == EmailAuthenticationVerdict.PASS.value
+
+
+def test_a_fetched_from_naming_someone_else_does_not_vouch_for_the_event() -> None:
+    """The webhook resolves one address; the receiver judged another."""
+    from app.modules.agent_surfaces.platforms.resend.parser import (
+        merge_received_email,
+    )
+
+    merged = merge_received_email(
+        _webhook_event("ceo@victim.com"),
+        _fetched("someone@corp.com", received_from="someone@corp.com"),
+    )
+
+    assert merged is not None
+    assert merged.sender_email == "ceo@victim.com"
+    assert merged.sender_authentication == EmailAuthenticationVerdict.UNKNOWN.value
+
+
+def test_two_from_headers_leave_the_sender_unauthenticated() -> None:
+    """Which ``From:`` the receiver evaluated cannot be told from here."""
+    import json
+
+    from app.modules.agent_surfaces.platforms.resend.parser import (
+        merge_received_email,
+    )
+
+    merged = merge_received_email(
+        _webhook_event("ceo@corp.com"),
+        _fetched(
+            json.dumps(["ceo@corp.com", "someone@elsewhere.com"]),
+            received_from="ceo@corp.com",
+        ),
+    )
+
+    assert merged is not None
+    assert merged.sender_authentication == EmailAuthenticationVerdict.UNKNOWN.value

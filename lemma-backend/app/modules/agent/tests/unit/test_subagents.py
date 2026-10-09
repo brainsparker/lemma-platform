@@ -7,6 +7,7 @@ actually spawned (parent_id linkage + same user). These tests pin that guard.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from uuid import uuid4
@@ -113,7 +114,12 @@ class _CommittingUowFactory:
         return self
 
     async def __aenter__(self):
-        return SimpleNamespace(session=SimpleNamespace(), commit=self._commit)
+        # A session with no children in it: the spawn finds nothing earlier
+        # to hand back, and creates one.
+        session = SimpleNamespace(
+            execute=AsyncMock(), scalar=AsyncMock(return_value=None)
+        )
+        return SimpleNamespace(session=session, commit=self._commit)
 
     async def __aexit__(self, exc_type, exc, tb):
         return None

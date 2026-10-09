@@ -250,6 +250,7 @@ async def _already_settled(
         target_ref=external_ref,
         user_id=deps.user_id,
         pod_id=deps.pod_id,
+        conversation_id=deps.conversation_id,
     )
     if outcome.reason is None:
         return None

@@ -19,7 +19,10 @@ from uuid import UUID
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.value_objects import TERMINAL_AGENT_RUN_STATUSES
+from app.modules.agent.domain.value_objects import (
+    TERMINAL_AGENT_RUN_STATUSES,
+    ConversationStatus,
+)
 from app.modules.agent.domain.wait import AgentWaitType, AgentWaitWakeReason
 from app.modules.agent.tools.waiting.models import wake_message
 
@@ -44,8 +47,14 @@ async def read_target(
     target_ref: str | None,
     user_id: UUID,
     pod_id: UUID | None,
+    conversation_id: UUID,
 ) -> TargetOutcome:
-    """What ``target_ref`` is doing right now, in wake-reason terms."""
+    """What ``target_ref`` is doing right now, in wake-reason terms.
+
+    ``conversation_id`` is the conversation doing the waiting. A sub-agent run
+    is only readable from the conversation that spawned it: the run id comes
+    from the model, and anything else would let it read any run it can name.
+    """
     if wait_type is AgentWaitType.TIME or not target_ref:
         # A TIME wait has no target: its timer *is* the condition, so there is
         # never anything to look at and the resolver wakes it on schedule.
@@ -53,7 +62,9 @@ async def read_target(
     if wait_type is AgentWaitType.PROCESS:
         return await _read_process(target_ref, user_id=user_id)
     if wait_type is AgentWaitType.SUBAGENT:
-        return await _read_subagent_run(target_ref)
+        return await _read_subagent_run(
+            target_ref, user_id=user_id, parent_conversation_id=conversation_id
+        )
     return _STILL_GOING
 
 
@@ -92,7 +103,16 @@ async def _read_process(process_id: str, *, user_id: UUID) -> TargetOutcome:
     return _STILL_GOING
 
 
-async def _read_subagent_run(run_id: str) -> TargetOutcome:
+async def _read_subagent_run(
+    run_id: str, *, user_id: UUID, parent_conversation_id: UUID
+) -> TargetOutcome:
+    """A child's run, in terms of its conversation as well as the run.
+
+    A run that ended on a question has ended, but its conversation is WAITING
+    on an answer only the parent can arrange -- the child has no surface, so
+    nobody else sees the question. Reported as finished, the parent built on a
+    result that did not exist yet and the question was never answered.
+    """
     from app.modules.agent.infrastructure.repositories import ConversationRepository
 
     try:
@@ -101,9 +121,23 @@ async def _read_subagent_run(run_id: str) -> TargetOutcome:
         return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_GONE)
 
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        run = await ConversationRepository(uow).get_agent_run(parsed)
-    if run is None:
+        repository = ConversationRepository(uow)
+        run = await repository.get_agent_run(parsed)
+        child = (
+            await repository.get_conversation(run.conversation_id, include_runs=False)
+            if run is not None
+            else None
+        )
+    if (
+        run is None
+        or child is None
+        or child.parent_id != parent_conversation_id
+        or child.user_id != user_id
+    ):
+        # Somebody else's run reads exactly like one that does not exist.
         return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_GONE)
-    if run.status in TERMINAL_AGENT_RUN_STATUSES:
-        return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_FINISHED)
-    return _STILL_GOING
+    if run.status not in TERMINAL_AGENT_RUN_STATUSES:
+        return _STILL_GOING
+    if child.status == ConversationStatus.WAITING:
+        return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_NEEDS_INPUT)
+    return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_FINISHED)

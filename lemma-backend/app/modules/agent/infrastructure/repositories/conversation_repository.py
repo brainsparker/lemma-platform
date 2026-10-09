@@ -22,6 +22,7 @@ from app.modules.agent.domain.entities import (
     Message as MessageEntity,
 )
 from app.modules.agent.domain.value_objects import (
+    AgentRunFinishResult,
     AgentRuntimeConfig,
     AgentRunStatus,
     ConversationAgentSelection,
@@ -56,7 +57,8 @@ from app.modules.agent.infrastructure.repositories.conversation_list_page import
     page_by_activity,
 )
 from app.modules.agent.infrastructure.repositories.conversation_run_lifecycle import (
-    ConversationRunLifecycleMixin,
+    finish_agent_run as _finish_agent_run,
+    update_conversation_status as _write_conversation_status,
 )
 from app.modules.agent.domain.subagent_spawn import SPAWN_KEY
 from app.modules.agent.infrastructure.repositories.conversation_approval_queries import (
@@ -70,7 +72,6 @@ from app.modules.agent.infrastructure.repositories.conversation_opening_texts im
 class ConversationRepository(
     ConversationApprovalQueriesMixin,
     ConversationOpeningTextsMixin,
-    ConversationRunLifecycleMixin,
     ConversationRunQueriesMixin,
 ):
     """Repository for conversations, agent runs, and messages."""
@@ -484,3 +485,60 @@ class ConversationRepository(
             rows = rows[:limit]
         next_cursor = rows[-1].sequence if has_more and rows else None
         return [row.to_entity() for row in reversed(rows)], next_cursor
+
+    async def finish_agent_run(
+        self,
+        *,
+        agent_run_id: UUID,
+        status: AgentRunStatus,
+        conversation_status: ConversationStatus | None = None,
+        error: str | None = None,
+        error_code: str | None = None,
+        error_reason: str | None = None,
+        output_data: JsonValue | None = None,
+        stamp: JsonObject | None = None,
+    ) -> AgentRunFinishResult | None:
+        """End a run once, whoever else is trying; see `conversation_run_lifecycle`."""
+        return await _finish_agent_run(
+            self.session,
+            agent_run_id=agent_run_id,
+            status=status,
+            conversation_status=conversation_status,
+            error=error,
+            error_code=error_code,
+            error_reason=error_reason,
+            output_data=output_data,
+            stamp=stamp,
+        )
+
+    async def set_conversation_status(
+        self,
+        *,
+        conversation_id: UUID,
+        status: ConversationStatus,
+    ) -> None:
+        """Move a conversation's status with no run to finish.
+
+        ``finish_agent_run`` is the usual path, but a suspended conversation has
+        no active run — the run ended when the tool paused it — so cancelling its
+        wait has to set the status directly.
+        """
+        await self._update_conversation_status(
+            conversation_id=conversation_id, status=status
+        )
+
+    async def _update_conversation_status(
+        self,
+        *,
+        conversation_id: UUID,
+        status: ConversationStatus,
+        output_data: JsonValue | None = None,
+        touch_activity: bool = False,
+    ) -> None:
+        await _write_conversation_status(
+            self.session,
+            conversation_id=conversation_id,
+            status=status,
+            output_data=output_data,
+            touch_activity=touch_activity,
+        )

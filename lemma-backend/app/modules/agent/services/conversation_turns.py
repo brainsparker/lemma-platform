@@ -87,6 +87,24 @@ from app.modules.agent.services.serialization import message_to_payload
 logger = get_logger(__name__)
 
 
+def _owed_an_answer(
+    completed_run: AgentRun | None, completed_run_id: UUID
+) -> tuple[list[UUID], int | None] | None:
+    """Where to look for what is owed an answer, and from which sequence on.
+
+    After Stop only the stopped run, and only what was said after Stop; None
+    when the stop left no mark to say where that is. Otherwise the run and
+    whatever earlier follow-ups left waiting behind it.
+    """
+    if completed_run is not None and completed_run.status == AgentRunStatus.STOPPED:
+        stopped_after = _said_after_stop(completed_run)
+        return None if stopped_after is None else ([completed_run_id], stopped_after)
+    return [
+        completed_run_id,
+        *leftover_sources(completed_run.metadata if completed_run else None),
+    ], None
+
+
 def _said_after_stop(run: AgentRun | None) -> int | None:
     """The newest message sequence when Stop was pressed on this run.
 
@@ -354,21 +372,11 @@ class TurnCoordinator:
         completed_run = await self.conversation_repository.get_agent_run(
             completed_run_id
         )
-        stopped = (
-            completed_run is not None and completed_run.status == AgentRunStatus.STOPPED
-        )
-        stopped_after = _said_after_stop(completed_run) if stopped else None
-        if stopped and stopped_after is None:
+        owed = _owed_an_answer(completed_run, completed_run_id)
+        if owed is None:
             # Stop means stop: nothing said before it starts the next turn.
             return None
-        sources = (
-            [completed_run_id]
-            if stopped
-            else [
-                completed_run_id,
-                *leftover_sources(completed_run.metadata if completed_run else None),
-            ]
-        )
+        sources, stopped_after = owed
         queue = await next_queue(
             self.conversation_repository, sources, after_sequence=stopped_after
         )

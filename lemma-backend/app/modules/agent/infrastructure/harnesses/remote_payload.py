@@ -120,10 +120,11 @@ def run_start_payload(
     ``resumed_tool_call_id`` names the pausing call this run exists to answer.
     See :func:`_turn_messages`.
 
-    Deliberately does not carry ``runtime_credentials``. They were assembled
-    here and then dropped by the only caller, on the one code path whose
-    destination is a third-party machine — a leak waiting for someone to widen
-    the spec it feeds.
+    Its destination is somebody's laptop, where the host keeps it in its own
+    journal, so it carries the prompt and nothing else. It used to carry the
+    whole agent, the conversation with all of its metadata, and the run
+    context -- connector account ids, surface metadata, the runtime's
+    credentials slot -- none of which the host reads.
     """
     return {
         "agent_run_id": str(agent_run_id),
@@ -141,11 +142,6 @@ def run_start_payload(
             runtime_instructions=runtime_instructions,
             open_notifications=open_notifications,
         ),
-        "agent": agent.model_dump(mode="json"),
-        "conversation": conversation.model_dump(
-            mode="json", exclude={"messages", "agent_runs"}
-        ),
-        "context": ctx.model_dump(mode="json"),
     }
 
 

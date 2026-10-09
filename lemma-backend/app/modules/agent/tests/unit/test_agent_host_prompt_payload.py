@@ -278,6 +278,79 @@ class TestCredentials:
 
         assert "runtime_credentials" not in payload
 
+    async def test_the_start_run_spec_carries_no_run_context_at_any_depth(self):
+        """The spec rests in plaintext in the command row and in the host's own
+        journal, on somebody's laptop. It used to carry the whole run context,
+        the agent and the conversation's metadata, none of which the host reads;
+        the check above looked only at the top level of a payload that nested
+        them one level down."""
+        from datetime import datetime, timezone
+
+        from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
+            run_spec_from,
+        )
+        from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+            AgentHostRunConfig,
+        )
+
+        ctx = _ctx().model_copy(
+            update={
+                "runtime_credentials": {"api_key": "sk-provider-secret"},
+                "configured_accounts": {"github": uuid7()},
+                "surface_metadata": {"external_user_id": "U-private"},
+            }
+        )
+        conversation = _conversation().model_copy(
+            update={
+                "metadata": {
+                    "surface_metadata": {"external_user_id": "U-private"},
+                    "external_channel_id": "C-private",
+                }
+            }
+        )
+        payload = run_start_payload(
+            agent=_agent(),
+            conversation=conversation,
+            messages=_transcript(),
+            ctx=ctx,
+            agent_run_id=uuid7(),
+            runtime_instructions="",
+            carries_history=False,
+        )
+
+        spec = run_spec_from(
+            payload,
+            conversation=conversation,
+            harness_id=uuid7(),
+            profile_revision="rev-1",
+            run_config=AgentHostRunConfig(
+                harness_id=uuid7(),
+                runtime_profile_id=uuid7(),
+                config_selections={},
+                wait_timeout_seconds=300,
+                model_name=None,
+            ),
+            system_prompt="instructions",
+            system_prompt_delivery=None,
+            resume_session_id=None,
+            run_deadline=datetime.now(timezone.utc),
+        )
+        wire = json.dumps(spec.model_dump(mode="json")) + json.dumps(
+            payload, default=str
+        )
+
+        for leaked in (
+            "runtime_credentials",
+            "sk-provider-secret",
+            "configured_accounts",
+            "surface_metadata",
+            "U-private",
+            "C-private",
+        ):
+            assert leaked not in wire, leaked
+        assert spec.context == {}
+        assert spec.prompt[0]["text"].endswith("Friday.")
+
     async def test_the_host_agent_is_given_the_users_lemma_identity(self):
         """Distinct from the assertion above, and deliberately so.
 

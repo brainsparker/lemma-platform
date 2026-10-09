@@ -27,6 +27,7 @@ from app.modules.agent.capabilities.open_notifications import (
 )
 from app.modules.agent.domain.queued_messages import is_queued
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
@@ -64,6 +65,42 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
 from app.modules.agent.services.workspace_location import resolve_workspace_location
 
 logger = get_logger(__name__)
+
+
+def run_spec_from(
+    payload: JsonObject,
+    *,
+    conversation: Conversation,
+    harness_id: UUID,
+    profile_revision: str,
+    run_config: AgentHostRunConfig,
+    system_prompt: str,
+    system_prompt_delivery: str | None,
+    resume_session_id: str | None,
+    run_deadline: datetime,
+) -> AgentHostRunSpec:
+    """The START_RUN spec for one run, out of its ``run_start_payload``.
+
+    ``context`` stays on the wire, empty: both sides declare it
+    (``tests/fixtures/wire_contract.json``) and the host accepts it absent or
+    empty, but nothing on the host reads it, so nothing is put there. The spec
+    rests in plaintext in the command row and in the host's own journal.
+    """
+    prompt = json_object(payload.get("prompt"))
+    return AgentHostRunSpec(
+        agent_run_id=UUID(str(payload["agent_run_id"])),
+        conversation_id=conversation.id,
+        harness_id=harness_id,
+        profile_revision=profile_revision,
+        model_name=run_config.model_name,
+        config_selections=run_config.config_selections,
+        system_prompt=system_prompt,
+        system_prompt_delivery=system_prompt_delivery,
+        prompt=[{"type": "text", "text": str(prompt.get("user_prompt") or "")}],
+        resume_session_id=resume_session_id,
+        workspace_cwd=resolve_workspace_location(conversation).cwd,
+        run_deadline=run_deadline,
+    )
 
 
 async def refresh_credential[DepsT: AgentContext](
@@ -350,24 +387,15 @@ async def _admit[DepsT: AgentContext](
         # First, so a claim that comes back short rolls back before anything
         # else is written; see `claim_exactly`.
         await claim_exactly(uow, agent_run_id=agent_run_id, carried=carried)
-        run_spec = AgentHostRunSpec(
-            agent_run_id=agent_run_id,
-            conversation_id=conversation.id,
+        run_spec = run_spec_from(
+            payload,
+            conversation=conversation,
             harness_id=harness_id,
             profile_revision=admission.config_revision,
-            model_name=run_config.model_name,
-            config_selections=run_config.config_selections,
+            run_config=run_config,
             system_prompt=system_prompt,
             system_prompt_delivery=system_prompt_delivery,
-            prompt=[{"type": "text", "text": str(prompt.get("user_prompt") or "")}],
             resume_session_id=resume_session_id,
-            workspace_cwd=resolve_workspace_location(conversation).cwd,
-            context={
-                "agent": payload.get("agent"),
-                "conversation": payload.get("conversation"),
-                "lemma": payload.get("context"),
-                "session_id": prompt.get("session_id"),
-            },
             run_deadline=dispatched_at + timedelta(seconds=timeout_seconds),
         )
         await AgentHostDispatchRepository(uow).enqueue_run(

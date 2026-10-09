@@ -594,9 +594,13 @@ guarantee:
   every retry of that call, on any link. Lemma claims `(run_id, request_id)` in
   Redis (`SET NX`); the first arrival executes the call in a task the link does
   not own, so a socket that drops mid-call does not cancel it, and its outcome
-  -- the MCP result, or the failure -- is kept for an hour. A duplicate that
+  -- the MCP result, or the failure -- is kept for ten minutes (a result over
+  256 KiB is not kept: a retry is told the call finished). A duplicate that
   arrives while it runs waits for that outcome; one that arrives after is
-  answered from it. Nothing is executed twice
+  answered from it. The executing replica keeps a heartbeat beside the claim,
+  so a duplicate of a call whose replica died is told at once that it may have
+  run, rather than waiting for an outcome nobody will record. Nothing is
+  executed twice
   (`agent_host_link_tool_calls.py`). `welcome` says so with
   `idempotent_tool_calls: true`, and a host resends a `tools/call` after a drop
   only to a server that said it. A call without a `request_id`, from an older

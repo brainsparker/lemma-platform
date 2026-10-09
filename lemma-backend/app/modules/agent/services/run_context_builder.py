@@ -67,13 +67,11 @@ async def build_run_context(
     user_id: UUID,
     resolved_runtime: Any,
     runtime_profile_snapshot: dict[str, object | None] | None,
-    runtime_credentials: dict[str, Any],
     resolve_configured_accounts: Any,
 ) -> ConversationContext:
     """The context this run's tools execute against.
 
-    `runtime_profile_snapshot` and `runtime_credentials` are passed in rather
-    than recomputed: the caller needs the same snapshot for the run identity and
+    `runtime_profile_snapshot` is passed in rather than recomputed: the caller needs the same snapshot for the run identity and
     the harness options, and two calls to `runtime_snapshot()` would be two
     objects that only happen to agree.
     """
@@ -119,7 +117,6 @@ async def build_run_context(
             else await resolve_configured_accounts(agent=agent, user_id=user_id)
         ),
         runtime_profile=runtime_profile_snapshot,
-        runtime_credentials=runtime_credentials,
         workspace_id=workspace_location.workspace_id,
         workspace_cwd=workspace_location.cwd,
         workspace_repo=workspace_location.repo,

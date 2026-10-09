@@ -11,7 +11,10 @@ harness now has to recover from, so this is the other half of that fix.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import itertools
+import secrets
 from collections.abc import Mapping
 from dataclasses import replace
 
@@ -65,6 +68,11 @@ _closing_clients: set[asyncio.Task[None]] = set()
 # and the cache only ever needs to know whether two credentials are the *same*,
 # never anything about them. A counter answers that exactly, and leaves nothing
 # to leak if a key ever reaches a log line or a traceback.
+#
+# The map from credential to label is keyed by an HMAC under a key drawn fresh
+# for this process, never by the plaintext: a dict key outlives every SecretStr
+# that held it and shows up in heap dumps and debug reprs. The digest cannot be
+# compared offline -- its key never leaves this process's memory.
 _credential_labels: BoundedDict[str, str] = BoundedDict(
     _MAX_PROVIDER_CLIENTS, name="agent.credential_labels", touch_on_get=True
 )
@@ -94,13 +102,21 @@ def provider_model_settings(
     )
 
 
+_FINGERPRINT_KEY = secrets.token_bytes(32)
+
+
+def _fingerprint(secret: str) -> str:
+    return hmac.new(_FINGERPRINT_KEY, secret.encode(), hashlib.sha256).hexdigest()
+
+
 def _credential_label(api_key: str | None) -> str:
     if not api_key:
         return "anonymous"
-    label = _credential_labels.get(api_key)
+    fingerprint = _fingerprint(api_key)
+    label = _credential_labels.get(fingerprint)
     if label is None:
         label = f"credential-{next(_credential_sequence)}"
-        _credential_labels[api_key] = label
+        _credential_labels[fingerprint] = label
     return label
 
 
@@ -133,7 +149,12 @@ def _client_cache_key(
     Two profiles pointing at the same base URL with different credentials must
     not share a client — same endpoint, different tenant.
     """
-    header_sig = ",".join(f"{k}={v}" for k, v in sorted(headers.items()))
+    # Header values are as often a credential as the key is.
+    header_sig = (
+        _fingerprint(",".join(f"{k}={v}" for k, v in sorted(headers.items())))
+        if headers
+        else ""
+    )
     return f"{protocol}|{base_url}|{_credential_label(api_key)}|{header_sig}"
 
 

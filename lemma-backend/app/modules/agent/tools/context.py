@@ -51,7 +51,8 @@ class BaseAgentContext(AgentContext):
     agent_display_name: str | None = None
     surface_conversation_kind: str | None = None
     runtime_profile: dict[str, object] | None = None
-    runtime_credentials: dict[str, object] = Field(default_factory=dict)
+    # No provider credentials here: this object reaches every tool, and no tool
+    # needs the model provider's key. The harness gets it through its options.
     workspace_id: str = "default"
     workspace_cwd: str | None = None
     # The GitHub repository this conversation works in, when it was started

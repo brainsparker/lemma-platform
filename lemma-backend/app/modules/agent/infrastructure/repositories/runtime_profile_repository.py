@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select
 
 from app.core.log.log import get_logger
@@ -13,6 +13,7 @@ from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
+    RuntimeCredentials,
     RuntimeProfileStatus,
     reveal_credentials,
 )
@@ -23,6 +24,15 @@ from app.modules.connectors.contracts import SecretEncryptionPort
 
 
 logger = get_logger(__name__)
+
+_CREDENTIALS: TypeAdapter[RuntimeCredentials | None] = TypeAdapter(
+    RuntimeCredentials | None
+)
+
+
+def _error_locations(error: ValidationError) -> list[str]:
+    return [".".join(str(part) for part in item["loc"]) for item in error.errors()]
+
 
 # Rows written for the retired local daemon still carry its per-tool protocols
 # (CODEX_APP_SERVER, CLAUDE_CODE, …). They can never execute again, and
@@ -58,9 +68,17 @@ class AgentRuntimeProfileRepository:
         return None
 
     def _to_entity(self, instance: AgentRuntimeProfileModel) -> AgentRuntimeProfile:
-        data = instance.to_entity().model_dump(mode="json")
-        data["credentials"] = self.encryption.decrypt_json(instance.credentials)
-        return AgentRuntimeProfile.model_validate(data)
+        # The row is validated before the decrypted key is anywhere near it, so
+        # a row that fails validation fails with nothing secret in its error.
+        # The key is then checked on its own and attached.
+        entity = AgentRuntimeProfile.model_validate(
+            instance.to_entity().model_dump(mode="json", exclude={"credentials"})
+        )
+        decrypted = self.encryption.decrypt_json(instance.credentials)
+        credentials = (
+            _CREDENTIALS.validate_python(decrypted) if decrypted is not None else None
+        )
+        return entity.model_copy(update={"credentials": credentials})
 
     def _apply_entity(
         self,
@@ -235,12 +253,15 @@ class AgentRuntimeProfileRepository:
             try:
                 profiles.append(self._to_entity(instance))
             except ValidationError as error:
+                # Where it failed, never what it read: a validation error's
+                # message and traceback quote the input, and for this row the
+                # input can be a decrypted key.
                 logger.warning(
                     "agent.runtime_profile.unreadable.skipped",
                     profile_id=str(instance.id),
                     organization_id=str(organization_id),
-                    error=str(error),
-                    exc_info=True,
+                    error_type=type(error).__name__,
+                    error_locations=_error_locations(error),
                 )
         return profiles
 

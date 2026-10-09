@@ -215,7 +215,6 @@ class AgentRunnerService:
                 user_id=user_id,
                 resolved_runtime=resolved_runtime,
                 runtime_profile_snapshot=runtime_profile_snapshot,
-                runtime_credentials=runtime_credentials,
                 resolve_configured_accounts=self._resolve_configured_accounts,
             )
             full_toolsets = await self.tool_assembler.assemble(

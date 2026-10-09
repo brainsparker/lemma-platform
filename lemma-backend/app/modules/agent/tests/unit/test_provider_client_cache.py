@@ -27,6 +27,20 @@ def _clean_cache():
     factory._credential_labels.clear()
 
 
+def test_no_cache_holds_a_plaintext_key_or_header_value() -> None:
+    """A dict key outlives every SecretStr that held it; keep secrets out."""
+    key = factory._client_cache_key(
+        "OPENAI_COMPATIBLE",
+        "https://api.example.com/v1",
+        "sk-plaintext-key",
+        {"X-Gateway": "header-secret"},
+    )
+
+    held = repr(list(factory._credential_labels)) + key
+    assert "sk-plaintext-key" not in held
+    assert "header-secret" not in held
+
+
 def test_the_same_credential_keeps_one_label() -> None:
     assert factory._credential_label("sk-a") == factory._credential_label("sk-a")
 

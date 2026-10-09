@@ -24,7 +24,6 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from app.core.file_types import is_untyped_mime
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
@@ -38,7 +37,6 @@ from app.modules.agent.contracts import (
 from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.envelope import (
-    EnvelopeVoice,
     PartDelivery,
     SurfaceEnvelope,
 )
@@ -50,7 +48,6 @@ from app.modules.agent_surfaces.services.cold_email_thread import (
 from app.modules.agent_surfaces.services.display_resource_content import (
     apply_file_facts,
     apply_table_rows,
-    load_pod_file_bytes,
     resolve_pod_file_parts,
     resolve_table_preview,
 )
@@ -60,6 +57,7 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
 )
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 from app.modules.agent_surfaces.services.egress_progress import SurfaceProgress
+from app.modules.agent_surfaces.services.egress_voice import send_voice_note
 from app.modules.agent_surfaces.services.approval_cards import approval_plan
 from app.modules.agent_surfaces.services.free_text_answer import (
     remember_free_text_answer_wanted,
@@ -228,13 +226,7 @@ class SurfaceEgress:
         tool_output: object | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        """Show one resource -- a file, a table, a card -- on the surface.
-
-        ``request`` is the validated model. It used to also accept the raw dict
-        and validate it here, which no caller ever needed: the tool path hands
-        over a `DisplayResourceRequest` and always did. Only two tests used the
-        dict, so the branch existed to be tested.
-        """
+        """Show one resource -- a file, a table, a card -- on the surface."""
         target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
             return False
@@ -536,58 +528,11 @@ class SurfaceEgress:
         path: str,
         caption: str | None = None,
     ) -> bool:
-        """Deliver a pod audio file as a native voice note on the surface.
-
-        Called by the ``say`` tool. Tries the platform's native voice note
-        (Telegram sendVoice / audio message); falls back to a normal file
-        attachment (an inline audio player on most platforms) and then a link.
-        """
-        target = await self.delivery.resolve_egress_target(conversation_id)
-        if target is None:
-            return False
-        # The caption is model-authored — strip any reasoning before delivery.
-        caption = sanitize_user_visible_text(caption) if caption else caption
-        loaded = await load_pod_file_bytes(
+        """Deliver a pod audio file as a voice note; the ``say`` tool's verb."""
+        return await send_voice_note(
             uow=self.uow,
-            target=target,
+            delivery=self.delivery,
             conversation_id=conversation_id,
             path=path,
-        )
-        if loaded is None:
-            # A warning: `say` reads this False as "the person did not hear it".
-            logger.warning(
-                "agent_surfaces.egress.voice_note_not_fetched.degraded",
-                conversation_id=str(conversation_id),
-                path=path,
-            )
-            return False
-        entity, content = loaded
-
-        # `or` was not enough: a file stored without an extension is typed
-        # `application/octet-stream`, which is truthy, so the fallback never
-        # fired and Telegram was handed a blob where sendVoice wants OGG.
-        mime = "audio/ogg" if is_untyped_mime(entity.mime_type) else entity.mime_type
-
-        # Voice note, then the same bytes as an attachment (an audio player on
-        # most platforms), then the link card. Three rungs that used to be
-        # written out here; the envelope walks them.
-        return await self.delivery.deliver_envelope(
-            target,
-            envelope=SurfaceEnvelope(
-                voice=EnvelopeVoice(
-                    file_name=entity.name,
-                    content=content,
-                    mime_type=mime,
-                    caption=caption,
-                    fallback=build_display_resource_render_plan(
-                        pod_id=target.pod_id,
-                        request=DisplayResourceRequest(
-                            type=DisplayResourceType.FILE, path=path
-                        ),
-                        conversation_id=conversation_id,
-                    ),
-                )
-            ),
-            metadata=await self.delivery.egress_metadata(target),
-            conversation_id=conversation_id,
+            caption=caption,
         )

@@ -165,7 +165,7 @@ test("the detail reads the runtime, the schemas and the grants", () => {
     });
 
     assert.equal(detail.instruction, "You are a researcher.\n\nAlways cite.");
-    assert.deepEqual(detail.runtime, { profile: "anthropic-key", model: "sonnet" });
+    assert.deepEqual(detail.runtime, { profile: "anthropic-key", model: "sonnet", settings: {} });
     assert.equal(runtimeLine(detail), "anthropic-key · sonnet");
     assert.deepEqual(detail.input?.fields, ["topic", "depth"]);
     assert.deepEqual(detail.input?.required, ["topic"]);
@@ -178,7 +178,7 @@ test("a runtime profile with no model named is still a pinned runtime", () => {
     // missing key and an empty string are the same fact: the profile decides.
     const detail = readAgentDetail({ name: "a", agent_runtime: { profile_id: "house" } });
 
-    assert.deepEqual(detail.runtime, { profile: "house", model: "" });
+    assert.deepEqual(detail.runtime, { profile: "house", model: "", settings: {} });
     assert.equal(runtimeLine(detail), "house");
 });
 
@@ -225,7 +225,7 @@ test("a PATCH carries only what changed", () => {
 });
 
 test("a cleared description is an explicit null, so it actually clears", () => {
-    const before = { description: "Plans meals.", instruction: "You plan meals." };
+    const before = { description: "Plans meals.", instruction: "You plan meals.", reasoningEffort: "", maxOutputTokens: "", runtime: null };
 
     assert.deepEqual(agentChanges(before, { ...before, description: "   " }), { description: null });
 });
@@ -233,10 +233,10 @@ test("a cleared description is an explicit null, so it actually clears", () => {
 test("an emptied instruction is not sent, because the API will not take it", () => {
     // `UpdateAgentRequest.instruction` has min_length=1; sending "" is a 422,
     // and the form should say so rather than find out.
-    const before = { description: "", instruction: "You plan meals." };
+    const before = { description: "", instruction: "You plan meals.", reasoningEffort: "", maxOutputTokens: "", runtime: null };
 
     assert.deepEqual(agentChanges(before, { ...before, instruction: "  " }), {});
-    assert.equal(agentProblems({ description: "", instruction: "  " }).instruction,
+    assert.equal(agentProblems({ ...before, instruction: "  " }).instruction,
         "An agent has to say what it is for. This cannot be emptied.");
 });
 
@@ -251,8 +251,8 @@ test("an instruction is a document, so its blank lines survive a round trip", ()
 test("an instruction past the limit is refused before the round trip", () => {
     const over = "x".repeat(MAX_INSTRUCTION + 1);
 
-    assert.match(agentProblems({ description: "", instruction: over }).instruction ?? "", /the limit is 60,000/);
-    assert.equal(agentProblems({ description: "", instruction: "x".repeat(MAX_INSTRUCTION) }).instruction, undefined);
+    assert.match(agentProblems({ description: "", instruction: over, reasoningEffort: "", maxOutputTokens: "", runtime: null }).instruction ?? "", /the limit is 60,000/);
+    assert.equal(agentProblems({ description: "", instruction: "x".repeat(MAX_INSTRUCTION), reasoningEffort: "", maxOutputTokens: "", runtime: null }).instruction, undefined);
 });
 
 /* ── what deleting breaks ──────────────────────────────────────── */
@@ -289,4 +289,54 @@ test("a row read on its own matches one read through the list", () => {
     const raw = { name: "chef", toolsets: ["POD"], allowed_actions: ["agent.read"] };
 
     assert.deepEqual(readAgentRow(raw), agentRows([raw])[0]);
+});
+
+/* ── generation settings ───────────────────────────────────────── */
+
+const pinned = {
+    name: "chef",
+    instruction: "You plan meals.",
+    agent_runtime: {
+        profile_id: "org:key",
+        model_name: "thinker",
+        settings: { reasoning_effort: "high", temperature: 0.2 },
+    },
+};
+
+test("the effort and output cap are read off the pinned runtime", () => {
+    const draft = draftOfAgent(readAgentDetail(pinned));
+
+    assert.equal(draft.reasoningEffort, "high");
+    assert.equal(draft.maxOutputTokens, "");
+    assert.deepEqual(agentChanges(draft, draft), {}, "an untouched form sends no runtime");
+});
+
+test("changing the effort writes the whole runtime back, other settings kept", () => {
+    // `agent_runtime` is replaced on PATCH, so a field left out is a field erased.
+    const before = draftOfAgent(readAgentDetail(pinned));
+
+    assert.deepEqual(agentChanges(before, { ...before, reasoningEffort: "low", maxOutputTokens: "2000" }), {
+        agent_runtime: {
+            profile_id: "org:key",
+            model_name: "thinker",
+            settings: { temperature: 0.2, reasoning_effort: "low", max_output_tokens: 2000 },
+        },
+    });
+    assert.deepEqual(agentChanges(before, { ...before, reasoningEffort: "" }).agent_runtime?.settings, {
+        temperature: 0.2,
+    }, "back to the model default is the field removed, not set to empty");
+});
+
+test("an agent on the pod default has no runtime of its own to write settings into", () => {
+    const before = draftOfAgent(readAgentDetail({ name: "chef", instruction: "You plan meals." }));
+
+    assert.deepEqual(agentChanges(before, { ...before, reasoningEffort: "low" }), {});
+});
+
+test("an output cap has to be a whole number", () => {
+    const draft = draftOfAgent(readAgentDetail(pinned));
+
+    assert.ok(agentProblems({ ...draft, maxOutputTokens: "lots" }).maxOutputTokens);
+    assert.ok(agentProblems({ ...draft, maxOutputTokens: "0" }).maxOutputTokens);
+    assert.equal(agentProblems({ ...draft, maxOutputTokens: "4096" }).maxOutputTokens, undefined);
 });

@@ -74,6 +74,23 @@ test("a runtime with no catalog still offers the model it names", () => {
     assert.deepEqual(runtime?.models, [{ name: "claude-opus-5", label: "claude-opus-5" }]);
 });
 
+test("a model that declares REASONING says so; one that does not, does not", () => {
+    // The agent editor offers a reasoning effort only for the first: the
+    // backend sends one to no other model.
+    const runtime = readRuntime({
+        id: "p4",
+        name: "Local",
+        kind: "MODEL_PROVIDER",
+        scope: "ORGANIZATION",
+        model_catalog: [
+            { name: "thinker", capabilities: ["TEXT", "REASONING"] },
+            { name: "talker", capabilities: ["TEXT"] },
+        ],
+    });
+    assert.equal(runtime?.models[0]?.reasons, true);
+    assert.equal(runtime?.models[1]?.reasons, undefined);
+});
+
 test("archived is DISABLED, not a missing row", () => {
     const runtime = readRuntime({ id: "p4", name: "Old key", kind: "MODEL_PROVIDER", status: "DISABLED" });
     assert.equal(runtime?.archived, true);

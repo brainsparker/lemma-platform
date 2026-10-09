@@ -85,11 +85,23 @@ export interface AgentDetail extends AgentRow {
      *  is named but the model is left to the profile's own default — the API
      *  drops `model_name` from the payload entirely in that case, so an empty
      *  string here and a missing key there are the same fact. */
-    runtime: { profile: string; model: string } | null;
+    runtime: PinnedRuntime | null;
     input: SchemaNote | null;
     output: SchemaNote | null;
     grants: AgentGrant[];
 }
+
+/** `agent_runtime` as stored. `settings` is kept whole -- every generation
+ *  field, not only the two this page edits -- because a save writes the
+ *  runtime back, and a field dropped here would be erased there. */
+export interface PinnedRuntime {
+    profile: string;
+    model: string;
+    settings: Record<string, unknown>;
+}
+
+/** `GenerationSettings.reasoning_effort`, as the API spells it. */
+export const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high"] as const;
 
 function text(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
@@ -213,7 +225,9 @@ export function readAgentDetail(raw: unknown): AgentDetail {
         blurb: row.blurb || firstSentence(text(item.instruction)),
         description: text(item.description),
         instruction: typeof item.instruction === "string" ? item.instruction : "",
-        runtime: profile ? { profile, model: text(runtime?.model_name) } : null,
+        runtime: profile
+            ? { profile, model: text(runtime?.model_name), settings: object(runtime?.settings) ?? {} }
+            : null,
         input: readSchema(item.input_schema),
         output: readSchema(item.output_schema),
         grants: list(permissions?.grants).map((entry) => {
@@ -268,15 +282,50 @@ export function whyNot(agent: Pick<AgentRow, "actions" | "front" | "broken" | "l
 export interface AgentDraft {
     description: string;
     instruction: string;
+    /** Empty is "not set here": the model's or the provider's own default. */
+    reasoningEffort: string;
+    /** Digits as typed; empty is unset. */
+    maxOutputTokens: string;
+    /** Carried, not edited: the settings live on it, so saving them writes it. */
+    runtime: PinnedRuntime | null;
 }
 
 export function draftOfAgent(detail: AgentDetail | null | undefined): AgentDraft {
+    const settings = detail?.runtime?.settings ?? {};
+    const effort = settings.reasoning_effort;
+    const cap = settings.max_output_tokens;
     return {
         description: (detail?.description ?? "").trim(),
         /* Not trimmed. An instruction is a document — its blank lines and its
            trailing newline are how it was written, and normalising them makes
            every load look like an edit. */
         instruction: detail?.instruction ?? "",
+        reasoningEffort: typeof effort === "string" ? effort : "",
+        maxOutputTokens: typeof cap === "number" ? String(cap) : "",
+        runtime: detail?.runtime ?? null,
+    };
+}
+
+export interface AgentRuntimePatch {
+    profile_id: string;
+    model_name?: string;
+    settings: Record<string, unknown> | null;
+}
+
+/** The pinned runtime with the two edited settings written into it.
+ *
+ *  Whole, because `agent_runtime` is replaced rather than merged on PATCH:
+ *  the profile, the model and every other setting go back as they were. */
+function runtimeWithSettings(runtime: PinnedRuntime, draft: AgentDraft): AgentRuntimePatch {
+    const settings: Record<string, unknown> = { ...runtime.settings };
+    delete settings.reasoning_effort;
+    delete settings.max_output_tokens;
+    if (draft.reasoningEffort) settings.reasoning_effort = draft.reasoningEffort;
+    if (draft.maxOutputTokens.trim()) settings.max_output_tokens = Number(draft.maxOutputTokens.trim());
+    return {
+        profile_id: runtime.profile,
+        ...(runtime.model ? { model_name: runtime.model } : {}),
+        settings: Object.keys(settings).length ? settings : null,
     };
 }
 
@@ -286,14 +335,21 @@ export function draftOfAgent(detail: AgentDetail | null | undefined): AgentDraft
 export function agentChanges(before: AgentDraft, after: AgentDraft): {
     description?: string | null;
     instruction?: string;
+    agent_runtime?: AgentRuntimePatch;
 } {
-    const patch: { description?: string | null; instruction?: string } = {};
+    const patch: { description?: string | null; instruction?: string; agent_runtime?: AgentRuntimePatch } = {};
     const description = after.description.trim();
     if (description !== before.description.trim()) {
         patch.description = description === "" ? null : description;
     }
     if (after.instruction !== before.instruction && after.instruction.trim() !== "") {
         patch.instruction = after.instruction;
+    }
+    const generation =
+        after.reasoningEffort !== before.reasoningEffort ||
+        after.maxOutputTokens.trim() !== before.maxOutputTokens.trim();
+    if (generation && after.runtime) {
+        patch.agent_runtime = runtimeWithSettings(after.runtime, after);
     }
     return patch;
 }
@@ -310,6 +366,10 @@ export function hasAgentChanges(before: AgentDraft, after: AgentDraft): boolean 
  */
 export function agentProblems(draft: AgentDraft): Partial<Record<keyof AgentDraft, string>> {
     const found: Partial<Record<keyof AgentDraft, string>> = {};
+    const cap = draft.maxOutputTokens.trim();
+    if (cap && !/^[1-9][0-9]*$/.test(cap)) {
+        found.maxOutputTokens = "A whole number of tokens, or empty for the model's own limit.";
+    }
     if (draft.instruction.trim() === "") {
         found.instruction = "An agent has to say what it is for. This cannot be emptied.";
     } else if (draft.instruction.length > MAX_INSTRUCTION) {

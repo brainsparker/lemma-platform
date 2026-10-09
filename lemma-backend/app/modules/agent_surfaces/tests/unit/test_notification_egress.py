@@ -158,6 +158,7 @@ def conversations(monkeypatch):
         surface_conversation=AsyncMock(return_value=None),
         open_surface_conversation=AsyncMock(return_value=_Conversation(uuid4())),
         append_notification_message=AsyncMock(),
+        pending_interaction=AsyncMock(return_value=None),
     )
     for name, double in vars(operations).items():
         monkeypatch.setattr(f"{_OPERATIONS}.{name}", double)
@@ -1274,7 +1275,7 @@ def _chat_service_with_link(conversations, *, touched: datetime):
     surface = _surface_for(agent_id, SurfacePlatform.SLACK)
     service = _notification_service(
         surfaces=(surface,),
-        external_user=SimpleNamespace(external_user_id="U123", tenant_id=None),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
     )
     link = _link_for(surface)
     links = service.channels.links

@@ -205,7 +205,7 @@ async def test_a_refused_registration_is_recorded_on_the_committed_row(telegram)
 
     saved = service.surface_repository.update.await_args.args[0]
     assert saved.status is AgentSurfaceStatus.ERROR
-    assert saved.webhook_secret == "the-secret"
+    assert saved.webhook_secret.get_secret_value() == "the-secret"
     # Once before the call, and again so the ERROR is not rolled back with it.
     assert telegram.order[0] == telegram.order[-1] == "commit"
 

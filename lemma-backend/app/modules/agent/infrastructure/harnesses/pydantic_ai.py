@@ -140,8 +140,17 @@ class PydanticAIHarness:
 
     kind = HarnessKind.LEMMA
 
-    def __init__(self, *, emit_tokens: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        emit_tokens: bool = True,
+        model: Model | None = None,
+    ) -> None:
         self.emit_tokens = emit_tokens
+        # Which model a run talks to. The runtime profile decides in production;
+        # a test hands in a scripted model here rather than replacing a name
+        # inside this module.
+        self._model = model
 
     async def run[DepsT: AgentContext](
         self,
@@ -288,7 +297,9 @@ class PydanticAIHarness:
             history_span.set_attribute("lemma.history.model_messages", len(history))
         # e2e mock mode swaps only the model — the rest of the harness (tool
         # execution, streaming, events, persistence) runs for real.
-        if is_mock_llm_enabled():
+        if self._model is not None:
+            model = self._model
+        elif is_mock_llm_enabled():
             model = _meter_mock_model(conversation, options)
         else:
             model = _runtime_profile_model(options)

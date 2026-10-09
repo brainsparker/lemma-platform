@@ -58,7 +58,11 @@ from app.modules.agent.services.outsider_runtime import (
     default_runtimes,
     in_process_runtime,
 )
-from app.modules.agent.services.run_limits import budget_for_run, make_stop_checker
+from app.modules.agent.services.run_limits import (
+    budget_for_run,
+    harness_usage_limits,
+    make_stop_checker,
+)
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_phase_spans import (
     observe_first_output,
@@ -136,7 +140,7 @@ class AgentRunnerService:
         self.uow_factory = uow_factory
         self.harness_registry = harness_registry
         self.fallback_model_name = fallback_model_name
-        self.fixed_usage_limits = fixed_usage_limits or UsageLimits(request_limit=200)
+        self.fixed_usage_limits = fixed_usage_limits or harness_usage_limits()
         self.tool_assembler = RunToolAssembler(uow_factory)
         self.usage_recorder = RunUsageRecorder(uow_factory)
         self.message_writer = RunMessageWriter(uow_factory)

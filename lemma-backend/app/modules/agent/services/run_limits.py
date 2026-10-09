@@ -15,6 +15,8 @@ import time
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
+from pydantic_ai import UsageLimits
+
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.run_budget import RunBudget, RunSpend
@@ -44,6 +46,21 @@ def budget_for_run(run: object) -> RunSpend:
             consecutive_tool_failures=agent_settings.agent_run_budget_tool_failures,
         )
     )
+
+
+def harness_usage_limits() -> UsageLimits:
+    """The limits pydantic-ai enforces inside one run: none on request count.
+
+    `RunSpend` is the run's request budget. It warns the run as it nears the
+    end and pauses to ask a person whether to carry on, which is what the run's
+    own instructions promise. A second, lower count inside pydantic-ai ended the
+    run instead -- before the warning, before the pause -- with an error telling
+    the reader to check model settings that were never the problem.
+
+    Explicitly `None` rather than omitted: pydantic-ai substitutes its own
+    default of 50 requests when it is handed no limits at all.
+    """
+    return UsageLimits(request_limit=None)
 
 
 def make_stop_checker(

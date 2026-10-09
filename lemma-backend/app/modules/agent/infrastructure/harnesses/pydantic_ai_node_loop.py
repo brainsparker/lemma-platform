@@ -129,6 +129,10 @@ class NodeLoop[DepsT]:
             state["run"] = run
             self._run, self._carried_usage = run, carried_usage
             self._usage_emitted = False
+            # A resumed attempt opens by re-asking the request that dropped.
+            # That request was counted when it was first made; counting it
+            # again would let a flaky connection spend the run's allowance.
+            already_counted = resume_history is not None
             try:
                 async for node in run:
                     if PydanticAIAgent.is_model_request_node(node):
@@ -136,7 +140,10 @@ class NodeLoop[DepsT]:
                         # on what the run is about to spend, and a check that
                         # only ran afterwards would always allow one call past
                         # it.
-                        await self._spend_a_model_request()
+                        if already_counted:
+                            already_counted = False
+                        else:
+                            await self._spend_a_model_request()
                         if await self._pump_model_request(node, run, state):
                             return
                     elif PydanticAIAgent.is_call_tools_node(node):

@@ -9,8 +9,9 @@ made -- and the two halves of that decision are made together, in
 from __future__ import annotations
 
 import secrets
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 
@@ -91,8 +92,23 @@ def _telegram_transition(
     )
 
 
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.domain.ports import (
+        SurfaceAccountInfo,
+        SurfaceInstallationRepositoryPort,
+    )
+
+
 class SurfaceTelegramWebhookMixin:
-    """Split out of :class:`AgentSurfaceService`; see the module docstring."""
+    """Split out of :class:`AgentSurfaceService`; see the module docstring.
+
+    The two collaborators below are declared, not assigned, as on
+    `SurfaceConsentMixin`: they belong to `AgentSurfaceService`, which composes
+    this, and declaring them is what lets a type checker see through it.
+    """
+
+    surface_repository: SurfaceInstallationRepositoryPort
+    _get_connected_account: Callable[[UUID], Awaitable[SurfaceAccountInfo]]
 
     async def _ensure_unique_telegram_account(
         self,

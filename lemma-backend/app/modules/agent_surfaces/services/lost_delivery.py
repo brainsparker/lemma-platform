@@ -23,7 +23,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.delivery_limits import CONSUMER_ATTEMPTS
-from app.modules.agent_surfaces.domain.entities import platform_value_for_source
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
@@ -94,9 +94,11 @@ async def _failed_tries(received: SurfaceWebhookReceivedEvent) -> int:
 async def _tell_sender(
     received: SurfaceWebhookReceivedEvent, uow_factory: UnitOfWorkFactory
 ) -> None:
-    platform = platform_value_for_source(received.source)
+    platform = SurfacePlatform.from_source(received.source)
+    if platform is None:
+        return
     adapters = SurfacePlatformAdapterRegistry()
-    adapter = adapters.get(platform) if platform else None
+    adapter = adapters.get(platform)
     if adapter is None:
         return
     parsed = await adapter.parse_inbound_event(received.payload, received.headers)

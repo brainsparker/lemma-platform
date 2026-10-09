@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypedDict
 from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -80,6 +80,13 @@ _TYPING_REFRESH_INTERVAL_SECONDS = {
     SurfacePlatform.WHATSAPP.value: 20.0,
 }
 _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
+
+
+class _OptionalSendArgs(TypedDict, total=False):
+    """The egress arguments a send passes only when it has a value for them."""
+
+    metadata: dict[str, object]
+    attach_files_of: RunFiles
 
 
 # Email recipients get one composed reply, not a stream of chat messages, and
@@ -471,7 +478,7 @@ class SurfaceAgentRunProgressObserver(
     ) -> bool:
         async with self.uow_factory() as uow:
             service = self.egress_factory(uow)
-            optional: dict[str, object] = {}
+            optional: _OptionalSendArgs = {}
             if carries_files:
                 # This run's reply, so it is the only one that carries this
                 # run's files. A failure notice is not that reply.

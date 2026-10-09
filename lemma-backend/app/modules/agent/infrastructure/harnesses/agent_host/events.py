@@ -65,6 +65,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.tool_calls import (
 from app.modules.agent.infrastructure.harnesses.agent_host.tool_events import (
     TOOL_OUTPUT_TOKEN_KIND,
     final_answer_in,
+    is_lemma_final_answer,
     left_to_lemma,
     open_tool_call,
     parsed_payload,
@@ -476,8 +477,10 @@ class AgentHostEventNormalizer:
                     agent_host_sequence=row.sequence,
                 )
             return self._drain_tokens()
-        if result.status is AgentHostToolStatus.COMPLETED:
-            record = final_answer_in(result.output, call.input)
+        if result.status is AgentHostToolStatus.COMPLETED and is_lemma_final_answer(
+            call
+        ):
+            record = final_answer_in(result.output)
             if record is not None:
                 self.adopt_final_answer(record, tool_call_id=call_id)
         return [

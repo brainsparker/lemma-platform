@@ -13,6 +13,7 @@ from app.modules.agent_surfaces.domain.events import SurfaceConnectedEvent
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
 )
+from app.modules.agent_surfaces.domain.sender_proof import SenderProof
 from app.modules.agent_surfaces.domain.surface_config import (
     SurfaceChannelRoute,
     SurfaceConfig,
@@ -152,6 +153,7 @@ class ExternalSurfaceUserEntity(Entity):
     raw_profile: dict[str, Any] = Field(default_factory=dict)
     resolved_user_id: UUID | None = None
     last_seen_at: datetime | None = None
+    proven_by: SenderProof | None = None
 
 
 class ParsedInboundSurfaceEvent(BaseModel):
@@ -257,6 +259,9 @@ class ResolvedSurfaceUser(BaseModel):
     email: str | None = None
     phone: str | None = None
     display_name: str | None = None
+    # Nobody resolved, but a live profile names this sender's Telegram handle:
+    # whoever it is has to prove the account is theirs before acting as them.
+    unproven_claim: bool = False
 
 
 class AgentSurfaceStatus(StrEnum):

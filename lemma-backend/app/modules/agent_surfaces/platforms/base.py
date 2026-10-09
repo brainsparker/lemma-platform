@@ -59,6 +59,17 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
         del event
         return None
 
+    def unproven_claim_reply(
+        self, event: ParsedInboundSurfaceEvent
+    ) -> tuple[str, dict[str, object]] | None:
+        """Reply asking a sender to prove the account a profile claims is theirs.
+
+        For a sender nobody resolved but whose platform handle a live profile
+        declares. None where the platform has no way for them to prove it, and
+        they are answered as anyone unresolved would be."""
+        del event
+        return None
+
     def linked_sender_confirmation(
         self, event: ParsedInboundSurfaceEvent
     ) -> tuple[str, dict[str, Any]] | None:

@@ -5,6 +5,7 @@ from uuid import UUID
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.sender_proof import SenderProof
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
@@ -87,5 +88,6 @@ async def link_managed_bot_creator(
             "managed_bot_setup_id": setup_id,
         },
         resolved_user_id=user_id,
+        proven_by=SenderProof.SETUP_LINK,
     )
     return True

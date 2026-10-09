@@ -150,23 +150,45 @@ def _reply_context(
     )
 
 
+def _unresolved_reply(
+    adapter: SurfacePlatformAdapterPort,
+    parsed: ParsedInboundSurfaceEvent,
+    sender: ResolvedSurfaceUser | None,
+) -> tuple[tuple[str, dict[str, object]], SurfaceReplyKind]:
+    """What to tell a sender nobody resolved, and which kind of reply it is.
+
+    Someone whose handle a profile declares is asked to prove the account
+    rather than to sign up -- the account may well be theirs. Asked unprompted
+    it is a nudge, held to the stranger window like a signup prompt, so a
+    person who keeps writing is asked once. Answering a contact they just
+    shared is a turn in a conversation and is always sent.
+    """
+    if sender is not None and sender.unproven_claim:
+        proof_reply = adapter.unproven_claim_reply(parsed)
+        if proof_reply is not None:
+            return proof_reply, (
+                "identity_link" if parsed.sender_phone else "identity_proof"
+            )
+    identity_reply = adapter.unresolved_sender_reply(parsed)
+    if identity_reply is not None:
+        return identity_reply, "identity_link"
+    return (signup_message(), {}), "signup"
+
+
 def unresolved_sender_context(
     *,
     surface: AgentSurfaceEntity,
     parsed: ParsedInboundSurfaceEvent,
     adapter: SurfacePlatformAdapterPort,
     agent_display_name: str,
+    sender: ResolvedSurfaceUser | None = None,
 ) -> SurfaceReplyContext | None:
     audience = private_reply_metadata(parsed)
     if audience is None:
         return None
     if not sender_can_be_answered(parsed):
         return None
-    identity_reply = adapter.unresolved_sender_reply(parsed)
-    message, reply_metadata = identity_reply or (signup_message(), {})
-    reply_kind: SurfaceReplyKind = (
-        "identity_link" if identity_reply is not None else "signup"
-    )
+    (message, reply_metadata), reply_kind = _unresolved_reply(adapter, parsed, sender)
     return _reply_context(
         platform=surface.surface_type,
         surface=surface,
@@ -268,12 +290,8 @@ async def prepare_unrouted_context(
     # leave this person with no answer at all.
     built = False
     try:
-        identity_reply = adapter.unresolved_sender_reply(parsed)
-        confirmation = adapter.linked_sender_confirmation(parsed)
         reply, reply_kind = _unrouted_reply(
-            resolved_user=resolved_user,
-            identity_reply=identity_reply,
-            confirmation=confirmation,
+            adapter=adapter, parsed=parsed, resolved_user=resolved_user
         )
         logger.debug(
             "agent_surfaces.fallback_reply_service.agent_surface_prepared_unrouted_fallback.observed",
@@ -303,15 +321,13 @@ async def prepare_unrouted_context(
 
 def _unrouted_reply(
     *,
+    adapter: SurfacePlatformAdapterPort,
+    parsed: ParsedInboundSurfaceEvent,
     resolved_user: ResolvedSurfaceUser,
-    identity_reply: tuple[str, dict[str, Any]] | None,
-    confirmation: tuple[str, dict[str, Any]] | None,
 ) -> tuple[tuple[str, dict[str, Any]], SurfaceReplyKind]:
     if resolved_user.internal_user_id is None:
-        return (
-            identity_reply or (signup_message(), {}),
-            "identity_link" if identity_reply is not None else "signup",
-        )
+        return _unresolved_reply(adapter, parsed, resolved_user)
+    confirmation = adapter.linked_sender_confirmation(parsed)
     if confirmation is not None:
         return confirmation, "identity_link"
     return (surface_setup_message(), {}), "surface_setup"

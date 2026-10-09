@@ -358,6 +358,8 @@ class AgentSurfaceExternalUser(UUIDAuditBase):
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # What proved `resolved_user_id` (`domain/sender_proof.py`); NULL: unrecorded.
+    proven_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     def to_entity(self) -> ExternalSurfaceUserEntity:
         return ExternalSurfaceUserEntity.model_validate(self)

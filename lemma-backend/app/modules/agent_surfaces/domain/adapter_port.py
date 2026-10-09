@@ -324,6 +324,13 @@ class SurfacePlatformAdapterPort(Protocol):
 
     # (message, reply_metadata) for unresolved senders; None → default signup prompt.
 
+    def unproven_claim_reply(
+        self, event: ParsedInboundSurfaceEvent
+    ) -> tuple[str, dict[str, object]] | None: ...
+
+    # (message, reply_metadata) asking a sender whose handle a profile declares to
+    # prove the account is theirs; None → answered as any unresolved sender.
+
     def linked_sender_confirmation(
         self, event: ParsedInboundSurfaceEvent
     ) -> tuple[str, dict[str, Any]] | None: ...

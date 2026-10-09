@@ -458,6 +458,7 @@ async def _seed_external_user(
     email: str | None = None,
     phone: str | None = None,
     tenant_id: str | None = None,
+    proven_by: str | None = None,
 ) -> None:
     db_session.add(
         AgentSurfaceExternalUser(
@@ -469,6 +470,7 @@ async def _seed_external_user(
             display_name="Surface Test User",
             raw_profile={},
             resolved_user_id=resolved_user_id,
+            proven_by=proven_by,
             last_seen_at=datetime.now(timezone.utc),
         )
     )

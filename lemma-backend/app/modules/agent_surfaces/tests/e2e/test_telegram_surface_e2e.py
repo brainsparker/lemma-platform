@@ -21,6 +21,7 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
 )
+from app.modules.agent_surfaces.domain.sender_proof import SenderProof
 from app.modules.agent_surfaces.infrastructure.models import AgentSurfaceExternalUser
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
@@ -160,6 +161,31 @@ def _telegram_group_payload(
     return {"update_id": message_id + 100000, "message": message}
 
 
+async def _proven_group_member(
+    db_session: AsyncSession, user: dict, mobile_number: str
+) -> None:
+    """The member declares the group sender's handle and has proven the account.
+
+    The handle alone is not proof (see the handle tests below); what makes the
+    group sender this member is the contact they shared once, from the number
+    verified on their profile -- written here as the resolution it leaves.
+    """
+    await _set_user_mobile_number(
+        db_session,
+        user_id=user["id"],
+        mobile_number=mobile_number,
+        telegram_username="surfaceuser",
+    )
+    await _seed_external_user(
+        db_session,
+        platform="TELEGRAM",
+        external_user_id="900100",
+        resolved_user_id=UUID(user["id"]),
+        phone=mobile_number,
+        proven_by=SenderProof.PHONE,
+    )
+
+
 def _wire_native_telegram(monkeypatch, fake_telegram) -> None:
     monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram")
     monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", True)
@@ -184,12 +210,7 @@ async def test_telegram_group_mention_routes_and_replies(
     pod_id = test_pod["id"]
     await _create_surface(authenticated_client, pod_id, config={"type": "TELEGRAM"})
     # The mentioning member is a pod user, resolved by their telegram username.
-    await _set_user_mobile_number(
-        db_session,
-        user_id=fixed_test_user["id"],
-        mobile_number="+15559990001",
-        telegram_username="surfaceuser",
-    )
+    await _proven_group_member(db_session, fixed_test_user, "+15559990001")
 
     payload = _telegram_group_payload(
         text="@lemmabot summarize the thread",
@@ -268,12 +289,7 @@ async def test_telegram_group_reply_to_bot_continues_without_mention(
     _wire_native_telegram(monkeypatch, fake_telegram)
     pod_id = test_pod["id"]
     await _create_surface(authenticated_client, pod_id, config={"type": "TELEGRAM"})
-    await _set_user_mobile_number(
-        db_session,
-        user_id=fixed_test_user["id"],
-        mobile_number="+15559990003",
-        telegram_username="surfaceuser",
-    )
+    await _proven_group_member(db_session, fixed_test_user, "+15559990003")
 
     payload = _telegram_group_payload(
         text="and what about next week?",
@@ -307,12 +323,7 @@ async def test_telegram_group_injects_reply_as_channel_context(
     _wire_native_telegram(monkeypatch, fake_telegram)
     pod_id = test_pod["id"]
     await _create_surface(authenticated_client, pod_id, config={"type": "TELEGRAM"})
-    await _set_user_mobile_number(
-        db_session,
-        user_id=fixed_test_user["id"],
-        mobile_number="+15559990004",
-        telegram_username="surfaceuser",
-    )
+    await _proven_group_member(db_session, fixed_test_user, "+15559990004")
 
     payload = _telegram_group_payload(
         text="@lemmabot follow up on that",
@@ -400,12 +411,7 @@ async def test_telegram_group_without_mention_is_ignored(
     _wire_native_telegram(monkeypatch, fake_telegram)
     pod_id = test_pod["id"]
     await _create_surface(authenticated_client, pod_id, config={"type": "TELEGRAM"})
-    await _set_user_mobile_number(
-        db_session,
-        user_id=fixed_test_user["id"],
-        mobile_number="+15559990002",
-        telegram_username="surfaceuser",
-    )
+    await _proven_group_member(db_session, fixed_test_user, "+15559990002")
 
     payload = _telegram_group_payload(
         text="just chatting, no bot here",
@@ -443,12 +449,7 @@ async def test_telegram_group_mention_of_other_user_is_ignored(
     _wire_native_telegram(monkeypatch, fake_telegram)
     pod_id = test_pod["id"]
     await _create_surface(authenticated_client, pod_id, config={"type": "TELEGRAM"})
-    await _set_user_mobile_number(
-        db_session,
-        user_id=fixed_test_user["id"],
-        mobile_number="+15559990005",
-        telegram_username="surfaceuser",
-    )
+    await _proven_group_member(db_session, fixed_test_user, "+15559990005")
 
     payload = _telegram_group_payload(
         text="@otherperson can you check this?",
@@ -470,7 +471,7 @@ async def test_telegram_group_mention_of_other_user_is_ignored(
     assert message_store.get_all("TELEGRAM") == []
 
 
-async def test_telegram_username_resolves_user_without_contact_share(
+async def test_a_telegram_handle_is_proven_by_a_shared_contact_before_it_acts(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -479,60 +480,173 @@ async def test_telegram_username_resolves_user_without_contact_share(
     message_store,
     monkeypatch,
 ):
-    """A Telegram sender whose @username matches a user's ``telegram_username``
-    resolves directly — no contact-share (phone) flow needed."""
-    monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram")
-    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", True)
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.telegram.client._TELEGRAM_API_BASE",
-        f"{fake_telegram.api_base}/bot",
-    )
+    """A profile's @username says whose account this might be; it proves nothing.
+
+    Anyone can type a handle onto their profile, and a handle given up on
+    Telegram is taken by a stranger. So a sender writing as the handle a pod
+    member declares reads none of the pod: they are asked, once, to share
+    their contact, and the member's verified number is what makes them the
+    member -- from then on, on every message.
+    """
+    _wire_native_telegram(monkeypatch, fake_telegram)
     pod_id = test_pod["id"]
     await _create_surface(authenticated_client, pod_id, config={"type": "TELEGRAM"})
-    # The user has a telegram_username set (and an unrelated mobile number); the
-    # external sender is NOT pre-linked and shares no contact.
     await _set_user_mobile_number(
         db_session,
         user_id=fixed_test_user["id"],
         mobile_number="+15559990000",
         telegram_username="surfaceuser",
     )
+    sender = 55501234
 
-    # _telegram_payload's sender carries username="surfaceuser".
-    payload = _telegram_payload(
-        text="hello directly", message_id=70, sender_id=55501234
+    async def says(text: str, message_id: int) -> object:
+        # _telegram_payload's sender carries username="surfaceuser".
+        return await process_ingress_and_run_scripted(
+            db_session,
+            SurfacePlatformWebhookIngress(
+                source="telegram",
+                payload=_telegram_payload(
+                    text=text, message_id=message_id, sender_id=sender
+                ),
+                headers={},
+            ),
+            script=[script_text("E2E agent reply")],
+        )
+
+    asked = await says("what is in this pod?", 70)
+    await says("hello?", 71)
+
+    assert isinstance(asked, SurfaceReplyContext)
+    assert asked.reply_kind == "identity_proof"
+    assert (
+        await _conversation_by_external_thread(
+            authenticated_client, pod_id=pod_id, external_thread_id=str(sender)
+        )
+        is None
     )
+    prompts = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
+    assert len(prompts) == 1, "asked once, however often they write"
+    assert "confirm the account is yours" in prompts[0]["text"]
+
+    linked = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="telegram",
+            payload={
+                "update_id": 100572,
+                "message": {
+                    "message_id": 72,
+                    "from": {
+                        "id": sender,
+                        "is_bot": False,
+                        "first_name": "Surface",
+                        "username": "surfaceuser",
+                    },
+                    "chat": {"id": sender, "type": "private"},
+                    "date": 1700000100,
+                    "contact": {
+                        "phone_number": "+1 555 999 0000",
+                        "first_name": "Surface",
+                        "user_id": sender,
+                    },
+                },
+            },
+            headers={},
+        ),
+    )
+    assert isinstance(linked, SurfaceReplyContext)
+    assert "linked now" in linked.reply_message
+
+    chat = await says("now what is in this pod?", 73)
+    assert isinstance(chat, SurfaceChatContext)
+    assert chat.user_id == UUID(fixed_test_user["id"])
+    telegram_messages = await wait_for_messages(
+        message_store,
+        "TELEGRAM",
+        predicate=lambda message: "E2E agent reply" in message.get("text", ""),
+    )
+    assert "E2E agent reply" in telegram_messages[-1]["text"]
+    cached = (
+        await db_session.execute(
+            select(
+                AgentSurfaceExternalUser.resolved_user_id,
+                AgentSurfaceExternalUser.proven_by,
+            )
+            .where(
+                AgentSurfaceExternalUser.platform == "TELEGRAM",
+                AgentSurfaceExternalUser.external_user_id == str(sender),
+            )
+            .execution_options(populate_existing=True)
+        )
+    ).one()
+    assert tuple(cached) == (UUID(fixed_test_user["id"]), "PHONE")
+
+
+async def test_a_binding_a_handle_alone_may_have_made_is_proved_again(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    message_store,
+    monkeypatch,
+):
+    """A row written before proof was recorded, by a handle match among others.
+
+    It cannot say what made it, and the member it names declares the handle
+    the sender writes with, so it may have been nothing more. The sender is
+    asked to prove the account, and the row is unbound -- group authorship and
+    member reach read it without asking.
+    """
+    _wire_native_telegram(monkeypatch, fake_telegram)
+    pod_id = test_pod["id"]
+    await _create_surface(authenticated_client, pod_id, config={"type": "TELEGRAM"})
+    await _set_user_mobile_number(
+        db_session,
+        user_id=fixed_test_user["id"],
+        mobile_number="+15559990010",
+        telegram_username="surfaceuser",
+    )
+    await _seed_external_user(
+        db_session,
+        platform="TELEGRAM",
+        external_user_id="55509876",
+        resolved_user_id=UUID(fixed_test_user["id"]),
+    )
+
     context = await process_ingress_and_run_scripted(
         db_session,
-        SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
-        script=[script_text("E2E agent reply")],
+        SurfacePlatformWebhookIngress(
+            source="telegram",
+            payload=_telegram_payload(
+                text="what is in this pod?", message_id=90, sender_id=55509876
+            ),
+            headers={},
+        ),
     )
-    # Resolved by username → a real chat (not the "share your contact" reply).
-    assert isinstance(context, SurfaceChatContext)
-    conversation = await _conversation_by_external_thread(
-        authenticated_client,
-        pod_id=pod_id,
-        external_thread_id="55501234",
-    )
-    assert conversation is not None
-    telegram_messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
-    assert "E2E agent reply" in telegram_messages[-1]["text"]
-    # The handle is a claim on a profile, so it routes this message without
-    # binding the Telegram account to that user for every message after it.
-    cached = await db_session.scalar(
-        select(AgentSurfaceExternalUser.resolved_user_id).where(
+
+    assert isinstance(context, SurfaceReplyContext)
+    assert context.reply_kind == "identity_proof"
+    still_bound = await db_session.scalar(
+        select(AgentSurfaceExternalUser.resolved_user_id)
+        .where(
             AgentSurfaceExternalUser.platform == "TELEGRAM",
-            AgentSurfaceExternalUser.external_user_id == "55501234",
+            AgentSurfaceExternalUser.external_user_id == "55509876",
         )
+        .execution_options(populate_existing=True)
     )
-    assert cached is None
+    assert still_bound is None
 
 
 async def test_a_profile_giving_up_a_telegram_handle_forgets_who_it_matched(
     db_session: AsyncSession,
     fixed_test_user,
 ):
-    """Only senders who wrote as the old handle lose the resolution it made."""
+    """Only unproven senders who wrote as the old handle lose what it matched.
+
+    A sender who proved the account with their own contact keeps it: renaming
+    a profile handle does not undo a proof.
+    """
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -541,7 +655,11 @@ async def test_a_profile_giving_up_a_telegram_handle_forgets_who_it_matched(
     from app.modules.test_support.fakes import PassthroughEventInbox
 
     user_id = UUID(fixed_test_user["id"])
-    for external_id, handle in (("70001", "@Asha"), ("70002", "someone_else")):
+    for external_id, handle, proof in (
+        ("70001", "@Asha", None),
+        ("70002", "someone_else", None),
+        ("70003", "asha", SenderProof.PHONE),
+    ):
         db_session.add(
             AgentSurfaceExternalUser(
                 platform="TELEGRAM",
@@ -549,6 +667,7 @@ async def test_a_profile_giving_up_a_telegram_handle_forgets_who_it_matched(
                 external_user_id=external_id,
                 raw_profile={"sender_username": handle},
                 resolved_user_id=user_id,
+                proven_by=proof,
             )
         )
     await db_session.commit()
@@ -571,13 +690,15 @@ async def test_a_profile_giving_up_a_telegram_handle_forgets_who_it_matched(
                     AgentSurfaceExternalUser.resolved_user_id,
                 )
                 .where(
-                    AgentSurfaceExternalUser.external_user_id.in_(["70001", "70002"])
+                    AgentSurfaceExternalUser.external_user_id.in_(
+                        ["70001", "70002", "70003"]
+                    )
                 )
                 .execution_options(populate_existing=True)
             )
         ).all()
     )
-    assert rows == {"70001": None, "70002": user_id}
+    assert rows == {"70001": None, "70002": user_id, "70003": user_id}
 
 
 async def test_telegram_contact_share_links_user_then_allows_chat(
@@ -662,14 +783,12 @@ async def test_a_deactivated_telegram_handle_resolves_to_nobody(
     db_session: AsyncSession,
     fixed_test_user,
 ):
-    """A departed colleague's @username must not still be an authority grant.
+    """A departed colleague's @username does not even ask for proof.
 
-    Resolution runs the telegram-username lookup *first*, so it decides who an
-    inbound message executes as before the filtered email path is ever reached.
-    The email lookup has excluded deactivated and deleted rows for exactly this
-    reason; this one did not, and PS-SURF-012 gives a resolved person "exactly
-    the access their Lemma identity has" -- which for a deactivated identity is
-    none.
+    A live member's handle resolves nobody but marks the sender as claiming
+    that account, so they are asked to prove it. A deactivated profile has no
+    account left to prove: the live-user lookup excludes it, and the sender is
+    an ordinary stranger.
     """
     user_id = UUID(fixed_test_user["id"])
     await _set_user_mobile_number(
@@ -694,14 +813,13 @@ async def test_a_deactivated_telegram_handle_resolves_to_nobody(
     )
 
     live = await service.resolve(event=event)
-    assert live.internal_user_id == user_id
+    assert live.internal_user_id is None
+    assert live.unproven_claim is True
 
     user = await db_session.get(User, user_id)
     assert user is not None
     user.is_active = False
     await db_session.commit()
-    # The cached ExternalSurfaceUser row the first resolve wrote would answer
-    # ahead of any lookup, so this asks the question the repository answers.
     await db_session.execute(
         delete(AgentSurfaceExternalUser).where(
             AgentSurfaceExternalUser.external_user_id == "900200"
@@ -711,3 +829,4 @@ async def test_a_deactivated_telegram_handle_resolves_to_nobody(
 
     departed = await service.resolve(event=event)
     assert departed.internal_user_id is None
+    assert departed.unproven_claim is False

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.domain.uow import IUnitOfWork
 from app.modules.agent_surfaces.domain.entities import ExternalSurfaceUserEntity
+from app.modules.agent_surfaces.domain.sender_proof import SenderProof
 from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurfaceExternalUser,
 )
@@ -111,7 +112,14 @@ class ExternalSurfaceUserRepository:
         display_name: str | None,
         raw_profile: dict | None,
         resolved_user_id=None,
+        proven_by: SenderProof | None = None,
     ) -> ExternalSurfaceUserEntity:
+        """Write what is known about a sender, and who they are once proven.
+
+        `proven_by` travels with `resolved_user_id`: a resolution is only as
+        good as what made it, and identity resolution decides whether to
+        believe a cached one by asking.
+        """
         existing = await self.get_by_identity(
             platform=platform,
             tenant_id=tenant_id,
@@ -127,6 +135,7 @@ class ExternalSurfaceUserRepository:
                 display_name=display_name,
                 raw_profile=raw_profile or {},
                 resolved_user_id=resolved_user_id,
+                proven_by=proven_by if resolved_user_id is not None else None,
                 last_seen_at=datetime.now(timezone.utc),
             )
             try:
@@ -160,6 +169,7 @@ class ExternalSurfaceUserRepository:
         instance.last_seen_at = datetime.now(timezone.utc)
         if resolved_user_id is not None:
             instance.resolved_user_id = resolved_user_id
+            instance.proven_by = proven_by
         await self.session.flush()
         return instance.to_entity()
 
@@ -179,15 +189,20 @@ class ExternalSurfaceUserRepository:
     ) -> int:
         """Forget Telegram senders this user's former handle could have matched.
 
-        The row does not record what proved it, so the handle the sender last
-        wrote with stands in: a sender who wrote as the handle the profile just
-        gave up is one a handle match may have bound here.
+        Only rows with no recorded proof, which were written before proof was
+        recorded and which a handle match was one of the things writing. The
+        handle the sender last wrote with stands in for what proved such a row:
+        a sender who wrote as the handle the profile just gave up is one a
+        handle match may have bound here. A proven row stays -- the person
+        showed the account is theirs, and renaming a profile handle does not
+        undo that.
         """
         result = await self.session.execute(
             update(AgentSurfaceExternalUser)
             .where(
                 AgentSurfaceExternalUser.resolved_user_id == resolved_user_id,
                 AgentSurfaceExternalUser.platform == "TELEGRAM",
+                AgentSurfaceExternalUser.proven_by.is_(None),
                 func.lower(
                     func.ltrim(
                         AgentSurfaceExternalUser.raw_profile["sender_username"].astext,
@@ -200,11 +215,29 @@ class ExternalSurfaceUserRepository:
         )
         return int(result.rowcount or 0)
 
+    async def forget_resolution(
+        self, *, platform: str, tenant_id: str | None, external_user_id: str
+    ) -> None:
+        """Unbind one sender whose cached resolution no longer stands.
+
+        Readers other than identity resolution -- group log authorship, reaching
+        a member on a platform -- take the row at its word, so a resolution
+        that was refused has to be removed, not only skipped.
+        """
+        stmt = update(AgentSurfaceExternalUser).where(
+            AgentSurfaceExternalUser.platform == platform,
+            AgentSurfaceExternalUser.external_user_id == external_user_id,
+            AgentSurfaceExternalUser.tenant_id.is_(None)
+            if tenant_id is None
+            else AgentSurfaceExternalUser.tenant_id == tenant_id,
+        )
+        await self.session.execute(stmt.values(resolved_user_id=None, proven_by=None))
+
     async def clear_resolved_user(self, resolved_user_id) -> int:
         """Clear cached platform identities after a Lemma profile phone change."""
         result = await self.session.execute(
             update(AgentSurfaceExternalUser)
             .where(AgentSurfaceExternalUser.resolved_user_id == resolved_user_id)
-            .values(resolved_user_id=None)
+            .values(resolved_user_id=None, proven_by=None)
         )
         return int(result.rowcount or 0)

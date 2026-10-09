@@ -12,6 +12,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.models import SurfaceSenderProfile
+from app.modules.agent_surfaces.domain.sender_proof import SenderProof
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
@@ -35,6 +36,10 @@ logger = get_logger(__name__)
 class _UserMatch:
     user_id: UUID | None
     cacheable: bool = True
+    #: What made the match, written beside it so the cache can be believed.
+    proof: SenderProof | None = None
+    #: No match, but a live profile declares the sender's Telegram handle.
+    unproven_claim: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,8 +81,8 @@ class _CachedSender(Protocol):
     """What a stored external-user row has to be able to answer.
 
     A structural type rather than the repository's model, because this reads
-    five attributes and is handed whatever `_upsert` returns -- which is
-    annotated `Any`. Naming the five keeps that `Any` from spreading into the
+    six attributes and is handed whatever `_upsert` returns -- which is
+    annotated `Any`. Naming the six keeps that `Any` from spreading into the
     one place that decides whether a cached resolution may be believed.
     """
 
@@ -86,6 +91,7 @@ class _CachedSender(Protocol):
     email: str | None
     phone: str | None
     display_name: str | None
+    proven_by: SenderProof | None
 
 
 class SurfaceIdentityResolutionService:
@@ -95,16 +101,21 @@ class SurfaceIdentityResolutionService:
     ----------------
     1. Cache hit — ExternalSurfaceUser row already has a resolved_user_id, and
        that user is still live. Skipped entirely when the caller asked for a
-       proven identity: the row does not record what proved it.
-    2. Telegram username — a Telegram sender whose @username matches a user's
-       ``telegram_username`` resolves directly (no contact-share needed).
-    3. Email match — profile email (fetched from platform API) matched against
+       proven identity, unless the platform still attests the match.
+    2. Email match — profile email (fetched from platform API) matched against
        the users table.
-    4. Phone match — for platforms that expose phone numbers (WhatsApp, and
+    3. Phone match — for platforms that expose phone numbers (WhatsApp, and
        Telegram's contact-share flow), against numbers verified on a profile.
        An unverified profile number matches only where the deployment has opted
        in (``surface_allow_unverified_phone_match``) and exactly one profile
        claims it.
+    4. Telegram username — never a match. A sender whose @username a live
+       profile declares resolves to nobody with ``unproven_claim`` set, so the
+       caller asks them to prove the account (a self-shared contact) rather
+       than signing them up; the proof is what then resolves and is cached.
+
+    Each match is cached with what made it (``SenderProof``), which is how a
+    proven Telegram account stays resolved and an unproven one never is.
 
     No connected-account (OAuth Account table) lookups are performed.  Platform
     adapters fetch sender emails directly from the platform API (Teams Graph /
@@ -199,8 +210,8 @@ class SurfaceIdentityResolutionService:
             if cached is not None:
                 return cached
 
-        # ── 2-4. Match against Lemma users: telegram username, then email,
-        #         then phone ─────────────────────────────────────────────────
+        # ── 2-4. Match against Lemma users: email, then phone; a Telegram
+        #         handle only says whose account it might be ─────────────────
         match = (
             await self._match_proven_sender(event, known)
             if require_proven_identity
@@ -214,7 +225,7 @@ class SurfaceIdentityResolutionService:
         # Persist the resolved_user_id so the next message is a cache hit.
         if known.external_user_id and match.cacheable and not profile_unavailable:
             external_user = await self._upsert(
-                event, known, resolved_user_id=match.user_id
+                event, known, resolved_user_id=match.user_id, proven_by=match.proof
             )
 
         return ResolvedSurfaceUser(
@@ -224,6 +235,7 @@ class SurfaceIdentityResolutionService:
             phone=known.phone,
             display_name=known.display_name
             or (external_user.display_name if external_user else None),
+            unproven_claim=match.unproven_claim,
         )
 
     async def _cached_resolution(
@@ -267,7 +279,14 @@ class SurfaceIdentityResolutionService:
             return None
         if await self._cache_rests_on_an_unverified_number(external_user, known, event):
             return None
-        if await self._cache_outlived_its_telegram_handle(external_user, known, event):
+        if await self._cache_rests_on_a_telegram_handle(external_user, known, event):
+            # Removed, not only skipped: group authorship and member reach
+            # read the row without asking any of this.
+            await self.external_user_repository.forget_resolution(
+                platform=event.platform,
+                tenant_id=event.tenant_id,
+                external_user_id=str(known.external_user_id),
+            )
             return None
         return ResolvedSurfaceUser(
             internal_user_id=external_user.resolved_user_id,
@@ -324,14 +343,15 @@ class SurfaceIdentityResolutionService:
     ) -> bool:
         """Was this cached resolution made on a number nobody verified, and only that?
 
-        The cache stores who a sender resolved to and not how, so a resolution
-        made while unverified numbers were accepted would outlive the setting
-        that allowed it: turning it off would change nothing for anyone already
-        matched. Where the deployment does not accept them, a cached resolution
-        is dropped when the *only* thing linking this sender to that user is an
-        unverified profile number -- and kept when anything else does: a verified
-        number, the profile email, the Telegram handle, or nothing about the
-        phone at all, which is how a managed bot's owner is bound.
+        A row's recorded proof says "a phone", not whether the profile's number
+        was verified then, so a resolution made while unverified numbers were
+        accepted would outlive the setting that allowed it: turning it off would
+        change nothing for anyone already matched. Where the deployment does not
+        accept them, a cached resolution is dropped when the *only* thing
+        linking this sender to that user is an unverified profile number -- and
+        kept when anything else does: a verified number, the profile email, or
+        nothing about the phone at all, which is how a managed bot's owner is
+        bound. Not the Telegram handle, which proves nothing.
 
         Dropping it sends the sender through ordinary matching, which now
         resolves nobody and clears the row.
@@ -355,44 +375,34 @@ class SurfaceIdentityResolutionService:
         verified = await self._users.user_ids_by_mobile_numbers(
             candidates, verified=True
         )
-        if cached_user_id in verified:
-            return False
-        handle = _telegram_username(event)
-        if handle and (
-            await self._match_user_by_telegram_username(handle) == cached_user_id
-        ):
-            return False
-        return True
+        return cached_user_id not in verified
 
-    async def _cache_outlived_its_telegram_handle(
+    async def _cache_rests_on_a_telegram_handle(
         self,
         external_user: _CachedSender,
         known: "_KnownSender",
         event: ParsedInboundSurfaceEvent,
     ) -> bool:
-        """Did a Telegram handle that no longer matches make this resolution?
+        """Could a Telegram handle be all that made this resolution?
 
-        A handle is free text on a profile that nobody confirms, so a match on it
-        is no longer cached. Rows written before that rule still stand on it,
-        and the row does not record what proved it -- so where the cached user
-        declares a handle, the sender's must still be that handle, unless a
-        number the user verified supports the row instead. A user who declares
-        no handle cannot have been matched by one, which keeps a managed bot's
-        owner (bound at setup, not by handle) recognised.
+        A handle is free text on a profile that nobody confirms, so it is never
+        proof and a match on it is never cached. A row that records its proof
+        stands on that proof -- whatever the handle on either side says now,
+        which is what keeps a proven account resolved (PS-SURF-012).
 
-        The profile-change event clears these rows when it is delivered; this is
-        what holds when it has not been yet.
+        A row with no recorded proof was written before proof was recorded, by
+        a handle match among other things, and cannot say which. Where the
+        cached user declares a handle it may have been, so the row stands only
+        if the number on it -- a self-shared contact -- is one that user
+        verified; otherwise the sender proves the account again. A user who
+        declares no handle cannot have been matched by one.
         """
         if event.platform is not SurfacePlatform.TELEGRAM:
             return False
         cached_user_id = external_user.resolved_user_id
-        if cached_user_id is None:
+        if cached_user_id is None or external_user.proven_by is not None:
             return False
-        declared = await self._users.telegram_username_of(cached_user_id)
-        if not declared:
-            return False
-        sender_handle = str(_telegram_username(event) or "").lstrip("@").lower()
-        if sender_handle == declared.lstrip("@").lower():
+        if not await self._users.telegram_username_of(cached_user_id):
             return False
         with_row_phone = replace(known, phone=known.phone or external_user.phone)
         return not await self._cache_is_attested(with_row_phone, cached_user_id)
@@ -408,7 +418,9 @@ class SurfaceIdentityResolutionService:
         ids = await self._users.user_ids_by_mobile_numbers(
             _phone_lookup_candidates(known.phone), verified=True
         )
-        return _UserMatch(ids[0] if len(ids) == 1 else None)
+        if len(ids) != 1:
+            return _UserMatch(None)
+        return _UserMatch(ids[0], proof=SenderProof.PHONE)
 
     async def _upsert(
         self,
@@ -435,24 +447,26 @@ class SurfaceIdentityResolutionService:
         phone: str | None,
         telegram_username: str | None = None,
     ) -> _UserMatch:
-        # Telegram username first: a direct @username match links the sender
-        # without the contact-share (phone) flow. Never cached: the handle is a
-        # claim on the profile, so each message asks it again rather than
-        # binding this Telegram account to whoever held the handle once.
-        if telegram_username:
-            user_id = await self._match_user_by_telegram_username(telegram_username)
-            if user_id:
-                return _UserMatch(user_id, cacheable=False)
-
         if email:
             user_id = await self._users.user_id_by_email(email)
             if user_id:
-                return _UserMatch(user_id)
+                return _UserMatch(user_id, proof=SenderProof.EMAIL)
 
         if phone:
             phone_match = await self._match_user_by_phone(phone)
             if phone_match.user_id:
                 return phone_match
+
+        # Last, and never a match. A handle is free text on a profile: anyone
+        # can type someone else's, and a handle given up on Telegram is taken
+        # by a stranger with a new account id. Acting as the profile on it
+        # handed that profile's pod to whoever wrote with the handle. What it
+        # still says is whose account this might be, so the sender is asked
+        # to prove it rather than told to sign up.
+        if telegram_username and await self._match_user_by_telegram_username(
+            telegram_username
+        ):
+            return _UserMatch(None, cacheable=False, unproven_claim=True)
 
         return _UserMatch(None)
 
@@ -474,7 +488,7 @@ class SurfaceIdentityResolutionService:
         # anyone can write another person's number on their own profile.
         ids = await self._users.user_ids_by_mobile_numbers(candidates, verified=True)
         if len(ids) == 1:
-            return _UserMatch(ids[0])
+            return _UserMatch(ids[0], proof=SenderProof.PHONE)
         if len(ids) > 1:
             logger.error(
                 "agent_surfaces.identity.ambiguous_mobile_match",
@@ -496,7 +510,7 @@ class SurfaceIdentityResolutionService:
             logger.warning(
                 "agent_surfaces.identity.unverified_phone_match_used.observed",
             )
-            return _UserMatch(unverified_ids[0])
+            return _UserMatch(unverified_ids[0], proof=SenderProof.PHONE)
         if len(unverified_ids) > 1:
             logger.error(
                 "agent_surfaces.identity.ambiguous_mobile_match",

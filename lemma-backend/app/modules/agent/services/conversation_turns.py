@@ -21,7 +21,7 @@ from uuid import UUID
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.usage.contracts import UsageLimitExceededError
+from app.modules.agent.services.usage_preflight import assert_usage_preflight_allowed
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.private_notes import (
@@ -110,17 +110,6 @@ def _stamped(
     if written_in is not None:
         stamped[WRITTEN_IN_LEMMA_KEY] = written_in
     return stamped or message_metadata
-
-
-def _scope_allows(scope: object) -> bool:
-    """Whether one usage window still has headroom.
-
-    `get_usage_limits` answers with a `dict[str, object]`, so each window
-    arrives untyped. Anything unreadable counts as allowed: this list only
-    names the limits to report, and the decision to block was already made by
-    the `allowed` flag above.
-    """
-    return not isinstance(scope, dict) or bool(scope.get("allowed", True))
 
 
 class TurnCoordinator:
@@ -563,34 +552,12 @@ class TurnCoordinator:
         """Refuse to start a run the account has no headroom for.
 
         Public because starting a turn is not the only way a run begins:
-        `ConversationRetryService.retry_failed_run` starts one too, and a retry
-        that skipped this would be a free way past a limit the first attempt
-        was held to. Reached through `ConversationService.turns`, like `start`
-        and `stop_conversation`.
+        `ConversationRetryService.retry_failed_run` starts one too, and reaches
+        it through `ConversationService.turns`. See `usage_preflight`.
         """
-        if self.usage_service is None:
-            return
-        if not agent_runtime.profile_id.startswith("system:"):
-            return
-        limits = await self.usage_service.get_usage_limits(
+        await assert_usage_preflight_allowed(
+            self.usage_service,
             organization_id=organization_id,
             user_id=user_id,
-        )
-        if limits["allowed"]:
-            return
-        # Say which limit was reached, not just that one was: a person told
-        # only "limit exceeded" cannot tell whether to wait for the month to
-        # turn or to ask an admin for headroom. See PS-OPS-012.
-        reached = [
-            name
-            for name, key in (
-                ("organization monthly", "org_monthly"),
-                ("user weekly", "user_weekly"),
-                ("user monthly", "user_monthly"),
-            )
-            if not _scope_allows(limits[key])
-        ]
-        raise UsageLimitExceededError(
-            "LLM usage limit exceeded: "
-            + ", ".join(f"{name} limit reached" for name in reached)
+            agent_runtime=agent_runtime,
         )

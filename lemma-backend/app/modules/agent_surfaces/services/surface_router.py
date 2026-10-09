@@ -534,18 +534,27 @@ class SurfaceRouter:
         credentials: dict[str, Any],
         installation_id: UUID | None = None,
     ) -> ResolvedSurfaceUser:
+        profile_unavailable = False
         try:
             async with connection_released(self.uow.session):
                 sender_profile = await adapter.fetch_sender_profile(
                     credentials=credentials,
                     event=parsed,
                 )
-        except Exception:
-            sender_profile = None
+        except PLATFORM_TRANSPORT_ERRORS:
+            # Without the profile there is no email to match, so a member reads
+            # as a stranger -- for this message only: the miss is not cached.
+            logger.warning(
+                "agent_surfaces.surface_router.sender_profile_unavailable.degraded",
+                platform=str(parsed.platform),
+                exc_info=True,
+            )
+            sender_profile, profile_unavailable = None, True
         resolved = await self.identity_service.resolve(
             event=parsed,
             sender_profile=sender_profile,
             installation_id=installation_id,
+            profile_unavailable=profile_unavailable,
         )
         return await self._hydrate_resolved_user(resolved)
 

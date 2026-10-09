@@ -403,6 +403,7 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
         credentials={"bot_token": "telegram-token"},
         webhook_url=webhook_url,
         webhook_secret=result.webhook_secret.get_secret_value(),
+        drop_pending_updates=True,
     )
 
 
@@ -690,10 +691,12 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
     assert result.is_active is True
     assert result.webhook_secret
     assert result.webhook_secret.get_secret_value() != "old-secret"
+    # Resuming the same bot: what Telegram held while it was off is kept.
     register.assert_awaited_once_with(
         credentials={"bot_token": "telegram-token"},
         webhook_url=f"https://api.example.test/surfaces/{entity.id}/webhook",
         webhook_secret=result.webhook_secret.get_secret_value(),
+        drop_pending_updates=False,
     )
 
 

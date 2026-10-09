@@ -149,6 +149,7 @@ class SurfaceInstallationRepositoryPort(Protocol):
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
         surface_identity_id: str | None = None,
+        limit: int | None = None,
     ) -> list[AgentSurfaceEntity]: ...
 
     async def list_active_native_receiver_surfaces(

@@ -44,7 +44,9 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 _OTHER_PEOPLE = 25
 
 
-async def _provision_other_people(sessions, *, organization_id) -> None:
+async def _provision_other_people(
+    sessions, *, organization_id, surface_type: str = "WHATSAPP"
+) -> None:
     """Other people's personal pods, each with its own shared-bot surface.
 
     They are nobody's concern on this message and every one of them used to be
@@ -86,17 +88,19 @@ async def _provision_other_people(sessions, *, organization_id) -> None:
                 )
             )
             await session.flush()
-            session.add(_shared_surface(pod.id, organization_id))
+            session.add(_shared_surface(pod.id, organization_id, surface_type))
         await session.commit()
 
 
-def _shared_surface(pod_id: UUID, organization_id: UUID) -> AgentSurface:
+def _shared_surface(
+    pod_id: UUID, organization_id: UUID, surface_type: str = "WHATSAPP"
+) -> AgentSurface:
     return AgentSurface(
         pod_id=pod_id,
         organization_id=organization_id,
         agent_id=pod_id,
-        name=f"lemma-whatsapp-{uuid4().hex[:8]}",
-        surface_type="WHATSAPP",
+        name=f"lemma-{surface_type.lower()}-{uuid4().hex[:8]}",
+        surface_type=surface_type,
         event_mode="WEBHOOK",
         credential_mode="SYSTEM",
         config={},
@@ -236,12 +240,11 @@ async def test_a_stranger_is_still_routed_into_signup(
 
     The narrowing is only available once the sender is known, and someone the
     deployment has never seen belongs to no pod -- so a scoped read answers "no
-    candidates" for every new person there will ever be. That is why the
-    unnarrowed read stays as the fallback, and this is the case that proves it:
-    with one surface on the platform, a single unambiguous DM target is routed
-    to *as* the target, so the signup flow runs on it. Skip the fallback and
-    there are no candidates, the shortcut cannot fire, and the first message
-    from every new person takes the no-surface path instead.
+    candidates" for every new person there will ever be. That is why a stranger
+    still reads the platform's surfaces -- two rows, enough to know whether
+    there is only one -- and this is the case that proves it: with one surface
+    on the platform, a single unambiguous DM target is routed to *as* the
+    target, so the signup flow runs on it.
     """
     sessions = shared_bot
     async with sessions() as session:
@@ -261,3 +264,93 @@ async def test_a_stranger_is_still_routed_into_signup(
     assert not isinstance(context, SurfaceChatContext), (
         "a stranger was routed into somebody's conversation"
     )
+
+
+@pytest.fixture
+def routing_rows(monkeypatch) -> list[int]:
+    """How many surfaces each routing read hydrated, in order."""
+    seen: list[int] = []
+    original = SurfaceRepository.list_active_for_routing
+
+    async def counting(self, *args, **kwargs):
+        found = await original(self, *args, **kwargs)
+        seen.append(len(found))
+        return found
+
+    monkeypatch.setattr(SurfaceRepository, "list_active_for_routing", counting)
+    return seen
+
+
+async def test_a_strangers_message_does_not_read_everybody(
+    authenticated_client, db_session, test_pod, fixed_test_org, shared_bot, routing_rows
+) -> None:
+    """Somebody in no pod used to read the whole fan-in, one row per signup.
+
+    Their reply needs no surface of anybody's: two rows answer "is there only
+    one", and with the crowd present there is not.
+    """
+    sessions = shared_bot
+    await _provision_other_people(sessions, organization_id=UUID(fixed_test_org["id"]))
+
+    context = await _ingest(sessions, sender_phone="1555" + str(uuid4().int)[:7])
+
+    assert context is not None, "a stranger's first message was dropped"
+    assert routing_rows and max(routing_rows) <= 2
+
+
+async def test_a_group_message_reads_the_groups_own_surfaces(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_org,
+    shared_bot,
+    routing_rows,
+    monkeypatch,
+) -> None:
+    """A group the pod adopted is answered by its surface, not by the crowd's."""
+    from app.modules.agent_surfaces.composition import build_surface_ingress
+    from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
+        SurfaceGroupRepository,
+    )
+
+    monkeypatch.setattr(surface_settings, "telegram_bot_token", "123:shared")
+    sessions = shared_bot
+    organization_id = UUID(fixed_test_org["id"])
+    await _provision_other_people(
+        sessions, organization_id=organization_id, surface_type="TELEGRAM"
+    )
+    chat_id = -100555000111
+    async with sessions() as session:
+        mine = _shared_surface(UUID(test_pod["id"]), organization_id, "TELEGRAM")
+        session.add(mine)
+        await session.flush()
+        await SurfaceGroupRepository(session).ensure(
+            pod_id=UUID(test_pod["id"]),
+            surface_id=mine.id,
+            platform="TELEGRAM",
+            external_channel_id=str(chat_id),
+        )
+        await session.commit()
+
+    command = "/help@lemma_bot"
+    async with sessions() as session:
+        await build_surface_ingress(SqlAlchemyUnitOfWork(session)).prepare_ingress(
+            SurfacePlatformWebhookIngress(
+                source="telegram",
+                payload={
+                    "update_id": 900001,
+                    "message": {
+                        "message_id": 41,
+                        "from": {"id": 7770001, "is_bot": False, "first_name": "A"},
+                        "chat": {"id": chat_id, "type": "supergroup", "title": "G"},
+                        "date": 1700000000,
+                        "text": f"{command} what is due",
+                        "entities": [
+                            {"offset": 0, "length": len(command), "type": "bot_command"}
+                        ],
+                    },
+                },
+            )
+        )
+
+    assert routing_rows == [1]

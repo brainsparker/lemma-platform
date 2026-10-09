@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import sys
 from collections.abc import Awaitable, Callable
 
 
@@ -80,6 +82,9 @@ from app.modules.identity.domain.events import (
     UserTelegramUsernameChangedEvent,
 )
 from app.core.log.log import get_logger
+from app.core.request_context import current_observability_context
+from app.modules.agent_surfaces.services.lost_delivery import after_failed_delivery
+from app.modules.agent_surfaces.services.turn_starter import PROCESSING_FAILED_REPLY
 
 from app.modules.agent_surfaces.domain.delivery_limits import (
     CONSUMER_ATTEMPTS,
@@ -173,13 +178,20 @@ async def handle_surface_webhook(
     received = SurfaceWebhookReceivedEvent.model_validate(event)
 
     async def process() -> None:
-        await _process_surface_webhook(
-            received,
-            fs_logger,
-            uow_factory=uow_factory,
-            job_queue=job_queue,
-            onboarding_handler=onboarding_handler,
-        )
+        finished = False
+        try:
+            await _process_surface_webhook(
+                received,
+                fs_logger,
+                uow_factory=uow_factory,
+                job_queue=job_queue,
+                onboarding_handler=onboarding_handler,
+            )
+            finished = True
+        finally:
+            failure = sys.exception()
+            if not finished and isinstance(failure, Exception):
+                await after_failed_delivery(received, failure, uow_factory=uow_factory)
 
     await inbox.process(
         "agent-surfaces.webhook", received, process, max_attempts=CONSUMER_ATTEMPTS
@@ -489,7 +501,26 @@ async def process_surface_message(
     # calls, file ingestion, and voice transcription — so no pooled DB
     # connection is held during that I/O.
     starter = build_surface_turn_starter(worker_ctx.uow_factory)
-    await starter.execute_chat(task_payload.context)
+    finished = False
+    try:
+        await starter.execute_chat(task_payload.context)
+        finished = True
+    finally:
+        # On the last try, a message that failed is one nobody will answer;
+        # the person is told once rather than left waiting. Not for a
+        # cancellation (a BaseException): that is the worker going away, and the
+        # job is redelivered rather than lost.
+        if (
+            not finished
+            and isinstance(sys.exception(), Exception)
+            and _is_last_try(CONSUMER_ATTEMPTS)
+        ):
+            await starter.tell_sender(task_payload.context, PROCESSING_FAILED_REPLY)
+
+
+def _is_last_try(max_tries: int) -> bool:
+    attempt = current_observability_context().job_attempt
+    return attempt is not None and attempt >= max_tries
 
 
 # One try: the job reschedules itself with the wait the platform asked for, and

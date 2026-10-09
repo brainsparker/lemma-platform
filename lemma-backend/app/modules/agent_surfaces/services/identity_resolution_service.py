@@ -153,7 +153,10 @@ class SurfaceIdentityResolutionService:
         sender_profile: SurfaceSenderProfile | None = None,
         installation_id: UUID | None = None,
         require_proven_identity: bool = False,
+        profile_unavailable: bool = False,
     ) -> ResolvedSurfaceUser:
+        """``profile_unavailable``: the platform could not be asked who sent
+        this, so a miss here is not an answer and is not remembered as one."""
         if installation_id is not None and event.platform in (
             SurfacePlatform.SLACK,
             SurfacePlatform.TEAMS,
@@ -209,7 +212,7 @@ class SurfaceIdentityResolutionService:
         )
 
         # Persist the resolved_user_id so the next message is a cache hit.
-        if known.external_user_id and match.cacheable:
+        if known.external_user_id and match.cacheable and not profile_unavailable:
             external_user = await self._upsert(
                 event, known, resolved_user_id=match.user_id
             )

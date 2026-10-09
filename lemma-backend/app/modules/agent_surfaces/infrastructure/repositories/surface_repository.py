@@ -173,18 +173,24 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
         surface_identity_id: str | None = None,
+        limit: int | None = None,
     ) -> list[AgentSurfaceEntity]:
-        """The live surfaces an inbound event could be for; see `routing_surfaces`."""
-        result = await self.session.execute(
-            routing_surfaces(
-                surface_type,
-                surface_ids=surface_ids,
-                pod_ids=pod_ids,
-                external_workspace_id=external_workspace_id,
-                system_credentials_only=system_credentials_only,
-                surface_identity_id=surface_identity_id,
-            )
+        """The live surfaces an inbound event could be for; see `routing_surfaces`.
+
+        ``limit`` is for a caller that needs only to know whether there is one
+        candidate or several, and must not hydrate a whole fan-in to find out.
+        """
+        statement = routing_surfaces(
+            surface_type,
+            surface_ids=surface_ids,
+            pod_ids=pod_ids,
+            external_workspace_id=external_workspace_id,
+            system_credentials_only=system_credentials_only,
+            surface_identity_id=surface_identity_id,
         )
+        if limit is not None:
+            statement = statement.limit(limit)
+        result = await self.session.execute(statement)
         return [model.to_entity() for model in result.scalars().all()]
 
     async def list_active_native_receiver_surfaces(

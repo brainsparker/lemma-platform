@@ -18,9 +18,12 @@ is what those became once nothing needed them to be methods on a namespace.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
+
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -32,6 +35,9 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceReplyContext,
 )
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.domain.ports import SurfaceEventDedupStorePort
 from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
     get_surface_event_dedup_store,
@@ -92,12 +98,24 @@ from app.modules.agent_surfaces.services.surface_inbound_message import (
     transcribe_voice_attachments,
     write_inbound_message,
 )
+from app.modules.agent_surfaces.services.personal_dm_routes import (
+    PersonalRouteUnavailable,
+)
+from app.modules.agent_surfaces.services.surface_inbound import release_ingress_claim
 from app.modules.agent_surfaces.services.telegram_command_service import (
     handle_telegram_command,
     handle_typed_retry,
 )
 
 logger = get_logger(__name__)
+
+#: Prepare an inbound delivery the ordinary way; see ``reprepare``.
+type Reprepare = Callable[
+    [SurfacePlatformWebhookIngress], Awaitable[AgentSurfaceContext | None]
+]
+
+_COULD_NOT_READ = "I couldn't read that message. Could you send it again?"
+PROCESSING_FAILED_REPLY = "I couldn't process that message. Please send it again."
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,11 +139,16 @@ class SurfaceTurnStarter:
         file_ingest_service: SurfaceFileIngestService | None = None,
         pooled_numbers: PooledNumberReader | None = None,
         ingest_memo: AttachmentIngestMemo | None = None,
+        reprepare: Reprepare | None = None,
     ) -> None:
         self.uow_factory = uow_factory
         # Shared with the file ingest by Redis key, not by instance: what a
         # retry reuses is keyed on the message, whichever object reads it.
         self.ingest_memo = ingest_memo or AttachmentIngestMemo()
+        # Ordinary ingress, for a message whose queued private route went away.
+        # Injected because preparing a message needs the request-mode ingress
+        # service, which this worker-side object deliberately is not.
+        self.reprepare = reprepare
         # `None` reads the pool through each short scope's own unit of work.
         self.pooled_numbers = pooled_numbers
         self.adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
@@ -157,7 +180,14 @@ class SurfaceTurnStarter:
             )
             return
 
-        await self.start_agent_chat(context)
+        try:
+            await self.start_agent_chat(context)
+        except PersonalRouteUnavailable as unavailable:
+            # The private destination this was queued for went away between
+            # preparing the message and starting its turn (the person left the
+            # pod, the app was uninstalled). Retrying cannot bring it back; the
+            # message is still the person's, so it goes the ordinary way.
+            await self._reroute_through_ordinary_ingress(context, unavailable)
 
     async def start_agent_chat(self, context: SurfaceChatContext) -> None:
         await self._validate_personal_context(context)
@@ -237,6 +267,76 @@ class SurfaceTurnStarter:
                 conversation_id=context.conversation_id,
                 tool_call_ids=superseded,
             )
+        if not message_text.strip() and not context.event.metadata.get("attachments"):
+            # Nothing a person sent is empty: a body we failed to fetch or
+            # parse. The write declined it, and silence reads as being ignored.
+            await self.tell_sender(context, _COULD_NOT_READ)
+
+    async def tell_sender(self, context: AgentSurfaceContext, message: str) -> None:
+        """A short reply to the person, outside any run, at most once per window.
+
+        For a message that will not be answered: one that could not be read, or
+        one whose processing failed for good. Through the fallback path, which
+        holds the stranger-reply window, so a burst of failures is one reply.
+        Never raises: it runs where something has already gone wrong, and its
+        own failure must not replace that one.
+        """
+        adapter = self.adapter_registry.get(context.platform)
+        if adapter is None or not context.event.sender_external_user_id:
+            return
+        reply = SurfaceReplyContext(
+            platform=context.platform,
+            surface_id=context.surface_id,
+            surface_name=context.surface_name,
+            surface_account_id=context.surface_account_id,
+            surface_config=context.surface_config,
+            agent_display_name=context.agent_display_name,
+            event=context.event,
+            reply_kind="processing_failed",
+            reply_message=message,
+        )
+        try:
+            await deliver_fallback_reply(
+                adapter=adapter,
+                context=reply,
+                credentials=await self._credentials_for(reply),
+                event_dedup_store=self.event_dedup_store,
+            )
+        except (SQLAlchemyError, *PLATFORM_TRANSPORT_ERRORS):
+            logger.warning(
+                "agent_surfaces.turn_starter.failure_reply_not_sent.degraded",
+                platform=str(context.platform),
+                exc_info=True,
+            )
+
+    async def _reroute_through_ordinary_ingress(
+        self, context: SurfaceChatContext, unavailable: Exception
+    ) -> None:
+        logger.info(
+            "agent_surfaces.turn_starter.personal_route_gone.rerouted",
+            platform=str(context.platform),
+            reason=str(unavailable),
+        )
+        if self.reprepare is None or not context.event.raw_payload:
+            await self.tell_sender(context, PROCESSING_FAILED_REPLY)
+            return
+        # Preparing it again takes the delivery claim again.
+        await release_ingress_claim(context, event_dedup_store=self.event_dedup_store)
+        rerouted = await self.reprepare(
+            SurfacePlatformWebhookIngress(
+                source=context.platform.value.lower(),
+                payload=context.event.raw_payload,
+            )
+        )
+        if isinstance(rerouted, SurfaceChatContext) and (
+            rerouted.personal_dm_route_id is not None
+        ):
+            # Ordinary ingress does not mint personal routes; one coming back
+            # would loop.
+            await self.tell_sender(context, PROCESSING_FAILED_REPLY)
+            return
+        if rerouted is not None:
+            await self.execute_chat(rerouted)
 
     async def _ingest_files(
         self, context: SurfaceChatContext, credentials: dict[str, Any]

@@ -18,6 +18,9 @@ SurfaceReplyKind = Literal[
     "identity_link",
     "surface_setup",
     "pod_access",
+    # A message that will not be answered: it could not be read, or its
+    # processing failed for good.
+    "processing_failed",
 ]
 
 

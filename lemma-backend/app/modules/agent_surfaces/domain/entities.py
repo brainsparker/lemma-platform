@@ -386,6 +386,11 @@ class AgentSurfaceEntity(AggregateRoot):
         self.status = AgentSurfaceStatus.ACTIVE
         self.updated_at = datetime.now(timezone.utc)
 
+    def mark_webhook_unregistered(self) -> None:
+        """The platform never accepted this surface's webhook: nothing arrives."""
+        self.status = AgentSurfaceStatus.ERROR
+        self.updated_at = datetime.now(timezone.utc)
+
     def configure_webhook_secret(self, *, secret: str) -> None:
         self.webhook_secret = SecretStr(secret)
         self.updated_at = datetime.now(timezone.utc)

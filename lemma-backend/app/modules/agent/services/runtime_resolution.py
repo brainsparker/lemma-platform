@@ -17,6 +17,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
 )
+from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.modules.agent.domain.value_objects import HarnessKind, JsonObject
 
 logger = get_logger(__name__)
@@ -114,55 +115,42 @@ def selected_model(
     profile: AgentRuntimeProfile,
     requested_model_name: str | None,
 ) -> RuntimeModelCatalogEntry | None:
+    """The catalog entry a run uses, or ``None`` when nothing is pinned.
+
+    Never a substitute. A model the profile no longer offers used to be
+    swapped for its default, or its first entry, with only a log line: a
+    teammate pinned to one model ran -- and was billed -- on another, with
+    different behaviour, indefinitely and invisibly. Now the run is refused
+    with the reason, and the person picks the model.
+
+    The one ``None`` that is not a refusal: a coding agent whose catalog is
+    empty publishes no list to check against, and an unpinned profile there
+    means "the agent's own default".
+    """
     model_name = requested_model_name or profile.default_model_name
     if not model_name:
         return None
     for model in profile.model_catalog:
         if model_name == model.name:
             return model
-    # The requested model is not in the catalog (e.g. a pinned default whose
-    # model was later deprecated, or a swapped BYO key). Degrade gracefully to
-    # the profile's own default — and then the first catalog entry — rather than
-    # hard-failing every run that relies on this profile.
-    #
-    # Except for a coding agent on someone's computer. That agent has a default
-    # of its own, which is what an unpinned profile already runs on, and it is
-    # the honest fallback: the first entry of its published list is an
-    # arbitrary model the person never chose, and pinning it explicitly
-    # replaced "whatever the agent would use" with a model nobody picked.
-    if profile.harness_id is not None:
-        logger.warning(
-            "agent.runtime_profile.model_substituted.degraded",
-            profile_id=profile.id,
-            requested_model_name=model_name,
-            selected_model_name=None,
-        )
+    if profile.harness_id is not None and not profile.model_catalog:
         return None
-    substitute: RuntimeModelCatalogEntry | None = None
-    if requested_model_name and profile.default_model_name:
-        substitute = next(
-            (
-                model
-                for model in profile.model_catalog
-                if model.name == profile.default_model_name
-            ),
-            None,
-        )
-    if substitute is None and profile.model_catalog:
-        substitute = profile.model_catalog[0]
-    if substitute is not None:
-        # Said out loud, because the substitution is otherwise undetectable: an
-        # agent pinned to one model runs -- and is billed -- on another, with
-        # different cost and different behaviour, indefinitely. The neighbouring
-        # archived-profile path went to real trouble to say what happened; this
-        # one used to say nothing at all.
-        logger.warning(
-            "agent.runtime_profile.model_substituted.degraded",
-            profile_id=profile.id,
-            requested_model_name=model_name,
-            selected_model_name=substitute.name,
-        )
-    return substitute
+    logger.warning(
+        "agent.runtime_profile.model_unavailable.refused",
+        profile_id=profile.id,
+        requested_model_name=model_name,
+    )
+    raise model_unavailable_error(profile.name, model_name)
+
+
+def model_unavailable_error(
+    profile_name: str, model_name: str
+) -> RuntimeUnavailableError:
+    return RuntimeUnavailableError(
+        f"{profile_name} no longer offers {model_name}, the model this teammate "
+        "is set to use. Pick another model for the teammate, or refresh the "
+        "model list in Settings → Models."
+    )
 
 
 def _config_dict(config: object | None) -> dict[str, object]:

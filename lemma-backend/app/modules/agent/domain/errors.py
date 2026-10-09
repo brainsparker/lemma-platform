@@ -93,6 +93,27 @@ class ApprovalNotOwnedError(AgentModuleError):
         super().__init__(message, code="APPROVAL_NOT_OWNED", status_code=403)
 
 
+class RuntimeUnavailableError(AgentModuleError):
+    """The model, or the runtime profile, a teammate is set to use cannot run.
+
+    One class, three codes, because the remedy is the same -- pick another
+    model -- and the reader needs to know which part is wrong:
+
+    * ``model_unavailable`` -- the profile no longer offers that model, or its
+      provider just answered that it does not serve it;
+    * ``runtime_profile_unavailable`` -- the profile is archived, gone, or
+      someone else's personal one;
+    * ``runtime_profile_not_shareable`` -- a personal profile on a teammate
+      the whole pod uses.
+
+    422 when a save names it, and the same error, not a substitute model, when
+    a run reaches it.
+    """
+
+    def __init__(self, message: str, *, code: str = "model_unavailable"):
+        super().__init__(message, code=code, status_code=422)
+
+
 class HarnessNotFoundError(AgentModuleError):
     """No harness is registered for the requested kind.
 

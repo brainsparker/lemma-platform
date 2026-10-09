@@ -16,6 +16,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileStatus,
     reveal_credentials,
 )
+from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -412,10 +413,10 @@ async def test_runtime_lists_configured_system_org_and_owned_personal_profiles(
 
 
 @pytest.mark.asyncio
-async def test_runtime_falls_back_when_model_not_in_selected_profile(caplog):
-    # A pinned model that is no longer in the profile catalog (deprecated model,
-    # swapped key) must degrade to the profile's default model rather than
-    # hard-failing every run that relies on the profile.
+async def test_runtime_refuses_a_model_the_profile_no_longer_offers():
+    # A pinned model that is no longer in the profile catalog is refused with
+    # the reason. It used to run -- and bill -- on the profile's default, with
+    # only a log line to say so.
     org_id = uuid4()
     org_profile = _test_profile(
         scope=RuntimeProfileScope.ORGANIZATION,
@@ -424,8 +425,8 @@ async def test_runtime_falls_back_when_model_not_in_selected_profile(caplog):
     )
     service = AgentRuntimeProfileService(_ProfileRepository([org_profile]))
 
-    with caplog.at_level("WARNING"):
-        resolved = await service.resolve(
+    with pytest.raises(RuntimeUnavailableError) as refused:
+        await service.resolve(
             runtime=AgentRuntimeConfig(
                 profile_id=org_profile.id,
                 model_name="missing-model",
@@ -434,13 +435,29 @@ async def test_runtime_falls_back_when_model_not_in_selected_profile(caplog):
             user_id=uuid4(),
         )
 
-    assert resolved.model is not None
-    assert resolved.model.name == org_profile.default_model_name
-    # ...and it says so. Silently answering (and billing) on a different model
-    # than the one an agent is pinned to is otherwise undetectable.
-    assert "model_substituted" in caplog.text
-    assert "missing-model" in caplog.text
-    assert org_profile.default_model_name in caplog.text
+    assert refused.value.code == "model_unavailable"
+    assert "missing-model" in refused.value.message
+
+
+@pytest.mark.asyncio
+async def test_someone_elses_personal_profile_is_a_typed_refusal():
+    org_id = uuid4()
+    personal = _test_profile(
+        scope=RuntimeProfileScope.PERSONAL,
+        organization_id=org_id,
+        user_id=uuid4(),
+        name="someone's key",
+    )
+    service = AgentRuntimeProfileService(_ProfileRepository([personal]))
+
+    with pytest.raises(RuntimeUnavailableError) as refused:
+        await service.resolve(
+            runtime=AgentRuntimeConfig(profile_id=personal.id),
+            organization_id=org_id,
+            user_id=uuid4(),
+        )
+
+    assert refused.value.code == "runtime_profile_unavailable"
 
 
 def test_system_runtime_profiles_return_empty_without_server_credentials(monkeypatch):
@@ -1205,19 +1222,11 @@ def test_selected_model_falls_back_to_profile_default_when_no_request():
     assert model is not None and model.name == "default"
 
 
-def test_selected_model_pinned_missing_falls_back_to_default_not_raise():
-    # A pinned model that is no longer in the catalog (e.g. deprecated) must
-    # degrade to the profile default rather than hard-failing the run.
+def test_selected_model_never_substitutes_for_a_removed_pin():
     profile = _test_profile(scope=RuntimeProfileScope.SYSTEM, name="p")
-    model = _selected_model(profile, "model-that-was-removed")
-    assert model is not None and model.name == "default"
-
-
-def test_selected_model_pinned_missing_and_default_missing_uses_first_entry():
-    profile = _test_profile(scope=RuntimeProfileScope.SYSTEM, name="p")
-    profile.default_model_name = "also-gone"
-    model = _selected_model(profile, "model-that-was-removed")
-    assert model is not None and model.name == "default"  # first catalog entry
+    with pytest.raises(RuntimeUnavailableError) as refused:
+        _selected_model(profile, "model-that-was-removed")
+    assert refused.value.code == "model_unavailable"
 
 
 def test_selected_model_empty_catalog_returns_none():
@@ -1860,12 +1869,12 @@ async def test_one_unreadable_row_does_not_blank_the_whole_listing():
     assert [profile.id for profile in listed] == [readable.id]
 
 
-def test_a_coding_agent_with_a_stale_pin_runs_on_its_own_default():
-    """A local coding agent has a default of its own, and that -- not the first
-    model it happens to publish -- is what a stale pin falls back to. `None`
-    is what dispatch sends as "no model", exactly as for an unpinned profile."""
+def test_a_coding_agent_with_a_stale_pin_is_refused_not_swapped():
+    """A pin the coding agent no longer offers is refused like any other: the
+    person chose that model, and the agent's own default is not it."""
     profile = _test_harness_profile(
         organization_id=uuid4(), name="Claude Code", default_model_name="opus"
     )
     assert _selected_model(profile, "opus").name == "opus"
-    assert _selected_model(profile, "a-model-it-no-longer-offers") is None
+    with pytest.raises(RuntimeUnavailableError):
+        _selected_model(profile, "a-model-it-no-longer-offers")

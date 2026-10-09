@@ -126,8 +126,13 @@ def _coordinator(conversation: Conversation):
         ),
         SimpleNamespace(),
         None,
+        runtime_check=_runtime_is_available,
     )
     return coordinator, repository
+
+
+async def _runtime_is_available(*_args: object, **_kwargs: object) -> None:
+    """These tests are about the message's stamp, not the model it runs on."""
 
 
 def _conversation(metadata: dict) -> Conversation:

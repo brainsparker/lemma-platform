@@ -51,6 +51,10 @@ from app.modules.agent.services.workspace_location import (
     apply_location_metadata,
 )
 from app.modules.pod.contracts.agent_access import pod_organization_id
+from app.modules.agent.services.runtime_availability import (
+    TurnRuntimeCheck,
+    ensure_turn_runtime_available,
+)
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.infrastructure.queued_message_queries import (
     QueuedMessageRepository,
@@ -81,6 +85,7 @@ class ConversationService:
         authorization_service: object,
         fallback_model_name: str | None = None,
         usage_service: UsageService | None = None,
+        turn_runtime_check: TurnRuntimeCheck = ensure_turn_runtime_available,
     ):
         self.uow = uow
         self.conversation_repository = conversation_repository
@@ -103,6 +108,7 @@ class ConversationService:
             self.approvals,
             self.pauses,
             usage_service,
+            runtime_check=turn_runtime_check,
         )
 
     async def create_conversation(

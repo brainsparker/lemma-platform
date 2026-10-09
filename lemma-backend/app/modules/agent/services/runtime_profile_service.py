@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.domain.errors import DomainError
+from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import (
     AgentHostHarnessHealth,
@@ -301,11 +302,12 @@ class AgentRuntimeProfileService:
                     code="runtime_profile_archived",
                     status_code=409,
                 )
-            raise RuntimeError(f"Agent runtime profile {profile_id!r} is not available")
+            raise runtime_profile_unavailable_error()
         model = selected_model(profile, runtime.model_name)
         if model is None and profile.kind is not RuntimeProfileKind.HARNESS:
-            raise RuntimeError(
-                f"Agent runtime profile {profile_id!r} has no selectable model"
+            raise RuntimeUnavailableError(
+                f"{profile.name} has no model to run. Add one in Settings "
+                "\u2192 Models, or pick another model for this teammate."
             )
         harness_sees = await self._harness_reads_images(profile)
         model = with_harness_vision(model, harness_sees=harness_sees)
@@ -436,3 +438,18 @@ def _profile_availability(
     if harness.health != AgentHostHarnessHealth.READY.value:
         return RuntimeProfileAvailability.UNAVAILABLE
     return RuntimeProfileAvailability.READY
+
+
+def runtime_profile_unavailable_error() -> RuntimeUnavailableError:
+    """Not visible to the person whose run this is: gone, or someone else's.
+
+    Typically a teammate the whole pod uses, pinned to one member's personal
+    provider. It used to be a bare RuntimeError -- an opaque failure for
+    everyone but that member.
+    """
+    return RuntimeUnavailableError(
+        "The model this teammate is set to use isn't available to you: it was "
+        "removed, or it is someone's personal model. Pick another model for "
+        "the teammate.",
+        code="runtime_profile_unavailable",
+    )

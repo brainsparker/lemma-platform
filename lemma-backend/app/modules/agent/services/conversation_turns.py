@@ -68,6 +68,10 @@ from app.modules.agent.services.queued_followups import (
 from app.modules.agent.services.pod_runtime_defaults import (
     default_agent_runtime_for_pod,
 )
+from app.modules.agent.services.runtime_availability import (
+    TurnRuntimeCheck,
+    ensure_turn_runtime_available,
+)
 from app.modules.agent.services.realtime import (
     input_added_payload,
     message_payload,
@@ -130,6 +134,7 @@ class TurnCoordinator:
         approvals: ApprovalCoordinator,
         pauses: PauseResume,
         usage_service: UsageService | None,
+        runtime_check: TurnRuntimeCheck = ensure_turn_runtime_available,
     ) -> None:
         self.uow = uow
         self.conversation_repository = conversation_repository
@@ -137,6 +142,7 @@ class TurnCoordinator:
         self.approvals = approvals
         self.pauses = pauses
         self.usage_service = usage_service
+        self.runtime_check = runtime_check
 
     async def start(
         self,
@@ -193,6 +199,12 @@ class TurnCoordinator:
                 or await default_agent_runtime_for_pod(
                     self.uow, pod_id=conversation.pod_id
                 )
+            )
+            await self.runtime_check(
+                self.uow,
+                selected_agent_runtime,
+                organization_id=conversation.organization_id,
+                user_id=user_id,
             )
             await self.assert_usage_preflight_allowed(
                 organization_id=conversation.organization_id,

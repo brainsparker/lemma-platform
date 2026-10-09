@@ -83,7 +83,7 @@ EXPECTED = [
     (
         "agent_model_stream_total_timeout_seconds",
         "AGENT_MODEL_STREAM_TOTAL_TIMEOUT_SECONDS",
-        300.0,
+        900.0,
     ),
     ("agent_model_http_max_connections", "AGENT_MODEL_HTTP_MAX_CONNECTIONS", 100),
     ("widget_url_expiry_seconds", "WIDGET_URL_EXPIRY_SECONDS", 1800),

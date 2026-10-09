@@ -230,13 +230,16 @@ class AgentSettings(BaseSettings):
         ),
     )
     agent_model_stream_total_timeout_seconds: float = Field(
-        default=300.0,
+        default=900.0,
         description=(
-            "Ceiling on one whole model exchange, first byte to last. The only "
-            "bound that catches a provider trickling a token a second: the "
-            "per-chunk timeout never fires while chunks keep arriving. Generous "
-            "on purpose, because a long answer streaming steadily has to be "
-            "allowed to finish. 0 disables it."
+            "Runaway backstop on one whole model exchange, from the moment the "
+            "request is sent to its last byte. The only bound that catches a "
+            "provider trickling a token at a time: the per-chunk timeout never "
+            "fires while chunks keep arriving. Far out on purpose, because a "
+            "reasoning model thinking at length and then writing a long answer "
+            "is working, not stuck. An exchange that does run past it is "
+            "retried at most once, with a smaller answer budget, and the reader "
+            "is told the model took too long. 0 disables it."
         ),
     )
     agent_model_http_max_connections: int = Field(

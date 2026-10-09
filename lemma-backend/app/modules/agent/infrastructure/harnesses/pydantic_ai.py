@@ -211,9 +211,10 @@ class PydanticAIHarness:
                 agent_run_id=agent_run_id,
             )
         except UnexpectedModelBehavior as exc:
-            # Reached only when a tool genuinely failed every retry (default 5) —
-            # GracefulToolset turns ordinary execution errors into tool responses,
-            # so this is the rare "model kept sending invalid arguments" case.
+            # Two causes, told apart by `classify_run_failure`: a tool that kept
+            # getting invalid arguments past every retry (GracefulToolset turns
+            # ordinary execution errors into tool responses), or a response the
+            # output cap cut off before it held anything usable.
             logger.warning(
                 "agent.pydantic_ai.agent_run_ended_after_repeated.degraded",
                 exc_info=True,
@@ -356,6 +357,7 @@ class PydanticAIHarness:
 
         def _new_run_context(
             resume_history: list[ModelMessage] | None,
+            attempt_settings: JsonObject | None,
         ) -> AbstractAsyncContextManager[AgentRun[DepsT, object]]:
             # Resuming already carries the user prompt in its message history.
             return pydantic_agent.iter(
@@ -364,6 +366,9 @@ class PydanticAIHarness:
                 if resume_history is not None
                 else (history or None),
                 deps=ctx,
+                # A retry may ask for a shorter answer than the run's own
+                # settings do; merged over them, not in place of them.
+                model_settings=provider_model_settings(attempt_settings),
                 usage_limits=options.usage_limits,
                 conversation_id=str(conversation.id),
             )
@@ -412,6 +417,7 @@ class PydanticAIHarness:
                     stopped=streamer.stopped_event,
                     should_stop=streamer.stop_requested,
                     emit_usage=node_loop.emit_usage,
+                    shorter_answer_settings=node_loop.shorter_answer_settings,
                 )
             except BaseException as exc:  # noqa: BLE001 — relayed to parent below
                 # Includes CancelledError from our own task.cancel(). pydantic's

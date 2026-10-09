@@ -1,16 +1,16 @@
-"""A model response that stops making progress has to end, not hang.
+"""A model response that stops making progress, or runs too long, has to end.
 
-The failure these pin is the one dev hit: a provider that keeps sending
-*something* — a token a second — while the per-chunk read timeout resets on
-every chunk and never fires. Nothing timed out, nothing retried, and the
-person's request stayed open for 270s holding the conversation's active run.
+The failure these pin: a provider that keeps sending *something* -- a token at
+a time -- while the per-chunk read timeout resets on every chunk and never
+fires, so the person's request stays open holding the conversation's run slot.
 
-Two of these matter more than the rest and are worth naming:
+Three of these matter more than the rest and are worth naming:
 
-* ``test_the_error_raised_is_one_the_run_already_knows_how_to_retry`` is the
-  load-bearing one. The budget is only a fix because the error it raises routes
-  into ``drive_with_retry``; raising anything else would turn a slow provider
-  into a failed run, which is worse than the hang.
+* ``test_a_provider_that_never_starts_is_retried_as_a_drop`` -- a stalled first
+  chunk is a transient failure, and its error routes into ``drive_with_retry``.
+* ``test_an_over_long_answer_is_not_mistaken_for_a_dropped_connection`` -- an
+  answer past the whole-response budget would take as long again, so it is a
+  different error with a different, stricter retry.
 * ``test_a_steady_long_answer_is_not_cut_off`` is the one that keeps this from
   being a regression. A budget that fires on legitimate work would be a far
   more expensive bug than the one being fixed.
@@ -25,7 +25,9 @@ import httpx
 import pytest
 
 from app.modules.agent.infrastructure.transport_errors import (
+    ModelResponseBudgetExceeded,
     is_retryable_stream_error,
+    response_budget_message,
 )
 from app.modules.agent.services.model_stream_budget import (
     ModelStreamBudgetTransport,
@@ -95,39 +97,86 @@ async def test_a_provider_that_never_starts_is_given_up_on() -> None:
 
 @pytest.mark.asyncio
 async def test_a_trickling_provider_is_given_up_on() -> None:
-    """The actual production failure, in miniature.
+    """The failure this module exists for, in miniature.
 
     Chunks keep arriving, so a per-chunk timeout is reset forever and the
-    exchange never ends. Only a total bound sees it — note the first chunk
+    exchange never ends. Only a total bound sees it -- note the first chunk
     arrives promptly here, so the first-chunk bound is deliberately generous
     and takes no part in catching this.
     """
     body = _Body(chunks=1000, gap=0.01)
 
-    with pytest.raises(httpx.ReadTimeout) as raised:
+    with pytest.raises(ModelResponseBudgetExceeded) as raised:
         await _drain(_budgeted(body, first_chunk=5.0, total=0.1))
 
-    assert "stopped making progress" in str(raised.value)
+    assert "ran past its time budget" in str(raised.value)
+    assert raised.value.budget_seconds == 0.1
     # It really was making *some* progress, which is the whole difficulty.
     assert body.delivered > 0
 
 
 @pytest.mark.asyncio
-async def test_the_error_raised_is_one_the_run_already_knows_how_to_retry() -> None:
-    """The reason this fix is a fix rather than a different failure.
+async def test_a_provider_that_never_starts_is_retried_as_a_drop() -> None:
+    """A stalled first chunk is transient: the run re-asks the request."""
+    body = _Body(chunks=3, gap=0.01, lead_in=5.0)
 
-    ``httpx.ReadTimeout`` is an ``httpx.TransportError``, which
-    ``is_retryable_stream_error`` already answers True for, so the run re-enters
-    the graph from the snapshot taken before the failing request instead of
-    dying. Pinned here because it is an invariant across two modules that
-    nothing else would catch if either side moved.
+    with pytest.raises(httpx.ReadTimeout) as raised:
+        await _drain(_budgeted(body, first_chunk=0.05, total=10.0))
+
+    assert not isinstance(raised.value, ModelResponseBudgetExceeded)
+    assert is_retryable_stream_error(raised.value) is True
+
+
+@pytest.mark.asyncio
+async def test_an_over_long_answer_is_not_mistaken_for_a_dropped_connection() -> None:
+    """Nothing dropped: the same request sent again takes as long again.
+
+    So it is not a transient transport error, and what the reader is told says
+    the model took too long -- never that the connection kept dropping, which
+    sends them round the same over-long request.
     """
     body = _Body(chunks=1000, gap=0.01)
 
-    with pytest.raises(httpx.ReadTimeout) as raised:
+    with pytest.raises(ModelResponseBudgetExceeded) as raised:
         await _drain(_budgeted(body, first_chunk=None, total=0.1))
 
-    assert is_retryable_stream_error(raised.value) is True
+    assert is_retryable_stream_error(raised.value) is False
+    message = response_budget_message(
+        ModelResponseBudgetExceeded(
+            "x", request=A_REQUEST, elapsed_seconds=900.0, budget_seconds=900.0
+        )
+    )
+    assert "took longer than 15 minutes" in message
+    assert "dropping" not in message
+
+
+@pytest.mark.asyncio
+async def test_the_whole_response_budget_counts_from_when_the_request_was_sent() -> (
+    None
+):
+    """Time spent before the provider sent headers is inside the budget.
+
+    Counted from the first body chunk, a slow start sat on top of the budget,
+    and the real ceiling on one exchange was the budget plus the read timeout.
+    """
+    body = _Body(chunks=1000, gap=0.01)
+
+    async def slow_headers(request: httpx.Request) -> httpx.Response:
+        del request
+        await asyncio.sleep(0.15)
+        return httpx.Response(200, stream=body)
+
+    transport = ModelStreamBudgetTransport(
+        httpx.MockTransport(slow_headers), first_chunk_seconds=None, total_seconds=0.2
+    )
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(ModelResponseBudgetExceeded) as raised:
+            await client.post("https://provider.example/v1/chat/completions")
+
+    assert raised.value.elapsed_seconds >= 0.2
+    # Only the time left after the slow start was spent on the body.
+    assert body.delivered < 10
 
 
 @pytest.mark.asyncio

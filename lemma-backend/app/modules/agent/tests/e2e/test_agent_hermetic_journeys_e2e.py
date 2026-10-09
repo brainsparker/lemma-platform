@@ -256,7 +256,7 @@ async def test_public_sse_sanitizes_provider_failure_matrix_and_persists_failure
             "A tool failed repeatedly after several attempts",
         ),
         ("usage_limit", None, "The run hit a usage limit."),
-        ("generic", None, "The model provider returned an error."),
+        ("generic", None, "The run failed."),
     )
 
     for kind, provider_status, expected_message in scenarios:

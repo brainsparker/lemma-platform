@@ -67,3 +67,30 @@ def with_reply_budget(
     if reply <= 0:
         return model_settings
     return {**(model_settings or {}), "max_tokens": reply}
+
+
+#: Never ask for less than this, however a halving lands: an answer budget too
+#: small to hold a tool call is a guaranteed failure, not a shorter answer.
+MIN_REPLY_TOKENS = 1_024
+
+#: Efforts already as light as the shorter retry would ask for.
+_LIGHT_EFFORTS = frozenset({"none", "minimal", "low"})
+
+
+def shorter_answer_settings(model_settings: JsonObject | None) -> JsonObject:
+    """Settings for re-asking a request whose answer ran past the time budget.
+
+    Sending the same request again takes the same time and expires again, so
+    the retry asks for less: half the output budget and, where this run already
+    sets a reasoning effort, a light one. The effort is only lowered, never
+    introduced: a model that was not sent one may reject the parameter, and
+    whether it accepts one is the runtime profile's to declare.
+    """
+    settings: JsonObject = dict(model_settings or {})
+    current = settings.get("max_tokens")
+    if isinstance(current, int) and not isinstance(current, bool) and current > 0:
+        settings["max_tokens"] = min(current, max(MIN_REPLY_TOKENS, current // 2))
+    effort = settings.get("openai_reasoning_effort")
+    if isinstance(effort, str) and effort not in _LIGHT_EFFORTS:
+        settings["openai_reasoning_effort"] = "low"
+    return settings

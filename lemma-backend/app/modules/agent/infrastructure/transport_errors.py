@@ -33,10 +33,13 @@ from app.core.domain.errors import DomainError
 
 __all__ = [
     "RETRYABLE_STATUS_CODES",
+    "ModelResponseBudgetExceeded",
     "is_retryable_stream_error",
     "connection_failure_message",
     "local_model_server_down_message",
     "local_model_server_name",
+    "response_budget_expiry",
+    "response_budget_message",
     "retry_after_seconds",
 ]
 
@@ -58,6 +61,64 @@ _NEVER_RETRY: tuple[type[BaseException], ...] = (
 )
 
 
+class ModelResponseBudgetExceeded(httpx.ReadTimeout):
+    """One model exchange ran past its whole-response time budget.
+
+    Still a `ReadTimeout`, so every layer that already unwinds a stream on one
+    keeps doing so. Told apart from a dropped connection because it is not one:
+    nothing dropped, the answer was simply longer than the budget allows, and
+    re-sending the identical request takes the same time and expires again --
+    paid for in full each time and thrown away. So it is never retried as a
+    drop, and the reader is told what actually happened.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        request: httpx.Request,
+        elapsed_seconds: float,
+        budget_seconds: float,
+    ) -> None:
+        super().__init__(message, request=request)
+        self.elapsed_seconds = elapsed_seconds
+        self.budget_seconds = budget_seconds
+
+
+def response_budget_expiry(exc: BaseException) -> ModelResponseBudgetExceeded | None:
+    """The budget expiry inside whatever a provider SDK wrapped it in."""
+    seen: set[int] = set()
+    pending: list[BaseException] = [exc]
+    while pending and len(seen) < 8:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ModelResponseBudgetExceeded):
+            return current
+        pending.extend(
+            linked
+            for linked in (current.__cause__, current.__context__)
+            if linked is not None
+        )
+    return None
+
+
+def response_budget_message(exc: ModelResponseBudgetExceeded) -> str:
+    """What to say about an answer that took longer than the budget allows.
+
+    Never "the connection kept dropping": the connection was fine, and sending
+    again on that advice repeats the same over-long request.
+    """
+    minutes = max(1, round(exc.budget_seconds / 60))
+    return (
+        f"The model took longer than {minutes} minutes to answer, so the "
+        "request was stopped. Everything finished before it is kept \u2014 ask "
+        "for a smaller step, or pick a faster model for this teammate "
+        "(Settings \u2192 Models)."
+    )
+
+
 def _provider_connection_error(exc: BaseException) -> bool:
     """True for the provider SDKs' own "couldn't reach the API" wrappers.
 
@@ -71,6 +132,10 @@ def _provider_connection_error(exc: BaseException) -> bool:
 def is_retryable_stream_error(exc: BaseException) -> bool:
     """Whether re-entering the run after ``exc`` is worth trying."""
     if isinstance(exc, _NEVER_RETRY):
+        return False
+    # Has its own, stricter policy in `drive_with_retry`: an over-long answer
+    # is not a transient failure, and re-sending it unchanged repeats it.
+    if response_budget_expiry(exc) is not None:
         return False
 
     if isinstance(exc, ModelHTTPError):

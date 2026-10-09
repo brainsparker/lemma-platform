@@ -59,6 +59,7 @@ from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
     AgentRunUsage,
+    JsonObject,
     MessageDraft,
     MessageKind,
     to_json_value,
@@ -69,8 +70,13 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
     usage_totals,
 )
+from app.modules.agent.services.run_input_settings import shorter_answer_settings
 
 logger = get_logger(__name__)
+
+#: Fraction of the run's wall-clock budget past which an answer that ran out of
+#: time is not tried again.
+_LATE_IN_THE_RUN = 0.9
 
 
 class FinalOutputWriter(Protocol):
@@ -87,7 +93,7 @@ class NodeLoop[DepsT]:
         self,
         *,
         run_context: Callable[
-            [list[ModelMessage] | None],
+            [list[ModelMessage] | None, JsonObject | None],
             AbstractAsyncContextManager[AgentRun[DepsT, object]],
         ],
         queue: asyncio.Queue[tuple[str, object]],
@@ -116,14 +122,39 @@ class NodeLoop[DepsT]:
         # The run's own clock, not the attempt's: a retry that re-enters the
         # graph is the same run to the person waiting for it.
         self._started_at = time.monotonic()
+        # The model settings the current attempt runs under, when a retry
+        # changed them; None means the run's own.
+        self._attempt_settings: JsonObject | None = None
+
+    def shorter_answer_settings(self) -> JsonObject | None:
+        """Settings for one more try at an answer that ran out of time, or None.
+
+        None once the run is nearly out of wall clock: another exchange as long
+        as the one that just expired would carry it past its budget, and the
+        pause that budget promises cannot interrupt a request in flight.
+        """
+        spend = self.options.spend
+        wall_clock = spend.budget.wall_clock_seconds if spend is not None else 0
+        elapsed = time.monotonic() - self._started_at
+        if wall_clock > 0 and elapsed >= _LATE_IN_THE_RUN * wall_clock:
+            return None
+        return shorter_answer_settings(
+            self._attempt_settings
+            if self._attempt_settings is not None
+            else self.options.model_settings
+        )
 
     async def drive_once(
         self,
         resume_history: list[ModelMessage] | None,
         state: dict[str, object],
         carried_usage: dict[str, int],
+        *,
+        model_settings: JsonObject | None = None,
     ) -> None:
-        async with self.run_context(resume_history) as run:
+        if model_settings is not None:
+            self._attempt_settings = model_settings
+        async with self.run_context(resume_history, self._attempt_settings) as run:
             # Published before the node loop so the retry handler can read
             # usage off the run that just failed.
             state["run"] = run

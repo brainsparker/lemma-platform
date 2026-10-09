@@ -392,7 +392,7 @@ async def test_a_paused_run_does_not_export_as_a_failed_run():
             raise AgentInputRequired("call-1", "ask_user")
 
     @asynccontextmanager
-    async def _run_context(_history):
+    async def _run_context(_history, _settings):
         yield _PausingRun()
 
     loop = NodeLoop(

@@ -16,6 +16,7 @@ from app.modules.workflow.domain.wait import (
     WorkflowRunWaitType,
 )
 from app.modules.workflow.execution.engine import WorkflowEngine
+from app.modules.workflow.execution.executors.agent import WAIT_TIMEOUT_SECONDS_KEY
 from app.modules.workflow.services.decision_resume_service import (
     DecisionResumeService,
 )
@@ -43,6 +44,25 @@ SELF_RESOLVING_WAIT_REASONS = frozenset({"WAIT"})
 # that reads as still waiting. This bounds the truly abandoned without punishing
 # ordinary out-of-hours delay.
 HUMAN_WAIT_CEILING_MULTIPLIER = 12
+
+
+def _step_timeout_seconds(wait: WorkflowRunWaitEntity) -> float | None:
+    """The step's own timeout, when its author set one.
+
+    It replaces the deployment's machine ceiling for that step alone: an
+    author who knows the step runs for a day says so, and one who knows it
+    should take ten minutes gets it stopped sooner.
+    """
+    value = wait.payload.get(WAIT_TIMEOUT_SECONDS_KEY)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        return None
+    return float(value)
+
+
+def _duration_text(seconds: float) -> str:
+    if seconds < 3600:
+        return f"{round(seconds / 60):g} min"
+    return f"{seconds / 3600:g}h"
 
 
 class RunResumeService:
@@ -308,14 +328,23 @@ class RunResumeService:
         human_paced = (
             wait.wait_type == WorkflowRunWaitType.HUMAN or wait_reason == "HUMAN"
         )
-        seconds = settings.workflow_wait_max_age_seconds
+        step_seconds = _step_timeout_seconds(wait)
+        seconds = (
+            step_seconds
+            if step_seconds is not None
+            else settings.workflow_wait_max_age_seconds
+        )
         if human_paced:
             seconds *= HUMAN_WAIT_CEILING_MULTIPLIER
-        cutoff = now - timedelta(seconds=seconds) if human_paced else machine_cutoff
+        cutoff = (
+            now - timedelta(seconds=seconds)
+            if human_paced or step_seconds is not None
+            else machine_cutoff
+        )
         if created_at > cutoff:
             return False
 
-        hours = seconds / 3600
+        within = _duration_text(seconds)
         logger.warning(
             "workflow.reconcile.wait_expired",
             run_id=str(wait.run_id),
@@ -330,11 +359,11 @@ class RunResumeService:
         # answered. "Human step did not finish" reads as a system fault, and
         # this one is not.
         error = (
-            f"Nobody answered this form within {hours:g}h, so the run was stopped."
+            f"Nobody answered this form within {within}, so the run was stopped."
             if wait.wait_type == WorkflowRunWaitType.HUMAN
             else (
                 f"{wait.wait_type.value.title()} step did not finish within "
-                f"{hours:g}h and was stopped."
+                f"{within} and was stopped."
             )
         )
         await self._engine.fail_for_wait(wait, error=error)

@@ -36,6 +36,10 @@ class BaseAgentContext(AgentContext):
 
     workload_type: str | None = "agent"
     workload_id: UUID | None = None
+    # The scope a delegated token carried (e.g. a function's
+    # `{function.execute}`), applied on top of the workload's grants. Empty
+    # means unscoped, as for every context Lemma builds for its own runs.
+    delegation_scope: frozenset[str] = frozenset()
     configured_accounts: dict[str, UUID] = Field(default_factory=dict)
     surface_id: UUID | None = None
     surface_platform: str | None = None

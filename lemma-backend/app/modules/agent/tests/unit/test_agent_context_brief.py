@@ -511,12 +511,16 @@ class TestEveryCapSaysWhatItLeftOut:
             MAX_COLUMNS as _MAX_COLUMNS,
             table_line as _table_line,
         )
+        from app.modules.datastore.domain.datastore_entities import (
+            ColumnSchema,
+            DatastoreDataType,
+        )
 
         table = SimpleNamespace(
             table_name="orders",
             primary_key_column="id",
             columns=[
-                SimpleNamespace(name=f"c{index}", type="TEXT")
+                ColumnSchema(name=f"c{index}", type=DatastoreDataType.TEXT)
                 for index in range(_MAX_COLUMNS + 7)
             ],
         )
@@ -529,11 +533,15 @@ class TestEveryCapSaysWhatItLeftOut:
         from types import SimpleNamespace
 
         from app.modules.agent.services.brief_lines import table_line as _table_line
+        from app.modules.datastore.domain.datastore_entities import (
+            ColumnSchema,
+            DatastoreDataType,
+        )
 
         table = SimpleNamespace(
             table_name="orders",
             primary_key_column="id",
-            columns=[SimpleNamespace(name="id", type="UUID")],
+            columns=[ColumnSchema(name="id", type=DatastoreDataType.UUID)],
         )
 
         assert "more columns" not in _table_line(table)

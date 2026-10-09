@@ -104,7 +104,9 @@ def test_pod_toolset_exposes_exactly_these_tools():
 
 @pytest.mark.asyncio
 async def test_pod_tables_lists_then_describes(monkeypatch):
-    column = SimpleNamespace(
+    from app.modules.datastore.contracts import ColumnSchema
+
+    column = ColumnSchema(
         name="id", type="UUID", required=True, description="Primary key"
     )
     table = SimpleNamespace(

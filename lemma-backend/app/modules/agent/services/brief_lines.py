@@ -16,11 +16,16 @@ whether a person was typing or a schedule had fired at six in the morning.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from uuid import UUID
 
 from app.modules.agent.config import agent_settings
 
 from app.modules.agent.infrastructure.context_brief_repository import UserProfile
+
+if TYPE_CHECKING:
+    from app.modules.datastore.contracts import ColumnSchema
 
 #: Columns past this are named as a count rather than listed.
 MAX_COLUMNS = 40
@@ -258,24 +263,13 @@ def user_lines(profile: UserProfile, user_id: UUID) -> list[str]:
     return lines
 
 
-def column_spec(column) -> str:
+def column_spec(column: ColumnSchema) -> str:
     """Write constraints only; full descriptions are available on inspection."""
-    type_name = getattr(column.type, "value", column.type)
-    marks: list[str] = []
-    if getattr(column, "system", False) or getattr(column, "auto", False):
-        marks.append("auto")
-    elif getattr(column, "required", False):
-        marks.append("required")
-    if getattr(column, "unique", False):
-        marks.append("unique")
-    fk = getattr(column, "foreign_key", None)
-    references = getattr(fk, "references", None) if fk is not None else None
-    if references:
-        marks.append(f"→{references}")
-    spec = f"{column.name}:{type_name}"
-    if marks:
-        spec += "(" + " ".join(marks) + ")"
-    return spec
+    # Imported here: the datastore contracts pull in its API schemas, and the
+    # brief is imported on paths that never render a table.
+    from app.modules.datastore.contracts import describe_column
+
+    return describe_column(column).brief()
 
 
 def table_line(table) -> str:

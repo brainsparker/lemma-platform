@@ -13,6 +13,7 @@ from app.core.authorization.context import (
     ResourceVisibility,
     normalize_resource_visibility,
 )
+from app.modules.datastore.domain.column_description import column_name_problem
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreTableEntity,
@@ -109,8 +110,10 @@ class TableService:
         # names a table the caller cannot find, and by then a row exists.
         ensure_identifier_fits(table_name, kind="Table name")
         ensure_identifier_fits(primary_key_column, kind="Column name")
+        _ensure_queryable_column_name(primary_key_column)
         for declared in columns:
             ensure_identifier_fits(declared.name, kind="Column name")
+            _ensure_queryable_column_name(declared.name)
         entity_data: dict = {
             "pod_id": pod_id,
             "table_name": table_name,
@@ -437,6 +440,7 @@ class TableService:
         ctx: Context,
     ) -> DatastoreTableEntity:
         ensure_identifier_fits(column.name, kind="Column name")
+        _ensure_queryable_column_name(column.name)
         requester_user_id = ctx.user_id
         table = await self.table_repository.get_by_datastore_and_name(
             pod_id,
@@ -552,3 +556,17 @@ class TableService:
     @staticmethod
     def _normalize_visibility_value(value: str | None) -> ResourceVisibility:
         return normalize_resource_visibility(value) or ResourceVisibility.POD
+
+
+def _ensure_queryable_column_name(name: str) -> None:
+    """Refuse a new column name that hand-written SQL cannot use unquoted.
+
+    The platform's own SQL quotes every name, so `check` or `Order` work for
+    record writes -- and then break every query an agent or a person writes
+    without quotes, as a syntax error or a column that "does not exist". Only
+    at creation: an existing table keeps its names, and its describe marks the
+    ones that need quoting.
+    """
+    problem = column_name_problem(name)
+    if problem is not None:
+        raise DatastoreValidationError(f"Column name {problem}")

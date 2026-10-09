@@ -11,21 +11,17 @@ import pytest
 
 from app.modules.agent.services import agent_self_brief as self_mod
 from app.modules.agent.services import brief_lines
+from app.modules.datastore.domain.datastore_entities import (
+    ColumnSchema,
+    DatastoreDataType,
+    ForeignKeySpec,
+)
 
 pytestmark = pytest.mark.unit
 
 
 def _column(name, type_, **kwargs):
-    return SimpleNamespace(
-        name=name,
-        type=type_,
-        required=kwargs.get("required", False),
-        unique=kwargs.get("unique", False),
-        system=kwargs.get("system", False),
-        auto=kwargs.get("auto", False),
-        description=kwargs.get("description"),
-        foreign_key=kwargs.get("foreign_key"),
-    )
+    return ColumnSchema(name=name, type=DatastoreDataType(type_), **kwargs)
 
 
 class TestCompactTableSchema:
@@ -91,7 +87,7 @@ class TestAColumnCarriesWhatAWriteNeeds:
 
     def test_a_foreign_key_names_what_it_points_at(self):
         spec = brief_lines.column_spec(
-            _column("pod_id", "UUID", foreign_key=SimpleNamespace(references="pods.id"))
+            _column("pod_id", "UUID", foreign_key=ForeignKeySpec(references="pods.id"))
         )
         assert "pods.id" in spec
 
@@ -283,3 +279,36 @@ class TestAScheduleReadsLikeAJob:
         """A paused job is not standing work, and acting on one is a mistake."""
         line = self_mod.schedule_line(self._summary(is_active=False))
         assert "(paused)" in line
+
+
+class TestAColumnSaysWhatItWillAccept:
+    """The brief dropped a TEXT column's length and an ENUM's values, and
+    nothing said a column called `check` needs quoting -- so the agent learned
+    each from a refused write or a SQL syntax error."""
+
+    def test_a_bounded_text_column_shows_its_length(self):
+        spec = brief_lines.column_spec(_column("title", "TEXT", max_length=500))
+        assert spec == "title:VARCHAR(500)"
+
+    def test_an_enum_lists_its_values(self):
+        spec = brief_lines.column_spec(
+            _column("status", "ENUM", options=["open", "held", "closed"])
+        )
+        assert spec == "status:ENUM[open|held|closed]"
+
+    def test_a_long_enum_is_cut_and_says_how_much(self):
+        spec = brief_lines.column_spec(
+            _column("code", "ENUM", options=[f"c{i}" for i in range(20)])
+        )
+        assert "…+8" in spec
+
+    def test_a_default_is_shown(self):
+        spec = brief_lines.column_spec(
+            _column("status", "ENUM", options=["open", "held"], default="open")
+        )
+        assert "default=open" in spec
+
+    def test_a_name_sql_cannot_read_unquoted_is_shown_quoted(self):
+        assert brief_lines.column_spec(_column("check", "TEXT")).startswith('"check":')
+        assert brief_lines.column_spec(_column("Order", "TEXT")).startswith('"Order":')
+        assert brief_lines.column_spec(_column("amount", "FLOAT")) == "amount:FLOAT"

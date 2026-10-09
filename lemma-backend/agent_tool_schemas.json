@@ -2426,7 +2426,7 @@
   {
     "tool_name": "pod_query",
     "toolset": "POD",
-    "description": "Run a read-only SQL query against the pod.\n\nReads across tables (joins, aggregates, subqueries) including RLS-enabled\ntables; rows of an RLS table are always scoped to the agent's user (the same\nper-user view its other record reads get). Only a single read-only SELECT is\nallowed.",
+    "description": "Run a read-only SQL query against the pod.\n\nReads across tables (joins, aggregates, subqueries) including RLS-enabled\ntables; rows of an RLS table are always scoped to the agent's user (the same\nper-user view its other record reads get). Only a single read-only SELECT is\nallowed. A column shown in double quotes, or with `quote_required`, must be\nwritten in double quotes here too: `SELECT \"check\" FROM audits`.",
     "input_schema": {
       "properties": {
         "sql": {

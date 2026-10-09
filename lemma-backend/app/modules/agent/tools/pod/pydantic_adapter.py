@@ -39,6 +39,7 @@ from app.modules.agent.tools.pod.pod_file_tools import (
 )
 from app.modules.datastore.contracts import (
     TableContext,
+    describe_column,
 )
 
 
@@ -48,25 +49,11 @@ def _table_summary(table: Any) -> JsonObject:
         "description": getattr(table, "description", None),
         "primary_key": table.primary_key_column,
         "rls_enabled": table.enable_rls,
-        "columns": [
-            {
-                "name": column.name,
-                "type": column.type.value
-                if hasattr(column.type, "value")
-                else str(column.type),
-                "required": column.required,
-                "description": column.description,
-                # ENUM columns only accept one of a fixed set; surface it here so
-                # a valid record can be built from the schema alone, without
-                # having to trip the validation error to learn the options.
-                **(
-                    {"options": getattr(column, "options", None)}
-                    if getattr(column, "options", None)
-                    else {}
-                ),
-            }
-            for column in table.columns
-        ],
+        # Everything a write depends on -- length, allowed values, default,
+        # uniqueness, the column it references, and whether its name must be
+        # quoted in `pod_query` -- so a valid record or query can be built from
+        # the schema alone rather than learned from the error.
+        "columns": [describe_column(column).as_json() for column in table.columns],
     }
 
 
@@ -215,7 +202,8 @@ async def pod_query(
     Reads across tables (joins, aggregates, subqueries) including RLS-enabled
     tables; rows of an RLS table are always scoped to the agent's user (the same
     per-user view its other record reads get). Only a single read-only SELECT is
-    allowed.
+    allowed. A column shown in double quotes, or with `quote_required`, must be
+    written in double quotes here too: `SELECT "check" FROM audits`.
     """
 
     async def op(services: PodServices) -> JsonObject:

@@ -69,6 +69,9 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
 from app.modules.agent_surfaces.services.group_updates import apply_group_updates
+from app.modules.agent_surfaces.services.whatsapp_delivery_status import (
+    apply_delivery_statuses,
+)
 from app.modules.agent_surfaces.services.telegram_group_join import (
     claim_telegram_group_join,
 )
@@ -320,6 +323,8 @@ async def _process_surface_webhook(
         # A group the bot asked WhatsApp to create, confirmed or refused. Never
         # instead of the message paths: such a body carries no message.
         await apply_group_updates(uow, ingress_request, adapters=adapters)
+        # And a WhatsApp send Meta now says never arrived.
+        await apply_delivery_statuses(uow, ingress_request)
 
         from app.modules.agent_surfaces.services.onboarding_inputs import (
             is_onboarding_input,

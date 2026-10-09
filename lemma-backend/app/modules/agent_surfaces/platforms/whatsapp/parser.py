@@ -197,6 +197,48 @@ def _replies_to(msg: dict[str, object], business_number: str) -> bool:
     return bool(digits) and "".join(c for c in quoted_from if c.isdigit()) == digits
 
 
+@dataclass(frozen=True, slots=True)
+class WhatsAppFailedDelivery:
+    """A message Cloud API accepted and later reported it could not deliver."""
+
+    message_id: str
+    code: str
+    reason: str
+
+
+def failed_deliveries(payload: dict[str, object]) -> list[WhatsAppFailedDelivery]:
+    """Every ``statuses[]`` entry in a delivery that says ``failed``.
+
+    The other statuses (sent, delivered, read) say nothing that needs doing.
+    """
+    failures = [
+        _failed_delivery(status)
+        for entry in _dicts(payload.get("entry"))
+        for change in _dicts(entry.get("changes"))
+        for status in _dicts(payload_section(change, "value").get("statuses"))
+        if status.get("status") == "failed"
+    ]
+    return [failure for failure in failures if failure.message_id]
+
+
+def _dicts(value: object) -> list[dict[str, object]]:
+    return (
+        [item for item in value if isinstance(item, dict)]
+        if isinstance(value, list)
+        else []
+    )
+
+
+def _failed_delivery(status: dict[str, object]) -> WhatsAppFailedDelivery:
+    errors = _dicts(status.get("errors"))
+    first = errors[0] if errors else {}
+    return WhatsAppFailedDelivery(
+        message_id=payload_text(status, "id"),
+        code=payload_text(first, "code"),
+        reason=payload_text(first, "title") or payload_text(first, "message"),
+    )
+
+
 def _retry_tap(
     common: dict[str, Any], sender_wa_id: str, phone_number_id: object
 ) -> ParsedSurfaceInteraction:

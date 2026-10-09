@@ -27,6 +27,7 @@ from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERROR
 from app.modules.agent_surfaces.platforms.delivery import note_partial_delivery
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.whatsapp import media
+from app.modules.agent_surfaces.platforms.whatsapp.sent_messages import remember_sent
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
     WhatsAppClient,
@@ -39,7 +40,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     WhatsAppRecipient,
     build_whatsapp_approval_interactive,
     build_whatsapp_interactive,
-    build_whatsapp_retry_interactive,
+    retry_notice_interactive,
     whatsapp_cta_url_payload,
     whatsapp_display_resource_text,
     flow_with_message,
@@ -126,24 +127,18 @@ class WhatsAppPlatformService:
                 recipient=recipient.to if recipient else None,
             )
 
-        flow = (metadata or {}).get("onboarding_flow")
-        if event.is_dm and flow and not recipient.is_group:
+        bodies = whatsapp_message_bodies(message)
+        interactive = _interactive_reply(event, message, bodies, metadata, recipient)
+        if interactive is not None:
             await self._client.send_interactive(
                 phone_number_id=phone_number_id,
                 to=recipient.to,
-                interactive=flow_with_message(flow, message),
-            )
-            return
-        bodies = whatsapp_message_bodies(message)
-        retry = _retry_notice(bodies, metadata, recipient)
-        if retry is not None:
-            await self._client.send_interactive(
-                phone_number_id=phone_number_id, to=recipient.to, interactive=retry
+                interactive=interactive,
             )
             return
         for index, body in enumerate(bodies):
             try:
-                await self._client.send_message_payload(
+                message_id = await self._client.send_message_payload(
                     phone_number_id=phone_number_id,
                     payload={
                         "messaging_product": "whatsapp",
@@ -153,6 +148,7 @@ class WhatsAppPlatformService:
                         "text": {"body": body},
                     },
                 )
+                await remember_sent((metadata or {}).get("notification_id"), message_id)
             except PLATFORM_TRANSPORT_ERRORS:
                 if index:
                     # The person already has the first part. The caller sees
@@ -581,16 +577,16 @@ def _recipient(event: ParsedInboundSurfaceEvent) -> WhatsAppRecipient | None:
     return whatsapp_recipient(event.reply_target, fallback_wa_id=event.sender_phone)
 
 
-def _retry_notice(
+def _interactive_reply(
+    event: ParsedInboundSurfaceEvent,
+    message: str,
     bodies: list[str],
-    metadata: dict[str, Any] | None,
+    metadata: dict[str, object] | None,
     recipient: WhatsAppRecipient,
-) -> dict[str, Any] | None:
-    """A failure notice as a message with a Try again button, where it fits.
-
-    A DM only: in a group anyone could tap it, and the tap is keyed to the
-    person's own chat.
-    """
-    if not (metadata or {}).get("retry_action") or recipient.is_group:
-        return None
-    return build_whatsapp_retry_interactive(bodies[0]) if len(bodies) == 1 else None
+) -> dict[str, object] | None:
+    """The message as an interactive one, when it is an onboarding step or a
+    failure notice with a Try again button; None to send it as text."""
+    flow = (metadata or {}).get("onboarding_flow")
+    if event.is_dm and flow and not recipient.is_group:
+        return flow_with_message(flow, message)
+    return retry_notice_interactive(bodies, metadata, recipient)

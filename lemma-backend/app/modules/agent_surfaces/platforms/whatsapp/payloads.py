@@ -66,6 +66,21 @@ _WHATSAPP_RETRY_BUTTON_ID = (
 )
 
 
+def retry_notice_interactive(
+    bodies: list[str],
+    metadata: dict[str, Any] | None,
+    recipient: "WhatsAppRecipient",
+) -> dict[str, Any] | None:
+    """A failure notice as a message with a Try again button, where it fits.
+
+    A DM only: in a group anyone could tap it, and the tap is keyed to the
+    person's own chat.
+    """
+    if not (metadata or {}).get("retry_action") or recipient.is_group:
+        return None
+    return build_whatsapp_retry_interactive(bodies[0]) if len(bodies) == 1 else None
+
+
 def build_whatsapp_retry_interactive(body: str) -> dict[str, Any] | None:
     """A reply button under a failure notice, or None when the notice is too
     long to be an interactive body and must go as plain text."""

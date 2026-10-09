@@ -39,6 +39,8 @@ from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
     _published_whatsapp_verification,
     _redacted_headers,
     _verify_inbound_request,
+    parse_webhook_platform,
+    slack_url_verification,
 )
 from app.modules.agent_surfaces.api.controllers.webhook_verification import (
     webhook_verification_response,
@@ -47,6 +49,7 @@ from app.modules.agent_surfaces.api.controllers.webhook_rejections import (
     record_whatsapp_number_mismatch,
     record_whatsapp_signature_rejected,
 )
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.domain.source_event_ids import webhook_source_event_id
 from app.modules.agent_surfaces.services import teams_consent
@@ -116,13 +119,15 @@ async def handle_platform_webhook(
     # own short scope, so nothing is held across a publish or a signature check.
     # Deliberately a comment, not part of the docstring: the docstring becomes
     # the endpoint's public OpenAPI description.
+    resolved = parse_webhook_platform(platform)
+    source = resolved.value.lower()
     headers = dict(request.headers)
     raw_body = await request.body()
     payload = _decode_webhook_payload(raw_body, headers)
 
     # Resend inbound: a catch-all address webhook. Resolve the destination
     # address to a concrete surface and feed the normal surface-level pipeline.
-    if platform == "resend":
+    if resolved is SurfacePlatform.RESEND:
         return await _handle_resend_webhook(
             payload=payload,
             headers=headers,
@@ -131,15 +136,15 @@ async def handle_platform_webhook(
             uow_factory=uow_factory,
         )
 
-    # Slack sends url_verification before any signing secret is configured — respond immediately.
-    if platform == "slack" and payload.get("type") == "url_verification":
-        return {"challenge": payload.get("challenge")}
+    # Slack sends url_verification before any signing secret is configured.
+    if resolved is SurfacePlatform.SLACK and payload.get("type") == "url_verification":
+        return slack_url_verification(payload, headers, security_service)
 
     # Authenticity failures raise SurfaceWebhookAuthenticationError (a DomainError),
     # translated to the right status by the global handler.
-    security_service.assert_platform_request_allowed(platform)
+    security_service.assert_platform_request_allowed(resolved.value)
     receiver_surface_ids = await _verify_inbound_request(
-        platform=platform,
+        platform=source,
         headers=headers,
         raw_body=raw_body,
         payload=payload,
@@ -147,27 +152,27 @@ async def handle_platform_webhook(
         uow_factory=uow_factory,
     )
 
-    if platform == "whatsapp" and await _published_whatsapp_verification(
+    if resolved is SurfacePlatform.WHATSAPP and await _published_whatsapp_verification(
         payload, uow_factory
     ):
         return {"message": "Verification message received"}
 
-    if platform == "slack" and await open_onboarding_modal(
+    if resolved is SurfacePlatform.SLACK and await open_onboarding_modal(
         payload, receiver_surface_ids, uow_factory
     ):
         return Response(status_code=200)
 
-    if platform == "slack" and await _handled_slack_modal(
+    if resolved is SurfacePlatform.SLACK and await _handled_slack_modal(
         payload, headers, receiver_surface_ids, uow_factory
     ):
         return Response(status_code=200)
 
     source_event_id = webhook_source_event_id(
-        platform, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
+        source, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
     )
     event = SurfaceWebhookReceivedEvent(
         event_id=stable_event_id({"event_id": source_event_id}),
-        source=platform,
+        source=source,
         payload=payload,
         headers=_redacted_headers(headers),
         source_event_id=source_event_id,
@@ -179,7 +184,7 @@ async def handle_platform_webhook(
     # acknowledgement: Slack parses it as a response_action and shows the user
     # "We had some trouble connecting" for anything it doesn't recognise. An
     # empty 200 means "accepted, close the modal".
-    if platform == "slack" and payload.get("type") == "view_submission":
+    if resolved is SurfacePlatform.SLACK and payload.get("type") == "view_submission":
         return Response(status_code=200)
 
     return {"message": "Webhook received"}
@@ -390,7 +395,7 @@ async def verify_surface_webhook(
 ):
     """Webhook verification endpoint for platforms that require it."""
     return webhook_verification_response(
-        platform,
+        platform.lower(),
         dict(request.query_params),
         whatsapp_verify_token=reveal_secret(surface_settings.whatsapp_verify_token),
     )

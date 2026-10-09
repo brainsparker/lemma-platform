@@ -381,6 +381,30 @@ class SurfaceWebhookSecurityService:
         _, verify_token = await self._resolve_whatsapp_secrets(surface)
         return verify_token
 
+    def verify_slack_handshake(self, *, headers: dict[str, str]) -> None:
+        """Check what can be checked of Slack's ``url_verification`` request.
+
+        Slack signs the handshake like any other request, but its body names
+        no workspace and no app -- it is ``{token, challenge, type}`` -- so
+        there is no signing secret to select. Checking it against the
+        deployment's own would refuse every org pointing its own Slack app at
+        this shared endpoint. What is left is that it carries Slack's headers
+        and a timestamp inside the replay window; the caller answers with the
+        challenge alone, bounded, and acts on nothing else in the body.
+        """
+        if not self.verification_enabled():
+            return
+        signature = headers.get("x-slack-signature") or headers.get("X-Slack-Signature")
+        timestamp = headers.get("x-slack-request-timestamp") or headers.get(
+            "X-Slack-Request-Timestamp"
+        )
+        if not signature or not timestamp:
+            raise SurfaceWebhookAuthenticationError("Missing Slack signature headers")
+        if not timestamp_within_skew(timestamp):
+            raise SurfaceWebhookAuthenticationError(
+                "Slack request timestamp is too old"
+            )
+
     def _verify_slack_signature(
         self,
         *,

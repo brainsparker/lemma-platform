@@ -10,6 +10,7 @@ ever reach it.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from uuid import UUID
 
@@ -28,6 +29,8 @@ from app.modules.agent_surfaces.api.dependencies import (
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.errors import SurfaceWebhookAuthenticationError
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
 from app.modules.identity.contracts.whatsapp_verification import (
@@ -48,6 +51,43 @@ from app.modules.agent_surfaces.api.controllers.slack_webhook_verification impor
     slack_candidates_for_workspace,
     slack_team_id,
 )
+
+# Slack's challenge is a short opaque token. Anything else is not Slack's, and
+# echoing it would make this unauthenticated branch a reflector.
+_SLACK_CHALLENGE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def parse_webhook_platform(platform: str) -> SurfacePlatform:
+    """The platform a shared webhook path names, read once, case-insensitively.
+
+    The routes branched on the raw string, case-sensitively, while the
+    allow-list upper-cased it -- so ``/webhooks/WHATSAPP`` was allowed in but
+    skipped the WhatsApp verification-code branch, and ``/webhooks/Slack``
+    skipped per-workspace signature candidates.
+    """
+    try:
+        return SurfacePlatform(str(platform or "").strip().upper())
+    except ValueError:
+        raise SurfaceWebhookAuthenticationError(
+            "This platform does not support direct webhook ingress",
+            status_code=404,
+        ) from None
+
+
+def slack_url_verification(
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    security_service: SurfaceWebhookSecurityServiceDep,
+) -> dict[str, str]:
+    """Answer Slack's ``url_verification`` with its challenge and nothing else."""
+    security_service.verify_slack_handshake(headers=headers)
+    challenge = payload.get("challenge")
+    if not isinstance(challenge, str) or not _SLACK_CHALLENGE.fullmatch(challenge):
+        raise SurfaceWebhookAuthenticationError(
+            "Malformed Slack url_verification challenge", status_code=400
+        )
+    return {"challenge": challenge}
+
 
 _MODAL_OPENING_ACTION_IDS = {
     "lemma_channel_setup",

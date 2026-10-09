@@ -51,7 +51,9 @@ another Mac.
 
 **Agent Host runs** (Claude Code, Codex, ...) are not given a host sandbox:
 they already run on the Mac. What they get instead is ``host_runs_native_
-commands``, which withholds Lemma's duplicate command tools (§7).
+commands``, which withholds Lemma's duplicate command tools (§7) -- under the
+same "who triggered the run" rule, because the agent's own shell asks a person
+before each command.
 """
 
 from __future__ import annotations
@@ -340,10 +342,7 @@ async def _select(
 ) -> tuple[UUID | None, HostWorkspace | None]:
     if conversation.user_id != user_id:
         return None, None
-    earlier: list[str | None] | None = None
-    if opened_in_app(conversation) and run_source(agent_run) in CONTINUATION_SOURCES:
-        earlier = await facts.earlier_sources(conversation.id, agent_run.id)
-    if not triggered_by_run_user(conversation, agent_run, earlier_sources=earlier):
+    if not await started_by_run_user(conversation, agent_run, facts=facts):
         return None, None
     host_id = await paired_host_for(user_id, conversation.id, facts=facts)
     if host_id is None:
@@ -379,15 +378,36 @@ async def _select(
     return host_id, workspace
 
 
-async def host_runs_native_commands(
-    conversation: Conversation, *, facts: HostExecutionFacts = FACTS
+async def started_by_run_user(
+    conversation: Conversation,
+    agent_run: AgentRun,
+    *,
+    facts: HostExecutionFacts = FACTS,
 ) -> bool:
-    """§7: a coding-agent run whose user's paired host has host execution on.
+    """``triggered_by_run_user``, reading the earlier runs a continuation needs."""
+    earlier: list[str | None] | None = None
+    if opened_in_app(conversation) and run_source(agent_run) in CONTINUATION_SOURCES:
+        earlier = await facts.earlier_sources(conversation.id, agent_run.id)
+    return triggered_by_run_user(conversation, agent_run, earlier_sources=earlier)
 
-    Not gated on who triggered the run: the coding agent already runs on the
-    Mac whoever asked, so the question is only whether Lemma's command tools
-    would duplicate the ones it has there.
+
+async def host_runs_native_commands(
+    conversation: Conversation,
+    agent_run: AgentRun,
+    *,
+    facts: HostExecutionFacts = FACTS,
+) -> bool:
+    """§7: a coding-agent run its user started, on a paired host with host execution.
+
+    Gated on who triggered the run, by the same rule as a host sandbox. The
+    coding agent runs on the Mac whoever asked, but its own shell asks a
+    person before each command, and only a run its user started in the app
+    has somebody there to answer. A workflow, schedule or channel run keeps
+    Lemma's command tools, which run without asking: withholding them left
+    such a run waiting on approvals nobody was there to give.
     """
+    if not await started_by_run_user(conversation, agent_run, facts=facts):
+        return False
     return (
         await paired_host_for(conversation.user_id, conversation.id, facts=facts)
         is not None

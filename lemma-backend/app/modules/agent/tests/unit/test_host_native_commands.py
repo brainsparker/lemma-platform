@@ -35,7 +35,7 @@ class World:
         self.rows: dict[UUID, dict[str, object]] = {}
 
     def facts(self) -> NativeCommandFacts:
-        async def applies(_conversation: Conversation) -> bool:
+        async def applies(_conversation: Conversation, _run: AgentRun) -> bool:
             return self.applies_now
 
         async def harness_host(harness_id: UUID) -> UUID | None:

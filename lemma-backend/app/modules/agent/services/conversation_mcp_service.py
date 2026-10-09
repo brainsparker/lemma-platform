@@ -415,15 +415,18 @@ async def _native_commands(conversation: Conversation, run: AgentRun | None) -> 
         recorded_native_commands,
     )
 
-    if run is not None:
-        recorded = await recorded_native_commands(run.id)
-        if recorded is not None:
-            return recorded
+    if run is None:
+        # No run, no way to tell who started it: keep Lemma's tools, which
+        # never wait on a person.
+        return False
+    recorded = await recorded_native_commands(run.id)
+    if recorded is not None:
+        return recorded
     from app.modules.agent.services.host_execution_selection import (
         host_runs_native_commands,
     )
 
-    return await host_runs_native_commands(conversation)
+    return await host_runs_native_commands(conversation, run)
 
 
 def _tool_context(

@@ -525,9 +525,7 @@ async def test_full_budget_fails_as_never_started_once_the_deadline_passes(
     invoke = _single_worker_invoker(tmp_path, registry)
     long_deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
 
-    active = asyncio.create_task(
-        invoke(uuid4(), hold_ms=3_000, deadline=long_deadline)
-    )
+    active = asyncio.create_task(invoke(uuid4(), hold_ms=3_000, deadline=long_deadline))
     try:
         await _until_a_worker_is_active(registry)
         short_deadline = datetime.now(timezone.utc) + timedelta(milliseconds=300)
@@ -544,9 +542,7 @@ async def test_full_budget_fails_as_never_started_once_the_deadline_passes(
 
 
 @pytest.mark.asyncio
-async def test_budget_wait_wakes_on_a_release_that_raced_the_failed_reserve() -> (
-    None
-):
+async def test_budget_wait_wakes_on_a_release_that_raced_the_failed_reserve() -> None:
     budget = WorkerBudget(1)
     await budget.reserve()
     observed = budget.generation

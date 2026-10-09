@@ -16,6 +16,8 @@ class WorkflowRunWaitType(str, Enum):
     FUNCTION = "FUNCTION"
     TIME = "TIME"
     DECISION = "DECISION"
+    # Waiting for the workflow's max_concurrent_runs to allow another run in.
+    QUEUED = "QUEUED"
 
 
 class WorkflowRunWaitStatus(str, Enum):

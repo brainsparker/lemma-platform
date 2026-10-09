@@ -102,6 +102,7 @@ class WorkflowModel(UUIDAuditBase):
             mode=self.mode,
             is_active=self.is_active,
             visibility=self.visibility,
+            max_concurrent_runs=self.max_concurrent_runs,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )

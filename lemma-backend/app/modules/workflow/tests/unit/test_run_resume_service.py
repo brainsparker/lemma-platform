@@ -427,7 +427,9 @@ async def test_the_sweep_asks_for_human_waits_and_polls_nothing_for_them():
     requested: list[list] = []
 
     class _WaitRepo:
-        async def list_active_older_than(self, *, wait_types, created_before, limit):
+        async def list_active_older_than(
+            self, *, wait_types, created_before, limit, after, **_filters
+        ):
             requested.append(list(wait_types))
             wait = _wait(WorkflowRunWaitType.HUMAN, None)
             wait.created_at = datetime.now(timezone.utc) - timedelta(hours=1)

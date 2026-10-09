@@ -125,6 +125,9 @@ class WorkflowRunWaitRepository(ABC):
         wait_types: list[WorkflowRunWaitType],
         created_before: datetime,
         limit: int = 100,
+        after: tuple[datetime, UUID] | None = None,
+        human_created_before: datetime | None = None,
+        timers_due_by: datetime | None = None,
     ) -> list[WorkflowRunWaitEntity]: ...
 
 

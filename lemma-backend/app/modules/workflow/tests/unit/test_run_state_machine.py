@@ -108,6 +108,30 @@ def test_fail_marks_last_open_step_and_truncates():
     assert run.step_history[-1].status == StepStatus.FAILED
 
 
+def test_reopen_at_failed_node_returns_to_running_there_and_keeps_earlier_output():
+    run = _run()
+    run.record_node_output("draft", {"answer": 42})
+    run.begin_step("record")
+    run.fail("function runtime returned 500", node_id="record")
+
+    node_id = run.reopen_at_failed_node()
+
+    assert node_id == "record"
+    assert run.status == WorkflowRunStatus.RUNNING
+    assert run.current_node_id == "record"
+    assert run.error is None and run.failed_node_id is None
+    assert run.completed_at is None
+    assert run.execution_context.node_output("draft") == {"answer": 42}
+    # The failed attempt stays in the history; a retry is a new step.
+    assert run.step_history[-1].status == StepStatus.FAILED
+
+
+def test_reopen_refuses_a_run_that_did_not_fail_at_a_node():
+    run = _run()
+    with pytest.raises(ValueError, match="failed at a node"):
+        run.reopen_at_failed_node()
+
+
 def test_summarize_error_keeps_head_and_tail():
     text = "HEAD " + ("middle " * 1000) + "TAIL"
     summary = summarize_error(text)

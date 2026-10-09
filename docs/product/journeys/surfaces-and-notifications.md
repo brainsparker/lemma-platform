@@ -226,6 +226,10 @@ it is asked, not skipped.
 - When a message arrives from an external identity, the system shall resolve it
   to a Lemma user where one exists, and shall keep that resolution stable across
   later messages.
+- Where all that links the identity to a Lemma user is something anybody could
+  claim — a Telegram @username typed onto a profile — the system shall ask the
+  person once to prove the account is theirs (by sharing their own contact on
+  Telegram) and shall not act as that user until they have.
 - The system shall give a resolved person exactly the access their Lemma
   identity has, and no more — being present in the Slack channel shall not by
   itself grant access to the pod.

@@ -594,11 +594,12 @@ async def _clear_run_pods(
 
 
 async def _known_on_telegram(holder: Person, ledger: Ledger) -> None:
-    """Tell Lemma which Telegram account the holder is.
+    """Tell Lemma which Telegram account the holder says is theirs.
 
-    Without it every inbound message is from a stranger — correctly, and the
-    stranger is told how to get access rather than answered. So the live lane
-    would prove the refusal path and never the conversation.
+    A claim, not proof: the live fixture proves it by sharing the account's own
+    contact against the holder's verified number (see LIVE.md). Without either,
+    every inbound message is from a stranger — correctly, and the stranger is
+    told how to get access rather than answered.
     """
     handle = os.getenv("SCENARIOS_TELEGRAM_HANDLE", "").strip().lstrip("@")
     if not handle:

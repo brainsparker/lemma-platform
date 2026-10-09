@@ -115,10 +115,16 @@ scenarios (`journeys/live/test_telegram.py`) run unattended from then on
 — text in and an answer out, an image the agent has to look at, a question
 answered by pressing a button, an approval offered as something to press.
 
-Two things that account needs, and both are what a real colleague has anyway:
+Three things that account needs, and all are what a real colleague has anyway:
 
-* **a @username** — Lemma resolves a Telegram sender by it, and without one every
-  message is from a stranger. The scenarios skip and say so.
+* **a @username** — it tells Lemma whose account a sender might be, so they are
+  asked to prove it rather than to sign up. The scenarios skip and say so.
+* **its number verified on the holder's Lemma profile** — a handle is a claim
+  anybody can type onto a profile, so it never makes a sender somebody. The
+  live fixture shares the account's own contact, which Telegram attests, and
+  Lemma matches it to the number verified on the profile. Verify it once, signed
+  in as the holder (account settings → verify with Telegram); the scenarios skip
+  and say so until then.
 * **to have messaged the bot once** — a bot cannot open a conversation, which is
   why the surface it talks to stands between runs (`tenant.STANDING_REACH`).
 
@@ -141,8 +147,9 @@ It matters most here, because Telegram identity is deployment-wide:
   erroring.
 * the resolution itself is **sticky by design** (`PS-SURF-012`: "shall keep
   that resolution stable across later messages"). Once a Telegram account has
-  resolved to a user, changing `telegram_username` does not re-point it — so a
-  cast built after the link was made can never be recognised.
+  proven it is a user's, changing `telegram_username` does not re-point it — so
+  a cast built after the link was made can never be recognised. The verified
+  number is the other half: two casts cannot both verify one account's number.
 
 So: **export `SCENARIOS_MAILBOX` in every command that touches a deployment**,
 including `make scenarios-provision`, and use the same answer every time. If a

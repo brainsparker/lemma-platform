@@ -194,19 +194,39 @@ class IdentitySteps:
         )
 
     async def is_known_on_telegram_as(self, username: str) -> JSON:
-        """Tell Lemma which Telegram account is this person.
+        """Tell Lemma which Telegram account this person says is theirs.
 
-        This is how a message from outside becomes a message from *somebody*:
-        a sender whose `@username` matches a user's `telegram_username` resolves
-        to that user, with no contact-share or linking round trip. Without it
-        every inbound message is from a stranger, and a stranger is only ever
-        told how to get access.
+        A claim, not proof: anyone can type a handle onto their profile, so a
+        sender writing as it resolves to nobody and is asked to prove the
+        account by sharing their contact (`ForgedChat.proves_who_they_are`).
+        What the handle buys is being asked for that proof instead of being
+        told to sign up.
         """
         return await self.api.post(
             "/users/me/profile",
             what=f"{self.label} declaring their Telegram username",
             json={"telegram_username": username},
         )
+
+    async def has_a_mobile_number(self) -> str:
+        """The number on this person's profile, writing one if there is none.
+
+        What a Telegram contact share is matched against. Kept when present:
+        changing a profile's number unbinds every chat account it proved, and
+        the standing cast is shared by scenarios running side by side. Written
+        from the account id otherwise, so it is the same on every run and no
+        other profile on the deployment holds it.
+        """
+        number = str((await self.profile()).get("mobile_number") or "").strip()
+        if number:
+            return number
+        number = f"+1555{int(str(self.user_id).replace('-', ''), 16) % 10**7:07d}"
+        await self.api.post(
+            "/users/me/profile",
+            what=f"{self.label} adding a mobile number",
+            json={"mobile_number": number},
+        )
+        return number
 
     # --- organizations ---------------------------------------------------
 

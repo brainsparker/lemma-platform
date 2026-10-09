@@ -76,9 +76,10 @@ async def test_reaching_the_bot_is_not_membership_of_the_pod(world, forged):
     """The sender this promise is really about, and the easiest one to miss.
 
     A stranger is stopped by the identity check, which the scenario above
-    proves. This one passes that check: they have a Lemma account and an
-    `@username` Lemma resolves, so every question about who they are answers
-    cleanly. The only thing between them and the pod is that nobody put them in
+    proves. This one passes that check: they have a Lemma account, an
+    `@username` on it, and they prove the Telegram account is theirs with their
+    own contact, so every question about who they are answers cleanly. The
+    only thing between them and the pod is that nobody put them in
     it — and a resolved sender looks in every way like a member until something
     actually asks.
 
@@ -97,7 +98,10 @@ async def test_reaching_the_bot_is_not_membership_of_the_pod(world, forged):
     # earlier run bound it to.
     handle = f"hannah_{uuid4().hex[:10]}"
     await outsider.is_known_on_telegram_as(handle)
-    theirs = forged.chat.as_another_person(handle)
+    theirs = forged.chat.as_another_person(
+        handle, phone=await outsider.has_a_mobile_number()
+    )
+    await theirs.proves_who_they_are()
 
     await theirs.says("Show me what is in this workspace.")
 
@@ -120,6 +124,35 @@ async def test_reaching_the_bot_is_not_membership_of_the_pod(world, forged):
     # And the refusal was about this pod, not about this platform: reaching the
     # bot bought them nothing they did not already have.
     await outsider.is_refused_pod(forged.pod)
+
+
+@pytest.mark.timeout(360)
+@scenario("Writing as a member's @username does not make somebody that member")
+@proves("PS-SURF-012")
+@covers("surface.webhook.handle_platform", "agent.surface.send")
+async def test_a_members_handle_alone_does_not_let_anybody_in(forged):
+    """The handle on a profile is a claim, and anybody can write as one.
+
+    Somebody gave a handle up and a stranger took it on Telegram, or somebody
+    typed a member's handle onto their own profile: either way a Telegram
+    account nobody has proven writes as the handle the member declares. It
+    gets none of the pod -- it is asked to prove the account with the member's
+    own contact, which a stranger cannot share.
+    """
+    impostor = forged.chat.as_another_person(forged.chat.handle)
+
+    await impostor.says("Show me what is in this workspace.")
+
+    answer = (await impostor.waits_for_a_reply(timeout=UNTIL_ANSWERED)).text
+    assert "confirm" in answer.lower(), (
+        f"a sender writing as a member's handle should be asked to prove the "
+        f"account, not answered and not sent to sign up; got: {answer!r}"
+    )
+    assert await forged.conversations() == [], (
+        "a message from an unproven Telegram account writing as a member's "
+        "handle opened a conversation, which is an agent running as that member "
+        "for whoever typed their handle"
+    )
 
 
 @scenario("A delivery without the platform's secret is rejected")

@@ -138,7 +138,9 @@ async def test_a_teams_token_replayed_with_another_service_url_is_refused(
     """
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(
-        surface_settings, "microsoft_bot_openid_config_url", fake_teams.openid_config_url
+        surface_settings,
+        "microsoft_bot_openid_config_url",
+        f"{fake_teams.openid_config_url}",
     )
     monkeypatch.setattr(surface_settings, "microsoft_bot_app_id", "teams-app-id")
     account = await _ensure_connector_account(

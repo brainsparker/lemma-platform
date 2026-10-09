@@ -19,10 +19,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
-
 import httpx
 import jwt
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from jwt.algorithms import RSAAlgorithm
 from redis.exceptions import RedisError
 
@@ -72,7 +71,7 @@ class TeamsActivityBinding:
     def from_raw_body(cls, raw_body: bytes) -> TeamsActivityBinding:
         try:
             # A provider's JSON: no shape until the two fields are read out.
-            payload: Any = json.loads(raw_body or b"{}")
+            payload = json.loads(raw_body or b"{}")
         except ValueError as exc:
             raise SurfaceWebhookAuthenticationError(
                 "Teams activity body is not JSON"
@@ -108,43 +107,140 @@ def _bearer_token(headers: dict[str, str]) -> str:
     return token
 
 
-async def verify_teams_jwt(
-    *,
-    headers: dict[str, str],
-    raw_body: bytes,
-    expected_app_id: str | None,
-) -> None:
-    if not expected_app_id:
-        raise SurfaceWebhookAuthenticationError(
-            "Teams bot app ID is not configured",
-            status_code=503,
-        )
-    token = _bearer_token(headers)
-    activity = TeamsActivityBinding.from_raw_body(raw_body)
+class TeamsJwtVerifier:
+    """Checks one inbound Teams activity's bearer token.
 
-    jwks_uri = await _jwks_uri()
-    signing_jwk = await _signing_jwk(token, jwks_uri)
-    try:
-        claims = jwt.decode(
-            token,
-            RSAAlgorithm.from_jwk(json.dumps(signing_jwk)),
-            algorithms=["RS256"],
-            audience=expected_app_id,
-            leeway=_CLOCK_SKEW_LEEWAY_SECONDS,
-            options={"verify_iss": False, "require": ["exp", "aud", "iss"]},
-        )
-    except jwt.PyJWTError as exc:
-        raise SurfaceWebhookAuthenticationError("Invalid Teams bearer token") from exc
+    ``cache`` holds the OpenID metadata and JWKS; ``None`` uses the shared Redis
+    cache every replica reads.
+    """
 
-    issuer = str(claims.get("iss") or "").strip()
-    if issuer not in _BOT_FRAMEWORK_ALLOWED_ISSUERS:
-        raise SurfaceWebhookAuthenticationError("Invalid Teams token issuer")
-    _require_service_url_binding(claims, activity)
-    _require_channel_endorsement(signing_jwk, activity)
+    def __init__(self, cache: RedisJsonCache | None = None) -> None:
+        self._injected_cache = cache
+
+    def _cache(self) -> RedisJsonCache:
+        return self._injected_cache or _get_oidc_cache()
+
+    async def verify(
+        self,
+        *,
+        headers: dict[str, str],
+        raw_body: bytes,
+        expected_app_id: str | None,
+    ) -> None:
+        if not expected_app_id:
+            raise SurfaceWebhookAuthenticationError(
+                "Teams bot app ID is not configured",
+                status_code=503,
+            )
+        token = _bearer_token(headers)
+        activity = TeamsActivityBinding.from_raw_body(raw_body)
+
+        jwks_uri = await self._jwks_uri()
+        signing_jwk = await self._signing_jwk(token, jwks_uri)
+        public_key = RSAAlgorithm.from_jwk(signing_jwk)
+        if not isinstance(public_key, RSAPublicKey):
+            raise SurfaceWebhookAuthenticationError(
+                "Teams signing key is not a public key"
+            )
+        try:
+            claims = jwt.decode(
+                token,
+                public_key,
+                algorithms=["RS256"],
+                audience=expected_app_id,
+                leeway=_CLOCK_SKEW_LEEWAY_SECONDS,
+                options={"verify_iss": False, "require": ["exp", "aud", "iss"]},
+            )
+        except jwt.PyJWTError as exc:
+            raise SurfaceWebhookAuthenticationError(
+                "Invalid Teams bearer token"
+            ) from exc
+
+        issuer = str(claims.get("iss") or "").strip()
+        if issuer not in _BOT_FRAMEWORK_ALLOWED_ISSUERS:
+            raise SurfaceWebhookAuthenticationError("Invalid Teams token issuer")
+        _require_service_url_binding(claims, activity)
+        _require_channel_endorsement(signing_jwk, activity)
+
+    async def _jwks_uri(self) -> str:
+        openid_url = (
+            surface_settings.microsoft_bot_openid_config_url
+            or _BOT_FRAMEWORK_OPENID_CONFIG_URL
+        )
+        openid_config = await self._get_json_cached(openid_url)
+        jwks_uri = str(openid_config.get("jwks_uri") or "").strip()
+        if not jwks_uri:
+            raise SurfaceWebhookAuthenticationError(
+                "Teams OpenID metadata is missing jwks_uri",
+                status_code=503,
+            )
+        return jwks_uri
+
+    async def _signing_jwk(self, token: str, jwks_uri: str) -> dict[str, object]:
+        key_id = _token_key_id(token)
+        jwks = await self._get_json_cached(jwks_uri)
+        found = _find_jwk(key_id, jwks.get("keys"))
+        if found is None and await self._may_refetch_jwks(jwks_uri):
+            jwks = await self._get_json_cached(jwks_uri, refresh=True)
+            found = _find_jwk(key_id, jwks.get("keys"))
+        if found is None:
+            raise SurfaceWebhookAuthenticationError(
+                "Unable to resolve Teams signing key"
+            )
+        return found
+
+    async def _may_refetch_jwks(self, jwks_uri: str) -> bool:
+        try:
+            return await self._cache().set_raw_if_absent(
+                f"refetch:{jwks_uri}", "1", ttl_seconds=_JWKS_REFETCH_COOLDOWN_SECONDS
+            )
+        except RedisError, OSError, TimeoutError:
+            # Without the shared cooldown there is no bound on refetches, so a
+            # Redis outage fails closed on unknown keys exactly as before.
+            logger.warning(
+                "agent_surfaces.teams_jwt_verifier.jwks_refetch_gate_unavailable.degraded",
+                exc_info=True,
+            )
+            return False
+
+    async def _get_json_cached(
+        self, url: str, *, refresh: bool = False
+    ) -> dict[str, object]:
+        cache = self._cache()
+        cached = None
+        if not refresh:
+            try:
+                cached = await cache.get_json(url)
+            except RedisError, OSError, TimeoutError, ValueError:
+                cached = None
+        if cached is not None:
+            return cached
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(url)
+            if response.status_code != 200:
+                raise SurfaceWebhookAuthenticationError(
+                    f"Failed to load Teams verification metadata from {url}",
+                    status_code=503,
+                )
+            payload = response.json()
+        if not isinstance(payload, dict):
+            raise SurfaceWebhookAuthenticationError(
+                f"Invalid Teams verification metadata from {url}",
+                status_code=503,
+            )
+        try:
+            await cache.set_json(url, payload, ttl_seconds=_OIDC_CACHE_TTL_SECONDS)
+        except RedisError, OSError, TimeoutError, TypeError:
+            # The OIDC metadata was fetched and verified above; caching it only
+            # spares the next webhook the same fetch. An uncacheable document is
+            # still a valid one, and `payload` is returned below regardless.
+            pass
+        return payload
 
 
 def _require_service_url_binding(
-    claims: dict[str, Any], activity: TeamsActivityBinding
+    claims: dict[str, object], activity: TeamsActivityBinding
 ) -> None:
     claimed = normalized_service_url(str(claims.get("serviceurl") or ""))
     if not claimed or claimed != normalized_service_url(activity.service_url):
@@ -154,7 +250,7 @@ def _require_service_url_binding(
 
 
 def _require_channel_endorsement(
-    signing_jwk: dict[str, Any], activity: TeamsActivityBinding
+    signing_jwk: dict[str, object], activity: TeamsActivityBinding
 ) -> None:
     # Bot Framework keys list the channels they may sign for. A key without the
     # list predates endorsements (and is what test doubles serve); a key with
@@ -168,33 +264,6 @@ def _require_channel_endorsement(
         )
 
 
-async def _jwks_uri() -> str:
-    openid_url = (
-        surface_settings.microsoft_bot_openid_config_url
-        or _BOT_FRAMEWORK_OPENID_CONFIG_URL
-    )
-    openid_config = await _get_json_cached(openid_url)
-    jwks_uri = str(openid_config.get("jwks_uri") or "").strip()
-    if not jwks_uri:
-        raise SurfaceWebhookAuthenticationError(
-            "Teams OpenID metadata is missing jwks_uri",
-            status_code=503,
-        )
-    return jwks_uri
-
-
-async def _signing_jwk(token: str, jwks_uri: str) -> dict[str, Any]:
-    key_id = _token_key_id(token)
-    jwks = await _get_json_cached(jwks_uri)
-    found = _find_jwk(key_id, jwks.get("keys") or [])
-    if found is None and await _may_refetch_jwks(jwks_uri):
-        jwks = await _get_json_cached(jwks_uri, refresh=True)
-        found = _find_jwk(key_id, jwks.get("keys") or [])
-    if found is None:
-        raise SurfaceWebhookAuthenticationError("Unable to resolve Teams signing key")
-    return found
-
-
 def _token_key_id(token: str) -> str:
     try:
         header = jwt.get_unverified_header(token)
@@ -206,57 +275,8 @@ def _token_key_id(token: str) -> str:
     return str(key_id)
 
 
-def _find_jwk(key_id: str, keys: list[dict[str, Any]]) -> dict[str, Any] | None:
-    for key in keys:
-        if key.get("kid") == key_id or key.get("x5t") == key_id:
+def _find_jwk(key_id: str, keys: object) -> dict[str, object] | None:
+    for key in keys if isinstance(keys, list) else []:
+        if isinstance(key, dict) and key_id in (key.get("kid"), key.get("x5t")):
             return key
     return None
-
-
-async def _may_refetch_jwks(jwks_uri: str) -> bool:
-    try:
-        return await _get_oidc_cache().set_raw_if_absent(
-            f"refetch:{jwks_uri}", "1", ttl_seconds=_JWKS_REFETCH_COOLDOWN_SECONDS
-        )
-    except RedisError, OSError, TimeoutError:
-        # Without the shared cooldown there is no bound on refetches, so a
-        # Redis outage fails closed on unknown keys exactly as before.
-        logger.warning(
-            "agent_surfaces.teams_jwt_verifier.jwks_refetch_gate_unavailable.degraded",
-            exc_info=True,
-        )
-        return False
-
-
-async def _get_json_cached(url: str, *, refresh: bool = False) -> dict[str, Any]:
-    cache = _get_oidc_cache()
-    cached = None
-    if not refresh:
-        try:
-            cached = await cache.get_json(url)
-        except RedisError, OSError, TimeoutError, ValueError:
-            cached = None
-    if cached is not None:
-        return cached
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(url)
-        if response.status_code != 200:
-            raise SurfaceWebhookAuthenticationError(
-                f"Failed to load Teams verification metadata from {url}",
-                status_code=503,
-            )
-        payload = response.json()
-    if not isinstance(payload, dict):
-        raise SurfaceWebhookAuthenticationError(
-            f"Invalid Teams verification metadata from {url}",
-            status_code=503,
-        )
-    try:
-        await cache.set_json(url, payload, ttl_seconds=_OIDC_CACHE_TTL_SECONDS)
-    except RedisError, OSError, TimeoutError, TypeError:
-        # The OIDC metadata was fetched and verified above; caching it only
-        # spares the next webhook the same fetch. An uncacheable document is
-        # still a valid one, and `payload` is returned below regardless.
-        pass
-    return payload

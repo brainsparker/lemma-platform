@@ -451,7 +451,7 @@ async def on_identity_event(
 
 
 async def _forget_telegram_handle_matches(
-    event: dict, uow_factory: UnitOfWorkFactory, inbox: EventInboxPort
+    event: dict[str, object], uow_factory: UnitOfWorkFactory, inbox: EventInboxPort
 ) -> None:
     async def process() -> None:
         parsed = UserTelegramUsernameChangedEvent.model_validate(event)

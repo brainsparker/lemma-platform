@@ -28,7 +28,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import SurfaceWebhookAuthenticationError
-from app.modules.agent_surfaces.services.teams_jwt_verifier import verify_teams_jwt
+from app.modules.agent_surfaces.services.teams_jwt_verifier import TeamsJwtVerifier
 
 __all__ = [
     "SlackWebhookVerificationCandidate",
@@ -83,9 +83,11 @@ class SurfaceWebhookSecurityService:
         *,
         uow_factory: Any = None,
         resolver_factory: Callable[[Any], SurfaceCredentialResolver] | None = None,
+        teams_verifier: TeamsJwtVerifier | None = None,
     ):
         self._uow_factory = uow_factory
         self._resolver_factory = resolver_factory
+        self._teams_verifier = teams_verifier or TeamsJwtVerifier()
 
     @asynccontextmanager
     async def _resolver(self):
@@ -137,7 +139,7 @@ class SurfaceWebhookSecurityService:
             )
             return
         if normalized == "TEAMS":
-            await verify_teams_jwt(
+            await self._teams_verifier.verify(
                 headers=headers,
                 raw_body=raw_body,
                 expected_app_id=surface_settings.microsoft_bot_app_id,

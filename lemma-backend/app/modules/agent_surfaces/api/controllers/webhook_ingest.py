@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
@@ -75,7 +76,7 @@ def parse_webhook_platform(platform: str) -> SurfacePlatform:
 
 
 def slack_url_verification(
-    payload: dict[str, Any],
+    payload: Mapping[str, object],
     headers: dict[str, str],
     security_service: SurfaceWebhookSecurityServiceDep,
 ) -> dict[str, str]:

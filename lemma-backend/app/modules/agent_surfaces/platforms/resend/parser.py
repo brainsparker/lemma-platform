@@ -8,6 +8,7 @@ one conversation.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -106,7 +107,7 @@ def merge_received_email(
     )
 
 
-def _sender_authentication(received: dict[str, Any], sender: str | None) -> str:
+def _sender_authentication(received: Mapping[str, object], sender: str | None) -> str:
     """The verdict for ``sender``, or UNKNOWN when the message names someone else.
 
     The receiver's verdict is about the ``From:`` it read. If the fetched

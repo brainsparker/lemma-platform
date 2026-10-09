@@ -52,7 +52,7 @@ def webhook_source_event_id(
     return f"{platform}:{receiver}:content-sha256:{digest}"
 
 
-def _whatsapp_delivery_ids(payload: Mapping[str, Any]) -> list[str]:
+def _whatsapp_delivery_ids(payload: Mapping[str, object]) -> list[str]:
     """What a WhatsApp delivery is about, sorted, however Meta batched it.
 
     A WhatsApp webhook has no id of its own, so the body hash stood in -- and
@@ -63,20 +63,32 @@ def _whatsapp_delivery_ids(payload: Mapping[str, Any]) -> list[str]:
     message are two deliveries.
     """
     found: set[str] = set()
-    entries = payload.get("entry")
-    for entry in entries if isinstance(entries, list) else []:
-        changes = entry.get("changes") if isinstance(entry, dict) else None
-        for change in changes if isinstance(changes, list) else []:
-            value = change.get("value") if isinstance(change, dict) else None
-            if not isinstance(value, dict):
-                continue
-            for message in value.get("messages") or []:
-                if isinstance(message, dict) and message.get("id"):
-                    found.add(f"message:{message['id']}")
-            for status in value.get("statuses") or []:
-                if isinstance(status, dict) and status.get("id"):
-                    found.add(f"status:{status['id']}:{status.get('status') or ''}")
+    for value in _whatsapp_change_values(payload):
+        for message in _dicts(value.get("messages")):
+            if message.get("id"):
+                found.add(f"message:{message['id']}")
+        for status in _dicts(value.get("statuses")):
+            if status.get("id"):
+                found.add(f"status:{status['id']}:{status.get('status') or ''}")
     return sorted(found)
+
+
+def _dicts(items: object) -> list[dict[str, object]]:
+    return (
+        [item for item in items if isinstance(item, dict)]
+        if isinstance(items, list)
+        else []
+    )
+
+
+def _whatsapp_change_values(payload: Mapping[str, object]) -> list[dict[str, object]]:
+    """Every ``entry[].changes[].value`` of a WhatsApp body, however nested."""
+    return [
+        value
+        for entry in _dicts(payload.get("entry"))
+        for change in _dicts(entry.get("changes"))
+        if isinstance(value := change.get("value"), dict)
+    ]
 
 
 def native_source_event_id(

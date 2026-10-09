@@ -101,7 +101,9 @@ async def fake_teams(message_store, fixed_test_user, monkeypatch):
     await server.start()
     # The bot token only goes to Bot Framework hosts; the double is local. The
     # worker subprocess gets the same host through its environment.
-    monkeypatch.setattr(surface_settings, "microsoft_bot_service_extra_host", "127.0.0.1")
+    monkeypatch.setattr(
+        surface_settings, "microsoft_bot_service_extra_host", "127.0.0.1"
+    )
     try:
         yield server
     finally:

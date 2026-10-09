@@ -106,8 +106,14 @@ def _get_bot_info_cache() -> RedisJsonCache:
 
 
 class TelegramPlatformService:
-    def __init__(self, credentials: dict[str, Any]):
+    def __init__(
+        self,
+        credentials: dict[str, Any],
+        *,
+        bot_info_cache: RedisJsonCache | None = None,
+    ):
         self.credentials = credentials
+        self._bot_info_cache = bot_info_cache
         self._client = TelegramClient.from_credentials(credentials)
         self._bot_token = self._client._bot_token
         self._retry_policy = RetryPolicy()
@@ -117,7 +123,7 @@ class TelegramPlatformService:
         token = self._bot_token
         if not token:
             return None
-        cache = _get_bot_info_cache()
+        cache = self._bot_info_cache or _get_bot_info_cache()
         cache_key = _bot_cache_key(token)
         try:
             cached = await cache.get_json(cache_key)

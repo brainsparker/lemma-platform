@@ -23,6 +23,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from app.core.authorization.context import Context
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.session import async_session_maker
@@ -30,6 +31,7 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from uuid import UUID
 
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
@@ -372,39 +374,27 @@ class SurfaceFileIngestService:
         # note whose transcript never landed needs its bytes again, and even
         # then it is not stored a second time.
         remembered = await self._recall(key)
-        if remembered is not None and not await self._needs_audio_bytes(
-            remembered
-        ):
+        if remembered is not None and not await self._needs_audio_bytes(remembered):
             return remembered
 
-        downloaded = await self._download(
+        stored = await self._transfer(
             adapter=adapter,
+            pod_id=pod_id,
             platform=platform,
             parsed=parsed,
             credentials=credentials,
-            attachment=attachment,
-            label=label,
-        )
-        if isinstance(downloaded, AttachmentFailure):
-            return downloaded
-        content, name, mime = downloaded
-        if remembered is not None:
-            if len(content) <= INBOUND_VOICE_TRANSCRIBE_BYTE_CAP:
-                remembered.audio_bytes = content
-            return remembered
-        stored = await self._store(
-            pod_id=pod_id,
-            platform=platform,
             ctx=ctx,
             directory=directory,
             attachment=attachment,
             store=store,
             label=label,
-            content=content,
-            name=name,
-            mime=mime,
+            remembered=remembered,
         )
-        if isinstance(stored, IngestedAttachment) and key is not None:
+        if (
+            remembered is None
+            and isinstance(stored, IngestedAttachment)
+            and key is not None
+        ):
             stored.memo_key = key
             await self.memo.remember(
                 key,
@@ -435,16 +425,27 @@ class SurfaceFileIngestService:
             and await self.memo.transcript(remembered.memo_key) is None
         )
 
-    async def _download(
+    async def _transfer(
         self,
         *,
-        adapter: Any,
+        adapter: SurfacePlatformAdapterPort,
+        pod_id: UUID,
         platform: str,
         parsed: ParsedInboundSurfaceEvent,
-        credentials: dict[str, Any],
-        attachment: dict[str, Any],
+        credentials: dict[str, object],
+        ctx: Context,
+        directory: str,
+        attachment: dict[str, object],
+        store: StoreInTransaction,
         label: str,
-    ) -> tuple[bytes, str, str | None] | AttachmentFailure:
+        remembered: IngestedAttachment | None,
+    ) -> IngestedAttachment | AttachmentFailure:
+        """Download one attachment and store it, or hand a retry its bytes.
+
+        ``remembered`` is the file an earlier attempt at this message already
+        stored: its bytes are fetched again only for transcription, and it is
+        not stored a second time.
+        """
         # The download runs with no session open at all. It used to run inside
         # one that committed first to hand the connection back -- correct, but
         # only legible as a comment, and invisible to the static gate because
@@ -503,22 +504,11 @@ class SurfaceFileIngestService:
                     f"{INBOUND_ATTACHMENT_BYTE_CAP // (1024 * 1024)} MB limit"
                 ),
             )
-        return content, name, mime
+        if remembered is not None:
+            if len(content) <= INBOUND_VOICE_TRANSCRIBE_BYTE_CAP:
+                remembered.audio_bytes = content
+            return remembered
 
-    async def _store(
-        self,
-        *,
-        pod_id: UUID,
-        platform: str,
-        ctx: Any,
-        directory: str,
-        attachment: dict[str, Any],
-        store: StoreInTransaction,
-        label: str,
-        content: bytes,
-        name: str,
-        mime: str | None,
-    ) -> IngestedAttachment | AttachmentFailure:
         content_type = attachment.get("content_type")
         file_name = _safe_file_name(name, mime, content)
 

@@ -22,8 +22,7 @@ def test_a_member_principal_name_is_their_address():
 
 def test_a_guest_principal_name_proves_nothing_about_the_foreign_address():
     assert (
-        tenant_verified_address("ceo_victim.com#EXT#@contoso.onmicrosoft.com")
-        is None
+        tenant_verified_address("ceo_victim.com#EXT#@contoso.onmicrosoft.com") is None
     )
 
 

@@ -570,7 +570,9 @@ async def test_a_profile_giving_up_a_telegram_handle_forgets_who_it_matched(
                     AgentSurfaceExternalUser.external_user_id,
                     AgentSurfaceExternalUser.resolved_user_id,
                 )
-                .where(AgentSurfaceExternalUser.external_user_id.in_(["70001", "70002"]))
+                .where(
+                    AgentSurfaceExternalUser.external_user_id.in_(["70001", "70002"])
+                )
                 .execution_options(populate_existing=True)
             )
         ).all()

@@ -245,9 +245,7 @@ def _aligned(candidate: str, from_domain: str) -> bool:
     if not candidate or not from_domain:
         return False
     organization = _organizational_domain(candidate)
-    return bool(organization) and organization == _organizational_domain(
-        from_domain
-    )
+    return bool(organization) and organization == _organizational_domain(from_domain)
 
 
 def _authserv_id(value: str) -> str:
@@ -341,7 +339,7 @@ def _expand(value: Any) -> list[str]:
     return [text]
 
 
-def header_values(raw_headers: Any, name: str) -> list[str]:
+def header_values(raw_headers: object, name: str) -> list[str]:
     """Every occurrence of header ``name``, in the order it was written.
 
     Handles both shapes the providers use — a ``{name: value}`` dict and a

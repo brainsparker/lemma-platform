@@ -23,8 +23,7 @@ from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.errors import SurfaceWebhookAuthenticationError
-from app.modules.agent_surfaces.services import teams_jwt_verifier
-from app.modules.agent_surfaces.services.teams_jwt_verifier import verify_teams_jwt
+from app.modules.agent_surfaces.services.teams_jwt_verifier import TeamsJwtVerifier
 
 pytestmark = pytest.mark.asyncio
 
@@ -62,13 +61,16 @@ class _Signer:
         }
         claims.update(overrides)
         claims = {name: value for name, value in claims.items() if value is not None}
-        return jwt.encode(claims, self.key, algorithm="RS256", headers={"kid": self.kid})
+        return jwt.encode(
+            claims, self.key, algorithm="RS256", headers={"kid": self.kid}
+        )
 
 
 class _BotFrameworkMetadata:
     """OpenID metadata and a JWKS whose keys a test can rotate."""
 
     def __init__(self) -> None:
+        self.verifier: TeamsJwtVerifier | None = None
         self.signers: list[_Signer] = []
         self.jwks_fetches = 0
         self._runner: web.AppRunner | None = None
@@ -104,13 +106,15 @@ async def metadata(monkeypatch) -> AsyncIterator[_BotFrameworkMetadata]:
     server = _BotFrameworkMetadata()
     await server.start()
     monkeypatch.setattr(
-        surface_settings, "microsoft_bot_openid_config_url", f"{server.base_url}/openid"
+        surface_settings,
+        "microsoft_bot_openid_config_url",
+        f"{server.base_url}/openid",
     )
     cache = RedisJsonCache(
         redis_url=settings.redis_url, key_prefix="surface:oidc", ttl_seconds=600
     )
     cache._redis = fakeredis.FakeAsyncRedis(decode_responses=True)
-    monkeypatch.setattr(teams_jwt_verifier, "_oidc_cache", cache)
+    server.verifier = TeamsJwtVerifier(cache)
     try:
         yield server
     finally:
@@ -123,8 +127,11 @@ def _activity(service_url: str = SERVICE_URL, channel_id: str = "msteams") -> by
     ).encode()
 
 
-async def _verify(token: str, body: bytes | None = None) -> None:
-    await verify_teams_jwt(
+async def _verify(
+    metadata: _BotFrameworkMetadata, token: str, body: bytes | None = None
+) -> None:
+    assert metadata.verifier is not None
+    await metadata.verifier.verify(
         headers={"Authorization": f"Bearer {token}"},
         raw_body=body if body is not None else _activity(),
         expected_app_id=APP_ID,
@@ -135,7 +142,7 @@ async def test_a_token_bound_to_the_activity_is_accepted(metadata) -> None:
     signer = _Signer(kid="k1", endorsements=["msteams"])
     metadata.signers.append(signer)
 
-    await _verify(signer.token())
+    await _verify(metadata, signer.token())
 
 
 async def test_a_token_for_another_bot_is_refused(metadata) -> None:
@@ -143,7 +150,7 @@ async def test_a_token_for_another_bot_is_refused(metadata) -> None:
     metadata.signers.append(signer)
 
     with pytest.raises(SurfaceWebhookAuthenticationError) as refused:
-        await _verify(signer.token(aud="someone-elses-bot"))
+        await _verify(metadata, signer.token(aud="someone-elses-bot"))
     assert refused.value.status_code == 401
 
 
@@ -152,7 +159,7 @@ async def test_a_token_from_a_foreign_issuer_is_refused(metadata) -> None:
     metadata.signers.append(signer)
 
     with pytest.raises(SurfaceWebhookAuthenticationError, match="issuer"):
-        await _verify(signer.token(iss="https://login.example.test"))
+        await _verify(metadata, signer.token(iss="https://login.example.test"))
 
 
 async def test_an_expired_token_is_refused(metadata) -> None:
@@ -161,7 +168,9 @@ async def test_an_expired_token_is_refused(metadata) -> None:
     long_ago = int(time.time()) - 3600
 
     with pytest.raises(SurfaceWebhookAuthenticationError, match="Invalid"):
-        await _verify(signer.token(iat=long_ago, nbf=long_ago, exp=long_ago + 600))
+        await _verify(
+            metadata, signer.token(iat=long_ago, nbf=long_ago, exp=long_ago + 600)
+        )
 
 
 async def test_a_token_a_few_minutes_past_expiry_is_within_clock_skew(
@@ -171,7 +180,7 @@ async def test_a_token_a_few_minutes_past_expiry_is_within_clock_skew(
     metadata.signers.append(signer)
     now = int(time.time())
 
-    await _verify(signer.token(iat=now - 900, nbf=now - 900, exp=now - 120))
+    await _verify(metadata, signer.token(iat=now - 900, nbf=now - 900, exp=now - 120))
 
 
 async def test_a_token_bound_to_another_service_url_is_refused(metadata) -> None:
@@ -180,7 +189,7 @@ async def test_a_token_bound_to_another_service_url_is_refused(metadata) -> None
     token = signer.token(serviceurl=SERVICE_URL)
 
     with pytest.raises(SurfaceWebhookAuthenticationError, match="serviceUrl"):
-        await _verify(token, _activity(service_url="https://evil.example/"))
+        await _verify(metadata, token, _activity(service_url="https://evil.example/"))
 
 
 async def test_a_token_without_a_service_url_claim_is_refused(metadata) -> None:
@@ -188,7 +197,7 @@ async def test_a_token_without_a_service_url_claim_is_refused(metadata) -> None:
     metadata.signers.append(signer)
 
     with pytest.raises(SurfaceWebhookAuthenticationError, match="serviceUrl"):
-        await _verify(signer.token(serviceurl=None))
+        await _verify(metadata, signer.token(serviceurl=None))
 
 
 async def test_service_url_comparison_ignores_trailing_slash_and_host_case(
@@ -198,6 +207,7 @@ async def test_service_url_comparison_ignores_trailing_slash_and_host_case(
     metadata.signers.append(signer)
 
     await _verify(
+        metadata,
         signer.token(serviceurl="https://SMBA.trafficmanager.net/amer"),
         _activity(service_url="https://smba.trafficmanager.net/amer/"),
     )
@@ -208,18 +218,18 @@ async def test_a_key_not_endorsed_for_the_channel_is_refused(metadata) -> None:
     metadata.signers.append(signer)
 
     with pytest.raises(SurfaceWebhookAuthenticationError, match="endorsed"):
-        await _verify(signer.token())
+        await _verify(metadata, signer.token())
 
 
 async def test_an_unknown_key_id_refetches_the_jwks_once(metadata) -> None:
     old = _Signer(kid="old")
     metadata.signers.append(old)
-    await _verify(old.token())
+    await _verify(metadata, old.token())
     assert metadata.jwks_fetches == 1
 
     rotated = _Signer(kid="rotated")
     metadata.signers.append(rotated)
-    await _verify(rotated.token())
+    await _verify(metadata, rotated.token())
 
     assert metadata.jwks_fetches == 2
 
@@ -230,7 +240,7 @@ async def test_unknown_key_ids_do_not_refetch_on_every_request(metadata) -> None
 
     for _ in range(3):
         with pytest.raises(SurfaceWebhookAuthenticationError, match="signing key"):
-            await _verify(stranger.token())
+            await _verify(metadata, stranger.token())
 
     # The first request fills the cache and the second-chance refetch is
     # spent; the rest wait out the cooldown instead of hammering the JWKS.
@@ -245,7 +255,8 @@ async def test_a_missing_or_malformed_bearer_is_refused(metadata, header) -> Non
     metadata.signers.append(_Signer(kid="k1"))
 
     with pytest.raises(SurfaceWebhookAuthenticationError) as refused:
-        await verify_teams_jwt(
+        assert metadata.verifier is not None
+        await metadata.verifier.verify(
             headers={"Authorization": header} if header else {},
             raw_body=_activity(),
             expected_app_id=APP_ID,
@@ -263,4 +274,4 @@ async def test_an_hs256_token_is_refused(metadata) -> None:
     )
 
     with pytest.raises(SurfaceWebhookAuthenticationError):
-        await _verify(forged)
+        await _verify(metadata, forged)

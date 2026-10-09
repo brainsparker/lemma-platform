@@ -8,7 +8,6 @@ from aiohttp import web
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
-from app.modules.agent_surfaces.platforms.telegram import service as telegram_service
 from app.modules.agent_surfaces.platforms.telegram.service import (
     TelegramPlatformService,
 )
@@ -24,7 +23,6 @@ async def test_no_redis_key_carries_the_bot_token(monkeypatch):
         redis_url=settings.redis_url, key_prefix="surface:telegram-bot", ttl_seconds=60
     )
     cache._redis = redis
-    monkeypatch.setattr(telegram_service, "_bot_info_cache", cache)
     # The stand-in Bot API server is on loopback, which the SSRF guard refuses
     # unless the deployment opts in to private targets.
     monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
@@ -45,8 +43,12 @@ async def test_no_redis_key_carries_the_bot_token(monkeypatch):
     port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
     credentials = {"bot_token": _TOKEN, "api_base_url": f"http://127.0.0.1:{port}"}
     try:
-        first = await TelegramPlatformService(credentials).get_bot_username()
-        second = await TelegramPlatformService(credentials).get_bot_username()
+        first = await TelegramPlatformService(
+            credentials, bot_info_cache=cache
+        ).get_bot_username()
+        second = await TelegramPlatformService(
+            credentials, bot_info_cache=cache
+        ).get_bot_username()
     finally:
         await runner.cleanup()
 

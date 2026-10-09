@@ -120,9 +120,7 @@ async def test_a_reply_to_bot_framework_is_posted() -> None:
     ]
 
 
-async def test_a_member_lookup_on_a_foreign_service_url_never_fetches_a_token() -> (
-    None
-):
+async def test_a_member_lookup_on_a_foreign_service_url_never_fetches_a_token() -> None:
     adapter = _RecordingTeamsAdapter()
 
     email = await adapter._fetch_email_from_bf_connector(

@@ -526,7 +526,7 @@ class SurfaceConversationLinkRepository(DmLinkQueries):
         over it would split one thread across two conversations. Losing
         returns None.
         """
-        values: dict[str, Any] = {
+        values: dict[str, object] = {
             "conversation_id": conversation_id,
             "last_event": last_event,
             "last_message_id": last_message_id,

@@ -4,6 +4,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -39,6 +40,10 @@ from app.modules.agent_surfaces.services.pending_envelope import (
 from app.modules.agent_surfaces.services.progress_plan import (
     SurfacePlan,
     plan_from_event,
+)
+from app.modules.agent_surfaces.services.progress_reply import (
+    deliver_final_answer,
+    deliver_run_error,
 )
 from app.modules.agent_surfaces.services.token_stream import TokenStreamMixin
 from app.modules.agent_surfaces.services.progress_events import (
@@ -403,97 +408,6 @@ class SurfaceAgentRunProgressObserver(
         # all while the process kept the bytes.
         await discard_display_paths(conversation.id, self._run_files)
 
-    async def _deliver_final_answer(self, conversation: Conversation) -> None:
-        """Deliver the single final answer once the run has finished.
-
-        Every surface, the same way: the buffered answer goes out when the run
-        stops. Email used to be the exception, deferring to a reply tool the
-        agent had to remember to call -- and this path, which ran whenever the
-        agent forgot, was never a lesser implementation of it. It threads
-        correctly, renders markdown to HTML and keeps the thread's subject,
-        which is the whole of what the tool did.
-
-        Nothing is sent if the run errored (the error is delivered instead) or
-        if there is no usable text.
-        """
-        if self._final_delivered:
-            return
-        if self._run_errored:
-            self._final_delivered = True
-            await self._deliver_run_error(conversation)
-            return
-        message = (self._final_answer_text or self._buffered_text or "").strip()
-        if not message and self._answer_was_all_reasoning:
-            # An answer existed and sanitizing removed all of it, so the run
-            # "succeeded" with nothing to show. Saying nothing is the one
-            # outcome the person cannot act on — they cannot tell it from the
-            # agent never having seen the message, and will ask again into the
-            # same silence. Say the turn produced nothing instead.
-            message = (
-                "I thought that through but never wrote the answer. "
-                "Ask me again and I'll give it another go."
-            )
-        if not message:
-            self._final_delivered = True
-            return
-        # Marked delivered only once it was, not before the send: latching first
-        # meant a send that failed still counted as the answer having gone out,
-        # and nothing that read the flag afterwards could tell the difference.
-        try:
-            delivered = await self._send_agent_message(
-                conversation_id=conversation.id,
-                message=message,
-            )
-        except Exception:
-            logger.warning(
-                "agent_surfaces.progress_observer.final_answer_not_delivered.degraded",
-                conversation_id=str(conversation.id),
-                exc_info=True,
-            )
-            self._final_send_failed = True
-            return
-        if delivered:
-            self._final_delivered = True
-        else:
-            self._final_send_failed = True
-            # The send path says why -- no surface link, a platform refusal --
-            # so this only records that the answer did not go out.
-            logger.debug(
-                "agent_surfaces.progress_observer.final_answer_unsent.diagnostic",
-                conversation_id=str(conversation.id),
-            )
-
-    async def _deliver_run_error(self, conversation: Conversation) -> None:
-        """Say that the run failed, on every surface including email.
-
-        Email used to be skipped here, so a failed run on an email surface said
-        nothing at all -- the person's message simply vanished, and nothing
-        distinguished that from never having been read. Now the run stopping is
-        the run stopping, whatever stopped it, and the one reply carries the
-        failure.
-        """
-        if self._error_delivered:
-            return
-        try:
-            delivered = await self._send_agent_message(
-                conversation_id=conversation.id,
-                message=(
-                    self._run_error_text
-                    or "I couldn’t finish that request. You can try it again."
-                ),
-                metadata={"retry_action": True},
-                carries_files=False,
-            )
-        except Exception:
-            logger.warning(
-                "agent_surfaces.progress_observer.run_error_not_delivered.degraded",
-                conversation_id=str(conversation.id),
-                exc_info=True,
-            )
-            return
-        if delivered:
-            self._error_delivered = True
-
     async def _refresh_typing_loop(
         self,
         *,
@@ -537,24 +451,29 @@ class SurfaceAgentRunProgressObserver(
                 metadata=metadata,
             )
 
+    async def _deliver_final_answer(self, conversation: Conversation) -> None:
+        await deliver_final_answer(self, conversation)
+
+    async def _deliver_run_error(self, conversation: Conversation) -> None:
+        await deliver_run_error(self, conversation)
+
     async def _send_agent_message(
         self,
         *,
-        conversation_id,
+        conversation_id: UUID,
         message: str,
-        metadata: dict[str, Any] | None = None,
+        metadata: dict[str, object] | None = None,
         carries_files: bool = True,
     ) -> bool:
         async with self.uow_factory() as uow:
             service = self.egress_factory(uow)
-            kwargs: dict[str, Any] = {
-                "conversation_id": conversation_id,
-                "message": message,
-            }
+            optional: dict[str, object] = {}
             if carries_files:
                 # This run's reply, so it is the only one that carries this
                 # run's files. A failure notice is not that reply.
-                kwargs["attach_files_of"] = self._run_files
+                optional["attach_files_of"] = self._run_files
             if metadata:
-                kwargs["metadata"] = metadata
-            return await service.send_agent_message_for_conversation(**kwargs)
+                optional["metadata"] = metadata
+            return await service.send_agent_message_for_conversation(
+                conversation_id=conversation_id, message=message, **optional
+            )

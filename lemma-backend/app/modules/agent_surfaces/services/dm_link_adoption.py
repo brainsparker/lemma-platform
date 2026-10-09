@@ -29,6 +29,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_re
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     dm_address_may_move,
 )
+from app.modules.agent_surfaces.services.contact_keepers import owned_or_moved
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -59,6 +60,7 @@ async def adopt_earlier_dm_link(
     parsed: ParsedInboundSurfaceEvent,
     resolved_user: ResolvedSurfaceUser,
     route: ResolvedSurfaceRoute,
+    for_contact: UUID | None = None,
 ) -> AgentSurfaceConversationLink | None:
     """The link this person's private chat already has, under an older address.
 
@@ -109,9 +111,9 @@ async def adopt_earlier_dm_link(
     )
     if (
         conversation is None
-        or conversation.user_id != user_id
         or conversation.pod_id != route.pod_id
         or not same_agent(conversation.agent_id, route.agent_id, pod_id=route.pod_id)
+        or not await owned_or_moved(uow, conversation, user_id, contact_id=for_contact)
     ):
         return None
     return await links.rebind_thread_address(

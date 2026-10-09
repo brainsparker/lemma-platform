@@ -127,7 +127,7 @@ async def handle_typed_retry(
     retry would re-run their request under their authority.
     """
     text = str(context.message_text or "").strip().rstrip(".!").lower()
-    if context.answers_outsider or text not in _TYPED_RETRY:
+    if context.audience.answers_outsiders or text not in _TYPED_RETRY:
         return False
     if not await _retry_failed_conversation(context, uow_factory=uow_factory):
         return False

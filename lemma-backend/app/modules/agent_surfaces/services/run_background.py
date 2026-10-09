@@ -78,7 +78,7 @@ async def run_background(
         )
         outside = outside_names(lines)
         withheld = 0
-        if not context.answers_outsider:
+        if not context.audience.answers_outsiders:
             lines, withheld = for_member_run(lines)
     # The message being answered was logged on its way in and is already
     # the prompt; repeating it as background shows the agent the question
@@ -87,7 +87,7 @@ async def run_background(
         lines.pop()
     audience = (
         None
-        if context.answers_outsider
+        if context.audience.answers_outsiders
         else chat_audience(
             platform=context.platform,
             group=group,
@@ -126,7 +126,7 @@ async def _group_background(
             group=group,
             membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
             agent_display_name=context.agent_display_name,
-            for_stranger=context.answers_outsider,
+            for_stranger=context.audience.answers_outsiders,
         )
     return group, logged
 

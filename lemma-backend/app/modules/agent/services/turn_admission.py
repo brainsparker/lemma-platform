@@ -30,6 +30,7 @@ from app.modules.agent.domain.private_notes import (
     NOTE_IN_DM_KEY,
     WRITTEN_IN_LEMMA_KEY,
     is_private_note,
+    note_in_member_dm,
     written_in_lemma_into,
 )
 from app.modules.agent.domain.queued_messages import (
@@ -87,10 +88,7 @@ def user_message_metadata(
     metadata[DURING_ACTIVE_RUN] = joins_a_run
     if client_message_id is not None:
         metadata[CLIENT_MESSAGE_ID] = client_message_id
-    if (
-        is_private_note(metadata)
-        and (conversation.metadata or {}).get("conversation_kind") == "DM"
-    ):
+    if is_private_note(metadata) and note_in_member_dm(conversation.metadata):
         metadata[NOTE_IN_DM_KEY] = True
     return metadata
 

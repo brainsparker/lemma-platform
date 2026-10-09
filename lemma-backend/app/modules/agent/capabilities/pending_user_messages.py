@@ -74,7 +74,7 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         # Rendered exactly as history renders a user message, so a steered one
         # reads the same as one the run started with -- sender label, quoted
         # message, the paths of whatever they attached.
-        from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+        from app.modules.agent.infrastructure.harnesses.user_turn_text import (
             user_prompt_text,
         )
 

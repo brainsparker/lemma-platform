@@ -19,7 +19,7 @@ from app.modules.agent.domain.private_notes import (
     run_is_private,
     run_metadata_for,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     user_prompt_text,
 )
 

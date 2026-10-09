@@ -16,7 +16,7 @@ from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     user_prompt_text,
 )
 from app.modules.workspace.contracts.host_execution import (

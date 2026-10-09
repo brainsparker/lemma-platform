@@ -18,7 +18,6 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.models import (
     SurfaceSenderProfile,
 )
-from app.modules.agent_surfaces.platforms.common import payload_any
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.adapter_egress import (
     TeamsSurfaceEgress,
@@ -47,6 +46,25 @@ def _graph_message_url(
     if root_thread_id and root_thread_id != message_id:
         return f"{base}/{quote(str(root_thread_id))}/replies/{quote(str(message_id))}"
     return f"{base}/{quote(str(message_id))}"
+
+
+def tenant_verified_address(user_principal_name: object) -> str | None:
+    """The sender's address, but only one their tenant proved it owns.
+
+    A Teams sender's address resolves to a Lemma user, and the run then
+    executes as that user. Entra's `mail` attribute is free text an
+    administrator (or a guest invitation) can set to anyone's address, so it
+    is never used. A user principal name's suffix has to be a domain the
+    tenant verified in DNS, so it cannot claim somebody else's -- except for a
+    guest, whose principal name is the host tenant's rewrite of a foreign
+    address (`alice_example.com#EXT#@host.onmicrosoft.com`) and proves nothing
+    about it. A sender with no such address goes through first-use
+    verification instead of being matched by email.
+    """
+    principal = str(user_principal_name or "").strip()
+    if "@" not in principal or "#ext#" in principal.lower():
+        return None
+    return principal
 
 
 class TeamsSurfaceAdapter(TeamsSurfaceEgress):
@@ -202,7 +220,7 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
                 ) as response:
                     if response.status < 400:
                         data = await response.json()
-                        email = payload_any(data, "mail", "userPrincipalName")
+                        email = tenant_verified_address(data.get("userPrincipalName"))
                         return SurfaceSenderProfile(
                             external_user_id=str(data.get("id") or bf_user_id or ""),
                             email=email,
@@ -334,13 +352,10 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
             )
             return None
 
-        # Standard fields: id, name, aadObjectId
-        # Teams-specific extension: `properties` may contain `email`
-        props = data.get("properties") or data.get("userPrincipalName") or {}
-        email = None
-        if isinstance(props, dict):
-            email = payload_any(props, "email", "userPrincipalName")
-        if not email:
-            # Some tenants return email directly on the member object
-            email = payload_any(data, "email", "userPrincipalName")
-        return email or None
+        # The roster's `email` is the directory's `mail`, which an administrator
+        # sets freely; only the principal name is bound to a verified domain.
+        props = data.get("properties")
+        principal = (
+            props.get("userPrincipalName") if isinstance(props, dict) else None
+        ) or data.get("userPrincipalName")
+        return tenant_verified_address(principal)

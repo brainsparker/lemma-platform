@@ -887,6 +887,7 @@ export function LiveConversation({
                 /* Not while the status is still unknown, which reads as idle
                    for a moment after load and would flash "Expired". */
                 runEnded={session.status !== undefined && state !== "running"}
+                resumesOnAnswer={state === "waiting"}
                 signIn={signingIn}
                 conversationId={session.conversationId}
                 crowded={crowded}

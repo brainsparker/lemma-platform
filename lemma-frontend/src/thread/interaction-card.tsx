@@ -379,6 +379,7 @@ export function InteractionCard({
     onResolve,
     docked,
     runEnded,
+    resumesOnAnswer,
     folded,
     onFold,
     answerWith,
@@ -396,6 +397,9 @@ export function InteractionCard({
     /** The run that asked is over. A coding agent's request waits inside its
      *  run, so once the run has ended nobody is left to hear the answer. */
     runEnded?: boolean;
+    /** The conversation is waiting on its pauses: answering resumes a new
+     *  run, so a coding agent's request has not lapsed with its turn. */
+    resumesOnAnswer?: boolean;
     /** Docked and folded to its heading; see `InteractionDock`. */
     folded?: boolean;
     onFold?: (folded: boolean) => void;
@@ -416,6 +420,7 @@ export function InteractionCard({
         askedAtMs: interaction.askedAtMs,
         nowMs: now,
         runEnded: Boolean(runEnded),
+        resumesOnAnswer: Boolean(resumesOnAnswer),
     });
 
     /* Resolved is whichever came first: the tool return landing, or our own

@@ -151,6 +151,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.run_budget.exhausted.observed': EventSpec('info', frozenset({'agent_run_id', 'dimension'})),
     'agent.run_event_pump.stream_ended_without_a_terminal_event.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.run_finalizer.usage_reservation_release.failed': EventSpec('error', frozenset({'agent_run_id'})),
+    'agent.run_message_writer.pause_id_renamed.observed': EventSpec('info', frozenset({'agent_run_id', 'conversation_id'})),
     'agent.run_observer.event_delivery.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.run_observer.failure_delivery.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.run_observer.finish_delivery.degraded': EventSpec('warning', frozenset({'agent_run_id'})),

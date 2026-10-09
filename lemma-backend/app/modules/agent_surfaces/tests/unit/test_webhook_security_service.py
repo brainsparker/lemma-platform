@@ -318,8 +318,8 @@ async def test_the_whatsapp_handshake_reads_the_same_answer(monkeypatch):
     It had its own copy of the check, so it was the one place that would still
     have skipped the comparison on a deployed environment.
     """
-    from app.modules.agent_surfaces.api.controllers.webhook_controller import (
-        _webhook_verification_response,
+    from app.modules.agent_surfaces.api.controllers.webhook_verification import (
+        webhook_verification_response,
     )
     from fastapi import HTTPException
 
@@ -327,7 +327,7 @@ async def test_the_whatsapp_handshake_reads_the_same_answer(monkeypatch):
     monkeypatch.setattr(core_settings, "environment", "production")
 
     with pytest.raises(HTTPException):
-        _webhook_verification_response(
+        webhook_verification_response(
             "whatsapp",
             {
                 "hub.mode": "subscribe",
@@ -350,8 +350,8 @@ async def test_an_unconfigured_verify_token_answers_nobody(monkeypatch):
     Both spellings of "absent" are checked, because a platform sends the
     parameter empty as readily as it omits it.
     """
-    from app.modules.agent_surfaces.api.controllers.webhook_controller import (
-        _webhook_verification_response,
+    from app.modules.agent_surfaces.api.controllers.webhook_verification import (
+        webhook_verification_response,
     )
     from fastapi import HTTPException
 
@@ -363,7 +363,7 @@ async def test_an_unconfigured_verify_token_answers_nobody(monkeypatch):
         if absent is not None:
             params["hub.verify_token"] = absent
         with pytest.raises(HTTPException):
-            _webhook_verification_response(
+            webhook_verification_response(
                 "whatsapp", params, whatsapp_verify_token=None
             )
 
@@ -374,14 +374,14 @@ async def test_the_right_verify_token_still_gets_its_challenge(monkeypatch):
     A check that refuses everything passes every test written about refusals,
     so the accepting path is asserted beside them.
     """
-    from app.modules.agent_surfaces.api.controllers.webhook_controller import (
-        _webhook_verification_response,
+    from app.modules.agent_surfaces.api.controllers.webhook_verification import (
+        webhook_verification_response,
     )
 
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(core_settings, "environment", "production")
 
-    answer = _webhook_verification_response(
+    answer = webhook_verification_response(
         "whatsapp",
         {
             "hub.mode": "subscribe",

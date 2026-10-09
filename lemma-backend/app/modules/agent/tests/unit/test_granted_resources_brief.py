@@ -20,6 +20,10 @@ from app.core.authorization.context import ResourceType
 from app.modules.agent.services.brief_lines import MAX_RESOURCES
 from app.modules.agent.services.granted_resources_brief import GrantedResourcesBrief
 from app.modules.datastore.contracts import DatastoreTableNotFoundError
+from app.modules.datastore.domain.datastore_entities import (
+    ColumnSchema,
+    DatastoreDataType,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -27,9 +31,9 @@ _TABLE = "datastore_table"
 
 
 def _table(name: str) -> SimpleNamespace:
-    column = SimpleNamespace(
-        name="title", type="TEXT", system=False, required=True, unique=False
-    )
+    # A real column: the brief renders it with the datastore's own
+    # `describe_column`, which reads the typed schema.
+    column = ColumnSchema(name="title", type=DatastoreDataType.TEXT, required=True)
     return SimpleNamespace(
         table_name=name,
         columns=[column],

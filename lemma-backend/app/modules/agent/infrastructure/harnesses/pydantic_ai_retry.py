@@ -31,9 +31,6 @@ from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import JsonObject
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
-    accumulate_usage,
-)
 from app.modules.agent.infrastructure.transport_errors import (
     is_retryable_stream_error,
     response_budget_expiry,
@@ -124,7 +121,6 @@ async def drive_with_retry(
     stream_reset,
     stopped,
     should_stop,
-    emit_usage,
     shorter_answer_settings: Callable[[], JsonObject | None],
 ) -> None:
     """Run one agent-graph pass, re-entering it after a transient stream drop.
@@ -134,8 +130,7 @@ async def drive_with_retry(
     streaming machinery it sits inside.
 
     `drive_once` publishes the live run and a pre-request history snapshot into
-    the `state` dict it is handed. Both are required to resume: the run carries
-    the usage already spent, and the snapshot is the history as it stood
+    the `state` dict it is handed. The snapshot is the history as it stood
     *before* the failing request, which is what keeps a retry from replaying a
     half-written response or re-executing a completed tool.
 
@@ -144,7 +139,6 @@ async def drive_with_retry(
     most once, with `shorter_answer_settings()`, and not at all when that
     returns None because the run has no time left for it.
     """
-    carried_usage: dict[str, int] = {}
     resume_history: list[object] | None = None
     retry_settings: JsonObject | None = None
     over_budget_retried = False
@@ -153,7 +147,7 @@ async def drive_with_retry(
         state: dict[str, object] = {}
         try:
             await drive_once(
-                resume_history, state, carried_usage, model_settings=retry_settings
+                resume_history, state, model_settings=retry_settings
             )
             return
         # Deliberately `Exception`, not `BaseException`: a CancelledError must
@@ -181,23 +175,10 @@ async def drive_with_retry(
                 or (over_budget and retry_settings is None)
                 or not (over_budget or is_retryable_stream_error(exc))
             ):
-                # Ending for good, so bill before the exception leaves. Every
-                # non-retryable exit used to skip this: a provider error, retry
-                # exhaustion, and -- the common one -- a pausing tool raising to
-                # wait for a person. An approval-gated turn billed zero on every
-                # run that asked for one.
-                #
-                # Here rather than in a `finally` inside the loop because a
-                # retryable failure must NOT emit: its tokens are carried into
-                # the next attempt's total, and a second event would either
-                # double-count for a consumer that sums or make the "exactly one
-                # usage total per run" contract false.
-                await emit_usage()
                 raise
             # Resuming re-asks only the request that failed. Completed tool
             # results are replayed from the snapshot rather than re-executed,
             # so no tool ever runs twice.
-            accumulate_usage(carried_usage, getattr(run, "usage", None))
             resume_history = list(snapshot)  # type: ignore[arg-type]
             attempt += 1
             logger.warning(

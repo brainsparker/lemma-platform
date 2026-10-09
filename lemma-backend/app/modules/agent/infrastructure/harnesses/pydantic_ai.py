@@ -416,7 +416,6 @@ class PydanticAIHarness:
                     stream_reset=lambda: self._stream_reset_event(agent_run_id),
                     stopped=streamer.stopped_event,
                     should_stop=streamer.stop_requested,
-                    emit_usage=node_loop.emit_usage,
                     shorter_answer_settings=node_loop.shorter_answer_settings,
                 )
             except BaseException as exc:  # noqa: BLE001 — relayed to parent below
@@ -554,10 +553,6 @@ def _runtime_profile_model[DepsT](options: HarnessOptions[DepsT]) -> Model:
         runtime_credentials=credentials if isinstance(credentials, Mapping) else None,
         fallback_model_name=options.model_name,
     )
-
-
-# Every usage field the harness reports, in one place so a retry can carry all of
-# them forward without the accumulator and the emitter drifting apart.
 
 
 def _meter_mock_model[DepsT](

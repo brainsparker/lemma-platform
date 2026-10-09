@@ -58,7 +58,6 @@ from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
-    AgentRunUsage,
     JsonObject,
     MessageDraft,
     MessageKind,
@@ -68,7 +67,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
     ModelRequestStreamer,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
-    usage_totals,
+    warn_if_implausible_usage,
 )
 from app.modules.agent.services.run_input_settings import shorter_answer_settings
 
@@ -114,11 +113,6 @@ class NodeLoop[DepsT]:
         # already reported must not be reported again after a retry.
         self.malformed_tool_call_ids: set[str] = set()
         self.emitted_tool_response_ids: set[str] = set()
-        # Set per attempt by `drive_once`, so a terminal branch can bill without
-        # the run being threaded down into every pump method.
-        self._run: AgentRun[DepsT, object] | None = None
-        self._carried_usage: dict[str, int] = {}
-        self._usage_emitted = False
         # The run's own clock, not the attempt's: a retry that re-enters the
         # graph is the same run to the person waiting for it.
         self._started_at = time.monotonic()
@@ -148,18 +142,15 @@ class NodeLoop[DepsT]:
         self,
         resume_history: list[ModelMessage] | None,
         state: dict[str, object],
-        carried_usage: dict[str, int],
         *,
         model_settings: JsonObject | None = None,
     ) -> None:
         if model_settings is not None:
             self._attempt_settings = model_settings
         async with self.run_context(resume_history, self._attempt_settings) as run:
-            # Published before the node loop so the retry handler can read
-            # usage off the run that just failed.
+            # Published before the node loop: the retry handler only re-enters
+            # an attempt that actually got as far as starting a run.
             state["run"] = run
-            self._run, self._carried_usage = run, carried_usage
-            self._usage_emitted = False
             # A resumed attempt opens by re-asking the request that dropped.
             # That request was counted when it was first made; counting it
             # again would let a flaky connection spend the run's allowance.
@@ -197,12 +188,10 @@ class NodeLoop[DepsT]:
                 # failure -- so only the pause is excused here.
                 trace.get_current_span().set_status(Status(StatusCode.OK))
                 raise
-
-            # The run finished on its own. The other exits bill for themselves:
-            # a terminal event bills before queueing it (the pump finalizes on
-            # sight of one and drops whatever follows), and a fatal exception
-            # bills in `drive_with_retry` before it re-raises.
-            await self.emit_usage()
+            finally:
+                # Billing is the metered model's, per request; this only says
+                # so when a provider reports a count that cannot be true.
+                warn_if_implausible_usage(getattr(run, "usage", None))
 
     async def _spend_a_model_request(self) -> None:
         """Count this step, and stop the run if it has spent its allowance.
@@ -252,52 +241,6 @@ class NodeLoop[DepsT]:
             dimension=exhausted.dimension.value,
         )
         raise AgentInputRequired(tool_call_id, "request_approval")
-
-    async def emit_usage(self) -> None:
-        """Report what this attempt spent, including attempts already abandoned.
-
-        Must reach the queue BEFORE any terminal event. `RunEventPump` finalizes
-        the run the moment it sees one and drops everything after it, so usage
-        queued afterwards is read by nobody and the run bills zero.
-
-        Idempotent per attempt: the terminal branches call it explicitly, and
-        `drive_with_retry` calls it again for the paths that raise instead of
-        ending.
-
-        Awaited, because the queue is bounded: a consumer that fell behind a
-        long streamed answer leaves it full, and `put_nowait` then raised
-        `QueueFull` -- after marking usage emitted, so the fallback was a no-op
-        and a finished answer was reported as a provider failure. The mark is
-        set only once the event is on the queue, so a put cancelled while
-        waiting leaves the caller free to try again.
-        """
-        if self._usage_emitted or self._run is None:
-            return
-        totals = usage_totals(self._run.usage, self._carried_usage)
-        await self.queue.put(
-            (
-                "event",
-                AgentEvent(
-                    type=AgentEventType.USAGE,
-                    data=AgentRunUsage(
-                        model_name=self.options.model_name,
-                        usage_kind="llm",
-                        input_tokens=totals["input_tokens"],
-                        output_tokens=totals["output_tokens"],
-                        request_count=totals["requests"],
-                        tool_call_count=totals["tool_calls"],
-                        metadata={
-                            "cache_write_tokens": totals["cache_write_tokens"],
-                            "cache_read_tokens": totals["cache_read_tokens"],
-                            "input_audio_tokens": totals["input_audio_tokens"],
-                            "output_audio_tokens": totals["output_audio_tokens"],
-                        },
-                    ),
-                    agent_run_id=self.agent_run_id,
-                ),
-            )
-        )
-        self._usage_emitted = True
 
     async def _pump_model_request(
         self,
@@ -353,7 +296,6 @@ class NodeLoop[DepsT]:
                 # the terminal event so the user keeps it.
                 for held in buffered:
                     await self.queue.put(("event", held))
-                await self.emit_usage()
                 await self.queue.put(("event", event))
                 return True
             await self.queue.put(("event", event))
@@ -377,8 +319,6 @@ class NodeLoop[DepsT]:
                 AgentEventType.ERROR,
                 AgentEventType.STOPPED,
             }
-            if terminal:
-                await self.emit_usage()
             await self.queue.put(("event", event))
             if terminal:
                 return True
@@ -427,7 +367,6 @@ class NodeLoop[DepsT]:
                     )
                 )
                 if await self.streamer.stop_requested():
-                    await self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
             final_message = self.final_output_message(
@@ -447,7 +386,6 @@ class NodeLoop[DepsT]:
                     )
                 )
                 if await self.streamer.stop_requested():
-                    await self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
 
@@ -469,7 +407,6 @@ class NodeLoop[DepsT]:
                     )
                 )
                 if await self.streamer.stop_requested():
-                    await self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
         return False

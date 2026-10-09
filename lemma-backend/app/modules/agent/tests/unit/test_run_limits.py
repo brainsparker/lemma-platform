@@ -414,7 +414,7 @@ async def test_a_paused_run_does_not_export_as_a_failed_run():
     # test that passes against the unfixed code and proves nothing.
     with pytest.raises(AgentInputRequired):
         with tracer.start_as_current_span("agent run"):
-            await loop.drive_once(None, {}, {})
+            await loop.drive_once(None, {})
 
     (span,) = exported[before:]
     assert span.name == "agent run"

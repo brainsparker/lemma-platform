@@ -9686,7 +9686,34 @@ var LemmaClient = (() => {
   function hasHeader(headers, name) {
     return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
   }
-  var ownOriginRecoveryTried = false;
+  var UPDATE_MARKER_COOKIE = "st-last-access-token-update";
+  var FRONT_TOKEN_COOKIE = "sFrontToken";
+  function hasCookie(name) {
+    return document.cookie.split(";").some((part) => part.trim().startsWith(`${name}=`));
+  }
+  function isHalfCleared() {
+    if (typeof document === "undefined") return false;
+    try {
+      return hasCookie(UPDATE_MARKER_COOKIE) && !hasCookie(FRONT_TOKEN_COOKIE);
+    } catch {
+      return false;
+    }
+  }
+  function dropUpdateMarker() {
+    document.cookie = `${UPDATE_MARKER_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  }
+  function cameFromThisSite(authUrl) {
+    try {
+      const here = window.location.origin;
+      const portal = new URL(authUrl, window.location.href).origin;
+      if (here === portal) return false;
+      const from = document.referrer ? new URL(document.referrer).origin : "";
+      return from === portal || from === here;
+    } catch {
+      return false;
+    }
+  }
+  var markerRecoveryTried = false;
   var AuthManager = class {
     /**
      * @param token A credential to present as `Authorization: Bearer`. Supplying
@@ -9950,30 +9977,34 @@ var LemmaClient = (() => {
       return checking;
     }
     /**
-     * One refresh for an app that calls the API through its own origin.
+     * One refresh for a pod app whose host remembers a session that ended.
      *
      * The session is shared between hosts by the HttpOnly cookies, but the
      * markers the browser SDK reads (`sFrontToken`, `st-last-access-token-update`)
      * are host-only on purpose, so a pod app keeps its own copy. If that copy is
      * half-cleared -- the update marker left behind with no front token, as a
      * failed refresh leaves it -- `doesSessionExist()` answers "no" without ever
-     * asking, and the app sends a signed-in person to sign in forever. Drop the
-     * stale marker on this host and ask once: the refresh carries the shared
-     * cookie and returns this origin's own front token. Once per page, so a
-     * genuinely signed-out app cannot storm the endpoint.
+     * asking. Signing in again renews the shared cookies but cannot reach this
+     * host's marker, so the auth portal, which sees the session, sends the person
+     * straight back to an app that does not: a redirect loop with no way out.
+     * Drop the stale marker on this host and ask once: the refresh carries the
+     * shared cookie and returns this host's own front token.
+     *
+     * Whether the API is on this origin or another one does not matter: the
+     * marker is always this host's, and the refresh cookie travels to the API
+     * either way. Once per page, so a genuinely signed-out app costs one refused
+     * refresh per load rather than a storm.
+     *
+     * The refresh is asked for directly, not through `doesSessionExist()`, which
+     * folds a network error or a 5xx into "no": an API mid-deploy would sign the
+     * person out instead of being waited out. A refresh that fails that way
+     * throws, and the caller reads it as unreachable.
      */
-    async recoverOwnOriginSession() {
-      if (ownOriginRecoveryTried || typeof document === "undefined") return false;
-      ownOriginRecoveryTried = true;
-      try {
-        if (new URL(this.apiUrl, window.location.href).origin !== window.location.origin) {
-          return false;
-        }
-      } catch {
-        return false;
-      }
-      document.cookie = "st-last-access-token-update=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
-      return import_session2.default.doesSessionExist();
+    async recoverHalfClearedSession() {
+      if (markerRecoveryTried || typeof document === "undefined") return false;
+      markerRecoveryTried = true;
+      dropUpdateMarker();
+      return import_session2.default.attemptRefreshingSession();
     }
     /**
      * Whether the API answers at all -- its liveness probe, not a session check.
@@ -9991,26 +10022,35 @@ var LemmaClient = (() => {
      * with no `front-token`, which the SDK throws on without saving anything.
      * One direct refresh tells them apart. It also is the retry the duplicate
      * answer needs: the server cleared the stray copy on that response, so this
-     * refresh carries one cookie and succeeds. Where the SDK already knows there
-     * is no session (the update marker without a front token) it answers
-     * without touching the network.
+     * refresh carries one cookie and succeeds.
+     *
+     * A half-cleared host takes the recovery instead of that refresh. There,
+     * `attemptRefreshingSession()` never reaches the network: it answers from
+     * the marker and fires `UNAUTHORISED` on the way out, which marks this
+     * manager signed out and so discards the result of the very check that is
+     * about to repair the session.
      */
     async localSession() {
+      const halfCleared = isHalfCleared();
       try {
         if (await import_session2.default.doesSessionExist()) return "exists";
       } catch (error) {
         return refreshFailureKind(error);
+      }
+      if (halfCleared) {
+        if (!cameFromThisSite(this.authUrl)) return "absent";
+        try {
+          return await this.recoverHalfClearedSession() ? "exists" : "absent";
+        } catch (error) {
+          return refreshFailureKind(error);
+        }
       }
       try {
         if (await import_session2.default.attemptRefreshingSession()) return "exists";
       } catch (error) {
         if (refreshFailureKind(error) === "unreachable") return "unreachable";
       }
-      try {
-        return await this.recoverOwnOriginSession() ? "exists" : "absent";
-      } catch (error) {
-        return refreshFailureKind(error);
-      }
+      return "absent";
     }
     async performAuthCheck(revision) {
       const unauthenticated = () => revision === this.authRevision ? this.applyUnauthenticatedState() : this.state;
@@ -10125,7 +10165,15 @@ var LemmaClient = (() => {
         return;
       }
       const redirectUri = (_a = options.redirectUri) != null ? _a : window.location.href;
-      window.location.href = this.getAuthUrl({ ...options, redirectUri });
+      const url = this.getAuthUrl({ ...options, redirectUri });
+      if (window.top && window.top !== window.self) {
+        try {
+          window.top.location.href = url;
+          return;
+        } catch {
+        }
+      }
+      window.location.href = url;
     }
     /**
      * Optional full logout flow:
@@ -16459,10 +16507,14 @@ var LemmaClient = (() => {
      * Follow Up Contact
      * Write to a contact in their most recent conversation, where the channel allows.
      *
+     * With ``channel: email``, to their verified email address instead, which
+     * reaches a web chat contact who is not on the page.
+     *
      * Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-     * has closed, or when they have never written to the pod; 429 past the day's
-     * follow-ups for this contact; 502 when the platform did not take it, which
-     * the conversation then shows as not sent.
+     * has closed, when they have never written to the pod, or, for email, when
+     * they have no verified address or the pod no email address answering
+     * contacts; 429 past the day's follow-ups for this contact; 502 when the
+     * platform did not take it, which the conversation then shows as not sent.
      * @param podId
      * @param contactId
      * @param requestBody
@@ -16909,10 +16961,15 @@ var LemmaClient = (() => {
     }
     /** Write to a contact in their latest conversation, where the channel allows:
      *  never where they unsubscribed, on WhatsApp only within 24 hours of their
-     *  last message, and a few times a day at most. Takes `contact.message`. */
-    followUp(podId, contactId, message) {
+     *  last message, and a few times a day at most. Takes `contact.message`.
+     *  `channel: "email"` sends to their verified email address instead, from
+     *  the pod's email address when their latest conversation is a web chat. */
+    followUp(podId, contactId, message, options = {}) {
       return this.client.request(
-        () => ContactsService.contactFollowUp(podId, contactId, { message })
+        () => ContactsService.contactFollowUp(podId, contactId, {
+          message,
+          channel: options.channel
+        })
       );
     }
     /** One page of everything the pod holds about a contact: handles,
@@ -19551,6 +19608,7 @@ var LemmaClient = (() => {
     return buildAuthUrl(url.href, { redirectUri });
   }
   async function refreshMainSession() {
+    if (isHalfCleared()) dropUpdateMarker();
     let timer;
     const deadline = new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error("The session service did not answer")), 1e4);

@@ -4,12 +4,13 @@ Two ways a send arrives twice. The client retries one it never heard back
 from, carrying the same client id; or the same words are sent again moments
 later by something else -- a second tab, a double tap. Each copy used to be its
 own message, answered twice or starting a second run. Against real Postgres and
-Redis, because the first is a lock-and-index question and the second a Redis
-window, and a stand-in for either answers whatever it is told.
+Redis, because the first is a question about the conversation lock and the
+second a Redis window, and a stand-in for either answers whatever it is told.
 """
 
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -69,6 +70,37 @@ async def test_a_retried_send_with_the_same_client_id_is_stored_once(scenario):
     (stored,) = await _typed(seeded, "Draft the memo.")
     assert stored.metadata["client_message_id"] == client_id
     assert await _typed(seeded, "Draft the memo!") == []
+
+
+async def test_two_copies_of_a_send_racing_each_other_store_one_message(scenario):
+    """Both copies in flight at once, so neither has stored anything when the
+    other looks. Only the conversation lock makes "look, then store" one step:
+    there is no unique index behind it."""
+    seeded = await seeded_conversation(scenario)
+    client_id = f"web-{uuid4()}"
+
+    sent = await asyncio.gather(
+        *(
+            _append(
+                scenario,
+                seeded,
+                # Different words, so the Redis window cannot be what folds
+                # them: only the client id says they are one send.
+                {"content": f"Race copy {copy}.", "client_message_id": client_id},
+            )
+            for copy in (1, 2)
+        )
+    )
+
+    assert sorted(item["deduplicated"] for item in sent) == [False, True]
+    assert sent[0]["agent_run_id"] == sent[1]["agent_run_id"]
+    stored = [
+        message
+        for message in await messages(seeded.conversation_id)
+        if message.role is MessageRole.USER
+        and message.metadata.get("client_message_id") == client_id
+    ]
+    assert len(stored) == 1
 
 
 async def test_a_client_id_sent_only_in_the_metadata_still_counts(scenario):

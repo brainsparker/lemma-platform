@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.errors import OrganizationDefaultConflictError
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     RuntimeProfileProtocol,
@@ -25,6 +26,9 @@ from app.modules.identity.contracts.profiles import user_profile
 
 
 logger = get_logger(__name__)
+
+#: The index that keeps at most one organization default (``runtime_models``).
+_ORGANIZATION_DEFAULT_INDEX = "uq_agent_runtime_profile_org_default"
 
 _CREDENTIALS: TypeAdapter[RuntimeCredentials | None] = TypeAdapter(
     RuntimeCredentials | None
@@ -142,6 +146,8 @@ class AgentRuntimeProfileRepository:
         try:
             await self.session.flush()
         except IntegrityError as exc:
+            if _ORGANIZATION_DEFAULT_INDEX in str(exc.orig):
+                raise OrganizationDefaultConflictError() from exc
             raise RuntimeError(
                 f"Runtime profile named {name!r} already exists"
             ) from exc

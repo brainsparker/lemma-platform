@@ -325,17 +325,6 @@ class MessageModel(UUIDCreatedBase):
         Index("ix_agent_message_conversation_sequence", "conversation_id", "sequence"),
         Index("ix_agent_message_run_sequence", "agent_run_id", "sequence"),
         Index("ix_agent_message_tool_call", "tool_call_id"),
-        # One message per send. A client retrying a send it never heard back
-        # from reuses the id, and gets the first send's run instead of a second
-        # message (`TurnCoordinator.start`, which checks under the lock; this is
-        # the backstop).
-        Index(
-            "uq_agent_message_client_message_id",
-            "conversation_id",
-            text("(message_metadata ->> 'client_message_id')"),
-            unique=True,
-            postgresql_where=text("message_metadata ? 'client_message_id'"),
-        ),
     )
 
     conversation_id: Mapped[UUID] = mapped_column(

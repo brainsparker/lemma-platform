@@ -38,6 +38,24 @@ class AgentAlreadyExistsError(AgentModuleError):
         super().__init__(message, code="AGENT_ALREADY_EXISTS", status_code=409)
 
 
+class OrganizationDefaultConflictError(AgentModuleError):
+    """Another default was chosen for the organization at the same moment.
+
+    At most one profile carries the mark, and the database holds that; two
+    owners choosing at once both pass every check before either commits, and
+    the second write is refused here rather than leaving two defaults.
+    """
+
+    def __init__(
+        self,
+        message: str = (
+            "The organization's default model was changed at the same time; "
+            "reload and choose again"
+        ),
+    ):
+        super().__init__(message, code="ORGANIZATION_DEFAULT_CONFLICT", status_code=409)
+
+
 class AgentValidationError(AgentModuleError):
     """Agent payload failed module-level validation."""
 

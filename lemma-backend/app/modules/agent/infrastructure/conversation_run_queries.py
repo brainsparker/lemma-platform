@@ -452,8 +452,9 @@ class ConversationRunQueriesMixin:
     ) -> MessageEntity | None:
         """The message an earlier send with this client id stored, if any.
 
-        Served by ``uq_agent_message_client_message_id``, whose expression and
-        predicate this matches.
+        Scoped to one conversation, so it reads that conversation's messages by
+        their conversation index. The caller holds the conversation lock, which
+        is what makes "look, then store" one step for two copies of a send.
         """
         metadata = MessageModel.message_metadata
         row = await self.session.scalar(

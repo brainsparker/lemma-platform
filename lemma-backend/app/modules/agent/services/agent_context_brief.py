@@ -62,6 +62,7 @@ from app.modules.datastore.contracts.agent_tools import (
 )
 from app.modules.function.contracts import agent_tools as function_tools
 from app.modules.pod.contracts.directory import list_pod_members
+from app.modules.agent.services.askable_pods_brief import askable_pod_lines
 from app.core.authorization.factory import create_authorization_data_service
 from app.modules.agent.services.brief_seams import (
     AuthorizationFactory,
@@ -217,6 +218,18 @@ class AgentContextBriefBuilder:
             brief = with_run_framing(
                 cached, conversation=conversation, run_source=run_source
             )
+            if is_default:
+                # Per conversation too: which other pods this thread may ask,
+                # and how, depends on who reads it and whether anyone is here.
+                asks = await askable_pod_lines(
+                    self.uow_factory,
+                    self._repo_factory(),
+                    conversation=conversation,
+                    pod_id=pod_id,
+                    user_id=user_id,
+                )
+                if asks:
+                    brief = brief + "\n" + "\n".join(asks)
             return await self._with_memory(
                 brief, agent=agent, pod_id=pod_id, user_id=user_id, toolsets=toolsets
             )

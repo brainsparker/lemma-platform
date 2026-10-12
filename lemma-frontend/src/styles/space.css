@@ -2824,6 +2824,141 @@ samp,
     flex: none;
     border-radius: calc(var(--r-md) - 2px);
 }
+
+/* ── who can ask this teammate, and connecting one ────────────────────── */
+.asked-by {
+    margin-top: 20px;
+}
+/* Not an `agentlist__row`: that row is one button, and its hover underlines
+   the name. Here the name and Disconnect are separate controls, and hovering
+   one must not mark the other. */
+.asked-by__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    padding: 14px 0;
+}
+.asked-by__who {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 14px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+}
+.asked-by__who:hover .agentlist__title b {
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+}
+.asked-by__acts {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+.asked-by__confirm {
+    padding: 0 0 14px 46px;
+}
+.asked-by__confirm p {
+    margin: 0 0 10px;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.asked-by__confirm .acct__confirm {
+    margin-left: 0;
+    flex-wrap: wrap;
+}
+.connect__label {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.connect__exposed {
+    margin: 0 0 10px;
+    font-size: 12.5px;
+    color: var(--ink-2);
+}
+.connect__choices {
+    margin: 0 0 12px;
+    padding: 0;
+    list-style: none;
+}
+.connect__choices--nested {
+    margin: 0;
+    padding-left: 22px;
+}
+.connect__choices .check {
+    align-items: center;
+    margin-bottom: 8px;
+}
+.connect__share {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+.connect__share .check {
+    flex: 1;
+    min-width: 0;
+}
+.connect__open {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+}
+.connect__open:hover {
+    background: var(--chrome);
+    color: var(--ink);
+}
+.connect__public {
+    font-weight: 500;
+    color: var(--ink-2);
+}
+/* The dialog's list can run past a screen; what it is for stays in reach.
+   Pinned to the foot of the scrolling body, bled out over its padding so
+   nothing scrolls by underneath. */
+.connect__acts {
+    position: sticky;
+    bottom: -22px;
+    flex-wrap: wrap;
+    margin: 0 -22px -22px;
+    padding: 12px 22px 22px;
+    border-top: 1px solid var(--line);
+    background: var(--paper);
+}
+.connect__acts .reachrow__error {
+    flex: 1 0 100%;
+    margin: 0;
+}
+@media (max-width: 767px) {
+    .connect__acts {
+        bottom: -20px;
+        margin: 0 -20px -20px;
+        padding: 12px 20px 20px;
+    }
+}
+/* "Let another teammate ask …" is long with a long name: it wraps rather
+   than running off a phone. */
+.aboutpage__action--long {
+    height: auto;
+    min-height: 30px;
+    padding-block: 5px;
+    text-align: left;
+}
 .agentlist__row:hover .agentlist__title b {
     text-decoration: underline;
     text-decoration-color: var(--line-2);
@@ -7671,6 +7806,22 @@ samp,
     color: var(--ink-2);
     font-size: 12px;
     white-space: nowrap;
+}
+/* Another teammate's side of a request, when it is the reader's to open: a
+   chip that reads as a link, because it is one. */
+.msg__chip--link {
+    text-decoration: none;
+    cursor: pointer;
+}
+.msg__chip--link:hover {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+}
+.msg__chip--link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 /* A note to the bot: over your bubble, on your side. */
 .msg__chip--note {

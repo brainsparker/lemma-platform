@@ -105,6 +105,9 @@ class _FakeBriefRepo:
     async def get_user_profile(self, user_id):
         return UserProfile(email="a@b.co")
 
+    async def list_askable_pods(self, *, pod_id, user_id):
+        return []
+
     async def get_agent_grants(self, **kwargs):
         return []
 
@@ -241,7 +244,13 @@ def _pod_default_agent():
 
 
 def _conversation(is_pod_assistant: bool):
-    return SimpleNamespace(id=uuid4(), is_pod_assistant=is_pod_assistant)
+    return SimpleNamespace(
+        id=uuid4(),
+        is_pod_assistant=is_pod_assistant,
+        user_id=None,
+        type=None,
+        metadata={},
+    )
 
 
 async def test_named_agent_brief_never_overlaps_uows(stubbed):

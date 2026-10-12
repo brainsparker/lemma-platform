@@ -32,6 +32,7 @@ from app.modules.agent.services.attached_document_brief import (
     build_attached_document_section,
 )
 from app.modules.agent.services.outsider_brief import outsider_brief
+from app.modules.agent.services.link_brief import link_brief
 from app.modules.agent.services.brief_lines import run_source_of
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.services.surface_context import (
@@ -140,7 +141,14 @@ async def build_run_context(
     )
     try:
         ctx.context_brief = (
-            await outsider_brief(
+            await link_brief(
+                uow_factory,
+                pod_id=conversation.pod_id,
+                asking_pod_id=audience.asking_pod_id,
+                steward_user_id=user_id,
+            )
+            if audience.asking_pod_id is not None
+            else await outsider_brief(
                 uow_factory,
                 pod_id=conversation.pod_id,
                 owner_user_id=user_id,

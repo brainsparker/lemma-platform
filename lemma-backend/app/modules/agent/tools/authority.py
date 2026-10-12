@@ -38,6 +38,7 @@ from app.core.authorization.anonymous import build_outsider_context
 from app.core.authorization.context import Context
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.authorization.factory import create_authorization_data_service
+from app.core.authorization.pod_principal import build_pod_context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.context import AgentContext
 
@@ -47,6 +48,15 @@ async def tool_authorization_context(
 ) -> Context:
     """The authorization context one agent tool call runs under."""
     audience = deps.audience
+    if audience.asking_pod_id is not None:
+        # Another pod asking over a link: Public reads here, plus what this pod
+        # granted that pod, and nothing else.
+        return build_pod_context(
+            session=uow.session,
+            pod_id=deps.pod_id,
+            organization_id=deps.org_id,
+            asking_pod_id=audience.asking_pod_id,
+        )
     if audience.answers_outsiders:
         # A contact is named in the audit trail and narrows contact-owned
         # tables to their rows; a group's outsiders are one conversation.

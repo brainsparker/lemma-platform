@@ -87,6 +87,8 @@ _NAME_TO_MODULE = {
     'ApplyImportRequest': 'apply_import_request',
     'ApplyImportRequestVariables': 'apply_import_request_variables',
     'ApprovalDecisionResponse': 'approval_decision_response',
+    'AskablePodListResponse': 'askable_pod_list_response',
+    'AskablePodResponse': 'askable_pod_response',
     'Attach': 'attach',
     'AuthConfigCreateSchema': 'auth_config_create_schema',
     'AuthConfigCreateSchemaConfigType0': 'auth_config_create_schema_config_type_0',
@@ -113,6 +115,7 @@ _NAME_TO_MODULE = {
     'CodeRequest': 'code_request',
     'ColumnSchema': 'column_schema',
     'ColumnSchemaTypeParamsType0': 'column_schema_type_params_type_0',
+    'ConnectPodRequest': 'connect_pod_request',
     'ConnectRequestInitiateSchema': 'connect_request_initiate_schema',
     'ConnectRequestInitiateSchemaConnectionFieldsType0': 'connect_request_initiate_schema_connection_fields_type_0',
     'ConnectRequestResponseSchema': 'connect_request_response_schema',
@@ -401,6 +404,8 @@ _NAME_TO_MODULE = {
     'PodJoinRequestCreateResponse': 'pod_join_request_create_response',
     'PodJoinRequestListResponse': 'pod_join_request_list_response',
     'PodJoinRequestStatus': 'pod_join_request_status',
+    'PodLinkListResponse': 'pod_link_list_response',
+    'PodLinkResponse': 'pod_link_response',
     'PodListResponse': 'pod_list_response',
     'PodMemberAddRequest': 'pod_member_add_request',
     'PodMemberDetailResponse': 'pod_member_detail_response',
@@ -485,6 +490,7 @@ _NAME_TO_MODULE = {
     'SessionResponse': 'session_response',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
     'SetOrganizationDefaultRuntimeRequest': 'set_organization_default_runtime_request',
+    'SharedResourceBody': 'shared_resource_body',
     'SignInOutcomeResponse': 'sign_in_outcome_response',
     'SignedUrlListResponse': 'signed_url_list_response',
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
@@ -713,6 +719,8 @@ if TYPE_CHECKING:
     from .apply_import_request import ApplyImportRequest
     from .apply_import_request_variables import ApplyImportRequestVariables
     from .approval_decision_response import ApprovalDecisionResponse
+    from .askable_pod_list_response import AskablePodListResponse
+    from .askable_pod_response import AskablePodResponse
     from .attach import Attach
     from .auth_config_create_schema import AuthConfigCreateSchema
     from .auth_config_create_schema_config_type_0 import AuthConfigCreateSchemaConfigType0
@@ -739,6 +747,7 @@ if TYPE_CHECKING:
     from .code_request import CodeRequest
     from .column_schema import ColumnSchema
     from .column_schema_type_params_type_0 import ColumnSchemaTypeParamsType0
+    from .connect_pod_request import ConnectPodRequest
     from .connect_request_initiate_schema import ConnectRequestInitiateSchema
     from .connect_request_initiate_schema_connection_fields_type_0 import ConnectRequestInitiateSchemaConnectionFieldsType0
     from .connect_request_response_schema import ConnectRequestResponseSchema
@@ -1027,6 +1036,8 @@ if TYPE_CHECKING:
     from .pod_join_request_create_response import PodJoinRequestCreateResponse
     from .pod_join_request_list_response import PodJoinRequestListResponse
     from .pod_join_request_status import PodJoinRequestStatus
+    from .pod_link_list_response import PodLinkListResponse
+    from .pod_link_response import PodLinkResponse
     from .pod_list_response import PodListResponse
     from .pod_member_add_request import PodMemberAddRequest
     from .pod_member_detail_response import PodMemberDetailResponse
@@ -1111,6 +1122,7 @@ if TYPE_CHECKING:
     from .session_response import SessionResponse
     from .set_default_surface_request import SetDefaultSurfaceRequest
     from .set_organization_default_runtime_request import SetOrganizationDefaultRuntimeRequest
+    from .shared_resource_body import SharedResourceBody
     from .sign_in_outcome_response import SignInOutcomeResponse
     from .signed_url_list_response import SignedUrlListResponse
     from .signed_url_revoke_response import SignedUrlRevokeResponse
@@ -1352,6 +1364,8 @@ __all__ = [
     'ApplyImportRequest',
     'ApplyImportRequestVariables',
     'ApprovalDecisionResponse',
+    'AskablePodListResponse',
+    'AskablePodResponse',
     'Attach',
     'AuthConfigCreateSchema',
     'AuthConfigCreateSchemaConfigType0',
@@ -1378,6 +1392,7 @@ __all__ = [
     'CodeRequest',
     'ColumnSchema',
     'ColumnSchemaTypeParamsType0',
+    'ConnectPodRequest',
     'ConnectRequestInitiateSchema',
     'ConnectRequestInitiateSchemaConnectionFieldsType0',
     'ConnectRequestResponseSchema',
@@ -1666,6 +1681,8 @@ __all__ = [
     'PodJoinRequestCreateResponse',
     'PodJoinRequestListResponse',
     'PodJoinRequestStatus',
+    'PodLinkListResponse',
+    'PodLinkResponse',
     'PodListResponse',
     'PodMemberAddRequest',
     'PodMemberDetailResponse',
@@ -1750,6 +1767,7 @@ __all__ = [
     'SessionResponse',
     'SetDefaultSurfaceRequest',
     'SetOrganizationDefaultRuntimeRequest',
+    'SharedResourceBody',
     'SignInOutcomeResponse',
     'SignedUrlListResponse',
     'SignedUrlRevokeResponse',

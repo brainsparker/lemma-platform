@@ -41,8 +41,11 @@ _MARKDOWN_IMAGE = re.compile(
     r"!\[[^\]]*\]\(\s*(<[^>]*>|(?:[^()\s]|\([^()\s]*\))+)(?:\s+[\"'(][^)]*)?\)"
 )
 #: Code is shown, not loaded: a reference inside a fence or a code span is text.
+#: A fence closes only on a run of its own character at least as long as the
+#: opener: a block opened with backticks does not end on a line of tildes.
 _FENCED_CODE = re.compile(
-    r"^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^ {0,3}\1[`~]*[ \t]*$|\Z)",
+    r"^ {0,3}((`){3,}|~{3,})[^\n]*\n.*?"
+    r"(?:^ {0,3}\1(?(2)`*|~*)[ \t]*$|\Z)",
     re.MULTILINE | re.DOTALL,
 )
 _CODE_SPAN = re.compile(r"(`+)(?!`).+?(?<!`)\1(?!`)", re.DOTALL)

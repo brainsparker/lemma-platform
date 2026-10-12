@@ -192,6 +192,14 @@ class TestMarkdownScanner:
         )
         assert embedded_references(page, kind="markdown") == {"shown.png"}
 
+    def test_a_fence_closes_only_on_its_own_character(self):
+        page = (
+            "```\n![a](inside.png)\n```~~~\n![b](still-inside.png)\n```\n"
+            "~~~\n![c](tilde.png)\n~~~```\n![d](tilde-too.png)\n~~~~\n"
+            "![e](shown.png)\n"
+        )
+        assert embedded_references(page, kind="markdown") == {"shown.png"}
+
 
 class TestPageKind:
     def test_markdown_by_type_or_by_name(self):

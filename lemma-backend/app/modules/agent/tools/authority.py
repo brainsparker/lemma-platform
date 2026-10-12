@@ -86,6 +86,17 @@ def workload_actor_id(deps: AgentContext) -> str:
     return f"agent:{getattr(deps, 'workload_id', None) or DEFAULT_POD_AGENT_ID}"
 
 
+def conversation_workload_actor_id(*, agent_id: UUID | None, pod_id: UUID) -> str:
+    """:func:`workload_actor_id` for a conversation, where there is no run.
+
+    A conversation with no agent of its own belongs to the pod's assistant,
+    whose id is its pod's. It used to fall back to ``DEFAULT_POD_AGENT_ID``,
+    which no run carries, so the assistant could never find an approval the
+    person gave it for the conversation.
+    """
+    return f"agent:{agent_id or pod_id}"
+
+
 @dataclass(frozen=True, slots=True)
 class WorkspacePrincipal:
     """Who a workspace session's token is minted for."""

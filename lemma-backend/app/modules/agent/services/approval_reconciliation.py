@@ -137,6 +137,7 @@ async def record_session_approvals(
     *,
     conversation_id: UUID,
     agent_id: UUID | None,
+    pod_id: UUID,
     tool_args: JsonObject,
     user_id: UUID,
 ) -> None:
@@ -156,13 +157,13 @@ async def record_session_approvals(
     for why anything looser, e.g. a prefix match, would be a shell-injection
     vector).
     """
-    from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
     from app.core.authorization.session_approvals import (
         exact_command_permission_id,
         record_session_approval,
     )
+    from app.modules.agent.tools.authority import conversation_workload_actor_id
 
-    workload_actor_id = f"agent:{agent_id or DEFAULT_POD_AGENT_ID}"
+    workload_actor_id = conversation_workload_actor_id(agent_id=agent_id, pod_id=pod_id)
 
     inner_tool_name = tool_args.get("tool_name")
     if isinstance(inner_tool_name, str) and inner_tool_name:

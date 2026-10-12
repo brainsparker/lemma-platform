@@ -33,12 +33,17 @@ SERVICE_WORKER_PATH = f"/{RESERVED_ASSET_PREFIX}sw.js"
 OFFLINE_PATH = f"/{RESERVED_ASSET_PREFIX}offline.html"
 ICON_PATH_TEMPLATE = f"/{RESERVED_ASSET_PREFIX}icon-{{size}}.png"
 
+# The large picture a shared link unfurls with. Unlike the paths above it is
+# not claimed outright: a build that ships its own cover here is served first,
+# and the host draws one only when it does not. (``apps.services.app_cover``)
+COVER_PATH = f"/{RESERVED_ASSET_PREFIX}cover.png"
+
 # The branding badge's plate, so the icon, the install pill and the "Remix on
 # Lemma" pill are one visual family. Also the standalone status-bar colour.
 PLATE_COLOR = "#141413"
 
 # The workspace's app frame announces itself with this message
-# (``lemma-harness/lib/app/app-theme.ts``). It is how a framed app knows it is
+# (``lemma-frontend/src/thread/widget-theme.ts``). It is how a framed app knows it is
 # inside Lemma rather than embedded on an unrelated page, and it carries the
 # origin to reply to.
 WORKSPACE_HELLO_MESSAGE = "lemma-app-theme"

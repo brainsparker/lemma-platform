@@ -315,7 +315,7 @@ urls.expires_at   # when urls.url stops working
 link = pod.files.create_signed_url("/reports/summary.pdf")                       # defaults: 3h, 50 downloads
 link = pod.files.create_signed_url("/reports/summary.pdf",
                                    expires_seconds=604800, max_hits=5)           # 7d, 5 downloads
-link.signed_url   # https://<api>/s/<code>  — short, copy-pasteable
+link.signed_url   # https://<api>/public/s/<code>  — short, copy-pasteable
 link.expires_at
 link.max_hits     # effective cap (max 7d / 1000 hits; out of range is a 422)
 ```
@@ -370,6 +370,47 @@ if run.active_wait and run.active_wait.wait_type == "HUMAN":
 conv = pod.conversations.create_for_agent("triage-agent", title="Triage")
 pod.conversations.send(str(conv.id), "Classify ticket " + rid)
 ```
+
+### Decisions (classify, route, triage)
+
+`pod.decisions.make` answers closed questions about one piece of evidence: a
+choice, several choices, yes/no, or a short integer scale. Use it instead of an
+agent run when the output is a label you will branch on or store. Nothing is
+stored; write the answer wherever it matters (a record field, say). It needs no
+grant: any function in the pod may ask.
+
+```python
+QUESTIONS = {
+    "type": "object",
+    "properties": {
+        "category": {"type": "string", "description": "What is the ticket about?",
+                     "oneOf": [{"const": "billing", "description": "Charges, refunds"},
+                               {"const": "bug", "description": "Something broken"},
+                               {"const": "other", "description": "Anything else"}]},
+        "urgent": {"type": "boolean", "description": "Does it need a reply today?"},
+    },
+}
+result = pod.decisions.make(
+    instruction="Triage incoming support tickets for the billing team.",
+    evidence={"subject": ticket["subject"], "body": ticket["body"][:20_000]},
+    schema=QUESTIONS,
+    examples=[{"evidence": "Refund my last invoice", "answers": {"category": "billing"}}],
+)
+category = result.answers["category"].value   # "billing", or None when unsure
+```
+
+- Each property's `description` is the question. Allowed shapes only: a string
+  `enum` (or `oneOf` of `{const, description}`), an array of one with
+  `uniqueItems: true`, `boolean`, or `integer` with `minimum`/`maximum` (2-11
+  levels). Free text and open-ended numbers are refused (422).
+- `value` is `None` when the evidence did not support an answer — route that to
+  a person rather than guessing. `confidence` is set only by providers that
+  measure it.
+- Evidence over 64 KiB is refused, not cut: send the part that matters.
+- Examples are how answers improve: keep corrected cases in a table and pass the
+  recent ones in `examples`.
+- 429 and 503 mean ask again later; for a table of rows, loop in a JOB function
+  or a workflow `loop`, one decision per row.
 
 ## Permissions (workload grants)
 
@@ -428,6 +469,15 @@ lemma functions permissions get save_expense
 
 A run failing with `MISSING_WORKLOAD_RESOURCE_GRANT` names the resource it tried to
 reach — add exactly that grant and retry.
+
+### Opening a function to contacts
+
+`PUT /pods/{pod}/functions/{name}/contacts` `{"contacts_invoke": true}` lets a
+contact's conversation call it (the `contact_function` tool). It runs as its owner's
+runs do, held to its own grants, and receives the asking contact as `contact_id` in
+its input — set by the platform, never by the model. Its output goes to the agent
+answering the contact, so return only what that person may be told. See
+`people-outside.md`.
 
 ### Exposing a function as an agent's tool
 

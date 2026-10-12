@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         BoundConnectors,
         PodAgents,
         PodConversations,
+        PodDecisions,
         PodApps,
         PodFiles,
         PodFunctions,
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
         PodNotifications,
         PodSurfaces,
         PodGroups,
+        PodContacts,
+        PodWebWidgets,
         PodTables,
         PodWorkflows,
         Table,
@@ -138,6 +141,12 @@ class Pod:
         return self._resource(PodConversations)
 
     @cached_property
+    def decisions(self) -> "PodDecisions":
+        from .resources import PodDecisions
+
+        return self._resource(PodDecisions)
+
+    @cached_property
     def apps(self) -> "PodApps":
         from .resources import PodApps
 
@@ -160,6 +169,18 @@ class Pod:
         from .resources import PodGroups
 
         return self._resource(PodGroups)
+
+    @cached_property
+    def contacts(self) -> "PodContacts":
+        from .resources import PodContacts
+
+        return self._resource(PodContacts)
+
+    @cached_property
+    def web_widgets(self) -> "PodWebWidgets":
+        from .resources import PodWebWidgets
+
+        return self._resource(PodWebWidgets)
 
     @cached_property
     def connectors(self) -> "BoundConnectors":

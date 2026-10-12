@@ -6,11 +6,15 @@ import {
   type CreateAgentRuntimeProfileRequest,
 } from "../namespaces/agent-runtime.js";
 import { AgentsNamespace } from "../namespaces/agents.js";
+import { DecisionsNamespace } from "../namespaces/decisions.js";
+import { SchedulesNamespace } from "../namespaces/schedules.js";
 import { FunctionsNamespace } from "../namespaces/functions.js";
 import { RecordsNamespace } from "../namespaces/records.js";
 import type { ConversationsNamespace } from "../namespaces/conversations.js";
 import { AgentHostService } from "../openapi_client/services/AgentHostService.js";
 import { AgentRuntimeService } from "../openapi_client/services/AgentRuntimeService.js";
+import { DecisionsService } from "../openapi_client/services/DecisionsService.js";
+import { SchedulesService } from "../openapi_client/services/SchedulesService.js";
 import { FunctionsService } from "../openapi_client/services/FunctionsService.js";
 import { RecordsService } from "../openapi_client/services/RecordsService.js";
 
@@ -240,5 +244,47 @@ describe("RecordsNamespace.listAll", () => {
     for (const call of spy.mock.calls) {
       expect(call[4]).toEqual(['{"field":"status","op":"eq","value":"open"}']);
     }
+  });
+});
+
+describe("DecisionsNamespace.make", () => {
+  it("asks the bound pod, sending the literal priority", async () => {
+    const makeSpy = vi
+      .spyOn(DecisionsService, "decisionMake")
+      .mockResolvedValue({ answers: {}, provider: "model", model: null, usage: {} } as never);
+    const decisions = new DecisionsNamespace(passthroughAdapter, () => "pod-1");
+    const schema = {
+      type: "object",
+      properties: { urgent: { type: "boolean", description: "Reply today?" } },
+    };
+
+    await decisions.make({
+      instruction: "Is it urgent?",
+      evidence: { subject: "Server down" },
+      schema,
+      priority: "interactive",
+    });
+
+    expect(makeSpy).toHaveBeenCalledWith("pod-1", {
+      instruction: "Is it urgent?",
+      evidence: { subject: "Server down" },
+      schema,
+      priority: "interactive",
+    });
+  });
+});
+
+describe("SchedulesNamespace.runs", () => {
+  it("asks for one status, or leaves out the events the filter skipped", async () => {
+    const listSpy = vi
+      .spyOn(SchedulesService, "scheduleRunList")
+      .mockResolvedValue({ items: [], limit: 20 } as never);
+    const schedules = new SchedulesNamespace(passthroughAdapter, () => "pod-1");
+
+    await schedules.runs("sched-1", { limit: 20, skipped: false });
+    await schedules.runs("sched-1", { status: "DEAD_LETTERED" });
+
+    expect(listSpy).toHaveBeenNthCalledWith(1, "pod-1", "sched-1", 20, undefined, false);
+    expect(listSpy).toHaveBeenNthCalledWith(2, "pod-1", "sched-1", 100, "DEAD_LETTERED", undefined);
   });
 });

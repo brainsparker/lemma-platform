@@ -23,10 +23,12 @@ import { PodsNamespace } from "./namespaces/pods.js";
 import { PodRolesNamespace } from "./namespaces/pod-roles.js";
 import { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
 import { PodGroupsNamespace } from "./namespaces/pod-groups.js";
+import { ContactsNamespace } from "./namespaces/contacts.js";
 import { NotificationsNamespace } from "./namespaces/notifications.js";
 import { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
 import { RecordsNamespace } from "./namespaces/records.js";
 import { ResourceAccessNamespace } from "./namespaces/resource-access.js";
+import { DecisionsNamespace } from "./namespaces/decisions.js";
 import { SchedulesNamespace } from "./namespaces/schedules.js";
 import { TablesNamespace } from "./namespaces/tables.js";
 import { UsersNamespace } from "./namespaces/users.js";
@@ -72,6 +74,7 @@ export class LemmaClient {
   readonly connectors: ConnectorsNamespace;
   readonly resourceAccess: ResourceAccessNamespace;
   readonly schedules: SchedulesNamespace;
+  readonly decisions: DecisionsNamespace;
   readonly datastore: DatastoreNamespace;
   /** Alias of {@link datastore}, matching the Python SDK's `pod.queries`. */
   readonly queries: DatastoreNamespace;
@@ -87,6 +90,7 @@ export class LemmaClient {
   readonly podSurfaces: PodSurfacesNamespace;
   /** The WhatsApp, Telegram and Slack groups a pod's bots are in. */
   readonly podGroups: PodGroupsNamespace;
+  readonly contacts: ContactsNamespace;
   /** The caller's own surfaces across all pods (grouped by platform). */
   readonly notifications: NotificationsNamespace;
   readonly userSurfaces: UserSurfacesNamespace;
@@ -140,6 +144,7 @@ export class LemmaClient {
     this.connectors = new ConnectorsNamespace(this._generated, this._http);
     this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
     this.schedules = new SchedulesNamespace(this._generated, podIdFn);
+    this.decisions = new DecisionsNamespace(this._generated, podIdFn);
     this.datastore = new DatastoreNamespace(
       this._generated,
       podIdFn,
@@ -158,6 +163,7 @@ export class LemmaClient {
     this.organizations = new OrganizationsNamespace(this._generated, this._http);
     this.podSurfaces = new PodSurfacesNamespace(this._generated);
     this.podGroups = new PodGroupsNamespace(this._generated);
+    this.contacts = new ContactsNamespace(this._generated);
     this.userSurfaces = new UserSurfacesNamespace(this._generated);
   }
 

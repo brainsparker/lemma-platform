@@ -8,10 +8,12 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.usage.contracts import MeteredRequest
 from app.modules.usage.services.usage_context import UsageExecutionContext
 
 from pydantic_ai.models import Model
 from app.modules.usage.domain.errors import UsageLimitExceededError
+from app.modules.usage.services.contacts_cap import contacts_cap_status
 from app.modules.usage.services.usage_service_factory import build_usage_service
 
 if TYPE_CHECKING:
@@ -25,21 +27,37 @@ async def check_run_budget(
     organization_id: UUID | None,
     user_id: UUID,
     profile_scope: str,
+    outside_audience: bool = False,
 ) -> None:
-    """Refuse an exhausted run before setup, without reserving future spend."""
+    """Refuse an exhausted run before setup, without reserving future spend.
+
+    ``outside_audience``: the run answers a contact or a group's outsiders, so
+    it is the organization's spend and the personal limits of ``user_id`` -- the
+    member who looks after the conversation -- do not apply to it. The
+    organization's contacts cap does, default included.
+    """
     if profile_scope.upper() != "SYSTEM":
         return
     async with factory() as uow:
         limits = await build_usage_service(uow).get_usage_limits(
             organization_id=organization_id, user_id=user_id
         )
+        if (
+            outside_audience
+            and organization_id is not None
+            and (await contacts_cap_status(uow, organization_id)).reached
+        ):
+            raise UsageLimitExceededError(
+                "The organization's monthly cap on answering contacts is reached"
+            )
+    scopes = (
+        (limits["org_monthly"],)
+        if outside_audience
+        else (limits["org_monthly"], limits["user_weekly"], limits["user_monthly"])
+    )
     if any(
         scope["limit_usd"] is not None and scope["used_usd"] >= scope["limit_usd"]
-        for scope in (
-            limits["org_monthly"],
-            limits["user_weekly"],
-            limits["user_monthly"],
-        )
+        for scope in scopes
     ):
         raise UsageLimitExceededError()
 
@@ -74,6 +92,24 @@ def meter_model(
             )
         )
     return MeteredModel(model, profile, source=source)
+
+
+@asynccontextmanager
+async def metered_request(
+    profile: Mapping[str, object], *, source: str | None = None
+) -> AsyncIterator[MeteredRequest]:
+    """Meter one paid request that is not a model call, inside `metering_execution`.
+
+    `profile` names what is being paid for the way a runtime profile snapshot
+    does (`profile_id`, `scope`, `model_name`), which is also what its price is
+    looked up by. Before anything is sent the request is admitted against the
+    execution's limits; call `settle` with what the provider reported, or
+    `reject` when it refused, before the block ends.
+    """
+    from app.modules.usage.services.external_request import metered_external_request
+
+    async with metered_external_request(profile, source=source) as outcome:
+        yield outcome
 
 
 def with_external_stream_retries(model: Model) -> Model:

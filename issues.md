@@ -37,6 +37,22 @@ the thing that is wrong — resolve it with a product decision before writing co
 
 ## Open
 
+### DEV-SCHED-001 — A schedule cannot fire at a surface
+**Violates:** PS-SCHED-030
+**Severity:** question
+**Where:** `lemma-backend/app/modules/schedule/api/schemas/schedule_schemas.py:90`
+**Required:** "When a schedule fires at a surface, the system shall deliver the
+message to that surface."
+**Actual:** a schedule names exactly one agent or one workflow
+(`require_one_target_name`); there is no surface target. The last tie between a
+surface and a schedule, `agent_surfaces.schedule_id`, was dropped in migration
+`0024_drop_surface_schedule_id` with the polled email surfaces it served.
+Found reading the schedule target validation while reviewing pull request #906.
+**Why it matters:** the specification promises a message-to-a-surface schedule
+nobody can create.
+**Fix:** a product decision first. Either withdraw the bullet (an agent on a
+schedule can already message a surface), or add a surface target.
+
 ### DEV-SURF-001 — A disabled surface drops every message to it, in silence
 **Violates:** nothing — and that is the finding. No statement defines what a
 *disabled* surface does with an inbound message.
@@ -66,8 +82,8 @@ anything is published** — because a `trigger_id` expires in about three second
 — and `app_event_handler.py` consults `status` nowhere. So a disabled Slack
 surface still opens its channel-setup modal.
 
-Nothing in `lemma-harness/src` mentions the status, so there is no way to see or
-unset it from the product.
+`lemma-frontend` shows the status as "Disabled" and can switch it back
+(`src/data/surface-settings.ts`), but nothing tells a person why the surface went quiet.
 **Why it matters:** the platform side keeps working — the bot is still in the
 channel, the number still receives — so a person messaging a disabled surface
 sees their message delivered and simply never answered, indistinguishable from
@@ -83,7 +99,7 @@ it is switched off; (c) it should exist, stay silent, and gain UI so somebody ca
 see why nothing is happening. Decide before writing code.
 **How it was found:** tracing `AgentSurfaceStatus.INACTIVE` from
 `domain/entities.py:248` to its readers during the surfaces schema rework, then
-grepping `lemma-harness/src` for any reference to it and finding none.
+grepping the web app's source for any reference to it and finding none.
 
 ### DEV-SURF-002 — A reassigned phone number signs in as the person who had it
 **Violates:** nothing. Decided: a number belongs to one person until somebody

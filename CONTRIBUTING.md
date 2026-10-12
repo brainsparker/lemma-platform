@@ -18,9 +18,9 @@ make init        # create .env files with local defaults (idempotent)
 make dev         # infra + backend + frontend
 ```
 
-`make help` lists everything else. The dev stack uses ports 3710 (harness) and
-8710 (backend). Run `make dev-frontend` alongside it for the user-facing workspace
-on port 3000. `make init` installs and configures both apps.
+`make help` lists everything else. The dev stack uses ports 3000 (frontend) and
+8710 (backend). `make dev-frontend` runs the frontend alone, for a backend you
+run some other way.
 
 ### Toolchain versions
 
@@ -102,7 +102,6 @@ Each component has its own setup and its own checks. Run the ones you touched.
 |---|---|---|
 | `lemma-backend/` | [backend README](lemma-backend/README.md), [development guidelines](lemma-backend/docs/development.md), [module guide](lemma-backend/docs/modules/README.md) | see below |
 | `lemma-frontend/` | [frontend README](lemma-frontend/README.md) | `npm run check && npm test && npm run build` |
-| `lemma-harness/` | [frontend README](lemma-harness/README.md), [frontend contributing](lemma-harness/CONTRIBUTING.md) | `npm run check && npm test` |
 | `lemma-cli/` | [CLI README](lemma-cli/README.md), [conventions](lemma-cli/CONVENTIONS.md) | `make test && make lint` |
 | `lemma-typescript/` | [SDK README](lemma-typescript/README.md) | `npm run build && npm test` |
 | `lemma-python/` | [SDK README](lemma-python/README.md) | `uv run pytest` |
@@ -175,6 +174,15 @@ that enforces it, and whether it is a hard failure or a ratchet — is in
 - Never hold a DB session across external I/O or a streaming body.
 - Classify errors at process boundaries. Preserve cancellation, redact secrets,
   and never return or log raw provider exceptions.
+- An endpoint a browser or an app reaches with no Lemma session goes under
+  `/public/`. Load balancers apply their untrusted-traffic rules to
+  `/public/*`, so an anonymous endpoint anywhere else escapes them. Sign-in,
+  OAuth, webhooks and machine-credential endpoints are not public: they are
+  listed in `SELF_AUTHENTICATED` in `lemma-backend/app/core/auth_exemptions.py`,
+  each with the reason it needs no session. A route moved under `/public/`
+  keeps its old path as a dated `LEGACY_ALIASES` entry.
+  `app/core/tests/unit/test_route_auth_classes.py` fails on an exempt route in
+  no class, an entry with no route, and an alias past its date.
 - Add an Alembic upgrade and downgrade test for schema changes.
 - Do not annotate with `Any`, or with a bare `dict`, `list` or `tuple`. Both
   say "this boundary is not checked", and the checker then cannot help at

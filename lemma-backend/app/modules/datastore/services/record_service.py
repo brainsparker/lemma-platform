@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -9,8 +10,15 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.modules.datastore.domain.datastore_entities import DatastoreDataType
-from app.modules.datastore.domain.ports import DatastoreRecordRepositoryPort
-from app.modules.datastore.services.authorization import DatastoreAuthorization
+from app.modules.datastore.domain.ports import (
+    DatastoreRecordRepositoryPort,
+    RecordEventFactory,
+)
+from app.modules.datastore.domain.row_security import CONTACT_COLUMN, RowPrincipal
+from app.modules.datastore.services.authorization import (
+    DatastoreAuthorization,
+    outside_writer,
+)
 from app.modules.datastore.infrastructure.record_bulk_delete import (
     bulk_delete_records as write_bulk_deletes,
 )
@@ -71,12 +79,22 @@ class RecordService:
     async def _require_record_read(self, *, user_id: UUID, ctx: TableContext) -> None:
         if self.authz is None:
             return
+        self.authz.refuse_contact_scoped_records(ctx)
         await self.authz.require_record_read(user_id=user_id, ctx=ctx)
 
-    async def _require_record_write(self, *, user_id: UUID, ctx: TableContext) -> None:
+    async def _require_record_write(
+        self, *, user_id: UUID, ctx: TableContext, creates: bool = False
+    ) -> None:
         if self.authz is None:
             return
+        if not creates:
+            self.authz.refuse_contact_scoped_records(ctx)
         await self.authz.require_record_write(user_id=user_id, ctx=ctx)
+
+    def _stamp_contact(self, ctx: TableContext, row: dict[str, Any]) -> dict[str, Any]:
+        """A new row made for a contact names them, whatever the caller sent."""
+        contact_id = self.authz.contact_scope(ctx) if self.authz is not None else None
+        return row if contact_id is None else {**row, CONTACT_COLUMN: str(contact_id)}
 
     async def _should_enforce_user_scope(
         self,
@@ -154,10 +172,12 @@ class RecordService:
         data: dict[str, Any],
         user_id: UUID,
     ):
-        await self._require_record_write(user_id=user_id, ctx=ctx)
+        await self._require_record_write(user_id=user_id, ctx=ctx, creates=True)
 
         validator = RecordValidator(ctx)
-        sanitized_data = validator.strip_system_write_overrides(data)
+        sanitized_data = self._stamp_contact(
+            ctx, validator.strip_system_write_overrides(data)
+        )
 
         is_valid, errors, error_details = validator.validate(
             sanitized_data, is_creation=True
@@ -171,15 +191,9 @@ class RecordService:
         await self._reject_unknown_user_references(
             self._user_references(ctx, sanitized_data)
         )
-        if ctx.events_enabled:
-            event_factory = partial(
-                self.events.required_for_record,
-                ctx=ctx,
-                operation=DatastoreRecordOperation.INSERT,
-                user_id=user_id,
-            )
-        else:
-            event_factory = None
+        event_factory = self._event_factory(
+            ctx, DatastoreRecordOperation.INSERT, user_id
+        )
         record = await self.record_repository.create_record(
             ctx,
             sanitized_data,
@@ -236,8 +250,9 @@ class RecordService:
 
         Parses the statement (single, read-only, no cross-schema references) and
         enforces per-table ``DATASTORE_TABLE_READ`` for every referenced table via
-        ``resolve_query_row_scope``. RLS-enabled tables are row-filtered at the
-        database layer.
+        ``resolve_query_row_scope``. RLS-enabled and contact-owned tables are
+        row-filtered at the database layer, as the principal ``ctx`` names: a
+        member, a contact, or nobody.
 
         Rows of RLS tables are scoped to ``user_id`` by default — for every
         caller, pod admins included — so apps and functions reading through this
@@ -269,9 +284,7 @@ class RecordService:
         return await self.record_repository.execute_readonly_query(
             pod_id=pod_id,
             query=query,
-            user_id=user_id,
-            enable_rls=True,
-            is_pod_admin=is_pod_admin,
+            principal=RowPrincipal.of(ctx, is_pod_admin=is_pod_admin),
         )
 
     async def list_records(
@@ -350,15 +363,8 @@ class RecordService:
         await self._reject_unknown_user_references(
             self._user_references(ctx, sanitized_data)
         )
-        event_factory = (
-            partial(
-                self.events.required_for_record,
-                ctx=ctx,
-                operation=DatastoreRecordOperation.UPDATE,
-                user_id=user_id,
-            )
-            if ctx.events_enabled
-            else None
+        event_factory = self._event_factory(
+            ctx, DatastoreRecordOperation.UPDATE, user_id
         )
         return await self.record_repository.update_record(
             ctx,
@@ -389,7 +395,9 @@ class RecordService:
             record_id,
             user_id,
             enforce_user_scope=enforce_user_scope,
-            event_factory=self._delete_event_factory(ctx, user_id),
+            event_factory=self._event_factory(
+                ctx, DatastoreRecordOperation.DELETE, user_id
+            ),
         )
         if ctx.events_enabled:
             await self.events.dispatch()
@@ -403,13 +411,14 @@ class RecordService:
         *,
         upsert: bool = False,
     ):
-        await self._require_record_write(user_id=user_id, ctx=ctx)
+        await self._require_record_write(user_id=user_id, ctx=ctx, creates=not upsert)
         if not records:
             return 0
 
         validator = RecordValidator(ctx)
         sanitized_records = [
-            validator.strip_system_write_overrides(record) for record in records
+            self._stamp_contact(ctx, validator.strip_system_write_overrides(record))
+            for record in records
         ]
 
         # Collected row by row so each row's own validation still runs in
@@ -433,15 +442,9 @@ class RecordService:
         # it actually wrote — the same contract as a single create. Building
         # them here from the submitted data would leave out the generated id and
         # anything the database defaulted, which a match condition may test.
-        if ctx.events_enabled:
-            event_factory = partial(
-                self.events.required_for_record,
-                ctx=ctx,
-                operation=DatastoreRecordOperation.INSERT,
-                user_id=user_id,
-            )
-        else:
-            event_factory = None
+        event_factory = self._event_factory(
+            ctx, DatastoreRecordOperation.INSERT, user_id
+        )
 
         write_records = (
             self.record_repository.bulk_upsert_records
@@ -505,15 +508,8 @@ class RecordService:
 
         await self._reject_unknown_user_references(user_references)
 
-        event_factory = (
-            partial(
-                self.events.required_for_record,
-                ctx=ctx,
-                operation=DatastoreRecordOperation.UPDATE,
-                user_id=user_id,
-            )
-            if ctx.events_enabled
-            else None
+        event_factory = self._event_factory(
+            ctx, DatastoreRecordOperation.UPDATE, user_id
         )
         count = await write_bulk_updates(
             self.record_repository,
@@ -531,14 +527,27 @@ class RecordService:
             await self.events.dispatch()
         return count
 
-    def _delete_event_factory(self, ctx: TableContext, user_id: UUID):
-        """The DELETE event builder both delete paths stage their rows through."""
+    def _event_factory(
+        self,
+        ctx: TableContext,
+        operation: DatastoreRecordOperation,
+        user_id: UUID,
+    ) -> RecordEventFactory | None:
+        """The builder every write path stages its rows' events through.
+
+        It names whoever outside the pod the write is for (``outside_writer``),
+        so a contact's function writing a row raises the same OUTSIDE event a
+        visitor's form row does, and a DATASTORE schedule treats the two alike.
+        """
         if not ctx.events_enabled:
             return None
+        writer = outside_writer(ctx)
+        if writer != ctx.outside_actor:
+            ctx = replace(ctx, outside_actor=writer)
         return partial(
             self.events.required_for_record,
             ctx=ctx,
-            operation=DatastoreRecordOperation.DELETE,
+            operation=operation,
             user_id=user_id,
         )
 
@@ -571,7 +580,9 @@ class RecordService:
             record_ids,
             user_id,
             enforce_user_scope=enforce_user_scope,
-            event_factory=self._delete_event_factory(ctx, user_id),
+            event_factory=self._event_factory(
+                ctx, DatastoreRecordOperation.DELETE, user_id
+            ),
         )
         # One dispatch for the batch, as with bulk update: the repository
         # stages a DELETE event per row and flushes none of them.

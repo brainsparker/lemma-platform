@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
 from typing import Any, ClassVar
@@ -53,6 +54,29 @@ class TimeScheduleConfig(BaseModel):
             "offset) is read in, e.g. 'Europe/Berlin'. Omitted means UTC."
         ),
     )
+
+
+#: The webhook source a connected MCP server's events arrive as. A WEBHOOK
+#: schedule naming it carries the event and its arguments in its config and is
+#: subscribed on its author's account, like a connector trigger.
+MCP_EVENT_SOURCE = "mcp"
+
+#: Config keys only provisioning writes, never an author. Each is a routing key
+#: an inbound webhook is matched on by containment across every tenant's
+#: schedules: a Composio trigger or MCP subscription id, a GitHub App
+#: installation. A schedule that could carry one it typed would receive the
+#: events of whoever owns it, so they are dropped from whatever an author sends
+#: and are written back only from the schedule's own account.
+PROVISIONED_CONFIG_KEYS = frozenset({"provider_trigger_id", "installation_id"})
+
+
+def authored_config(config: Mapping[str, object] | None) -> dict[str, object]:
+    """`config` without the keys only provisioning may write."""
+    return {
+        key: value
+        for key, value in (config or {}).items()
+        if key not in PROVISIONED_CONFIG_KEYS
+    }
 
 
 class WebhookScheduleConfig(BaseModel):
@@ -248,6 +272,11 @@ class ScheduleEntity(Entity):
     account_id: UUID | None = None
     connector_trigger_id: str | None = None
 
+    # DATASTORE only. A row added from outside the pod -- an open table's form
+    # -- is a stranger's words, and by default it starts nothing; a schedule
+    # that should react to it says so, and its run is told the row is untrusted.
+    include_outside_rows: bool = False
+
     visibility: str = "POD"
     is_active: bool = True
     is_internal: bool = (
@@ -282,6 +311,26 @@ class ScheduleEntity(Entity):
         return None
 
     @property
+    def listens_to_mcp(self) -> bool:
+        """A WEBHOOK schedule on a connected MCP server's event."""
+        return (
+            self.schedule_type == ScheduleType.WEBHOOK
+            and not self.connector_trigger_id
+            and self.config.get("source") == MCP_EVENT_SOURCE
+        )
+
+    @property
+    def listens_through_account(self) -> bool:
+        """Whether its subscription is made on its author's account -- a
+        connector trigger, or an MCP server's event -- and so is created,
+        swapped and dropped with the schedule."""
+        return (
+            self.schedule_type == ScheduleType.WEBHOOK
+            and self.account_id is not None
+            and (bool(self.connector_trigger_id) or self.listens_to_mcp)
+        )
+
+    @property
     def has_target(self) -> bool:
         """Whether anything is wired to this schedule's firing."""
         return self.agent_id is not None or self.workflow_id is not None
@@ -304,6 +353,7 @@ class ScheduleCreateEntity(BaseModel):
     filter_output_schema: dict[str, Any] | None = None
     account_id: UUID | None = None
     connector_trigger_id: str | None = None
+    include_outside_rows: bool = False
     # None means "caller did not specify": DATASTORE and GLOBAL-workflow
     # schedules default to POD; other schedules default to PERSONAL.
     visibility: str | None = None
@@ -328,5 +378,6 @@ class ScheduleUpdateEntity(BaseModel):
     instruction: str | None = None
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
+    include_outside_rows: bool | None = None
     is_active: bool | None = None
     visibility: str | None = None

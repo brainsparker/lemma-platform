@@ -232,8 +232,8 @@ The workspace page is a **remote origin** to Tauri — locald serves it over
 http, and the hosted build loads `lemma.work` — so it can only reach the shell
 through a capability naming its URL. `capabilities/workspace.json` grants
 `open_control_center`, seven `agent_host_*` commands, `sandbox_image_status`,
-the conversation-folder commands, `discover_provider_models` and
-`configure_ai_provider` — and, for Settings → This Mac, the commands that
+the conversation-folder commands, `discover_provider_models` — and, for
+Settings → This Mac, the commands that
 change this computer's own settings: `local_settings_snapshot`,
 `apply_local_settings`, `test_server_setup`, `local_sharing`, `set_start_at_login`,
 `set_host_execution`, `repair_runtime`, `open_logs`, `diagnostic_logs`, `prepare_sandbox_image`,
@@ -723,7 +723,8 @@ A `401 AGENT_HOST_REVOKED_OR_MISSING` would stop the old host faster, but it
 drops its pairing after three refusals, and the person would have to pair again
 after updating.
 
-**Removal.** Delete the controller, its `/agent-runtime/conversations/` entry in
-`EXCLUDED_PATHS`, and this section no earlier than 2027-03-25 (six months after
-protocol 3 shipped on 2026-09-25), and only after
+**Removal.** Delete the controller, its `/agent-runtime/conversations` entry in
+`SELF_AUTHENTICATED` (`app/core/auth_exemptions.py`), and this section no
+earlier than 2027-03-25 (six months after protocol 3 shipped on 2026-09-25),
+and only after
 `agent.agent_host_legacy.upgrade_required` has not been logged for 30 days.

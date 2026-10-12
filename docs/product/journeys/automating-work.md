@@ -219,6 +219,25 @@ always reaches a conclusion a person can see.
 
 **Contracts:** `workflow.run.create`, `workflow.run.get`
 
+### PS-FLOW-015 — A workflow can branch on a judgement
+**Status:** covered
+
+- Where a branch depends on reading something rather than on a fact the run
+  already holds, the system shall let a person give that step one closed
+  question about the evidence, and a branch for each answer.
+- When a run reaches such a step, the system shall ask the question and
+  continue down the branch the answer names.
+- When the evidence does not support an answer, the system shall take the branch
+  the person set for an unsure answer.
+- The system shall record on the step what was answered and which branch it
+  took.
+- If a person saves a question with an answer that leads nowhere, then the
+  system shall refuse it and shall say which answer.
+- If the judgement cannot be made, then the system shall not take any branch,
+  and shall fail the run saying why.
+
+**Contracts:** `workflow.graph.update`, `workflow.run.create`, `workflow.run.get`
+
 ---
 
 ## Capability: Watch a run happen
@@ -234,6 +253,29 @@ always reaches a conclusion a person can see.
   than leaving it open.
 
 **Contracts:** `workflow.run.stream`, `workflow.run.get`
+
+---
+
+## Capability: Judge something with a closed question
+
+A function or a person can ask the pod to judge one piece of evidence -- an
+email, an event, a row -- against closed questions: which of these, which of
+these apply, yes or no, where on a short scale. Nothing is kept; whoever asks
+records the answer where it matters.
+
+### PS-FUNC-020 — A closed question about some evidence gets one allowed answer per question
+**Status:** covered
+
+- When a pod member asks closed questions about a piece of evidence, the system
+  shall answer every question with one of the values that question allows, or
+  with no value when the evidence does not support one.
+- If a question asks for free text or an open-ended number, then the system
+  shall refuse the request without judging anything and shall name each
+  question at fault.
+- If someone who is not a member of the pod asks, then the system shall refuse
+  them.
+
+**Contracts:** `decision.make`
 
 ---
 

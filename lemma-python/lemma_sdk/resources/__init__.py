@@ -16,6 +16,7 @@ _NAME_TO_MODULE = {
     "WebLogins": "web_logins",
     "PodAgents": "agents",
     "PodConversations": "conversations",
+    "PodDecisions": "decisions",
     "PodQueries": "data",
     "PodRecords": "data",
     "PodTables": "data",
@@ -24,6 +25,8 @@ _NAME_TO_MODULE = {
     "PodFiles": "files",
     "PodFunctions": "functions",
     "PodGroups": "groups",
+    "PodContacts": "contacts",
+    "PodWebWidgets": "web_widgets",
     "BoundConnectors": "connectors",
     "PodMembers": "members",
     "PodNotifications": "notifications",
@@ -44,11 +47,14 @@ if TYPE_CHECKING:
     from .web_logins import WebLogins
     from .agents import PodAgents
     from .conversations import PodConversations
+    from .decisions import PodDecisions
     from .data import PodQueries, PodRecords, PodTables, Table
     from .apps import PodApps
     from .files import PodFiles
     from .functions import PodFunctions
     from .groups import PodGroups
+    from .contacts import PodContacts
+    from .web_widgets import PodWebWidgets
     from .connectors import BoundConnectors
     from .members import PodMembers
     from .notifications import PodNotifications
@@ -85,10 +91,13 @@ __all__ = [
     "BoundOrgRuntime",
     "PodAgents",
     "PodConversations",
+    "PodDecisions",
     "PodApps",
     "PodFiles",
     "PodFunctions",
     "PodGroups",
+    "PodContacts",
+    "PodWebWidgets",
     "PodMembers",
     "PodNotifications",
     "PodQueries",

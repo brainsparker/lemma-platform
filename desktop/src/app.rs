@@ -170,6 +170,8 @@ fn setup(
         cold: resume.is_none(),
     });
 
+    // Before any window exists, so none is ever ordered in as a tab.
+    disallow_window_tabbing();
     build_main_window(&handle, mode, initial_url(mode, resume.as_ref()), true)?;
     launch_trace("window shown");
 

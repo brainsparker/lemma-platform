@@ -26,9 +26,11 @@ from app.modules.agent.domain.pod_asks import (
     ASK_SOURCE,
     AskRefused,
 )
+from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
+    ConversationType,
     MessageDraft,
     MessageRole,
 )
@@ -197,7 +199,7 @@ async def test_an_ask_runs_as_the_person_and_its_answer_arrives_once(
 
     # The turn that answer started is not the person's: it may relay what came
     # back, but asking again -- here or anywhere -- waits for them to say so.
-    with pytest.raises(AskRefused, match="not with something the person wrote"):
+    with pytest.raises(AskRefused, match="started with an answer coming back"):
         with suppress_agent_run_enqueue():
             await _service().ask(
                 deps, teammate=teammate, request="And invoice 43?", wait_seconds=0
@@ -477,6 +479,17 @@ async def test_who_a_pod_can_ask_is_the_other_pods_the_person_is_in(
     brief = await _default_agent_brief(pod_id=support, user_id=fixed_test_user["id"])
     assert "## Other pods you can ask" in brief
     assert f"(teammate: {billing})" in brief
+    # Per conversation: a task nobody started could only ask over a link, and
+    # nothing is connected; a channel's readers may not be answered by another
+    # pod at all. Neither is offered Billing.
+    for narrowed in (
+        {"type": ConversationType.TASK},
+        {"metadata": {"conversation_kind": "CHANNEL"}},
+    ):
+        other = await _default_agent_brief(
+            pod_id=support, user_id=fixed_test_user["id"], **narrowed
+        )
+        assert "## Other pods you can ask" not in other, narrowed
 
     # Someone who is only in Support has nobody to ask through it.
     colleague = await signup_user(async_client, f"colleague-{uuid4().hex[:6]}")
@@ -497,14 +510,22 @@ async def test_who_a_pod_can_ask_is_the_other_pods_the_person_is_in(
     assert theirs.json()["items"] == []
 
 
-async def _default_agent_brief(*, pod_id: str, user_id: str) -> str:
+async def _default_agent_brief(
+    *,
+    pod_id: str,
+    user_id: str,
+    type: ConversationType = ConversationType.CHAT,
+    metadata: dict[str, object] | None = None,
+) -> str:
     uow_factory = SessionUnitOfWorkFactory(async_session_maker)
     async with uow_factory() as uow:
         agent = await AgentRepository(uow).get_by_pod_and_name(
             pod_id=UUID(pod_id), name=DEFAULT_POD_AGENT_NAME
         )
     assert agent is not None
-    conversation = SimpleNamespace(id=uuid4(), metadata={})
+    conversation = Conversation(
+        user_id=UUID(user_id), pod_id=UUID(pod_id), type=type, metadata=metadata or {}
+    )
     return await AgentContextBriefBuilder(uow_factory).build(
         agent=agent,
         conversation=conversation,

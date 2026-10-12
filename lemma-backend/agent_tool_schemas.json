@@ -83,6 +83,18 @@
           ],
           "default": null
         },
+        "asked_as": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "AS_PERSON: it worked with the person's own access there. LINK: with what that pod shared with this one."
+        },
         "conversation_id": {
           "anyOf": [
             {
@@ -106,7 +118,7 @@
             }
           ],
           "default": null,
-          "description": "ANSWERED (read `answer`) / WORKING (end your turn; the answer comes here) / WAITING (it needs the person first) / UNFINISHED."
+          "description": "ANSWERED (read `answer`) / WORKING (end your turn; the answer comes here) / WAITING (it needs someone there first) / UNFINISHED / DISCONNECTED (the connection was removed)."
         },
         "answer": {
           "anyOf": [

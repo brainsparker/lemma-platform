@@ -1,8 +1,9 @@
 """Another pod, asking this one: Public reads here, its grants, and nothing else.
 
 The paths that need no grant lookup are pinned here, with no database. What a
-grant to ``POD:A`` unlocks is held against a real database in the agent
-module's pod-ask e2e tests, where the grant rows exist.
+grant to ``POD:A`` unlocks -- decided by the authorizer and projected row by row
+in SQL -- is held against real grant rows in
+``agent/tests/e2e/test_pod_link_authority_e2e.py``.
 """
 
 from __future__ import annotations
@@ -10,10 +11,6 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Column, MetaData, String, Table
-from sqlalchemy.dialects import postgresql
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
-
 from app.core.authorization.context import (
     ActorType,
     Context,
@@ -21,13 +18,12 @@ from app.core.authorization.context import (
     ResourceType,
     ResourceVisibility,
 )
-from app.core.authorization.permissions import Permissions
+from app.core.authorization.permissions import Permissions, pod_principal_may_hold
 from app.core.authorization.pod_principal import (
     POD_PRINCIPAL_TYPE,
     build_pod_context,
     pod_principal,
 )
-from app.core.authorization.sql_actions import allowed_actions_expr
 
 pytestmark = pytest.mark.unit
 
@@ -107,40 +103,38 @@ async def test_a_personal_thing_is_never_another_pods():
     assert not decision.allowed
 
 
-def _projected_sql(ctx: Context, *, with_pod_column: bool) -> str:
-    rows = Table(
-        "resources",
-        MetaData(),
-        Column("id", PGUUID(as_uuid=True)),
-        Column("pod_id", PGUUID(as_uuid=True)),
-        Column("visibility", String),
-    )
-    expression = allowed_actions_expr(
-        ctx=ctx,
-        resource_type=ResourceType.FOLDER,
-        resource_id_col=rows.c.id,
-        pod_id_col=rows.c.pod_id if with_pod_column else None,
-        visibility_col=rows.c.visibility,
-    )
-    return str(
-        expression.compile(
-            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
-        )
+@pytest.mark.parametrize(
+    "permission_id",
+    [
+        Permissions.DATASTORE_RECORD_WRITE,
+        Permissions.DATASTORE_TABLE_DELETE,
+        Permissions.FOLDER_WRITE,
+    ],
+)
+async def test_nothing_but_reading_whatever_a_grant_says(permission_id):
+    """Refused before any grant is read: no session, so a lookup would raise."""
+    here = uuid4()
+    ctx = _asking(here=here, asker=uuid4())
+
+    decision = await ctx.authorizer.authorize(
+        ctx, permission_id, _folder(here, ResourceVisibility.PUBLIC)
     )
 
-
-def test_the_row_projection_matches_its_grants_inside_its_pod():
-    here, asker = uuid4(), uuid4()
-
-    sql = _projected_sql(_asking(here=here, asker=asker), with_pod_column=True)
-
-    assert f"'{POD_PRINCIPAL_TYPE}'" in sql
-    assert asker.hex in sql.replace("-", "")
-    assert here.hex in sql.replace("-", "")
-    assert "resources.visibility = 'PERSONAL'" in sql
+    assert not decision.allowed
+    assert decision.reason_code == "POD_READ_ONLY"
 
 
-def test_a_row_whose_pod_cannot_be_told_projects_nothing():
-    sql = _projected_sql(_asking(here=uuid4(), asker=uuid4()), with_pod_column=False)
-
-    assert POD_PRINCIPAL_TYPE not in sql
+@pytest.mark.parametrize(
+    ("permission_id", "may_hold"),
+    [
+        (Permissions.DATASTORE_TABLE_READ, True),
+        (Permissions.DATASTORE_RECORD_READ, True),
+        (Permissions.FOLDER_READ, True),
+        (Permissions.AGENT_EXECUTE, True),
+        (Permissions.DATASTORE_RECORD_WRITE, False),
+        (Permissions.FOLDER_WRITE, False),
+        (Permissions.POD_MEMBER_MANAGE, False),
+    ],
+)
+def test_a_pod_may_hold_reads_and_the_link_and_nothing_else(permission_id, may_hold):
+    assert pod_principal_may_hold(permission_id) is may_hold

@@ -209,17 +209,7 @@ class SurfaceTurnStarter:
                 credentials=credentials,
                 roster_reads=self.roster_reads,
             )
-            if background.lines:
-                metadata["channel_context"] = background.lines
-            if background.withheld:
-                metadata["channel_context_withheld"] = background.withheld
-            if background.participants:
-                metadata["channel_participants"] = [
-                    participant.model_dump(mode="json")
-                    for participant in background.participants
-                ]
-            if background.audience is not None:
-                metadata["outside_audience"] = background.audience.to_metadata()
+            metadata.update(background.to_metadata())
         elif not context.audience.answers_outsiders:
             # Email is a DM to the pod's mailbox, but a reply-all reaches
             # everybody on the thread.

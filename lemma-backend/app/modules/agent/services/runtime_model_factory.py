@@ -218,6 +218,32 @@ class _UsageOnlyStreamOptionsChatModel(OpenAIChatModel):
         return {"include_usage": True}
 
 
+def _nonempty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _provider_access(
+    runtime_profile: Mapping[str, object],
+    config: Mapping[str, object],
+    runtime_credentials: Mapping[str, object] | None,
+) -> tuple[str | None, dict[str, str] | None, str | None]:
+    """The key and headers the SDK client sends, and the profile it pools under."""
+    credentials = (
+        runtime_credentials if isinstance(runtime_credentials, Mapping) else {}
+    )
+    headers = config.get("headers")
+    default_headers = (
+        {str(key): str(value) for key, value in headers.items()}
+        if isinstance(headers, Mapping)
+        else None
+    )
+    return (
+        _nonempty_str(credentials.get("api_key")),
+        default_headers or None,
+        _nonempty_str(runtime_profile.get("profile_id")),
+    )
+
+
 def _unmetered_model_from_runtime_profile(
     *,
     runtime_profile: Mapping[str, object] | None,
@@ -254,20 +280,9 @@ def _unmetered_model_from_runtime_profile(
     if not isinstance(config, Mapping):
         return None
 
-    credentials = (
-        runtime_credentials if isinstance(runtime_credentials, Mapping) else {}
+    api_key, default_headers, profile_id = _provider_access(
+        runtime_profile, config, runtime_credentials
     )
-    api_key = credentials.get("api_key")
-    api_key = api_key if isinstance(api_key, str) and api_key else None
-
-    headers = config.get("headers")
-    default_headers = (
-        {str(key): str(value) for key, value in headers.items()}
-        if isinstance(headers, Mapping)
-        else None
-    ) or None
-    profile_id = runtime_profile.get("profile_id")
-    profile_id = profile_id if isinstance(profile_id, str) and profile_id else None
 
     if protocol == "OPENAI_COMPATIBLE":
         base_url = config.get("base_url")

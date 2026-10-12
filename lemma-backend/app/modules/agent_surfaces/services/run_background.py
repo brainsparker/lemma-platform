@@ -61,6 +61,21 @@ class RunBackground:
     #: Everyone the pod knows is in the group, and whether they are in the pod.
     participants: tuple[SurfaceGroupParticipant, ...] = ()
 
+    def to_metadata(self) -> dict[str, object]:
+        """The run's message metadata keys for this background, only those set."""
+        metadata: dict[str, object] = {}
+        if self.lines:
+            metadata["channel_context"] = self.lines
+        if self.withheld:
+            metadata["channel_context_withheld"] = self.withheld
+        if self.participants:
+            metadata["channel_participants"] = [
+                participant.model_dump(mode="json") for participant in self.participants
+            ]
+        if self.audience is not None:
+            metadata["outside_audience"] = self.audience.to_metadata()
+        return metadata
+
 
 async def run_background(
     uow_factory: UnitOfWorkFactory,

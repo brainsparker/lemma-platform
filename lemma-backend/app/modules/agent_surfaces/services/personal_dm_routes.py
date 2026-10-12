@@ -15,7 +15,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
 )
-from app.modules.agent_surfaces.domain.errors import PersonalRouteUnavailable
+from app.modules.agent_surfaces.domain.personal_route import PersonalRouteUnavailable
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (

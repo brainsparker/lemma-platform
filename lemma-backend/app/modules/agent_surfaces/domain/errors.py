@@ -280,13 +280,3 @@ class SurfaceWebhookAuthenticationError(DomainError):
         super().__init__(
             detail, code="SURFACE_WEBHOOK_AUTH_FAILED", status_code=status_code
         )
-
-
-class PersonalRouteUnavailable(ValueError):
-    """A verified person's private route to their pod can no longer carry a DM.
-
-    Here rather than beside the route checks in ``services/personal_dm_routes``
-    so that catching it does not import them: they reach identity onboarding,
-    and through it the sign-in stack, which the worker's turn starter otherwise
-    never loads.
-    """

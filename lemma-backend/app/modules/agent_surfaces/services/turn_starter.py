@@ -29,10 +29,8 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.domain.errors import (
-    AgentSurfaceError,
-    PersonalRouteUnavailable,
-)
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
+from app.modules.agent_surfaces.domain.personal_route import PersonalRouteUnavailable
 from app.modules.agent_surfaces.domain.ingress_context import (
     AgentSurfaceContext,
     SurfaceChatContext,

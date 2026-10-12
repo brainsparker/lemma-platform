@@ -198,8 +198,9 @@ class DatastoreSignedLink(UUIDAuditBase):
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    # `agent:<id>` or `function:<id>` when a workload minted the link, so the
-    # live check at fetch time holds it to what the workload may read.
+    # `agent:<id>` or `function:<id>` when a workload minted the link for a
+    # person, `alone:agent:<id>` when it minted for nobody, so the live check at
+    # fetch time holds it to what it was held to then (`ACTING_ALONE`).
     minted_by_workload: Mapped[str | None] = mapped_column(String(80), nullable=True)
     path: Mapped[str] = mapped_column(Text)
     object_key: Mapped[str] = mapped_column(Text)

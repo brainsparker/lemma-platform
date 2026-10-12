@@ -342,8 +342,14 @@ put it there having to think about it on every operation.
   and never the documents it only links to.
 - The system shall serve through a link only what the person who made it can
   still read, and, when an agent made it, only what that agent can also read.
-- If a page that others can edit embeds a personal or restricted file, then the
-  system shall not serve that file through the page's link.
+- The system shall serve through a page's link a personal file only when the
+  page and the file are both in the personal folder of the person who made the
+  link, and a restricted file never.
+- When a page's link has been opened for the last time it allows, the system
+  shall keep serving what the page embeds for a short while, so that last
+  reader sees the whole page.
+- If the person who made a link no longer exists, then the system shall serve
+  nothing through it, even when an agent made it for them.
 
 **Contracts:** `file.signed_url`, `file.update`
 

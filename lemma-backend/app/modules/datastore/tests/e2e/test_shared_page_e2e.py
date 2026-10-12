@@ -16,7 +16,18 @@ import pytest
 from fastapi import status
 from httpx import ASGITransport, AsyncClient
 
+from sqlalchemy import update
+
+from app.core.infrastructure.db.session import get_session_maker
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.datastore.api import shared_link_files
+from app.modules.datastore.infrastructure.models.datastore_models import (
+    DatastoreSignedLink,
+)
+from app.modules.datastore.infrastructure.repositories.signed_link_repository import (
+    SignedLinkRepository,
+)
+from app.modules.datastore.services.files import link_budget, signed_url
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
 from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
 from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
@@ -64,14 +75,16 @@ async def test_an_edit_is_what_the_next_reader_sees(
 
     # The browser holding the first copy asks whether it is still current. It
     # is not, so it gets the edit rather than a 304 that would pin it forever.
-    again = await async_client.get(f"/public/s/{code}", headers={"If-None-Match": stale_etag})
+    again = await async_client.get(
+        f"/public/s/{code}", headers={"If-None-Match": stale_etag}
+    )
     assert again.status_code == status.HTTP_200_OK, again.text
     assert again.content == b"# Second"
     assert again.headers["etag"] != stale_etag
 
 
 async def test_a_page_carries_the_pictures_it_shows_without_spending_opens(
-    pod_api: DatastoreApi, async_client: AsyncClient
+    pod_api: DatastoreApi, async_client: AsyncClient, monkeypatch
 ):
     await pod_api.create_folder("/pages")
     await pod_api.create_folder("/pages/Plan-files")
@@ -92,12 +105,93 @@ async def test_a_page_carries_the_pictures_it_shows_without_spending_opens(
         assert picture.content == PNG
         assert picture.headers["content-type"].startswith("image/png")
 
+    # A browser asks in this order: the page, then its pictures. The open that
+    # spends the last allowance is still somebody reading the page, so what it
+    # shows keeps loading — a one-open link must not be a page without pictures.
+    opened = await async_client.get(f"/public/s/{code}")
+    assert opened.status_code == status.HTTP_200_OK, opened.text
+    for _ in range(2):
+        shown = await async_client.get(_embedded(code, "Plan-files/chart.png"))
+        assert shown.status_code == status.HTTP_200_OK, shown.text
+
+    # The page itself is spent.
+    again = await async_client.get(f"/public/s/{code}")
+    assert again.status_code == status.HTTP_410_GONE
+
+    # Once the grace has passed, what it carried goes with it.
+    monkeypatch.setattr(signed_url, "EMBEDDED_GRACE_SECONDS", 0)
+    spent = await async_client.get(_embedded(code, "Plan-files/chart.png"))
+    assert spent.status_code == status.HTTP_410_GONE
+
+
+async def test_the_embedded_allowance_is_a_ceiling(
+    pod_api: DatastoreApi, async_client: AsyncClient, monkeypatch
+):
+    """What a page carries is metered in bytes of its own, so a leaked link
+    cannot be used to pull its pictures forever."""
+    # One 72-byte picture fits; a second does not.
+    monkeypatch.setattr(signed_url, "EMBEDDED_BYTES_PER_OPEN", 100)
+    assert len(PNG) == 72
+    await pod_api.create_folder("/pages")
+    await pod_api.upload_file(
+        "chart.png", PNG, directory_path="/pages", content_type="image/png"
+    )
+    page = await pod_api.upload_file(
+        "Plan.md", b"![chart](chart.png)\n", directory_path="/pages"
+    )
+    code = await _share(pod_api, page["path"], {"max_hits": 1})
+
+    first = await async_client.get(_embedded(code, "chart.png"))
+    assert first.status_code == status.HTTP_200_OK, first.text
+    over = await async_client.get(_embedded(code, "chart.png"))
+    assert over.status_code == status.HTTP_410_GONE
+
+    # Only the allowance is spent: the page still opens.
     opened = await async_client.get(f"/public/s/{code}")
     assert opened.status_code == status.HTTP_200_OK, opened.text
 
-    # The open was the page's last; what it carried goes with it.
-    spent = await async_client.get(_embedded(code, "Plan-files/chart.png"))
-    assert spent.status_code == status.HTTP_410_GONE
+
+async def test_a_path_whose_file_is_replaced_serves_the_new_file(
+    pod_api: DatastoreApi, async_client: AsyncClient
+):
+    """A link names a path, not bytes: delete the file and the link has nothing
+    to serve; put a file back at that path and it serves that one, for as long
+    as the person who shared it may read it."""
+    await pod_api.create_folder("/pages")
+    page = await pod_api.upload_file("Plan.md", b"# Old", directory_path="/pages")
+    code = await _share(pod_api, page["path"])
+
+    await pod_api.delete_file(page["path"])
+    gone = await async_client.get(f"/public/s/{code}")
+    assert gone.status_code == status.HTTP_404_NOT_FOUND
+
+    await pod_api.upload_file("Plan.md", b"# New", directory_path="/pages")
+    back = await async_client.get(f"/public/s/{code}")
+    assert back.status_code == status.HTTP_200_OK, back.text
+    assert back.content == b"# New"
+
+
+async def test_a_second_rehydrate_keeps_the_first_ones_charges(
+    pod_api: DatastoreApi, async_client: AsyncClient
+):
+    """Two fetches can both find nothing cached and both reload the link. The
+    second must not hand it a fresh budget after the first was charged."""
+    await pod_api.create_folder("/pages")
+    page = await pod_api.upload_file("Plan.md", b"# Plan", directory_path="/pages")
+    code = await _share(pod_api, page["path"], {"max_hits": 2})
+
+    opened = await async_client.get(f"/public/s/{code}")
+    assert opened.status_code == status.HTTP_200_OK, opened.text
+
+    store = signed_url.get_signed_url_store()
+    async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+        link = await SignedLinkRepository(uow).get_by_code(code)
+    assert link is not None
+    await store._cache(link)
+
+    redis = await store._get_redis()
+    spent = await redis.hget(store._key(code), "spent_units")
+    assert int(spent) == link_budget.OPEN_UNITS
 
 
 async def test_only_what_the_page_embeds_now(
@@ -157,6 +251,29 @@ async def test_a_pod_page_never_carries_a_private_file(
     carried = await async_client.get(_embedded(own_code, "secret.png"))
     assert carried.status_code == status.HTTP_200_OK, carried.text
     assert carried.content == PNG
+
+
+async def test_a_personal_page_never_carries_a_restricted_file(
+    pod_api: DatastoreApi, async_client: AsyncClient
+):
+    """A restricted file is shared by naming who may read it. Its owner's
+    personal page — which an org owner or a granted agent may also write —
+    does not get to publish it to whoever holds a link."""
+    await pod_api.create_folder("/locked", visibility="RESTRICTED")
+    await pod_api.upload_file(
+        "plan.png",
+        PNG,
+        directory_path="/locked",
+        content_type="image/png",
+        visibility="RESTRICTED",
+    )
+    await pod_api.create_folder("/me/notes")
+    own_page = await pod_api.upload_file(
+        "notes.md", b"![](/locked/plan.png)\n", directory_path="/me/notes"
+    )
+    code = await _share(pod_api, own_page["path"])
+    refused = await async_client.get(_embedded(code, "/locked/plan.png"))
+    assert refused.status_code == status.HTTP_404_NOT_FOUND
 
 
 async def test_an_html_report_brings_its_stylesheet_and_script(
@@ -297,3 +414,23 @@ async def test_an_agents_page_carries_only_what_the_agent_may_read(
     assert (
         await async_client.get(_embedded(person_code, "/vault/payroll.png"))
     ).status_code == status.HTTP_200_OK
+
+    # The person's account goes (the row's person is nulled on delete) and the
+    # cache is lost. The agent minted for them, so with nobody to intersect
+    # with the link serves nothing — never the agent's own, wider, authority.
+    async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+        await uow.session.execute(
+            update(DatastoreSignedLink)
+            .where(DatastoreSignedLink.code == agent_code)
+            .values(created_by_user_id=None)
+        )
+        await uow.commit()
+    store = signed_url.get_signed_url_store()
+    await (await store._get_redis()).delete(store._key(agent_code))
+
+    assert (
+        await async_client.get(f"/public/s/{agent_code}")
+    ).status_code == status.HTTP_404_NOT_FOUND
+    assert (
+        await async_client.get(_embedded(agent_code, "cover.png"))
+    ).status_code == status.HTTP_404_NOT_FOUND

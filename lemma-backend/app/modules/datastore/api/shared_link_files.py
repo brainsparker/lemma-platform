@@ -60,6 +60,7 @@ from app.modules.datastore.services.files.embedded_references import (
     resolve_reference,
 )
 from app.modules.datastore.services.files.projection import datastore_storage_key
+from app.modules.datastore.services.files.signed_links import ACTING_ALONE
 from app.modules.datastore.services.files.signed_url import SignedUrlClaims
 
 logger = get_logger(__name__)
@@ -121,23 +122,31 @@ async def _authority(
     """The context the minter was held to, rebuilt now. None when nobody vouches.
 
     A link whose person has been deleted (`created_by_user_id` is nulled on
-    delete) and that no workload minted has nobody left to ask, so it serves
-    nothing rather than everything.
+    delete) has nobody left to ask, so it serves nothing rather than everything
+    — and that holds for a link an agent minted for them too, which must not
+    fall back to the agent's own, wider, authority. Only a workload that minted
+    for nobody (``ACTING_ALONE``) is re-checked as itself.
     """
     authorization = create_authorization_data_service(uow)
     user_id = claims.created_by_user_id
     if claims.minted_by_workload:
-        kind, _, raw_id = claims.minted_by_workload.partition(":")
+        workload = claims.minted_by_workload
+        alone = workload.startswith(ACTING_ALONE)
+        if alone:
+            workload = workload.removeprefix(ACTING_ALONE)
+        kind, _, raw_id = workload.partition(":")
         try:
             principal_id = UUID(raw_id)
         except ValueError:
             return None
-        if user_id is None:
+        if alone:
             return await authorization.build_workload_context(
                 principal_type=kind.upper(),
                 principal_id=principal_id,
                 pod_id=claims.pod_id,
             )
+        if user_id is None:
+            return None
         return await authorization.build_delegated_workload_context(
             user_id=user_id,
             principal_type=kind.upper(),
@@ -299,7 +308,11 @@ async def embedded_file(
         raise SharedFileUnavailable(reference)
     resource = await live_file(code, claims, target)
     if not may_travel_with(
-        page_visibility=page.visibility, resource_visibility=resource.visibility
+        page_path=page.path,
+        page_visibility=page.visibility,
+        resource_path=resource.path,
+        resource_visibility=resource.visibility,
+        sharer_id=claims.created_by_user_id,
     ):
         raise SharedFileUnavailable(reference)
     return resource

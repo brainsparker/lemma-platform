@@ -70,6 +70,7 @@ from contextlib import suppress
 import asyncio
 import math
 import secrets
+from typing import NoReturn
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -95,9 +96,14 @@ from app.modules.datastore.infrastructure.repositories.signed_link_repository im
 )
 from app.modules.datastore.services.files.link_budget import (
     EMBEDDED_BYTES_PER_OPEN,
+    EMBEDDED_GRACE_SECONDS,
     OPEN_UNITS,
 )
 from app.modules.datastore.services.files.projection import datastore_storage_key
+from app.modules.datastore.services.files.signed_url_scripts import (
+    CACHE_LUA as _CACHE_LUA,
+    CONSUME_LUA as _CONSUME_LUA,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -108,85 +114,6 @@ _KEY_PREFIX = "datastore:signedurl"
 # has to outlive a rehydrate that is already in flight — a row read and a cache
 # write — so this is generous by orders of magnitude.
 _REVOKED_TOMBSTONE_SECONDS = 300
-
-# Atomically charge ARGV[1] open-units against the link's budget and ARGV[2]
-# bytes against its embedded allowance, and return its claims, as one step.
-#
-# {-1}: missing, expired, or cached before links went live (no `budget_units`;
-# dropped so the record rebuilds it). {-2}: the budget is spent or this request
-# would not fit in what is left — the whole request, which is what makes the
-# budget a ceiling rather than a line one response may cross. {-3}: only the
-# embedded allowance would be crossed. Otherwise a fixed-arity {exhausted,
-# pod_id, path, created_by_user_id, minted_by_workload, content_type, filename}.
-# Fixed arity matters: Redis truncates a returned Lua table at its first nil, so
-# a hash missing one field used to hand Python a short list and raise IndexError
-# — a 500 where the honest answer was 404. Every field is coerced here instead.
-_CONSUME_LUA = """
-if redis.call('EXISTS', KEYS[1]) == 0 then
-  return {-1}
-end
-if redis.call('HEXISTS', KEYS[1], 'budget_units') == 0 then
-  redis.call('DEL', KEYS[1])
-  return {-1}
-end
-local wanted = tonumber(ARGV[1]) or 0
-local budget = tonumber(redis.call('HGET', KEYS[1], 'budget_units')) or 0
-local spent = tonumber(redis.call('HGET', KEYS[1], 'spent_units')) or 0
-if budget > 0 and (spent >= budget or spent + wanted > budget) then
-  return {-2}
-end
-local embedded = tonumber(ARGV[2]) or 0
-if embedded > 0 then
-  local allowance = tonumber(redis.call('HGET', KEYS[1], 'embedded_budget_bytes')) or 0
-  local used = tonumber(redis.call('HGET', KEYS[1], 'embedded_spent_bytes')) or 0
-  if used + embedded > allowance then
-    return {-3}
-  end
-  redis.call('HINCRBY', KEYS[1], 'embedded_spent_bytes', embedded)
-end
-local exhausted = 0
-if wanted > 0 then
-  spent = redis.call('HINCRBY', KEYS[1], 'spent_units', wanted)
-end
-if budget > 0 and spent >= budget then
-  exhausted = 1
-end
-return {
-  exhausted,
-  redis.call('HGET', KEYS[1], 'pod_id') or '',
-  redis.call('HGET', KEYS[1], 'path') or '',
-  redis.call('HGET', KEYS[1], 'created_by_user_id') or '',
-  redis.call('HGET', KEYS[1], 'minted_by_workload') or '',
-  redis.call('HGET', KEYS[1], 'content_type') or '',
-  redis.call('HGET', KEYS[1], 'filename') or ''
-}
-"""
-
-
-# Write a link's claims, unless it has been revoked. KEYS[1] is the entry and
-# KEYS[2] the revocation tombstone; both are examined and written in one step so
-# a revoke cannot land between the check and the write.
-_CACHE_LUA = """
-if redis.call('EXISTS', KEYS[2]) == 1 then
-  return 0
-end
-redis.call('DEL', KEYS[1])
-redis.call('HSET', KEYS[1],
-  'pod_id', ARGV[1],
-  'path', ARGV[2],
-  'created_by_user_id', ARGV[3],
-  'minted_by_workload', ARGV[4],
-  'content_type', ARGV[5],
-  'filename', ARGV[6],
-  'max_hits', ARGV[7],
-  'budget_units', ARGV[8],
-  'spent_units', 0,
-  'embedded_budget_bytes', ARGV[9],
-  'embedded_spent_bytes', 0
-)
-redis.call('PEXPIREAT', KEYS[1], ARGV[10])
-return 1
-"""
 
 
 class SignedUrlNotFound(Exception):
@@ -220,6 +147,21 @@ class SignedUrlClaims:
     minted_by_workload: str | None
     content_type: str
     filename: str
+
+
+def _claims_of(result: list[str | int]) -> SignedUrlClaims:
+    """The claims in a fixed-arity answer from the consume script."""
+    pod_id, path, created_by, workload, content_type, filename = (
+        str(field) for field in result[1:7]
+    )
+    return SignedUrlClaims(
+        pod_id=UUID(pod_id),
+        path=path,
+        created_by_user_id=UUID(created_by) if created_by else None,
+        minted_by_workload=workload or None,
+        content_type=content_type or "application/octet-stream",
+        filename=filename or path.rsplit("/", 1)[-1] or "file",
+    )
 
 
 def _clamp(value: int | None, *, default: int, ceiling: int) -> int:
@@ -400,10 +342,18 @@ class SignedUrlStore:
             link.max_hits,
             link.max_hits * OPEN_UNITS,
             link.max_hits * EMBEDDED_BYTES_PER_OPEN,
+            link.object_key,
+            link.content_sha256 or "",
+            link.size_bytes,
+            # The pre-live budget: 0 meant "uncounted" there, which is what an
+            # unknown size fell back to.
+            link.size_bytes * link.max_hits,
             expires_at_ms,
         )
 
-    async def peek_claims(self, code: str) -> SignedUrlClaims:
+    async def peek_claims(
+        self, code: str, *, embedded: bool = False
+    ) -> SignedUrlClaims:
         """The link's claims, charging nothing.
 
         Used to decide what the response *would* be — its type, size and
@@ -411,11 +361,19 @@ class SignedUrlStore:
         to transfer nothing (a 304, a HEAD, an unsatisfiable range) or to fail
         (the object is gone) therefore costs the link nothing, where the old
         increment-first ordering spent a download on each of them.
+
+        ``embedded`` asks on behalf of something the page loads, which keeps
+        answering for the grace after the page's last open.
         """
-        return await self._consume(code)
+        return await self._consume(code, embedded=embedded)
 
     async def consume_claims(
-        self, code: str, *, units_wanted: int = 0, embedded_bytes_wanted: int = 0
+        self,
+        code: str,
+        *,
+        units_wanted: int = 0,
+        embedded_bytes_wanted: int = 0,
+        embedded: bool = False,
     ) -> SignedUrlClaims:
         """Charge the link, returning its claims.
 
@@ -426,15 +384,28 @@ class SignedUrlStore:
         ``SignedUrlEmbeddedAllowanceSpent`` when only the allowance is.
         """
         return await self._consume(
-            code, units_wanted=units_wanted, embedded_bytes_wanted=embedded_bytes_wanted
+            code,
+            units_wanted=units_wanted,
+            embedded_bytes_wanted=embedded_bytes_wanted,
+            embedded=embedded,
         )
 
     async def _consume(
-        self, code: str, *, units_wanted: int = 0, embedded_bytes_wanted: int = 0
+        self,
+        code: str,
+        *,
+        units_wanted: int = 0,
+        embedded_bytes_wanted: int = 0,
+        embedded: bool = False,
     ) -> SignedUrlClaims:
         redis = await self._get_redis()
         key = self._key(code)
-        charges = (max(0, units_wanted), max(0, embedded_bytes_wanted))
+        charges = (
+            max(0, units_wanted),
+            max(0, embedded_bytes_wanted),
+            1 if embedded else 0,
+            max(0, EMBEDDED_GRACE_SECONDS) * 1000,
+        )
         result = await redis.eval(_CONSUME_LUA, 1, key, *charges)
 
         if not result or int(result[0]) == -1:
@@ -450,13 +421,8 @@ class SignedUrlStore:
         if not result:
             raise SignedUrlNotFound(code)
         head = int(result[0])
-        if head == -1:
-            raise SignedUrlNotFound(code)
-        if head == -2:
-            await self._retire(code, drop_cache=key)
-            raise SignedUrlExhausted(code)
-        if head == -3:
-            raise SignedUrlEmbeddedAllowanceSpent(code)
+        if head < 0:
+            await self._refuse(code, key, result)
 
         if head == 1:
             # This charge finished the budget. Retire the row now and still
@@ -472,15 +438,22 @@ class SignedUrlStore:
             # exhausted, so the distinction would have been lost for good.
             await self._retire(code)
 
-        path = result[2]
-        return SignedUrlClaims(
-            pod_id=UUID(result[1]),
-            path=path,
-            created_by_user_id=UUID(result[3]) if result[3] else None,
-            minted_by_workload=result[4] or None,
-            content_type=result[5] or "application/octet-stream",
-            filename=result[6] or path.rsplit("/", 1)[-1] or "file",
-        )
+        return _claims_of(result)
+
+    async def _refuse(self, code: str, key: str, result: list[str | int]) -> NoReturn:
+        """Raise what a negative answer from the consume script means."""
+        head = int(result[0])
+        if head == -2:
+            # Inside the grace the row was retired by the open that spent it,
+            # and the entry has to stay for the page's pictures; it expires on
+            # its own when the grace does.
+            in_grace = len(result) > 1 and int(result[1]) == 1
+            if not in_grace:
+                await self._retire(code, drop_cache=key)
+            raise SignedUrlExhausted(code)
+        if head == -3:
+            raise SignedUrlEmbeddedAllowanceSpent(code)
+        raise SignedUrlNotFound(code)
 
     async def _retire(self, code: str, *, drop_cache: str | None = None) -> None:
         """Record that a link's budget is spent, and optionally drop its cache.

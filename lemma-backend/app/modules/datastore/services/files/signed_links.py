@@ -32,20 +32,31 @@ from app.modules.datastore.services.files.signed_url import (
 )
 
 
+#: Marks a link a workload minted with no person behind it. Without it, a link
+#: an agent minted for somebody whose account was later deleted (the row's
+#: `created_by_user_id` is nulled) would read exactly like one an agent minted
+#: on its own, and be re-checked on the agent's authority alone — wider than
+#: the intersection it was minted under. So the permissive case is the one that
+#: has to say so, and a link that says nothing needs its person.
+ACTING_ALONE = "alone:"
+
+
 def minting_workload(ctx: Context) -> str | None:
-    """``agent:<id>`` when an agent holding less than its person minted this.
+    """Which workload minted this, and whether a person stood behind it.
 
     A live link is re-checked on every fetch, and the check has to be the one
     the minter was held to: the person's access, intersected with the agent's
-    when an agent acts for them. The pod's default agent acts *as* the person,
-    so it is recorded as the person alone.
+    when an agent acts for them (``agent:<id>``), or the workload's own when it
+    acts for nobody (``alone:agent:<id>``). The pod's default agent acts *as*
+    the person, so it is recorded as the person alone.
     """
     if ctx.is_user_equivalent:
         return None
     if ctx.actor_type is ActorType.DELEGATED_USER_WORKLOAD:
         return ctx.actor_id
     if ctx.actor_type in (ActorType.AGENT, ActorType.FUNCTION):
-        return f"{ctx.actor_type.value.lower()}:{ctx.actor_id}"
+        workload = f"{ctx.actor_type.value.lower()}:{ctx.actor_id}"
+        return workload if ctx.user_id else ACTING_ALONE + workload
     return None
 
 

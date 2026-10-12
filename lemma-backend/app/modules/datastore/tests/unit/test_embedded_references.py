@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import pytest
 
 from app.modules.datastore.services.files.embedded_references import (
@@ -120,21 +122,75 @@ class TestEmbeddedReferences:
         }
 
 
+SHARER = UUID("00000000-0000-0000-0000-00000000000a")
+SOMEONE_ELSE = UUID("00000000-0000-0000-0000-00000000000b")
+
+
+def _travels(
+    *,
+    page: str = "PERSONAL",
+    resource: str = "PERSONAL",
+    page_path: str = f"/{SHARER}/Plan.md",
+    resource_path: str = f"/{SHARER}/Plan-files/chart.png",
+    sharer: UUID | None = SHARER,
+) -> bool:
+    return may_travel_with(
+        page_path=page_path,
+        page_visibility=page,
+        resource_path=resource_path,
+        resource_visibility=resource,
+        sharer_id=sharer,
+    )
+
+
 class TestMayTravelWith:
-    def test_a_personal_page_carries_whatever_its_owner_reads(self):
-        for visibility in ("PERSONAL", "RESTRICTED", "POD", "PUBLIC"):
-            assert may_travel_with(
-                page_visibility="PERSONAL", resource_visibility=visibility
-            )
+    def test_a_personal_page_carries_the_sharers_own_pictures(self):
+        assert _travels()
+
+    @pytest.mark.parametrize("page", ["PERSONAL", "POD", "RESTRICTED", "PUBLIC"])
+    def test_what_the_whole_pod_could_open_travels_from_any_page(self, page):
+        assert _travels(page=page, resource="POD", page_path="/pages/Plan.md")
+        assert _travels(page=page, resource="PUBLIC", page_path="/pages/Plan.md")
+
+    @pytest.mark.parametrize("page", ["PERSONAL", "POD", "RESTRICTED", "PUBLIC"])
+    def test_a_restricted_file_never_travels(self, page):
+        assert not _travels(page=page, resource="RESTRICTED")
 
     @pytest.mark.parametrize("page", ["POD", "RESTRICTED", "PUBLIC"])
-    def test_a_page_others_can_edit_never_carries_a_private_file(self, page):
-        assert not may_travel_with(page_visibility=page, resource_visibility="PERSONAL")
-        assert not may_travel_with(
-            page_visibility=page, resource_visibility="RESTRICTED"
+    def test_a_page_others_can_edit_never_carries_a_personal_file(self, page):
+        assert not _travels(page=page, page_path="/pages/Plan.md")
+
+    def test_a_personal_page_outside_the_sharers_folder_carries_nothing_personal(
+        self,
+    ):
+        # Somebody else's page the sharer can read (an org owner's shortcut):
+        # its writer is not the sharer, so its personal references stay home.
+        assert not _travels(page_path=f"/{SOMEONE_ELSE}/Plan.md")
+
+    def test_a_personal_file_outside_the_sharers_folder_does_not_travel(self):
+        assert not _travels(resource_path=f"/{SOMEONE_ELSE}/chart.png")
+
+    def test_a_folder_that_only_starts_like_the_sharers_is_not_theirs(self):
+        assert not _travels(resource_path=f"/{SHARER}x/chart.png")
+
+    def test_a_link_nobody_shared_carries_nothing_personal(self):
+        assert not _travels(sharer=None)
+
+
+class TestMarkdownScanner:
+    def test_a_destination_may_hold_balanced_parentheses(self):
+        assert embedded_references("![c](chart(1).png)", kind="markdown") == {
+            "chart(1).png"
+        }
+
+    def test_code_is_shown_not_loaded(self):
+        page = (
+            "```\n![a](fenced.png)\n```\n"
+            '~~~html\n<img src="tilde.png">\n~~~\n'
+            "Write `![b](span.png)` to embed.\n"
+            "![c](shown.png)\n"
         )
-        assert may_travel_with(page_visibility=page, resource_visibility="POD")
-        assert may_travel_with(page_visibility=page, resource_visibility="PUBLIC")
+        assert embedded_references(page, kind="markdown") == {"shown.png"}
 
 
 class TestPageKind:

@@ -18,6 +18,14 @@ OPEN_UNITS = 1_000_000
 #: page itself.
 EMBEDDED_BYTES_PER_OPEN = 25 * 1024 * 1024
 
+#: How long what a page embeds keeps loading after the open that spent the
+#: link's last allowance. A browser fetches the page first and its pictures
+#: after, so without this the last reader of a link — every reader of a
+#: one-open link — saw the page with none of them. Long enough for lazily
+#: loaded pictures to arrive as the reader scrolls; still bounded by the
+#: embedded allowance.
+EMBEDDED_GRACE_SECONDS = 600
+
 
 def open_units(billable_bytes: int, size_bytes: int) -> int:
     """What a response costs, as a fraction of one open of the file as it is now.

@@ -181,7 +181,9 @@ async def serve_signed_url(code: str, request: Request) -> Response:
     return response
 
 
-@router.api_route("/public/s/{code}/a", methods=["GET", "HEAD"], include_in_schema=False)
+@router.api_route(
+    "/public/s/{code}/a", methods=["GET", "HEAD"], include_in_schema=False
+)
 async def serve_embedded_resource(
     code: str,
     request: Request,
@@ -196,7 +198,7 @@ async def serve_embedded_resource(
     store = get_signed_url_store()
     not_here = HTTPException(status_code=404, detail="Not part of this page")
     try:
-        claims = await store.peek_claims(code)
+        claims = await store.peek_claims(code, embedded=True)
     except SignedUrlNotFound:
         raise not_here from None
     except SignedUrlExhausted:
@@ -221,7 +223,9 @@ async def serve_embedded_resource(
 
     if billable_bytes > 0:
         try:
-            await store.consume_claims(code, embedded_bytes_wanted=billable_bytes)
+            await store.consume_claims(
+                code, embedded_bytes_wanted=billable_bytes, embedded=True
+            )
         except SignedUrlNotFound:
             raise not_here from None
         except SignedUrlExhausted, SignedUrlEmbeddedAllowanceSpent:

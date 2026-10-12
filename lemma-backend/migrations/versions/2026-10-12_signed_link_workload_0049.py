@@ -10,7 +10,9 @@ An agent acting for somebody holds less than they do (PS-ACCESS-020: the
 intersection, never the union). Re-checking a link an agent minted against the
 person alone would let the agent's page carry a picture the agent itself was
 never granted. So the link remembers the agent, and the fetch-time check is the
-same intersection the agent was held to when it minted.
+same intersection the agent was held to when it minted. A workload minting for
+nobody is recorded as ``alone:<kind>:<id>``; a link that does not say so needs
+its person, and stops serving when that person's account is deleted.
 
 Null means the person alone: a person minting for themselves, the pod's default
 agent (which acts as the person), and every link minted before this column

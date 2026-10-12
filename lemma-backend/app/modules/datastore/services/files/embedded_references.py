@@ -23,6 +23,7 @@ import re
 from html.parser import HTMLParser
 from typing import Literal
 from urllib.parse import unquote
+from uuid import UUID
 
 from app.core.authorization.context import ResourceVisibility
 
@@ -34,7 +35,17 @@ PageKind = Literal["markdown", "html"]
 MAX_SCANNED_PAGE_BYTES = 2 * 1024 * 1024
 
 _SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
-_MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\(\s*(<[^>]*>|[^)\s]+)(?:\s+[\"'(][^)]*)?\)")
+# A destination may hold one level of balanced parentheses, as CommonMark reads
+# it: `![](chart(1).png)` is `chart(1).png`, not `chart(1`.
+_MARKDOWN_IMAGE = re.compile(
+    r"!\[[^\]]*\]\(\s*(<[^>]*>|(?:[^()\s]|\([^()\s]*\))+)(?:\s+[\"'(][^)]*)?\)"
+)
+#: Code is shown, not loaded: a reference inside a fence or a code span is text.
+_FENCED_CODE = re.compile(
+    r"^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^ {0,3}\1[`~]*[ \t]*$|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+_CODE_SPAN = re.compile(r"(`+)(?!`).+?(?<!`)\1(?!`)", re.DOTALL)
 _MARKDOWN_IMAGE_DEFINITION = re.compile(r"!\[[^\]]*\]\[([^\]]*)\]")
 _REFERENCE_DEFINITION = re.compile(
     r"^\s{0,3}\[([^\]]+)\]:\s*(<[^>]*>|\S+)", re.MULTILINE
@@ -166,6 +177,7 @@ def _html_references(text: str) -> list[str]:
 
 
 def _markdown_references(text: str) -> list[str]:
+    text = _CODE_SPAN.sub("", _FENCED_CODE.sub("", text))
     found = [match.group(1) for match in _MARKDOWN_IMAGE.finditer(text)]
     definitions = {
         label.strip().lower(): target
@@ -188,23 +200,47 @@ def embedded_references(text: str, *, kind: PageKind) -> frozenset[str]:
     return frozenset(reference for reference in normalized if reference)
 
 
-def may_travel_with(*, page_visibility: str, resource_visibility: str) -> bool:
+def _within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root + "/")
+
+
+def may_travel_with(
+    *,
+    page_path: str,
+    page_visibility: str,
+    resource_path: str,
+    resource_visibility: str,
+    sharer_id: UUID | None,
+) -> bool:
     """Whether a page may carry this resource out through a public link.
 
-    A personal page is written only by its owner, who could share anything it
-    shows directly, so it carries whatever they can read. Any other page is
-    written by more people than shared it — a pod page by everyone in the pod —
-    and the link is checked as the person who shared it. Letting such a page
-    carry a personal or restricted file would let anyone who can edit the page
-    publish a file the sharer can read and they cannot, by writing its path in.
-    So a shared page carries only what everybody in the pod could already open.
+    A page is written by more people than shared it — a pod page by everyone
+    in the pod, and even a personal one by an org owner or by an agent granted
+    write there — and the link is checked as the person who shared it. Letting
+    a page carry a file the sharer can read and its other writers cannot would
+    let any of them publish it by writing its path in. Who else can write a page
+    is not something a fetch can afford to ask, so the rule does not depend on
+    it:
+
+    - What everybody in the pod could already open (Pod, Public) travels.
+    - A personal file travels only from a personal page, and only when both sit
+      in the sharer's own folder (``/{sharer_id}/``): their report and their
+      pictures, and nothing of anyone else's.
+    - A restricted file never does; share it directly.
     """
-    if page_visibility == ResourceVisibility.PERSONAL.value:
-        return True
-    return resource_visibility in {
+    if resource_visibility in {
         ResourceVisibility.POD.value,
         ResourceVisibility.PUBLIC.value,
-    }
+    }:
+        return True
+    if (
+        sharer_id is None
+        or resource_visibility != ResourceVisibility.PERSONAL.value
+        or page_visibility != ResourceVisibility.PERSONAL.value
+    ):
+        return False
+    root = f"/{sharer_id}"
+    return _within(page_path, root) and _within(resource_path, root)
 
 
 def page_kind(content_type: str, filename: str) -> PageKind | None:

@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.authorization.context import ActorType
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import DomainError
@@ -73,6 +74,30 @@ async def test_a_workload_acting_for_the_person_is_accepted() -> None:
                 pod_id=pod_id,
                 agent_id=uuid4(),
                 actions=[Permissions.AGENT_READ],
+            )
+    finally:
+        reset_current_context(token)
+
+
+@pytest.mark.asyncio
+async def test_another_pod_asking_over_a_link_is_held_to_its_grants_alone() -> None:
+    """A pod's context is nobody's, so it has no person to match: the thread it
+    opens belongs to the link's steward, and the link grant is what is checked."""
+    steward, pod_id = uuid4(), uuid4()
+    asking_pod = replace(
+        allow_all_context(user_id=None, pod_id=pod_id),
+        actor_type=ActorType.POD,
+        actor_id=f"pod:{uuid4()}",
+        user_id=None,
+    )
+    token = set_current_context(asking_pod)
+    try:
+        with does_not_raise():
+            await require_agent_actions(
+                user_id=steward,
+                pod_id=pod_id,
+                agent_id=None,
+                actions=[Permissions.AGENT_EXECUTE],
             )
     finally:
         reset_current_context(token)

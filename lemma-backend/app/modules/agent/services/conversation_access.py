@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.core.authorization.context import ResourceRef, ResourceType
+from app.core.authorization.context import ActorType, ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
 from app.core.domain.errors import DomainError
 from app.core.authorization.delegation import (
@@ -203,7 +203,12 @@ async def require_agent_actions(
     # about `user_id` unless that context is the same person's -- their own, or
     # a workload acting for them. A worker or delegated path whose context is
     # somebody else's would otherwise authorize the wrong subject silently.
-    if user_id not in {ctx.user_id, ctx.delegated_by_user_id}:
+    # Another pod asking over a link is nobody's: the conversation it opens is
+    # its steward's, and what it may do there is the link's grant, checked below.
+    if ctx.actor_type != ActorType.POD and user_id not in {
+        ctx.user_id,
+        ctx.delegated_by_user_id,
+    }:
         raise DomainError(
             "The request's identity does not match the conversation's user",
             code="CONTEXT_USER_MISMATCH",

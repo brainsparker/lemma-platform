@@ -22,9 +22,15 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.core.authorization.context import ResourceType
+from app.core.authorization.authorizer import Authorizer
+from app.core.authorization.context import (
+    ResourceRef,
+    ResourceType,
+    ResourceVisibility,
+)
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.grants import (
+    NormalizedResourceGrant,
     ResourceGrantInputProtocol,
     normalize_pod_resource_grants,
     validate_pod_resource_grant_permissions,
@@ -108,12 +114,32 @@ class PodLinkService:
         normalized = await normalize_pod_resource_grants(
             self.uow.session, pod_id=answering_pod_id, grants=shares
         )
+        await self._refuse_personal(normalized)
         await self.links.connect(
             answering_pod_id=answering_pod_id,
             asking_pod_id=asking_pod_id,
             shares=normalized,
             steward_user_id=user_id,
         )
+
+    async def _refuse_personal(self, shares: Sequence[NormalizedResourceGrant]) -> None:
+        """Refuse sharing somebody's own table or folder -- a /me folder, say.
+
+        No grant would reach it (``Authorizer._pod_decision`` refuses PERSONAL
+        first), so the link would list a share that gives nothing.
+        """
+        authorizer = Authorizer(self.uow.session)
+        for share in shares:
+            hydrated = await authorizer.hydrate_resource_ref(
+                ResourceRef(
+                    resource_type=share.resource_type, resource_id=share.resource_id
+                )
+            )
+            if hydrated.visibility == ResourceVisibility.PERSONAL:
+                raise BadRequestError(
+                    "A link can't share somebody's own table or folder.",
+                    code="POD_LINK_PERSONAL",
+                )
 
     async def disconnect(self, *, answering_pod_id: UUID, asking_pod_id: UUID) -> bool:
         """Take the link away, and stop its asks. False when there was none.

@@ -25,10 +25,31 @@ from collections import Counter
 import pytest
 
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.services import progress_observer
 from app.modules.agent_surfaces.tests.e2e.surface_journey import stage_surface
 from app.modules.test_support.query_counting import counted_queries
 
 pytestmark = pytest.mark.e2e
+
+
+@pytest.fixture(autouse=True)
+def _no_typing_keepalive(monkeypatch):
+    """Measure the message, not the clock.
+
+    While a run is in progress the observer re-sends Telegram's typing indicator
+    every four seconds, and each re-send reads the conversation's link and its
+    surface. How many fire depends on how long the run took, not on anything
+    the message asked: a loaded CI worker crossed four seconds now and then and
+    read `links 8 vs 7, surfaces 5 vs 4`, which looked like a read growing with
+    the conversation and was a keep-alive. The opening indicator, sent once per
+    run, is still counted.
+    """
+    monkeypatch.setitem(
+        progress_observer._TYPING_REFRESH_INTERVAL_SECONDS,
+        SurfacePlatform.TELEGRAM.value,
+        3600.0,
+    )
+
 
 #: The tables this module owns, and the most statements one message may issue
 #: against each. Two budgets because the two messages do different work: the

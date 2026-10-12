@@ -169,11 +169,13 @@ def _message_snapshot_from_graph_item(
         return None
 
     sender = payload_section(item, "from")
-    user = payload_section(sender, "user") or payload_section(sender, "application")
+    person = payload_section(sender, "user")
+    user = person or payload_section(sender, "application")
     return TeamsChannelMessageSnapshot(
         message_id=payload_text(item, "id") or None,
         reply_to_id=payload_text(item, "replyToId") or None,
         user_id=payload_text(user, "id") or None,
+        from_application=not person and bool(user),
         display_name=payload_text(user, "displayName") or None,
         text=text,
         attachments=attachments,
@@ -366,8 +368,10 @@ class TeamsChannelHistoryMixin:
                 SurfaceContextMessage(
                     author=snapshot.author_label
                     or channel_author_label(snapshot.display_name, snapshot.user_id),
+                    author_external_id=snapshot.user_id,
                     text=text,
                     ts=snapshot.message_id,
+                    from_bot=snapshot.from_application,
                 )
             )
             if len(out) >= limit:

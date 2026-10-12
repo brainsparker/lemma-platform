@@ -18,7 +18,7 @@ from app.modules.agent.domain.queued_messages import CLIENT_MESSAGE_ID
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
-from app.modules.agent.domain.outsiders import with_audience_kept
+from app.modules.agent.domain.server_metadata import with_server_keys_kept
 from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.core.authorization.permissions import Permissions
@@ -251,7 +251,9 @@ class ConversationService(ConversationPauses):
         if not isinstance(agent_runtime, UnsetType):
             conversation.agent_runtime = agent_runtime
         if not isinstance(metadata, UnsetType):
-            conversation.metadata = with_audience_kept(conversation.metadata, metadata)
+            conversation.metadata = with_server_keys_kept(
+                conversation.metadata, metadata
+            )
         if not isinstance(is_archived, UnsetType):
             conversation.is_archived = is_archived
 

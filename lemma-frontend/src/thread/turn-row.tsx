@@ -5,11 +5,13 @@ import { Prose, StreamingProse } from "./markdown";
 import { ClampedProse } from "./clamped-prose";
 import { CopyButton } from "./copy-button";
 import { Mark } from "@/shell/mark";
+import { writeAddress } from "@/shell/address";
+import { PlaceLink } from "@/shell/place-link";
 import { ResourceCard } from "./resource-card";
 import { PlanCard } from "./plan-card";
 import { ToolCardView } from "./tool-card-view";
 import { InteractionCard, type Resolve } from "./interaction-card";
-import { liveNote, spanOf, type HumanMessage, type Note, type Streaming, type Turn } from "./turns";
+import { liveNote, relayedBy, spanOf, type HumanMessage, type Note, type Streaming, type Turn } from "./turns";
 import type { Persona } from "@/data";
 import type { Noted } from "./memory-notes";
 
@@ -148,13 +150,25 @@ function Human({
     onRetry?: (id: string) => void;
     onEdit?: (id: string) => void;
 }) {
-    const guest = Boolean(outsiders && message.from);
+    const teammate = relayedBy(message);
+    const guest = Boolean(outsiders && message.from) || Boolean(teammate);
     const at = message.pending === "sending" ? "Sending…" : message.pending === "failed" ? "Not sent" : message.at;
     return (
         <div className={"msg msg--you" + (guest ? " msg--guest" : "")} data-pending={message.pending}>
             <div className="msg__head">
-                <span className="msg__who">{guest ? message.from : "You"}</span>
-                {guest && <span className="msg__chip">Not in {outsiders}</span>}
+                <span className="msg__who">{teammate ? teammate.name : guest ? message.from : "You"}</span>
+                {teammate && (teammate.place
+                    ? (
+                        <PlaceLink
+                            className="msg__chip msg__chip--link"
+                            href={writeAddress({ ...teammate.place, tabId: "conversation", agentName: null })}
+                            title={"Open " + teammate.name + "’s conversation"}
+                        >
+                            {teammate.chip}
+                        </PlaceLink>
+                    )
+                    : <span className="msg__chip">{teammate.chip}</span>)}
+                {guest && !teammate && <span className="msg__chip">Not in {outsiders}</span>}
                 <span className="msg__at">{at}</span>
             </div>
             {message.note && (

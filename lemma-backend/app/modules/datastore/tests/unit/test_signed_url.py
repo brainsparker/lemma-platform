@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import pytest
 
 from app.modules.datastore.api.file_download_response import build_content_disposition
@@ -261,3 +263,64 @@ class TestCacheExpiry:
             )
         )
         assert store._redis.calls == []
+
+
+class TestMintingWorkload:
+    """Who a live link is re-checked as, recorded at mint."""
+
+    AGENT_ID = "00000000-0000-0000-0000-0000000000a1"
+    USER_ID = UUID("00000000-0000-0000-0000-0000000000b2")
+
+    @staticmethod
+    def _ctx(actor_type, actor_id, *, user_id=None, user_equivalent=False):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            actor_type=actor_type,
+            actor_id=actor_id,
+            user_id=user_id,
+            is_user_equivalent=user_equivalent,
+        )
+
+    def test_a_person_minting_for_themselves_is_the_person_alone(self):
+        from app.core.authorization.context import ActorType
+        from app.modules.datastore.services.files.signed_links import minting_workload
+
+        ctx = self._ctx(ActorType.USER, str(self.USER_ID), user_id=self.USER_ID)
+        assert minting_workload(ctx) is None
+
+    def test_the_default_agent_acts_as_the_person(self):
+        from app.core.authorization.context import ActorType
+        from app.modules.datastore.services.files.signed_links import minting_workload
+
+        ctx = self._ctx(
+            ActorType.DELEGATED_USER_WORKLOAD,
+            f"agent:{self.AGENT_ID}",
+            user_id=self.USER_ID,
+            user_equivalent=True,
+        )
+        assert minting_workload(ctx) is None
+
+    def test_an_agent_acting_for_a_person_is_recorded_with_them(self):
+        from app.core.authorization.context import ActorType
+        from app.modules.datastore.services.files.signed_links import minting_workload
+
+        ctx = self._ctx(
+            ActorType.DELEGATED_USER_WORKLOAD,
+            f"agent:{self.AGENT_ID}",
+            user_id=self.USER_ID,
+        )
+        assert minting_workload(ctx) == f"agent:{self.AGENT_ID}"
+
+    def test_an_agent_acting_for_nobody_says_so(self):
+        """The permissive case is the one that has to be explicit: a link that
+        does not say `alone:` needs its person at fetch time."""
+        from app.core.authorization.context import ActorType
+        from app.modules.datastore.services.files.signed_links import (
+            ACTING_ALONE,
+            minting_workload,
+        )
+
+        ctx = self._ctx(ActorType.AGENT, self.AGENT_ID)
+        assert minting_workload(ctx) == f"{ACTING_ALONE}agent:{self.AGENT_ID}"
+        assert len(minting_workload(ctx)) <= 80

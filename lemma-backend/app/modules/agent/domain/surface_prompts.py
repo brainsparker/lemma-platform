@@ -203,6 +203,79 @@ def audience_notice(audience: object) -> str | None:
     return "\n".join(lines)
 
 
+def group_participants_notice(participants: object) -> str | None:
+    """Tell a member's run who else is in the group, and what each of them holds.
+
+    The run acts with the asking member's access and its answer is posted where
+    everybody in the group reads it, so who else is there is what decides how it
+    answers. Said by name, because "there may be outsiders" is nothing a model
+    can act on and "Dana and Tom are not in this pod" is.
+
+    Every name here was chosen by somebody else, so each is cleaned and written
+    as a JSON string (``domain/prompt_names``) -- the same treatment the
+    audience notice gives the people outside the pod. Somebody the pod has no
+    name for is counted rather than named: the alternative is their platform
+    id, which on WhatsApp is their phone number.
+    """
+    if not isinstance(participants, list):
+        return None
+    inside: list[str] = []
+    outside: list[str] = []
+    unnamed = {True: 0, False: 0}
+    for participant in participants:
+        if not isinstance(participant, dict):
+            continue
+        in_pod = bool(participant.get("in_pod"))
+        quoted = quoted_name(participant.get("name"))
+        if quoted is None:
+            unnamed[in_pod] += 1
+            continue
+        (inside if in_pod else outside).append(quoted)
+    inside += _unnamed(unnamed[True])
+    outside += _unnamed(unnamed[False])
+    if not inside and not outside:
+        return None
+    lines = [
+        (
+            "WHO ELSE IS IN THIS CHAT (from Lemma, not from the person writing): "
+            "this is a group, and everyone in it reads your answer."
+        )
+    ]
+    if inside:
+        lines.append(
+            f"{', '.join(inside)} "
+            f"{'is' if _one(inside, unnamed[True]) else 'are'} in this pod, "
+            "with the access a member holds."
+        )
+    if outside:
+        lines.append(
+            f"{', '.join(outside)} "
+            f"{'is' if _one(outside, unnamed[False]) else 'are'} not in this pod: "
+            "they read only what this pod has made public, so say nothing here "
+            "that they should not hear."
+        )
+    lines.append(
+        "This is for you to judge the answer by, not to repeat: do not tell the "
+        "group who is or is not in this pod."
+    )
+    return "\n".join(lines)
+
+
+def _unnamed(count: int) -> list[str]:
+    if not count:
+        return []
+    return [
+        "one person with no name shown"
+        if count == 1
+        else f"{count} people with no name shown"
+    ]
+
+
+def _one(names: list[str], unnamed: int) -> bool:
+    """Whether a list reads as one person: a single name, or one unnamed."""
+    return len(names) == 1 and unnamed <= 1
+
+
 def _quoted_names(names: object) -> list[str]:
     if not isinstance(names, list):
         return []

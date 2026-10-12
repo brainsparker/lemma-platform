@@ -89,11 +89,16 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         ctx: TableContext,
         where_clauses: list[str],
         params: dict[str, Any],
-        user_id: UUID,
+        user_id: UUID | None,
         *,
         enforce_user_scope: bool,
     ) -> None:
         if not ctx.enable_rls or not enforce_user_scope:
+            return
+        if user_id is None:
+            # Nobody -- an outsider, another pod asking over a link -- owns no
+            # row of a per-user table: an empty page, not a cast of "None".
+            where_clauses.append("FALSE")
             return
         where_clauses.append('"user_id" = :current_user_id')
         params["current_user_id"] = str(user_id)

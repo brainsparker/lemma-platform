@@ -12,10 +12,13 @@ A token is good for a conversation's tools when:
   A token is minted for one run and sent only to the host leasing it, so one
   arriving on another person's link is a leak being replayed;
 * its delegation claims, when it carries any, parse, are not revoked, name an
-  agent that still exists in the conversation's pod, and are bound to the run
-  the call names (``gpy_session_id`` is the run id, see
-  ``remote_payload.mcp_payload``). Deleting an agent revokes its tokens, but the
-  revocation store fails open; the row lookup does not;
+  agent that still exists in the conversation's pod, and are bound to this
+  conversation (``gpy_session_id`` is the conversation id, the key a person's
+  "allow for this conversation" is recorded under -- see
+  ``WorkspaceSandboxService.get_env_vars``). A token minted before that change
+  names the run instead, and is held to the run the call names. Deleting an
+  agent revokes its tokens, but the revocation store fails open; the row
+  lookup does not;
 * the person owns the conversation and is still a member of its pod;
 * the run named is one of this conversation's, has not ended, and is leased to
   the host the call arrived from.
@@ -219,7 +222,10 @@ async def _claims_refusal(
         return "not_an_agent_token"
     if claims.pod_id != conversation.pod_id:
         return "token_for_another_pod"
-    if agent_run_id is not None and claims.session_id != str(agent_run_id):
+    if agent_run_id is not None and claims.session_id not in {
+        str(conversation.id),
+        str(agent_run_id),
+    }:
         return "token_for_another_run"
     if not is_pod_default_agent(claims.actor_id, pod_id=conversation.pod_id):
         # A conversation's and a run's agent are both ON DELETE SET NULL, and

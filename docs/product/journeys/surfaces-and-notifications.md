@@ -545,13 +545,26 @@ by its link.
 ### PS-SURF-033 — What is meant for one person is not said in a group
 **Status:** planned
 
-> Proven at module level by `agent_surfaces/tests/e2e/test_member_reach_private_e2e.py`.
+> Proven at module level by `agent_surfaces/tests/e2e/test_member_reach_private_e2e.py`
+> and `agent_surfaces/tests/e2e/test_group_private_send_e2e.py`.
 
 - The system shall deliver a notification meant for one person only somewhere
   private to them.
 - Where the only place a person has spoken to the bot is a group, the system
   shall reach them another way -- email, or their Lemma inbox -- rather than in
   front of the group.
+- When the agent sends the person it is working for something mid-task from a
+  group chat, the system shall deliver it to that person's own chat with the bot
+  in the same pod.
+- If that person has no private chat with the bot, then the system shall not
+  post the message in the group.
+- If that person has no private chat with the bot, then the system shall tell
+  the agent that nobody was reached.
+- If the delivery fails for another reason, then the system shall not tell the
+  agent that the person has no private chat.
+- When the agent sends the person it is working for something mid-task on an
+  email thread that copies other people, the system shall send it to that
+  person alone.
 
 **Contracts:** `notification.send`
 

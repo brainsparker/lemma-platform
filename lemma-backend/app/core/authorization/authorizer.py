@@ -42,6 +42,7 @@ from app.core.authorization.models import (
 from app.core.authorization.grant_resolution import GrantResolutionMixin
 from app.core.authorization.hydration import ResourceHydrationMixin
 from app.core.authorization.permissions import (
+    pod_principal_may_hold,
     PERMISSION_BY_ID,
     PermissionScope,
     Permissions,
@@ -138,15 +139,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         if ctx.is_superuser:
             return AuthorizationDecision(True, "SUPERUSER", permission_id, resource)
         if ctx.is_outsider:
-            if resource and await self._is_public_read(
-                permission_id, resource, pod_id=ctx.pod_id
-            ):
-                return AuthorizationDecision(
-                    True, "PUBLIC_RESOURCE", permission_id, resource
-                )
-            return AuthorizationDecision(
-                False, "AUTH_REQUIRED", permission_id, resource
-            )
+            return await self._outsider_decision(ctx, permission_id, resource)
 
         # The default pod agent mirrors the invoking user's authority but ONLY
         # within its pinned pod: it may exercise any pod-scoped action the user
@@ -295,6 +288,76 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
             )
         return AuthorizationDecision(
             False, "UNSUPPORTED_VISIBILITY", permission_id, hydrated
+        )
+
+    async def _outsider_decision(
+        self,
+        ctx: Context,
+        permission_id: str,
+        resource: ResourceRef | None,
+    ) -> AuthorizationDecision:
+        """Somebody this pod does not know: nobody at all, or another pod.
+
+        Both hold no role here and are pinned to the context's pod. Nobody may
+        read what is Public and nothing more; another pod, asking over a link,
+        may also use what this pod granted it.
+        """
+        if ctx.actor_type == ActorType.POD:
+            return await self._pod_decision(ctx, permission_id, resource)
+        if resource and await self._is_public_read(
+            permission_id, resource, pod_id=ctx.pod_id
+        ):
+            return AuthorizationDecision(
+                True, "PUBLIC_RESOURCE", permission_id, resource
+            )
+        return AuthorizationDecision(False, "AUTH_REQUIRED", permission_id, resource)
+
+    async def _pod_decision(
+        self,
+        ctx: Context,
+        permission_id: str,
+        resource: ResourceRef | None,
+    ) -> AuthorizationDecision:
+        """Another pod, asking this one: Public reads here, and what it was granted.
+
+        No role, no ownership, no capability without a resource: a pod holds
+        nothing in another pod but the grants that pod gave it. Pinned to the
+        context's pod first, so a grant elsewhere can never be reached through
+        this one.
+        """
+        if resource is None:
+            return AuthorizationDecision(
+                False, "INSUFFICIENT_PERMISSION", permission_id, resource
+            )
+        if not pod_principal_may_hold(permission_id):
+            # Read-only by construction, not by what was granted: a grant row
+            # carrying a write -- however it got there -- reaches nothing.
+            return AuthorizationDecision(
+                False, "POD_READ_ONLY", permission_id, resource
+            )
+        hydrated = await self._hydrate_resource(resource)
+        if hydrated.pod_id is None or hydrated.pod_id != ctx.pod_id:
+            return AuthorizationDecision(
+                False, "POD_SCOPE_MISMATCH", permission_id, hydrated
+            )
+        if hydrated.visibility == ResourceVisibility.PERSONAL:
+            # Somebody's own, and a pod is nobody: no grant reaches it. Said
+            # here rather than left to the grant path, whose "not yours" test
+            # compares owners, and a pod has no user to compare.
+            return AuthorizationDecision(
+                False, "PERSONAL_RESOURCE_DENIED", permission_id, hydrated
+            )
+        if await self._is_public_read(permission_id, hydrated, pod_id=ctx.pod_id):
+            return AuthorizationDecision(
+                True, "PUBLIC_RESOURCE", permission_id, hydrated
+            )
+        grant_decision = await self._resource_grant_decision(
+            ctx, permission_id, hydrated
+        )
+        if grant_decision is not None:
+            return grant_decision
+        return AuthorizationDecision(
+            False, "MISSING_POD_GRANT", permission_id, hydrated
         )
 
     async def _destructive_delegated_decision(

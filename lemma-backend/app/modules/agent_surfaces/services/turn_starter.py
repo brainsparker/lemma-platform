@@ -79,6 +79,7 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
 from app.modules.agent_surfaces.services.card_retirement import (
     retire_superseded_cards,
 )
+from app.modules.agent_surfaces.services.group_log import RosterReads, roster_reads
 from app.modules.agent_surfaces.services.run_background import (
     reply_all_audience,
     run_background,
@@ -117,8 +118,10 @@ class SurfaceTurnStarter:
         pooled_numbers: PooledNumberReader | None = None,
         ingest_memo: AttachmentIngestMemo | None = None,
         reprepare: Reprepare | None = None,
+        roster_reads: RosterReads = roster_reads,
     ) -> None:
         self.uow_factory = uow_factory
+        self.roster_reads = roster_reads
         # Shared with the file ingest by Redis key, not by instance: what a
         # retry reuses is keyed on the message, whichever object reads it.
         self.ingest_memo = ingest_memo or AttachmentIngestMemo()
@@ -202,12 +205,21 @@ class SurfaceTurnStarter:
         # the agent as background context. Best-effort; never blocks the run.
         if not context.event.is_dm:
             background = await run_background(
-                self.uow_factory, context, adapter=adapter, credentials=credentials
+                self.uow_factory,
+                context,
+                adapter=adapter,
+                credentials=credentials,
+                roster_reads=self.roster_reads,
             )
             if background.lines:
                 metadata["channel_context"] = background.lines
             if background.withheld:
                 metadata["channel_context_withheld"] = background.withheld
+            if background.participants:
+                metadata["channel_participants"] = [
+                    participant.model_dump(mode="json")
+                    for participant in background.participants
+                ]
             if background.audience is not None:
                 metadata["outside_audience"] = background.audience.to_metadata()
         elif not context.audience.answers_outsiders:

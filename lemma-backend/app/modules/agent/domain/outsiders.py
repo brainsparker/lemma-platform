@@ -24,6 +24,12 @@ private chat with a person the pod knows by a vouched-for handle -- carries the
 outsiders: every rule above holds for a contact's run exactly as for a
 stranger's in a group. What the contact adds is a name, and a private chat
 rather than a group.
+
+**Another pod asking over a link is somebody outside the pod too.** Its
+conversation is the one the ask opened (``pod_asks``), and its ``Audience`` is
+``pod``: every rule above holds, and the one difference is whose authority the
+tools check -- the asking pod's grants here (``authorization.pod_principal``)
+instead of nobody's.
 """
 
 from __future__ import annotations
@@ -38,6 +44,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.pod_asks import linked_asker_in
 from app.modules.agent.domain.value_objects import AgentToolset
 
 #: The metadata key, and its values. ``outsiders`` is a group's people from
@@ -94,6 +101,9 @@ class AudienceKind(StrEnum):
     MEMBER = "member"
     OUTSIDERS = OUTSIDERS
     CONTACT = CONTACT
+    #: Another pod, asking over a link. Never stored under ``AUDIENCE_KEY``:
+    #: read off the conversation's ``ask``, which only the server writes.
+    POD = "pod"
 
 
 class Audience(BaseModel):
@@ -107,18 +117,22 @@ class Audience(BaseModel):
 
     ``contact_id`` is set exactly when ``kind`` is ``CONTACT``. A conversation
     that says ``contact`` without an id it can parse is still somebody outside
-    the pod: it reads as ``OUTSIDERS``, never as a member's.
+    the pod: it reads as ``OUTSIDERS``, never as a member's. ``asking_pod_id``
+    is set exactly when ``kind`` is ``POD``.
     """
 
     model_config = ConfigDict(frozen=True)
 
     kind: AudienceKind = AudienceKind.MEMBER
     contact_id: UUID | None = None
+    asking_pod_id: UUID | None = None
 
     @model_validator(mode="after")
     def _contact_id_only_for_a_contact(self) -> Self:
         if (self.kind is AudienceKind.CONTACT) != (self.contact_id is not None):
             raise ValueError("contact_id is set exactly for a contact audience")
+        if (self.kind is AudienceKind.POD) != (self.asking_pod_id is not None):
+            raise ValueError("asking_pod_id is set exactly for a pod audience")
         return self
 
     @classmethod
@@ -132,6 +146,10 @@ class Audience(BaseModel):
     @classmethod
     def contact(cls, contact_id: UUID) -> Audience:
         return cls(kind=AudienceKind.CONTACT, contact_id=contact_id)
+
+    @classmethod
+    def pod(cls, asking_pod_id: UUID) -> Audience:
+        return cls(kind=AudienceKind.POD, asking_pod_id=asking_pod_id)
 
     @classmethod
     def from_conversation_metadata(
@@ -148,6 +166,9 @@ class Audience(BaseModel):
                 return cls.outsiders()
         if recorded == OUTSIDERS:
             return cls.outsiders()
+        asking_pod = linked_asker_in(metadata)
+        if asking_pod is not None:
+            return cls.pod(asking_pod)
         return cls.member()
 
     @classmethod
@@ -157,14 +178,18 @@ class Audience(BaseModel):
 
     @property
     def answers_outsiders(self) -> bool:
-        """True for a group's outsiders and for a contact alike: both are
-        answered as nobody, and nothing that decides what a run may do needs to
-        tell them apart."""
+        """True for a group's outsiders, a contact and a linked pod alike: none
+        is a member, and every rule about what such a run may do holds for all
+        three. Only the authority its tools check differs (``tools/authority``)."""
         return self.kind is not AudienceKind.MEMBER
 
     @property
     def is_contact(self) -> bool:
         return self.kind is AudienceKind.CONTACT
+
+    @property
+    def is_linked_pod(self) -> bool:
+        return self.kind is AudienceKind.POD
 
     def to_metadata(self) -> dict[str, object]:
         """The keys a conversation records this audience under."""
@@ -172,6 +197,7 @@ class Audience(BaseModel):
             return {AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(self.contact_id)}
         if self.kind is AudienceKind.OUTSIDERS:
             return {AUDIENCE_KEY: OUTSIDERS}
+        # A linked pod lives in the conversation's ``ask``, written with it.
         return {}
 
 

@@ -62,6 +62,24 @@ async def _run_token(scenario, *, agent_id: UUID, session_id: str) -> str:
 
 
 async def test_the_runs_own_token_is_authorized(db_session, scenario):
+    """Dispatch mints the run's token with the conversation as its session --
+    the key a person's "allow for this conversation" is recorded under -- so
+    the token the host relays names the conversation, not the run."""
+    await scenario.create_org_with_pod(name_prefix="Relayed tools")
+    agent_id, conversation_id, run_id = await _agent_run(db_session, scenario)
+    token = await _run_token(
+        scenario, agent_id=agent_id, session_id=str(conversation_id)
+    )
+
+    assert await ConversationMCPService().authorize(
+        conversation_id=conversation_id, token=token, agent_run_id=run_id
+    )
+
+
+async def test_a_token_minted_with_the_run_as_its_session_still_works(
+    db_session, scenario
+):
+    """A run in flight across the deploy holds a token naming the run."""
     await scenario.create_org_with_pod(name_prefix="Relayed tools")
     agent_id, conversation_id, run_id = await _agent_run(db_session, scenario)
     token = await _run_token(scenario, agent_id=agent_id, session_id=str(run_id))

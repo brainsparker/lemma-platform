@@ -10,6 +10,7 @@ holds no connection across them.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -17,6 +18,7 @@ from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapte
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+from app.modules.agent_surfaces.domain.models import SurfaceGroupParticipant
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
@@ -37,9 +39,12 @@ from app.modules.agent_surfaces.services.group_audience import (
 )
 from app.modules.agent_surfaces.services.group_log import (
     GroupBackground,
+    RosterReads,
     for_member_run,
     group_background,
     keeps_group_log,
+    live_participants,
+    roster_reads,
 )
 from app.modules.agent_surfaces.services.surface_inbound_message import (
     fetch_channel_context,
@@ -53,6 +58,8 @@ class RunBackground:
     lines: list[dict[str, object]]
     withheld: int = 0
     audience: Audience | None = None
+    #: Everyone the pod knows is in the group, and whether they are in the pod.
+    participants: tuple[SurfaceGroupParticipant, ...] = ()
 
 
 async def run_background(
@@ -61,6 +68,7 @@ async def run_background(
     *,
     adapter: SurfacePlatformAdapterPort,
     credentials: dict[str, object],
+    roster_reads: RosterReads = roster_reads,
 ) -> RunBackground:
     """What this run is shown of the group, and who outside the pod reads it.
 
@@ -72,12 +80,22 @@ async def run_background(
     if logged is not None:
         lines = [line.model_dump(mode="json") for line in logged.lines]
         withheld, outside = logged.withheld, list(logged.outside_authors)
+        participants = logged.participants
     else:
         lines = await fetch_channel_context(
             adapter=adapter, context=context, credentials=credentials
         )
         outside = outside_names(lines)
         withheld = 0
+        # A stranger's run acts as nobody, so it is not handed a roster of
+        # who holds access to this pod -- only a member's run is.
+        participants = (
+            ()
+            if context.audience.answers_outsiders
+            else await _participants_in_live_group(
+                uow_factory, context, lines, reads=roster_reads
+            )
+        )
         if not context.audience.answers_outsiders:
             lines, withheld = for_member_run(lines)
     # The message being answered was logged on its way in and is already
@@ -95,7 +113,34 @@ async def run_background(
             outside_authors=outside,
         )
     )
-    return RunBackground(lines=lines, withheld=withheld, audience=audience)
+    return RunBackground(
+        lines=lines,
+        withheld=withheld,
+        audience=audience,
+        participants=participants,
+    )
+
+
+async def _participants_in_live_group(
+    uow_factory: UnitOfWorkFactory,
+    context: SurfaceChatContext,
+    lines: Sequence[Mapping[str, object]],
+    *,
+    reads: RosterReads,
+) -> tuple[SurfaceGroupParticipant, ...]:
+    """Who the pod can vouch for among a fetched window's speakers."""
+    if context.pod_id is None:
+        return ()
+    return await live_participants(
+        uow_factory,
+        lines=lines,
+        pod_id=context.pod_id,
+        platform=context.platform.value,
+        tenant_id=context.event.tenant_id,
+        asker_external_id=context.message_external_user_id,
+        conversation_id=context.conversation_id,
+        reads=reads,
+    )
 
 
 async def _group_background(
@@ -127,6 +172,7 @@ async def _group_background(
             membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
             agent_display_name=context.agent_display_name,
             for_stranger=context.audience.answers_outsiders,
+            asker_external_id=context.message_external_user_id,
         )
     return group, logged
 

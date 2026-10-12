@@ -471,3 +471,12 @@ def equivalent_permission_ids(permission_id: str) -> set[str]:
         if permission_id in implied:
             candidates.add(candidate)
     return candidates
+
+
+def pod_principal_may_hold(permission_id: str) -> bool:
+    """Whether another pod may ever hold ``permission_id`` here.
+
+    Reading, and running this pod's assistant -- the link itself. Nothing that
+    changes anything, whatever a grant row says.
+    """
+    return permission_id.endswith(".read") or permission_id == Permissions.AGENT_EXECUTE

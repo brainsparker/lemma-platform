@@ -87,6 +87,8 @@ _NAME_TO_MODULE = {
     'ApplyImportRequest': 'apply_import_request',
     'ApplyImportRequestVariables': 'apply_import_request_variables',
     'ApprovalDecisionResponse': 'approval_decision_response',
+    'AskablePodListResponse': 'askable_pod_list_response',
+    'AskablePodResponse': 'askable_pod_response',
     'Attach': 'attach',
     'AuthConfigCreateSchema': 'auth_config_create_schema',
     'AuthConfigCreateSchemaConfigType0': 'auth_config_create_schema_config_type_0',
@@ -113,6 +115,7 @@ _NAME_TO_MODULE = {
     'CodeRequest': 'code_request',
     'ColumnSchema': 'column_schema',
     'ColumnSchemaTypeParamsType0': 'column_schema_type_params_type_0',
+    'ConnectPodRequest': 'connect_pod_request',
     'ConnectRequestInitiateSchema': 'connect_request_initiate_schema',
     'ConnectRequestInitiateSchemaConnectionFieldsType0': 'connect_request_initiate_schema_connection_fields_type_0',
     'ConnectRequestResponseSchema': 'connect_request_response_schema',
@@ -211,6 +214,12 @@ _NAME_TO_MODULE = {
     'EndNodeResponse': 'end_node_response',
     'EndNodeResponsePositionType0': 'end_node_response_position_type_0',
     'ErrorResponse': 'error_response',
+    'EventCatalogResponse': 'event_catalog_response',
+    'EventDescriptorResponse': 'event_descriptor_response',
+    'EventDescriptorResponseInputSchema': 'event_descriptor_response_input_schema',
+    'EventDescriptorResponsePayloadSchema': 'event_descriptor_response_payload_schema',
+    'EventSubscriptionResponse': 'event_subscription_response',
+    'EventSubscriptionResponseArguments': 'event_subscription_response_arguments',
     'EventWorkflowStartConfigInput': 'event_workflow_start_config_input',
     'EventWorkflowStartConfigInputTriggerConfig': 'event_workflow_start_config_input_trigger_config',
     'EventWorkflowStartConfigOutput': 'event_workflow_start_config_output',
@@ -315,6 +324,8 @@ _NAME_TO_MODULE = {
     'InstallationChoiceSchema': 'installation_choice_schema',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
+    'ListeningResponse': 'listening_response',
+    'ListeningResponseState': 'listening_response_state',
     'LiteralInputBinding': 'literal_input_binding',
     'LoopNode': 'loop_node',
     'LoopNodeConfig': 'loop_node_config',
@@ -396,6 +407,8 @@ _NAME_TO_MODULE = {
     'PodJoinRequestCreateResponse': 'pod_join_request_create_response',
     'PodJoinRequestListResponse': 'pod_join_request_list_response',
     'PodJoinRequestStatus': 'pod_join_request_status',
+    'PodLinkListResponse': 'pod_link_list_response',
+    'PodLinkResponse': 'pod_link_response',
     'PodListResponse': 'pod_list_response',
     'PodMemberAddRequest': 'pod_member_add_request',
     'PodMemberDetailResponse': 'pod_member_detail_response',
@@ -480,6 +493,7 @@ _NAME_TO_MODULE = {
     'SessionResponse': 'session_response',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
     'SetOrganizationDefaultRuntimeRequest': 'set_organization_default_runtime_request',
+    'SharedResourceBody': 'shared_resource_body',
     'SignInOutcomeResponse': 'sign_in_outcome_response',
     'SignedUrlListResponse': 'signed_url_list_response',
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
@@ -708,6 +722,8 @@ if TYPE_CHECKING:
     from .apply_import_request import ApplyImportRequest
     from .apply_import_request_variables import ApplyImportRequestVariables
     from .approval_decision_response import ApprovalDecisionResponse
+    from .askable_pod_list_response import AskablePodListResponse
+    from .askable_pod_response import AskablePodResponse
     from .attach import Attach
     from .auth_config_create_schema import AuthConfigCreateSchema
     from .auth_config_create_schema_config_type_0 import AuthConfigCreateSchemaConfigType0
@@ -734,6 +750,7 @@ if TYPE_CHECKING:
     from .code_request import CodeRequest
     from .column_schema import ColumnSchema
     from .column_schema_type_params_type_0 import ColumnSchemaTypeParamsType0
+    from .connect_pod_request import ConnectPodRequest
     from .connect_request_initiate_schema import ConnectRequestInitiateSchema
     from .connect_request_initiate_schema_connection_fields_type_0 import ConnectRequestInitiateSchemaConnectionFieldsType0
     from .connect_request_response_schema import ConnectRequestResponseSchema
@@ -832,6 +849,12 @@ if TYPE_CHECKING:
     from .end_node_response import EndNodeResponse
     from .end_node_response_position_type_0 import EndNodeResponsePositionType0
     from .error_response import ErrorResponse
+    from .event_catalog_response import EventCatalogResponse
+    from .event_descriptor_response import EventDescriptorResponse
+    from .event_descriptor_response_input_schema import EventDescriptorResponseInputSchema
+    from .event_descriptor_response_payload_schema import EventDescriptorResponsePayloadSchema
+    from .event_subscription_response import EventSubscriptionResponse
+    from .event_subscription_response_arguments import EventSubscriptionResponseArguments
     from .event_workflow_start_config_input import EventWorkflowStartConfigInput
     from .event_workflow_start_config_input_trigger_config import EventWorkflowStartConfigInputTriggerConfig
     from .event_workflow_start_config_output import EventWorkflowStartConfigOutput
@@ -936,6 +959,8 @@ if TYPE_CHECKING:
     from .installation_choice_schema import InstallationChoiceSchema
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
+    from .listening_response import ListeningResponse
+    from .listening_response_state import ListeningResponseState
     from .literal_input_binding import LiteralInputBinding
     from .loop_node import LoopNode
     from .loop_node_config import LoopNodeConfig
@@ -1017,6 +1042,8 @@ if TYPE_CHECKING:
     from .pod_join_request_create_response import PodJoinRequestCreateResponse
     from .pod_join_request_list_response import PodJoinRequestListResponse
     from .pod_join_request_status import PodJoinRequestStatus
+    from .pod_link_list_response import PodLinkListResponse
+    from .pod_link_response import PodLinkResponse
     from .pod_list_response import PodListResponse
     from .pod_member_add_request import PodMemberAddRequest
     from .pod_member_detail_response import PodMemberDetailResponse
@@ -1101,6 +1128,7 @@ if TYPE_CHECKING:
     from .session_response import SessionResponse
     from .set_default_surface_request import SetDefaultSurfaceRequest
     from .set_organization_default_runtime_request import SetOrganizationDefaultRuntimeRequest
+    from .shared_resource_body import SharedResourceBody
     from .sign_in_outcome_response import SignInOutcomeResponse
     from .signed_url_list_response import SignedUrlListResponse
     from .signed_url_revoke_response import SignedUrlRevokeResponse
@@ -1342,6 +1370,8 @@ __all__ = [
     'ApplyImportRequest',
     'ApplyImportRequestVariables',
     'ApprovalDecisionResponse',
+    'AskablePodListResponse',
+    'AskablePodResponse',
     'Attach',
     'AuthConfigCreateSchema',
     'AuthConfigCreateSchemaConfigType0',
@@ -1368,6 +1398,7 @@ __all__ = [
     'CodeRequest',
     'ColumnSchema',
     'ColumnSchemaTypeParamsType0',
+    'ConnectPodRequest',
     'ConnectRequestInitiateSchema',
     'ConnectRequestInitiateSchemaConnectionFieldsType0',
     'ConnectRequestResponseSchema',
@@ -1466,6 +1497,12 @@ __all__ = [
     'EndNodeResponse',
     'EndNodeResponsePositionType0',
     'ErrorResponse',
+    'EventCatalogResponse',
+    'EventDescriptorResponse',
+    'EventDescriptorResponseInputSchema',
+    'EventDescriptorResponsePayloadSchema',
+    'EventSubscriptionResponse',
+    'EventSubscriptionResponseArguments',
     'EventWorkflowStartConfigInput',
     'EventWorkflowStartConfigInputTriggerConfig',
     'EventWorkflowStartConfigOutput',
@@ -1570,6 +1607,8 @@ __all__ = [
     'InstallationChoiceSchema',
     'InstalledAppSummary',
     'JsonObject',
+    'ListeningResponse',
+    'ListeningResponseState',
     'LiteralInputBinding',
     'LoopNode',
     'LoopNodeConfig',
@@ -1651,6 +1690,8 @@ __all__ = [
     'PodJoinRequestCreateResponse',
     'PodJoinRequestListResponse',
     'PodJoinRequestStatus',
+    'PodLinkListResponse',
+    'PodLinkResponse',
     'PodListResponse',
     'PodMemberAddRequest',
     'PodMemberDetailResponse',
@@ -1735,6 +1776,7 @@ __all__ = [
     'SessionResponse',
     'SetDefaultSurfaceRequest',
     'SetOrganizationDefaultRuntimeRequest',
+    'SharedResourceBody',
     'SignInOutcomeResponse',
     'SignedUrlListResponse',
     'SignedUrlRevokeResponse',

@@ -24,6 +24,10 @@ class ActorType(str, Enum):
     #: what an anonymous visitor reads, and the pod database narrows contact-
     #: owned tables to their own rows (``Context.contact_id``).
     CONTACT = "CONTACT"
+    #: Another pod, asking this one over a link (``authorization.pod_principal``):
+    #: Public reads here, plus whatever this pod granted that pod, and nothing
+    #: in any other pod.
+    POD = "POD"
 
 
 class ResourceType(str, Enum):
@@ -380,8 +384,14 @@ class Context:
 
     @property
     def is_outsider(self) -> bool:
-        """Somebody outside the pod: an anonymous visitor or a contact."""
-        return self.actor_type in (ActorType.ANONYMOUS, ActorType.CONTACT)
+        """Somebody outside the pod: an anonymous visitor, a contact, or another
+        pod asking over a link. None of them is a member, and the pod database
+        reads each as nobody in particular (``RowPrincipal.of``)."""
+        return self.actor_type in (
+            ActorType.ANONYMOUS,
+            ActorType.CONTACT,
+            ActorType.POD,
+        )
 
     def has_permission(self, permission_id: str) -> bool:
         return bool(equivalent_permission_ids(permission_id) & self.permission_ids)

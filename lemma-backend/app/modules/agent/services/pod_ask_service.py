@@ -23,10 +23,9 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from app.core.authorization.context import Context, ResourceRef
+from app.core.authorization.context import Context
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
-from app.core.authorization.permissions import Permissions
 from app.core.authorization.pod_principal import build_pod_context
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -34,21 +33,19 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.outsiders import run_audience
+from app.modules.agent.domain.pod_ask_rules import AskingRun, open_modes, plan_ask
 from app.modules.agent.domain.pod_asks import (
     ASK_KEY,
     ASK_SOURCE,
     ASKS_OUT_KEY,
     AnswerOutcome,
     AskChain,
-    AskingRun,
     AskMode,
     AskRefused,
     PodAsk,
     ask_message_metadata,
     ask_of,
     instructions_for_answering,
-    open_modes,
-    plan_ask,
 )
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
@@ -62,6 +59,10 @@ from app.modules.agent.infrastructure.pod_ask_queries import (
 from app.modules.agent.infrastructure.pod_link_queries import PodLinkQueries
 from app.modules.agent.services.askable_pods_brief import narrowed
 from app.modules.agent.services.pod_ask_delivery import BUSY, settled_answer
+from app.modules.agent.services.pod_link_guards import (
+    refuse_past_link_cap,
+    still_stewards,
+)
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
@@ -69,7 +70,7 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.poll_backoff import poll_delay
 from app.modules.identity.contracts.profiles import UserProfileRef, user_profile
-from app.modules.pod.contracts.members import pod_member_id, pod_name
+from app.modules.pod.contracts.members import pod_name
 from app.modules.usage.contracts.execution import build_usage_service
 
 if TYPE_CHECKING:
@@ -81,12 +82,6 @@ logger = get_logger(__name__)
 #: grows it, so a wait of half a minute is a handful of reads, not thirty.
 _POLL_SECONDS = 1.0
 _DENIED_STATUS_CODES = frozenset({401, 403})
-#: How many runs one pod's asks over a link may start in the pod it asks, per
-#: window. A link is for a schedule's check or a task's lookup, not a loop: a
-#: schedule every two minutes fits; one stuck re-asking does not, and the asked
-#: pod's organization pays for every run.
-LINK_RUNS_PER_WINDOW = 30
-LINK_RUN_WINDOW = timedelta(hours=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,7 +231,10 @@ class PodAskService:
             if asking is None:
                 return []
             teammates = await askable_pods(
-                uow, user_id=deps.user_id, organization_id=deps.org_id, pod_id=deps.pod_id
+                uow,
+                user_id=deps.user_id,
+                organization_id=deps.org_id,
+                pod_id=deps.pod_id,
             )
         modes = open_modes(_asking_run(deps, asking, latest_turn_source=source))
         return [one for one in (narrowed(t, modes) for t in teammates) if one]
@@ -283,7 +281,7 @@ class PodAskService:
                 ),
             )
             if plan.mode is AskMode.LINK:
-                await self._refuse_past_link_cap(
+                await refuse_past_link_cap(
                     uow, to_pod_id=teammate.pod_id, from_pod_id=deps.pod_id
                 )
             from_name = await pod_name(uow.session, deps.pod_id) or "Another pod"
@@ -312,9 +310,7 @@ class PodAskService:
                     teammate=teammate,
                     instructions=instructions,
                 )
-                await self._conversation_service(
-                    uow
-                ).add_user_message_and_start_run(
+                await self._conversation_service(uow).add_user_message_and_start_run(
                     conversation_id=thread_id,
                     user_id=owner,
                     content=request.strip(),
@@ -357,22 +353,6 @@ class PodAskService:
             wait_seconds=wait_seconds,
         )
 
-    @staticmethod
-    async def _refuse_past_link_cap(
-        uow: SqlAlchemyUnitOfWork, *, to_pod_id: UUID, from_pod_id: UUID
-    ) -> None:
-        """Refuse an ask over a link that has started too many runs lately."""
-        since = datetime.now(timezone.utc) - LINK_RUN_WINDOW
-        started = await PodAskQueries(uow).link_runs_since(
-            to_pod_id=to_pod_id, from_pod_id=from_pod_id, since=since
-        )
-        if started >= LINK_RUNS_PER_WINDOW:
-            raise AskRefused(
-                f"This pod has asked that one {started} times in the last hour, "
-                "which is as many as a connection allows. Answer with what you "
-                "have, and ask again later."
-            )
-
     async def _side(
         self,
         uow: SqlAlchemyUnitOfWork,
@@ -404,7 +384,7 @@ class PodAskService:
             answering_pod_id=teammate.pod_id, asking_pod_id=deps.pod_id
         )
         steward = link.steward_user_id if link is not None else None
-        if steward is None or not await self._still_stewards(
+        if steward is None or not await still_stewards(
             uow, steward, answering_pod_id=teammate.pod_id, asking_pod_id=deps.pod_id
         ):
             raise AskRefused(
@@ -418,31 +398,6 @@ class PodAskService:
             asking_pod_id=deps.pod_id,
         )
         return steward, context, None
-
-    @staticmethod
-    async def _still_stewards(
-        uow: SqlAlchemyUnitOfWork,
-        steward: UUID,
-        *,
-        answering_pod_id: UUID,
-        asking_pod_id: UUID,
-    ) -> bool:
-        """Whether whoever connected the link could still connect it now.
-
-        The same two tests connecting made: an admin of the pod being asked,
-        and in the pod asking. Someone who has since left either, or stopped
-        running the pod being asked, no longer stands behind what it shares.
-        """
-        if await pod_member_id(uow, asking_pod_id, steward) is None:
-            return False
-        if await pod_member_id(uow, answering_pod_id, steward) is None:
-            return False
-        context = await create_authorization_data_service(uow).build_user_context(
-            user_id=steward, pod_id=answering_pod_id
-        )
-        return await context.can(
-            Permissions.POD_MEMBER_MANAGE, ResourceRef.pod(answering_pod_id)
-        )
 
     async def _open_thread(
         self,

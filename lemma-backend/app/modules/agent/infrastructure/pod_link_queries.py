@@ -9,6 +9,10 @@ and taking it away is deleting them.
 Whoever made the link grant looks after the link (its steward): the
 conversations A's asks open in B are theirs, and so are the questions B passes
 on. ``created_by_user_id`` already records exactly that person.
+
+A pod bundle does not carry its links: each names another pod by id, which
+means nothing in the organization the bundle is imported into. They are made
+again there, by that pod's people.
 """
 
 from __future__ import annotations

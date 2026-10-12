@@ -539,4 +539,3 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
             group_ids = set((await self.session.execute(stmt)).scalars().all())
             visible_ids = group_ids if visible_ids is None else visible_ids & group_ids
         return frozenset(visible_ids or set())
-

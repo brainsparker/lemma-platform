@@ -11,8 +11,9 @@ make one and what it may share.
   pod through the outsider machinery, which writes nothing, so a write grant
   would promise what no run could use.
 * **Who looks after it.** Whoever connected it. They own the conversations the
-  asks open, get the questions the run passes on, and the link stops working if
-  they leave the pod.
+  asks open, get the questions the run passes on, and the link stops working
+  once they could no longer connect it: out of either pod, or no longer an
+  admin of this one (``PodAskService._still_stewards``).
 """
 
 from __future__ import annotations

@@ -368,33 +368,6 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
             )
         return message, {"reply_markup": _CONTACT_REQUEST_MARKUP}
 
-    def unproven_claim_reply(
-        self, event: ParsedInboundSurfaceEvent
-    ) -> tuple[str, dict[str, object]] | None:
-        # The username names a Lemma profile, which anyone can type, so the
-        # proof is the one Telegram attests: the sender's own contact, matched
-        # against the number verified on an account. Asked only in private --
-        # in a group the person stays unresolved until they have done it.
-        if not event.is_dm:
-            return None
-        if event.metadata.get("contact_shared_by_sender") is False:
-            return self.unresolved_sender_reply(event)
-        if event.sender_phone:
-            # They shared their own contact and it proved nothing: the number
-            # is not one a Lemma account has verified.
-            message = (
-                "That number isn't verified on the Lemma account that uses this "
-                "Telegram username. Verify your mobile number in your Lemma "
-                "account settings, then share your phone number here again."
-            )
-        else:
-            message = (
-                "This Telegram username is on a Lemma account. To confirm the "
-                "account is yours, share your phone number with the button below. "
-                "It has to be the mobile number verified on that account."
-            )
-        return message, {"reply_markup": _CONTACT_REQUEST_MARKUP}
-
     def linked_sender_confirmation(
         self, event: ParsedInboundSurfaceEvent
     ) -> tuple[str, dict[str, Any]] | None:

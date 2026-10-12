@@ -193,21 +193,6 @@ class IdentitySteps:
             "/users/me/profile", json={"first_name": first, "last_name": last}
         )
 
-    async def is_known_on_telegram_as(self, username: str) -> JSON:
-        """Tell Lemma which Telegram account this person says is theirs.
-
-        A claim, not proof: anyone can type a handle onto their profile, so a
-        sender writing as it resolves to nobody and is asked to prove the
-        account by sharing their contact (`ForgedChat.proves_who_they_are`).
-        What the handle buys is being asked for that proof instead of being
-        told to sign up.
-        """
-        return await self.api.post(
-            "/users/me/profile",
-            what=f"{self.label} declaring their Telegram username",
-            json={"telegram_username": username},
-        )
-
     async def has_a_mobile_number(self) -> str:
         """The number on this person's profile, writing one if there is none.
 

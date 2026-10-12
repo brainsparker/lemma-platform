@@ -177,17 +177,16 @@ observer renders them on the surface and a submission resumes the run.
 - **A sender is a user only on proof.** A chat sender resolves to a Lemma user by
   the profile email the platform's API returns, or by a mobile number already
   *verified* on the profile (WhatsApp's signed sender, a Telegram contact the
-  sender shares about themselves). A Telegram handle is never proof: anyone can
-  type one onto their profile, and a handle given up on Telegram is taken by a
-  stranger. A sender writing as a handle a live profile declares resolves to
-  nobody and is asked, once per stranger window, to share their contact;
-  proven, the account stays resolved whatever either handle later says. The
-  cache records what proved each resolution (`proven_by`: `PHONE`, `EMAIL`,
-  `SETUP_LINK` for a managed bot's creator), and an unrecorded Telegram row
-  whose user declares a handle is dropped unless a verified number backs it.
-  Someone with no verified number cannot prove a handle on a pod's own bot:
-  they verify their number in account settings first, or sign up through the
-  shared bot, whose email-code step verifies the contact they share. A number a profile merely lists does not match by
+  sender shares about themselves). A Telegram handle is matched on not at all,
+  and a profile holds none: anyone can claim a free handle, and one given up on
+  Telegram is taken by a stranger. An unresolved Telegram sender is asked to
+  share their own contact; proven, the account stays resolved whatever their
+  handle later says. A managed bot's creator is not bound by opening the setup
+  link -- a link can leak -- and is recognised the same way, by a contact share
+  in the new bot. Someone with no verified number cannot be recognised on a
+  pod's own bot: they verify their number in account settings first, or sign up
+  through the shared bot, whose email-code step verifies the contact they
+  share. A number a profile merely lists does not match by
   default: it would hand the number's real owner's messages -- and the agent's
   replies, sent from the shared number -- to whoever typed it. That sender goes
   through signup instead. A deployment can accept that risk with

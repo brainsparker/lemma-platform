@@ -27,25 +27,18 @@ def test_changing_mobile_clears_verification_and_emits_cache_invalidation_event(
     assert events[0].user_id == user.id
 
 
-def test_changing_the_telegram_handle_names_the_handle_given_up():
-    """Surfaces clear Telegram senders the old handle matched, so they need it."""
-    user = UserEntity(email="test+tg@example.com", telegram_username="Asha")
+def test_a_telegram_handle_is_not_a_profile_field():
+    """A handle on a profile proved nothing, so a profile no longer holds one.
 
-    user.update_profile(telegram_username="asha_new")
+    An older client may still send it; the profile ignores it rather than
+    storing a claim nobody checks.
+    """
+    user = UserEntity(email="test+tg@example.com")
 
-    events = user.collect_events()
-    assert [event.event_type for event in events] == [
-        "identity.user.telegram_username.changed"
-    ]
-    assert events[0].user_id == user.id
-    assert events[0].previous_username == "asha"
+    user.update_profile(telegram_username="asha", first_name="Asha")
 
-
-def test_resubmitting_the_same_telegram_handle_is_not_a_change():
-    user = UserEntity(email="test+tg@example.com", telegram_username="Asha")
-
-    user.update_profile(telegram_username="asha")
-
+    assert user.first_name == "Asha"
+    assert "telegram_username" not in user.model_dump()
     assert user.collect_events() == []
 
 

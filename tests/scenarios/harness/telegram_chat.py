@@ -245,9 +245,8 @@ class ForgedChat(Chat):
                 "id": self.sender_id,
                 "is_bot": False,
                 "first_name": "Alice",
-                # Says whose account this might be: a sender writing as a handle
-                # a profile declares is asked to prove it rather than to sign
-                # up. Not proof -- see `proves_who_they_are`.
+                # Real senders usually have one, and it proves nothing -- Lemma
+                # matches on it not at all. See `proves_who_they_are`.
                 **({"username": self._handle} if self._handle else {}),
             },
             "text": text,
@@ -258,7 +257,7 @@ class ForgedChat(Chat):
     async def proves_who_they_are(self) -> None:
         """Share this person's own contact, as Telegram's button does, once.
 
-        A handle on a profile is a claim anybody can type, so it is never what
+        A Telegram handle is something anybody can claim, so it is never what
         makes a sender somebody; the number Telegram attests in a self-shared
         contact is, matched against the one on the profile. Lemma confirms,
         and the confirmation is set aside so a scenario's first wait is for an
@@ -337,8 +336,7 @@ class ForgedChat(Chat):
     def as_a_stranger(self) -> ForgedChat:
         """The same bot, messaged by somebody Lemma has never heard of.
 
-        No @username a profile declares and no proven account: what a real
-        stranger looks like, rather than what a broken message looks like. Its
+        No @username and no proven account: what a real stranger looks like, rather than what a broken message looks like. Its
         own chat, too — a stranger writing into the colleague's conversation
         would be a different and much more alarming scenario.
         """
@@ -350,9 +348,8 @@ class ForgedChat(Chat):
     def as_another_person(self, handle: str, *, phone: str | None = None) -> ForgedChat:
         """The same bot, messaged by a different Lemma user from their own chat.
 
-        Not a stranger: somebody with an account, an `@username` on it and --
-        once they `proves_who_they_are` with `phone` -- a Telegram account Lemma
-        resolves, who simply has no business in this pod. Only a forged delivery
+        Not a stranger: somebody with an account and -- once they
+        `proves_who_they_are` with `phone` -- a Telegram account Lemma resolves, who simply has no business in this pod. Only a forged delivery
         can arrange that — a Telegram account belongs to one person
         deployment-wide, so a real one cannot be the member and the outsider in
         the same run, and the live lane has exactly one account which is already

@@ -272,7 +272,6 @@ async def test_created_managed_bot_persists_surface_and_finishes_setup():
     service = _service(store)
     setup = await _start(service)
     setup.telegram_user_id = 77
-    setup.telegram_username = "Bot_Owner"
     setup.status = TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM
     await store.save(setup)
     await store.bind_telegram_user(
@@ -498,7 +497,6 @@ async def test_integrity_failure_marks_setup_failed_and_releases_target():
     service = _service(store)
     setup = await _start(service)
     setup.telegram_user_id = 77
-    setup.telegram_username = "Bot_Owner"
     setup.status = TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM
     await store.save(setup)
     await store.bind_telegram_user(
@@ -794,7 +792,6 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
     setup_service = _service(store)
     setup = await _start(setup_service)
     setup.telegram_user_id = 77
-    setup.telegram_username = "Bot_Owner"
     account_id = uuid4()
     surface_id = uuid4()
 
@@ -862,13 +859,6 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
         "ExternalSurfaceUserRepository",
         lambda _: external_users,
     )
-    # The creator wrote with the handle their Lemma profile declares, which is
-    # what lets setup bind the two.
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.managed_bot_identity."
-        "live_user_telegram_username",
-        AsyncMock(return_value="bot_owner"),
-    )
 
     persisted_account_id, persisted_surface_id = await service._persist_managed_bot(
         setup=setup,
@@ -884,8 +874,11 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
     assert auth_config.organization_id == setup.organization_id
     assert auth_config.name == "telegram"
     assert accounts.create.await_args.args[0].credentials.bot_token == "child-token"
-    assert external_users.upsert.await_args.kwargs["external_user_id"] == "77"
-    assert external_users.upsert.await_args.kwargs["resolved_user_id"] == setup.user_id
+    # Opening the setup link proves nothing about who opened it, so the
+    # creator's Telegram account is not bound to the user here: they are
+    # recognised once they share a contact matching a verified number.
+    external_users.get_by_identity.assert_awaited_once()
+    external_users.upsert.assert_not_awaited()
     uow.commit.assert_awaited_once()
 
 
@@ -898,7 +891,6 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
     store = _Store()
     setup = await _start(_service(store))
     setup.telegram_user_id = 77
-    setup.telegram_username = "Bot_Owner"
     account_id = uuid4()
     surface_id = uuid4()
 
@@ -968,13 +960,6 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
         "ExternalSurfaceUserRepository",
         lambda _: external_users,
     )
-    # The creator wrote with the handle their Lemma profile declares, which is
-    # what lets setup bind the two.
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.managed_bot_identity."
-        "live_user_telegram_username",
-        AsyncMock(return_value="bot_owner"),
-    )
 
     if not surface_account_matches:
         with pytest.raises(DomainError) as exc_info:
@@ -1003,5 +988,5 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
         surface_id=surface_id,
         is_active=True,
     )
-    external_users.upsert.assert_awaited_once()
+    external_users.upsert.assert_not_awaited()
     uow.commit.assert_awaited_once()

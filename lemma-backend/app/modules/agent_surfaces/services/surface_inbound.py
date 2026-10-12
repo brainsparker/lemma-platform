@@ -561,7 +561,6 @@ class SurfaceInboundMixin:
                 parsed=parsed,
                 adapter=adapter,
                 agent_display_name=agent_display_name,
-                sender=resolved_user,
             )
         confirmation = adapter.linked_sender_confirmation(parsed)
         if confirmation is not None:

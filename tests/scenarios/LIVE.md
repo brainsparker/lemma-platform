@@ -115,13 +115,10 @@ scenarios (`journeys/live/test_telegram.py`) run unattended from then on
 — text in and an answer out, an image the agent has to look at, a question
 answered by pressing a button, an approval offered as something to press.
 
-Three things that account needs, and all are what a real colleague has anyway:
+Two things that account needs, and both are what a real colleague has anyway:
 
-* **a @username** — it tells Lemma whose account a sender might be, so they are
-  asked to prove it rather than to sign up. The scenarios skip and say so.
-* **its number verified on the holder's Lemma profile** — a handle is a claim
-  anybody can type onto a profile, so it never makes a sender somebody. The
-  live fixture shares the account's own contact, which Telegram attests, and
+* **its number verified on the holder's Lemma profile** — a Telegram handle is
+  a claim anybody can make, so Lemma matches on it not at all. The live fixture shares the account's own contact, which Telegram attests, and
   Lemma matches it to the number verified on the profile. Verify it once, signed
   in as the holder (account settings → verify with Telegram); the scenarios skip
   and say so until then.
@@ -141,15 +138,12 @@ organizations sharing a display name, which is a state nothing reports.
 
 It matters most here, because Telegram identity is deployment-wide:
 
-* `telegram_username` is unique across the deployment, so only one of the two
-  Daniels can hold `@you`. Whichever cast ran last owns it, and the other is
-  refused with a 409. The live fixture skips with that explanation rather than
-  erroring.
+* a mobile number is unique across the deployment, so only one of the two
+  Daniels can verify the account's number, and only that one is recognised.
 * the resolution itself is **sticky by design** (`PS-SURF-012`: "shall keep
   that resolution stable across later messages"). Once a Telegram account has
-  proven it is a user's, changing `telegram_username` does not re-point it — so
-  a cast built after the link was made can never be recognised. The verified
-  number is the other half: two casts cannot both verify one account's number.
+  proven it is a user's, nothing re-points it — so a cast built after the link
+  was made can never be recognised.
 
 So: **export `SCENARIOS_MAILBOX` in every command that touches a deployment**,
 including `make scenarios-provision`, and use the same answer every time. If a

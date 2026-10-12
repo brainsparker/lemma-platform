@@ -19458,6 +19458,8 @@
                 "type": "null"
               }
             ],
+            "deprecated": true,
+            "description": "Deprecated: accepted and ignored, and will be removed. A Telegram account is linked by sharing a contact with a Lemma bot, never by a handle typed onto a profile.",
             "title": "Telegram Username"
           },
           "timezone": {
@@ -19607,17 +19609,6 @@
               }
             ],
             "title": "Mobile Verified At"
-          },
-          "telegram_username": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Telegram Username"
           },
           "timezone": {
             "anyOf": [

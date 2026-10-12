@@ -346,19 +346,6 @@ class SurfaceUserDirectoryPort(Protocol):
         """The live user with this address, or nobody."""
         raise NotImplementedError
 
-    async def user_id_by_telegram_username(self, username: str) -> UUID | None:
-        """The live user holding this handle, or nobody.
-
-        A handle freed by a deactivated account must answer nobody: it can be
-        taken by someone else, and a surface resolving it is choosing whose
-        authority a run executes with.
-        """
-        raise NotImplementedError
-
-    async def telegram_username_of(self, user_id: UUID) -> str | None:
-        """The handle this live user's profile declares, lower-cased, or None."""
-        raise NotImplementedError
-
     async def user_ids_by_mobile_numbers(
         self, numbers: list[str], *, verified: bool
     ) -> list[UUID]:

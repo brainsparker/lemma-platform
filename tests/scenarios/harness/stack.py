@@ -724,7 +724,7 @@ def _environment(
             [{"slug_prefix": SPEND_CAP_PROBE_SLUG_PREFIX, "monthly_limit_usd": 0}]
         ),
         "AUTH_ALTCHA_ENABLED": "false",
-        # A Telegram handle on a profile is not proof, so a scenario's person
+        # A Telegram handle is not proof of anything, so a scenario's person
         # proves their Telegram account by sharing their contact, matched to
         # the number on their profile. Nothing here can verify a number (that
         # takes a real WhatsApp or Telegram login), so the stack accepts the

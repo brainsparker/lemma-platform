@@ -458,7 +458,6 @@ async def _seed_external_user(
     email: str | None = None,
     phone: str | None = None,
     tenant_id: str | None = None,
-    proven_by: str | None = None,
 ) -> None:
     db_session.add(
         AgentSurfaceExternalUser(
@@ -470,7 +469,6 @@ async def _seed_external_user(
             display_name="Surface Test User",
             raw_profile={},
             resolved_user_id=resolved_user_id,
-            proven_by=proven_by,
             last_seen_at=datetime.now(timezone.utc),
         )
     )
@@ -556,7 +554,6 @@ async def _set_user_mobile_number(
     *,
     user_id: str,
     mobile_number: str,
-    telegram_username: str | None = None,
     verified: bool = True,
 ) -> None:
     """Give the user a number the sender can be matched to.
@@ -568,8 +565,6 @@ async def _set_user_mobile_number(
     assert user is not None
     user.mobile_number = mobile_number
     user.mobile_verified_at = datetime.now(timezone.utc) if verified else None
-    if telegram_username is not None:
-        user.telegram_username = telegram_username
     await db_session.commit()
 
 

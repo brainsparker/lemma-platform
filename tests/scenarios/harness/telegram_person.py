@@ -119,7 +119,7 @@ class Conversation:
 
         How a person proves the account is theirs: Telegram attests the number
         of a contact a user shares about themselves, and Lemma matches it to the
-        number verified on their profile. A handle on the profile is no proof.
+        number verified on their profile. A Telegram handle is no proof.
         """
         from telethon.tl.types import InputMediaContact
 

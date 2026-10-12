@@ -391,7 +391,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.ingress_service.webhook_carried_several_messages.observed': EventSpec('info', frozenset({'message_count', 'source'})),
     'agent_surfaces.lost_delivery.sender_not_told.degraded': EventSpec('warning', frozenset({'source'})),
     'agent_surfaces.lost_delivery.sender_told.degraded': EventSpec('warning', frozenset({'source', 'surface_id'})),
-    'agent_surfaces.managed_bot.creator_binding_unconfirmed': EventSpec('info', frozenset({'setup_id'})),
     'agent_surfaces.notification_channels.provision_failed.degraded': EventSpec('warning', frozenset({'failure_type', 'pod_id'})),
     'agent_surfaces.notification_controller.delegated_outside_answer.refused': EventSpec('info', frozenset({'notification_id'})),
     'agent_surfaces.notification_egress.cold_open_unsupported.observed': EventSpec('info', frozenset({'notification_id', 'platform'})),

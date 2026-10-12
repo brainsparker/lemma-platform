@@ -209,7 +209,6 @@ async def test_a_cached_actor_whose_account_is_gone_configures_nothing():
         external_user_repository=external_users,
         user_directory=SimpleNamespace(
             user_id_by_email=AsyncMock(return_value=None),
-            user_id_by_telegram_username=AsyncMock(return_value=None),
             user_ids_by_mobile_numbers=AsyncMock(return_value=[]),
         ),
         verified_identity_lookup=nobody_verified,

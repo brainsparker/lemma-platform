@@ -107,22 +107,6 @@ class UserMobileChangedEvent(DomainEvent):
         return IDENTITY_EVENTS_STREAM
 
 
-class UserTelegramUsernameChangedEvent(DomainEvent):
-    """A profile's Telegram handle changed, so what it once vouched for has not.
-
-    Carries the handle being replaced because that is what consumers have to
-    find: an external identity the old handle was matched to.
-    """
-
-    event_type: str = "identity.user.telegram_username.changed"
-    user_id: UUID
-    previous_username: str | None = None
-
-    @classmethod
-    def stream_name(cls) -> str:
-        return IDENTITY_EVENTS_STREAM
-
-
 class IdentityEvents:
     STREAM = IDENTITY_EVENTS_STREAM
 

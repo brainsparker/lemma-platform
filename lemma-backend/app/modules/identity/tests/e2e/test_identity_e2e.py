@@ -1871,7 +1871,7 @@ async def test_invite_with_pod_id_from_different_org_is_rejected(
 
 
 @pytest.mark.asyncio
-async def test_profile_mobile_and_telegram_uniqueness(
+async def test_profile_mobile_uniqueness(
     async_client: AsyncClient,
     signup_user,
 ):
@@ -1902,7 +1902,7 @@ async def test_profile_mobile_and_telegram_uniqueness(
     set_first = await async_client.post(
         "/users/me/profile",
         headers=first_headers,
-        json={"mobile_number": "+1 555 123 4567", "telegram_username": "AnukulT"},
+        json={"mobile_number": "+1 555 123 4567"},
     )
     assert set_first.status_code == 201
     assert set_first.json()["mobile_number"] == "+15551234567"
@@ -1931,19 +1931,11 @@ async def test_profile_mobile_and_telegram_uniqueness(
     finally:
         await telegram_service.close()
 
-    # Same telegram username, different case -> conflict.
-    dup_telegram = await async_client.post(
-        "/users/me/profile",
-        headers=second_headers,
-        json={"telegram_username": "anukult"},
-    )
-    assert dup_telegram.status_code == 409
-
     # Unique values are accepted.
     unique = await async_client.post(
         "/users/me/profile",
         headers=second_headers,
-        json={"mobile_number": "+1 555 987 6543", "telegram_username": "someone_else"},
+        json={"mobile_number": "+1 555 987 6543"},
     )
     assert unique.status_code == 201
 
@@ -1951,7 +1943,7 @@ async def test_profile_mobile_and_telegram_uniqueness(
     resave = await async_client.post(
         "/users/me/profile",
         headers=first_headers,
-        json={"mobile_number": "+1 555 123 4567", "telegram_username": "AnukulT"},
+        json={"mobile_number": "+1 555 123 4567"},
     )
     assert resave.status_code == 201
 
@@ -1966,6 +1958,36 @@ async def test_profile_mobile_and_telegram_uniqueness(
         changed_owner = await session.get(User, UUID(first["id"]))
     assert changed_owner is not None
     assert changed_owner.mobile_verified_at is None
+
+
+@pytest.mark.asyncio
+async def test_a_telegram_handle_on_a_profile_is_accepted_and_ignored(
+    async_client: AsyncClient,
+    signup_user,
+):
+    """An older client still sends a handle; it is neither refused nor kept.
+
+    A handle typed onto a profile proved nothing -- anyone could type someone
+    else's -- so it is no longer stored, compared or returned. Two profiles
+    naming the same one therefore conflict on nothing.
+    """
+    first, second = await asyncio.gather(
+        signup_user(email=f"tg-first-{uuid4().hex[:8]}@example.com"),
+        signup_user(email=f"tg-second-{uuid4().hex[:8]}@example.com"),
+    )
+    for user in (first, second):
+        saved = await async_client.post(
+            "/users/me/profile",
+            headers=_auth_headers(user["token"]),
+            json={"first_name": "Asha", "telegram_username": "same_handle"},
+        )
+        assert saved.status_code == 201
+        assert saved.json()["first_name"] == "Asha"
+        assert "telegram_username" not in saved.json()
+
+        me = await async_client.get("/users/me", headers=_auth_headers(user["token"]))
+        assert me.status_code == 200
+        assert "telegram_username" not in me.json()
 
 
 @pytest.mark.asyncio

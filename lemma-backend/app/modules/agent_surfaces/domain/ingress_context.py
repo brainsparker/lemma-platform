@@ -17,8 +17,6 @@ from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 SurfaceReplyKind = Literal[
     "signup",
     "identity_link",
-    # Asking a sender whose handle a profile declares to prove the account.
-    "identity_proof",
     "surface_setup",
     "pod_access",
     # A message that will not be answered: it could not be read, or its

@@ -153,22 +153,12 @@ def _reply_context(
 def _unresolved_reply(
     adapter: SurfacePlatformAdapterPort,
     parsed: ParsedInboundSurfaceEvent,
-    sender: ResolvedSurfaceUser | None,
 ) -> tuple[tuple[str, dict[str, object]], SurfaceReplyKind]:
     """What to tell a sender nobody resolved, and which kind of reply it is.
 
-    Someone whose handle a profile declares is asked to prove the account
-    rather than to sign up -- the account may well be theirs. Asked unprompted
-    it is a nudge, held to the stranger window like a signup prompt, so a
-    person who keeps writing is asked once. Answering a contact they just
-    shared is a turn in a conversation and is always sent.
+    Where the platform can prove who the sender is (a Telegram contact share),
+    they are asked for that proof; otherwise they are pointed at signup.
     """
-    if sender is not None and sender.unproven_claim:
-        proof_reply = adapter.unproven_claim_reply(parsed)
-        if proof_reply is not None:
-            return proof_reply, (
-                "identity_link" if parsed.sender_phone else "identity_proof"
-            )
     identity_reply = adapter.unresolved_sender_reply(parsed)
     if identity_reply is not None:
         return identity_reply, "identity_link"
@@ -181,14 +171,13 @@ def unresolved_sender_context(
     parsed: ParsedInboundSurfaceEvent,
     adapter: SurfacePlatformAdapterPort,
     agent_display_name: str,
-    sender: ResolvedSurfaceUser | None = None,
 ) -> SurfaceReplyContext | None:
     audience = private_reply_metadata(parsed)
     if audience is None:
         return None
     if not sender_can_be_answered(parsed):
         return None
-    (message, reply_metadata), reply_kind = _unresolved_reply(adapter, parsed, sender)
+    (message, reply_metadata), reply_kind = _unresolved_reply(adapter, parsed)
     return _reply_context(
         platform=surface.surface_type,
         surface=surface,
@@ -354,7 +343,7 @@ def _unrouted_reply(
     resolved_user: ResolvedSurfaceUser,
 ) -> tuple[tuple[str, dict[str, Any]], SurfaceReplyKind]:
     if resolved_user.internal_user_id is None:
-        return _unresolved_reply(adapter, parsed, resolved_user)
+        return _unresolved_reply(adapter, parsed)
     confirmation = adapter.linked_sender_confirmation(parsed)
     if confirmation is not None:
         return confirmation, "identity_link"

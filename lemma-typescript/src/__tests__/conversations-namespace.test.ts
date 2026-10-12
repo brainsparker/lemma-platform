@@ -151,7 +151,10 @@ describe("ConversationsNamespace.list", () => {
     expect(request).toHaveBeenCalledWith(
       "POST",
       "/pods/pod-1/conversations/conversation-1/messages/append",
-      expect.objectContaining({ body: { content: "steer this" } }),
+      // Every send names itself, so a retried append is stored once.
+      expect.objectContaining({
+        body: { content: "steer this", client_message_id: expect.any(String) },
+      }),
     );
     expect(stream).not.toHaveBeenCalled();
   });

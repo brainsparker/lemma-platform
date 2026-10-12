@@ -1,6 +1,7 @@
 """Schedule API schemas."""
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field, model_validator
@@ -8,10 +9,17 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 from app.modules.schedule.config import schedule_settings
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.modules.schedule.domain.schedule import (
+    MCP_EVENT_SOURCE,
     ScheduleRunStatus,
     ScheduleFireStatus,
     ScheduleType,
     normalize_datastore_schedule_config,
+)
+
+_INCLUDE_OUTSIDE_ROWS = (
+    "DATASTORE schedules only: also fire on rows people outside the pod added "
+    "to an open table. Off by default. When it fires, the run is told the row's "
+    "content came from outside and is untrusted."
 )
 
 
@@ -75,6 +83,7 @@ class CreateScheduleRequest(BaseModel):
             "the schedule, not the workflow start."
         ),
     )
+    include_outside_rows: bool = Field(default=False, description=_INCLUDE_OUTSIDE_ROWS)
     visibility: str | None = None
 
     @model_validator(mode="after")
@@ -87,8 +96,12 @@ class CreateScheduleRequest(BaseModel):
             self.agent_name
             and self.schedule_type == ScheduleType.WEBHOOK
             and not self.connector_trigger_id
+            and self.config.get("source") != MCP_EVENT_SOURCE
         ):
-            raise ValueError("Agent webhook schedules require connector_trigger_id")
+            raise ValueError(
+                "Agent webhook schedules require connector_trigger_id, or a "
+                "connected MCP server's event (config.source 'mcp')"
+            )
         # "A target with no standing instruction must be told what to do" is
         # enforced in the service, not here: it is a question about the resolved
         # agent, and a validator cannot look one up. The cost is that it comes
@@ -113,6 +126,9 @@ class UpdateScheduleRequest(BaseModel):
     instruction: str | None = Field(default=None, max_length=8000)
     filter_instruction: str | None = None
     filter_output_schema: dict | None = None
+    include_outside_rows: bool | None = Field(
+        default=None, description=_INCLUDE_OUTSIDE_ROWS
+    )
     is_active: bool | None = None
     visibility: str | None = None
 
@@ -126,6 +142,24 @@ class UpdateScheduleRequest(BaseModel):
         if self.config is not None and "operations" in self.config:
             self.config = normalize_datastore_schedule_config(self.config)
         return self
+
+
+class ListeningResponse(BaseModel):
+    """How a schedule on a connected MCP server's event is hearing from it."""
+
+    state: Literal["listening", "retrying", "lapsed", "pending"] = Field(
+        description=(
+            "listening: the server holds the subscription. retrying: renewing "
+            "it failed and is being retried. lapsed: the server no longer tells "
+            "us anything. pending: the server has not answered yet."
+        )
+    )
+    last_error: str | None = None
+    last_event_at: datetime | None = None
+    refresh_before: datetime | None = None
+    server: str | None = Field(
+        default=None, description="The connected server it listens to, by name."
+    )
 
 
 class ScheduleResponse(BaseModel):
@@ -149,6 +183,7 @@ class ScheduleResponse(BaseModel):
     connector_trigger_id: str | None
     filter_instruction: str | None
     filter_output_schema: dict | None
+    include_outside_rows: bool = False
     visibility: str
     is_active: bool
     is_internal: bool
@@ -159,6 +194,11 @@ class ScheduleResponse(BaseModel):
     consecutive_failures: int = 0
     created_at: datetime
     updated_at: datetime
+    listening: ListeningResponse | None = Field(
+        default=None,
+        description="For a schedule on an MCP server's event: whether it is "
+        "still hearing from the server. Absent for every other schedule.",
+    )
 
     model_config = {"from_attributes": True}
 

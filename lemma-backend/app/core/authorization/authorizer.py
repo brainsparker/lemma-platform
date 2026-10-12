@@ -42,6 +42,7 @@ from app.core.authorization.models import (
 from app.core.authorization.grant_resolution import GrantResolutionMixin
 from app.core.authorization.hydration import ResourceHydrationMixin
 from app.core.authorization.permissions import (
+    pod_principal_may_hold,
     PERMISSION_BY_ID,
     PermissionScope,
     Permissions,
@@ -137,7 +138,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
             )
         if ctx.is_superuser:
             return AuthorizationDecision(True, "SUPERUSER", permission_id, resource)
-        if ctx.actor_type in (ActorType.ANONYMOUS, ActorType.POD):
+        if ctx.is_outsider:
             return await self._outsider_decision(ctx, permission_id, resource)
 
         # The default pod agent mirrors the invoking user's authority but ONLY
@@ -327,6 +328,12 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         if resource is None:
             return AuthorizationDecision(
                 False, "INSUFFICIENT_PERMISSION", permission_id, resource
+            )
+        if not pod_principal_may_hold(permission_id):
+            # Read-only by construction, not by what was granted: a grant row
+            # carrying a write -- however it got there -- reaches nothing.
+            return AuthorizationDecision(
+                False, "POD_READ_ONLY", permission_id, resource
             )
         hydrated = await self._hydrate_resource(resource)
         if hydrated.pod_id is None or hydrated.pod_id != ctx.pod_id:
@@ -532,3 +539,4 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
             group_ids = set((await self.session.execute(stmt)).scalars().all())
             visible_ids = group_ids if visible_ids is None else visible_ids & group_ids
         return frozenset(visible_ids or set())
+

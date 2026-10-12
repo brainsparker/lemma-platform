@@ -102,9 +102,14 @@ export function readAddress(pathname: string): Address {
         case "files":
         case "workflows":
         case "groups":
-        case "settings":
+        case "contacts":
         case "about":
             return rest.length > 1 ? here(null) : here("space:" + rest[0]);
+        /* The space's settings are sections of the teammate's page now. A link
+           that still names the page they had opens the one that carries them
+           rather than nothing, and the shell rewrites the address. */
+        case "settings":
+            return rest.length > 1 ? here(null) : here("space:about");
         case "library":
         case "history":
         case "computer":

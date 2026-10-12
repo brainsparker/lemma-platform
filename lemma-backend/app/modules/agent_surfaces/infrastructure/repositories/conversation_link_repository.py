@@ -29,7 +29,6 @@ from sqlalchemy.orm import Session
 from app.core.domain.uow import IUnitOfWork
 from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceConversationLink
-from app.modules.agent_surfaces.domain.groups import OUTSIDERS_LINK_USER
 from app.modules.agent_surfaces.domain.notification import (
     NotificationDeliveryStatus,
     NotificationStatus,
@@ -194,8 +193,21 @@ class SurfaceConversationLinkRepository:
         platform. Ordered by inbound recency for the reason
         ``list_latest_by_surface_and_external_users`` gives.
         """
+        person = {"platform": platform, "external_user_id": external_user_id}
+        links = await self.latest_dm_links_for_person(**person, surface_ids=surface_ids)
+        return links[0] if links else None
+
+    async def latest_dm_links_for_person(
+        self,
+        *,
+        platform: str,
+        external_user_id: str,
+        surface_ids: Collection[UUID],
+        limit: int = 1,
+    ) -> list[AgentSurfaceConversationLink]:
+        """The above, several deep, for a caller that wants one pod's chat."""
         if not surface_ids:
-            return None
+            return []
         recency = func.coalesce(
             AgentSurfaceConversationLinkModel.last_inbound_at,
             AgentSurfaceConversationLinkModel.updated_at,
@@ -209,10 +221,10 @@ class SurfaceConversationLinkRepository:
                 AgentSurfaceConversationLinkModel.surface_id.in_(list(surface_ids)),
             )
             .order_by(recency.desc())
-            .limit(1)
+            .limit(limit)
         )
-        model = (await self.session.execute(stmt)).scalar_one_or_none()
-        return model.to_entity() if model else None
+        models = (await self.session.execute(stmt)).scalars().all()
+        return [model.to_entity() for model in models]
 
     async def rebind_thread_address(
         self,
@@ -351,17 +363,6 @@ class SurfaceConversationLinkRepository:
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
-
-    async def is_outsiders_thread(self, conversation_id: UUID) -> bool:
-        """Whether routing linked this conversation as the strangers' thread."""
-        link = AgentSurfaceConversationLinkModel
-        stmt = select(
-            select(link.id)
-            .where(link.conversation_id == conversation_id)
-            .where(link.external_user_id == OUTSIDERS_LINK_USER)
-            .exists()
-        )
-        return bool((await self.session.execute(stmt)).scalar())
 
     async def lock_thread(
         self,

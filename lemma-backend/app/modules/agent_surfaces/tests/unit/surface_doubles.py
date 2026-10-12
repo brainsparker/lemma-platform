@@ -80,6 +80,10 @@ def conversation_operations(monkeypatch):
         "surface_agent_identity": AsyncMock(return_value=None),
         "conversation_metadata_value": AsyncMock(return_value=None),
         "set_conversation_metadata_value": AsyncMock(),
+        # Nobody typed into Lemma: the ordinary answer for an egress target
+        # resolved for a channel. The real one reads the conversation's latest
+        # run, which these doubles have no rows for.
+        "lemma_message_run_started_at": AsyncMock(return_value=None),
     }
     for name, double in doubles.items():
         monkeypatch.setattr(f"{_CONVERSATIONS}.{name}", double)
@@ -288,6 +292,7 @@ def build_doubles(
     # A bare AsyncMock answers every call with a truthy mock, which the binder
     # would read as "this person has an earlier private-chat link".
     conversation_link_repository.find_latest_dm_link_for_person.return_value = None
+    conversation_link_repository.latest_dm_links_for_person.return_value = []
     conversation_link_repository.create.side_effect = lambda link, **_: link
     conversation_link_repository.update_last_event.side_effect = lambda **kwargs: (
         existing_link
@@ -567,6 +572,49 @@ _REQUEST_APPROVAL_TOOL_ARGS = {
 }
 
 
+class MembershipDouble:
+    """Pod membership, as the group roster asks it: are these people in?
+
+    Stands in for `SurfacePodMembershipPort` where the answer under test is what
+    a roster does with it, not how it is looked up.
+    """
+
+    def __init__(self, members: set[UUID] | None = None) -> None:
+        self.members = members or set()
+
+    async def pod_members_among(self, _pod_id: UUID, user_ids) -> set[UUID]:
+        return {user_id for user_id in user_ids if user_id in self.members}
+
+
+class ExternalIdentityDouble:
+    """The pod's cache of who a platform sender is, as a roster reads it.
+
+    Stands in for `ExternalSurfaceUserRepository`, and records how it was asked:
+    the roster's answer turns on the platform and tenant it asks with, because a
+    Slack id means one person in one workspace and somebody else in another.
+    """
+
+    def __init__(self, known: dict[str, UUID] | None = None) -> None:
+        self.known = known or {}
+        self.asked: list[dict[str, object]] = []
+
+    async def resolved_users_by_external_ids(
+        self, *, platform: str, tenant_id: str | None, external_user_ids
+    ) -> dict[str, UUID]:
+        self.asked.append(
+            {
+                "platform": platform,
+                "tenant_id": tenant_id,
+                "external_user_ids": list(external_user_ids),
+            }
+        )
+        return {
+            external: self.known[external]
+            for external in external_user_ids
+            if external in self.known
+        }
+
+
 class ScopeCountingFactory:
     """A unit-of-work factory over one doubled session, counting open scopes.
 
@@ -603,6 +651,7 @@ def build_turn_starter(
     uow_factory: object | None = None,
     file_ingest_service: object | None = None,
     pooled_numbers: object | None = None,
+    roster_reads: object | None = None,
 ) -> SurfaceTurnStarter:
     """The worker's half, over doubled collaborators.
 
@@ -631,4 +680,5 @@ def build_turn_starter(
             ingest_attachments=AsyncMock(return_value=AttachmentIngest())
         ),
         pooled_numbers=pooled_numbers,
+        **({"roster_reads": roster_reads} if roster_reads is not None else {}),
     )

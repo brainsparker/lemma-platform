@@ -244,7 +244,13 @@ def _pod_default_agent():
 
 
 def _conversation(is_pod_assistant: bool):
-    return SimpleNamespace(id=uuid4(), is_pod_assistant=is_pod_assistant)
+    return SimpleNamespace(
+        id=uuid4(),
+        is_pod_assistant=is_pod_assistant,
+        user_id=None,
+        type=None,
+        metadata={},
+    )
 
 
 async def test_named_agent_brief_never_overlaps_uows(stubbed):

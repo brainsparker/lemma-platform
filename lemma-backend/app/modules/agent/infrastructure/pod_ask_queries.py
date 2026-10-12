@@ -14,6 +14,7 @@ same answer, and neither has to take a lock to know.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func, literal, select, update
@@ -21,8 +22,12 @@ from sqlalchemy.dialects.postgresql import JSONB, array
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.pod_asks import ASK_KEY, AskMode
-from app.modules.agent.domain.value_objects import MessageRole
-from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
+from app.modules.agent.domain.value_objects import ConversationStatus, MessageRole
+from app.modules.agent.infrastructure.models import (
+    AgentRunModel,
+    ConversationModel,
+    MessageModel,
+)
 from app.modules.identity.contracts.organizations import (
     organization_member_ids_for_user,
 )
@@ -34,6 +39,12 @@ from app.modules.pod.contracts.user_pods import (
 )
 
 _DELIVERED_RUN_KEY = "delivered_run_id"
+#: A thread in one of these still has a run going, or one paused on someone.
+_BUSY_STATUSES = (
+    ConversationStatus.RUNNING.value,
+    ConversationStatus.STOP_REQUESTED.value,
+    ConversationStatus.WAITING.value,
+)
 #: One conversation keeps one thread per pod it has asked, and an ask can only
 #: go to a pod the person belongs to. A conversation past this many is not one
 #: anybody is having, and its oldest threads wait for the next finished run.
@@ -96,6 +107,51 @@ class PodAskQueries:
         )
         return list(rows)
 
+    async def busy_link_threads(
+        self, *, to_pod_id: UUID, from_pod_id: UUID
+    ) -> list[tuple[UUID, UUID]]:
+        """``(conversation, owner)`` of each link thread here still working."""
+        rows = await self.session.execute(
+            select(ConversationModel.id, ConversationModel.user_id).where(
+                ConversationModel.pod_id == to_pod_id,
+                ConversationModel.status.in_(_BUSY_STATUSES),
+                ConversationModel.conversation_metadata.contains(
+                    {
+                        ASK_KEY: {
+                            "from_pod_id": str(from_pod_id),
+                            "mode": AskMode.LINK.value,
+                        }
+                    }
+                ),
+            )
+        )
+        return [(conversation_id, owner) for conversation_id, owner in rows]
+
+    async def link_runs_since(
+        self, *, to_pod_id: UUID, from_pod_id: UUID, since: datetime
+    ) -> int:
+        """How many runs asks over the link from ``from_pod_id`` started here."""
+        count = await self.session.scalar(
+            select(func.count(AgentRunModel.id))
+            .join(
+                ConversationModel,
+                ConversationModel.id == AgentRunModel.conversation_id,
+            )
+            .where(
+                ConversationModel.pod_id == to_pod_id,
+                ConversationModel.conversation_metadata.contains(
+                    {
+                        ASK_KEY: {
+                            "from_pod_id": str(from_pod_id),
+                            "mode": AskMode.LINK.value,
+                        }
+                    }
+                ),
+                AgentRunModel.created_at >= since,
+            )
+        )
+        return int(count or 0)
+
     async def latest_turn_source(self, *, conversation_id: UUID) -> str | None:
         """``source`` on the newest user-side message: what started this turn."""
         metadata = await self.session.scalar(
@@ -148,6 +204,18 @@ class Teammate:
     through_you: bool = True
     #: Over a link that pod's people made, with nobody present.
     connected: bool = False
+
+    @property
+    def reach(self) -> list[str]:
+        """How it can be asked, in the words the brief and the tool use."""
+        return [
+            word
+            for word, reachable in (
+                ("through the person", self.through_you),
+                ("connected", self.connected),
+            )
+            if reachable
+        ]
 
 
 #: How many other pods are offered at once. Past this the person belongs to more

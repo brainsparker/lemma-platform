@@ -23,33 +23,35 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from app.core.authorization.context import Context
+from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
+from app.core.authorization.permissions import Permissions
 from app.core.authorization.pod_principal import build_pod_context
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.pod_asks import (
     ASK_KEY,
     ASK_SOURCE,
     ASKS_OUT_KEY,
+    AnswerOutcome,
     AskChain,
     AskingRun,
     AskMode,
     AskRefused,
     PodAsk,
-    answer_from,
     ask_message_metadata,
     ask_of,
     instructions_for_answering,
+    open_modes,
     plan_ask,
 )
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
-    AgentRunStatus,
     ConversationStatus,
 )
 from app.modules.agent.infrastructure.pod_ask_queries import (
@@ -58,7 +60,8 @@ from app.modules.agent.infrastructure.pod_ask_queries import (
     askable_pods,
 )
 from app.modules.agent.infrastructure.pod_link_queries import PodLinkQueries
-from app.modules.agent.services.pod_ask_delivery import ANSWER_WINDOW, BUSY
+from app.modules.agent.services.askable_pods_brief import narrowed
+from app.modules.agent.services.pod_ask_delivery import BUSY, settled_answer
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
@@ -78,6 +81,12 @@ logger = get_logger(__name__)
 #: grows it, so a wait of half a minute is a handful of reads, not thirty.
 _POLL_SECONDS = 1.0
 _DENIED_STATUS_CODES = frozenset({401, 403})
+#: How many runs one pod's asks over a link may start in the pod it asks, per
+#: window. A link is for a schedule's check or a task's lookup, not a loop: a
+#: schedule every two minutes fits; one stuck re-asking does not, and the asked
+#: pod's organization pays for every run.
+LINK_RUNS_PER_WINDOW = 30
+LINK_RUN_WINDOW = timedelta(hours=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,8 +96,11 @@ class AskOutcome:
     pod_id: UUID
     pod_name: str
     conversation_id: UUID
-    #: ANSWERED, WORKING, WAITING or UNFINISHED.
+    #: ANSWERED, WORKING, WAITING, UNFINISHED or DISCONNECTED.
     status: str
+    #: Whose the other pod's conversation is: the person's own as them, the
+    #: link's steward's over a link -- so a page links to it only as them.
+    mode: AskMode | None = None
     answer: str | None = None
     detail: str | None = None
 
@@ -98,6 +110,7 @@ def _outcome(
     conversation_id: UUID,
     *,
     status: str,
+    mode: AskMode | None = None,
     answer: str | None = None,
     detail: str | None = None,
 ) -> AskOutcome:
@@ -106,6 +119,7 @@ def _outcome(
         pod_name=teammate.name,
         conversation_id=conversation_id,
         status=status,
+        mode=mode,
         answer=answer,
         detail=detail,
     )
@@ -142,6 +156,20 @@ class AskPlan:
     chain: AskChain
 
 
+def _asking_run(
+    deps: BaseAgentContext, asking: Conversation, *, latest_turn_source: str | None
+) -> AskingRun:
+    return AskingRun(
+        user_id=deps.user_id,
+        pod_id=deps.pod_id,
+        conversation=asking,
+        is_pod_default_agent=deps.is_pod_default_agent,
+        answers_outsider=run_audience(deps).answers_outsiders,
+        surface_conversation_kind=deps.surface_conversation_kind,
+        latest_turn_source=latest_turn_source,
+    )
+
+
 def _plan(
     deps: BaseAgentContext,
     asking: Conversation | None,
@@ -152,15 +180,7 @@ def _plan(
     if asking is None:
         raise AskRefused("This conversation no longer exists.")
     mode, chain = plan_ask(
-        AskingRun(
-            user_id=deps.user_id,
-            pod_id=deps.pod_id,
-            conversation=asking,
-            is_pod_default_agent=deps.is_pod_default_agent,
-            answers_outsider=deps.answers_outsider,
-            surface_conversation_kind=deps.surface_conversation_kind,
-            latest_turn_source=latest_turn_source,
-        ),
+        _asking_run(deps, asking, latest_turn_source=latest_turn_source),
         to_pod_id=teammate.pod_id,
         through_you=teammate.through_you,
         connected=teammate.connected,
@@ -199,6 +219,27 @@ class PodAskService:
             return await askable_pods(
                 uow, user_id=user_id, organization_id=organization_id, pod_id=pod_id
             )
+
+    async def reachable(self, deps: BaseAgentContext) -> list[Teammate]:
+        """The pods this run can ask, each only by the ways it could ask it.
+
+        ``teammates`` narrowed by the same rules ``plan_ask`` applies, so the
+        agent is never offered a pod, or a way, the ask would then refuse.
+        """
+        async with self.uow_factory() as uow:
+            asking = await ConversationRepository(uow).get_conversation(
+                deps.conversation_id
+            )
+            source = await PodAskQueries(uow).latest_turn_source(
+                conversation_id=deps.conversation_id
+            )
+            if asking is None:
+                return []
+            teammates = await askable_pods(
+                uow, user_id=deps.user_id, organization_id=deps.org_id, pod_id=deps.pod_id
+            )
+        modes = open_modes(_asking_run(deps, asking, latest_turn_source=source))
+        return [one for one in (narrowed(t, modes) for t in teammates) if one]
 
     async def ensure_may_ask(
         self, deps: BaseAgentContext, *, teammate: Teammate
@@ -241,6 +282,10 @@ class PodAskService:
                     conversation_id=asking.id
                 ),
             )
+            if plan.mode is AskMode.LINK:
+                await self._refuse_past_link_cap(
+                    uow, to_pod_id=teammate.pod_id, from_pod_id=deps.pod_id
+                )
             from_name = await pod_name(uow.session, deps.pod_id) or "Another pod"
             ask = PodAsk(
                 from_pod_id=deps.pod_id,
@@ -267,7 +312,7 @@ class PodAskService:
                     teammate=teammate,
                     instructions=instructions,
                 )
-                started = await self._conversation_service(
+                await self._conversation_service(
                     uow
                 ).add_user_message_and_start_run(
                     conversation_id=thread_id,
@@ -308,9 +353,25 @@ class PodAskService:
         return await self._await_answer(
             teammate=teammate,
             conversation_id=thread_id,
-            run_id=started.agent_run_id,
+            mode=plan.mode,
             wait_seconds=wait_seconds,
         )
+
+    @staticmethod
+    async def _refuse_past_link_cap(
+        uow: SqlAlchemyUnitOfWork, *, to_pod_id: UUID, from_pod_id: UUID
+    ) -> None:
+        """Refuse an ask over a link that has started too many runs lately."""
+        since = datetime.now(timezone.utc) - LINK_RUN_WINDOW
+        started = await PodAskQueries(uow).link_runs_since(
+            to_pod_id=to_pod_id, from_pod_id=from_pod_id, since=since
+        )
+        if started >= LINK_RUNS_PER_WINDOW:
+            raise AskRefused(
+                f"This pod has asked that one {started} times in the last hour, "
+                "which is as many as a connection allows. Answer with what you "
+                "have, and ask again later."
+            )
 
     async def _side(
         self,
@@ -343,9 +404,8 @@ class PodAskService:
             answering_pod_id=teammate.pod_id, asking_pod_id=deps.pod_id
         )
         steward = link.steward_user_id if link is not None else None
-        if (
-            steward is None
-            or await pod_member_id(uow, teammate.pod_id, steward) is None
+        if steward is None or not await self._still_stewards(
+            uow, steward, answering_pod_id=teammate.pod_id, asking_pod_id=deps.pod_id
         ):
             raise AskRefused(
                 f"Nobody in {teammate.name} looks after its link to this pod any "
@@ -358,6 +418,31 @@ class PodAskService:
             asking_pod_id=deps.pod_id,
         )
         return steward, context, None
+
+    @staticmethod
+    async def _still_stewards(
+        uow: SqlAlchemyUnitOfWork,
+        steward: UUID,
+        *,
+        answering_pod_id: UUID,
+        asking_pod_id: UUID,
+    ) -> bool:
+        """Whether whoever connected the link could still connect it now.
+
+        The same two tests connecting made: an admin of the pod being asked,
+        and in the pod asking. Someone who has since left either, or stopped
+        running the pod being asked, no longer stands behind what it shares.
+        """
+        if await pod_member_id(uow, asking_pod_id, steward) is None:
+            return False
+        if await pod_member_id(uow, answering_pod_id, steward) is None:
+            return False
+        context = await create_authorization_data_service(uow).build_user_context(
+            user_id=steward, pod_id=answering_pod_id
+        )
+        return await context.can(
+            Permissions.POD_MEMBER_MANAGE, ResourceRef.pod(answering_pod_id)
+        )
 
     async def _open_thread(
         self,
@@ -406,7 +491,7 @@ class PodAskService:
         *,
         teammate: Teammate,
         conversation_id: UUID,
-        run_id: UUID | None,
+        mode: AskMode,
         wait_seconds: float,
     ) -> AskOutcome:
         loop = asyncio.get_running_loop()
@@ -414,7 +499,7 @@ class PodAskService:
         attempt = 0
         while True:
             outcome = await self._settled_outcome(
-                teammate=teammate, conversation_id=conversation_id
+                teammate=teammate, conversation_id=conversation_id, mode=mode
             )
             if outcome is not None:
                 return outcome
@@ -423,6 +508,7 @@ class PodAskService:
                     teammate,
                     conversation_id,
                     status="WORKING",
+                    mode=mode,
                     detail=(
                         f"{teammate.name} is working on it. End your turn: its "
                         "answer arrives in this conversation as a new message "
@@ -439,7 +525,7 @@ class PodAskService:
             )
 
     async def _settled_outcome(
-        self, *, teammate: Teammate, conversation_id: UUID
+        self, *, teammate: Teammate, conversation_id: UUID, mode: AskMode
     ) -> AskOutcome | None:
         """The ask's outcome if it has one yet, taking delivery of the answer."""
         async with self.uow_factory() as uow:
@@ -452,6 +538,7 @@ class PodAskService:
                     teammate,
                     conversation_id,
                     status="UNFINISHED",
+                    mode=mode,
                     detail="Its conversation was deleted.",
                 )
             if thread.status is ConversationStatus.WAITING:
@@ -459,14 +546,16 @@ class PodAskService:
                     teammate,
                     conversation_id,
                     status="WAITING",
-                    detail=(
-                        f"{teammate.name} is waiting on the person to answer "
-                        "something in its conversation. Tell them; its answer "
-                        "arrives here once they do."
-                    ),
+                    mode=mode,
+                    detail=_waiting_detail(teammate, mode),
                 )
             latest = thread.agent_runs[-1] if thread.agent_runs else None
-            if latest is None or latest.status in ACTIVE_AGENT_RUN_STATUSES:
+            ask = ask_of(thread)
+            if (
+                ask is None
+                or latest is None
+                or latest.status in ACTIVE_AGENT_RUN_STATUSES
+            ):
                 return None
             if not await PodAskQueries(uow).claim_delivery(
                 conversation_id=conversation_id, run_id=latest.id
@@ -477,19 +566,44 @@ class PodAskService:
                     teammate,
                     conversation_id,
                     status="ANSWERED",
+                    mode=mode,
                     detail="Its answer has been added to this conversation.",
                 )
-            messages, _ = await conversations.list_messages(
-                conversation_id=conversation_id, limit=ANSWER_WINDOW
+            delivered = await settled_answer(
+                uow, thread=thread, ask=ask, latest=latest, pod_name=teammate.name
             )
             await uow.commit()
-        if latest.status is AgentRunStatus.COMPLETED:
+        if delivered.outcome is AnswerOutcome.ANSWERED:
+            answer = delivered.content[delivered.answer_offset or 0 :]
             return _outcome(
                 teammate,
                 conversation_id,
                 status="ANSWERED",
-                answer=answer_from(messages, run_id=latest.id),
+                mode=mode,
+                answer=answer,
+                detail=delivered.content[: delivered.answer_offset or 0].strip(),
             )
         return _outcome(
-            teammate, conversation_id, status="UNFINISHED", detail=latest.error
+            teammate,
+            conversation_id,
+            status=(
+                "ANSWERED"
+                if delivered.outcome is AnswerOutcome.NO_ANSWER
+                else delivered.outcome.value
+            ),
+            mode=mode,
+            detail=delivered.content,
         )
+
+
+def _waiting_detail(teammate: Teammate, mode: AskMode) -> str:
+    """What the asker is told while the other pod waits on someone."""
+    if mode is AskMode.AS_PERSON:
+        return (
+            f"{teammate.name} is waiting on the person to answer something in "
+            "its conversation. Tell them; its answer arrives here once they do."
+        )
+    return (
+        f"{teammate.name} passed a question to whoever looks after its "
+        "connection to this pod. Its answer arrives here once they reply."
+    )

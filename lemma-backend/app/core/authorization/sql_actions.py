@@ -30,7 +30,10 @@ from app.core.authorization.context import (
 from app.core.authorization.delegation import DESTRUCTIVE_ACTIONS
 from app.core.authorization.grants import grant_resource_type_values
 from app.core.authorization.models import ResourcePermissionGrantModel
-from app.core.authorization.permissions import equivalent_permission_ids
+from app.core.authorization.permissions import (
+    equivalent_permission_ids,
+    pod_principal_may_hold,
+)
 from app.core.authorization.resource_actions import (
     RESOURCE_ACTIONS,
     owner_actions_for_resource,
@@ -98,14 +101,8 @@ def allowed_actions_expr(
         ]
     empty_actions = _text_array([])
 
-    if ctx.actor_type == ActorType.ANONYMOUS:
-        return _anonymous_allowed_actions_expr(
-            resource_actions=resource_actions,
-            visibility_col=visibility_col,
-            pod_id_col=pod_id_col,
-            pod_id=ctx.pod_id,
-        )
-
+    # Before the outsider branch: another pod is an outsider too, but one this
+    # pod may have granted things to.
     if ctx.actor_type == ActorType.POD:
         return _pod_allowed_actions_expr(
             ctx=ctx,
@@ -115,6 +112,14 @@ def allowed_actions_expr(
             pod_id_col=pod_id_col,
             visibility_col=visibility_col,
             resource_path_col=resource_path_col,
+        )
+
+    if ctx.is_outsider:
+        return _anonymous_allowed_actions_expr(
+            resource_actions=resource_actions,
+            visibility_col=visibility_col,
+            pod_id_col=pod_id_col,
+            pod_id=ctx.pod_id,
         )
 
     if (
@@ -252,6 +257,7 @@ def _pod_allowed_actions_expr(
     """
     if pod_id_col is None or ctx.pod_id is None:
         return _text_array([])
+    resource_actions = [a for a in resource_actions if pod_principal_may_hold(a)]
     granted = _grant_actions_array_expr(
         ctx=ctx,
         resource_type=resource_type,

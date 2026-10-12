@@ -27,10 +27,9 @@ from app.modules.agent.domain.pod_asks import (
     answer_from,
     ask_of,
     chain_for_person,
-    linked_asker,
     plan_ask,
 )
-from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.server_metadata import (
     client_metadata,
     with_server_keys_kept,
@@ -184,7 +183,7 @@ class TestWhoMayAskAsTheirPerson:
     @pytest.mark.parametrize("source", sorted(HANDED_BACK_SOURCES))
     def test_not_from_a_turn_an_answer_started(self, source):
         """Otherwise two pods could hand work back and forth with nobody asking."""
-        with pytest.raises(AskRefused, match="not with something the person wrote"):
+        with pytest.raises(AskRefused, match="started with an answer coming back"):
             chain_for_person(_run(turn_source=source), to_pod_id=THERE)
 
     @pytest.mark.parametrize("source", [None, "agent_surfaces", "queued_messages"])
@@ -286,14 +285,17 @@ class TestHowItAsks:
         assert mode is AskMode.LINK
         assert chain.pod_ids == (HERE, THERE)
 
-    def test_over_the_link_when_other_people_read_the_thread(self):
-        mode, _ = plan_ask(
-            _run(surface_kind="CHANNEL"),
-            to_pod_id=THERE,
-            through_you=True,
-            connected=True,
-        )
-        assert mode is AskMode.LINK
+    @pytest.mark.parametrize("kind", ["CHANNEL", "EMAIL"])
+    def test_not_even_over_the_link_when_other_people_read_the_thread(self, kind):
+        # The link was granted to the asking pod, not to a channel's guests or
+        # an email's Cc: what it shares must not land where they read it.
+        with pytest.raises(AskRefused, match="Other people read this thread"):
+            plan_ask(
+                _run(surface_kind=kind),
+                to_pod_id=THERE,
+                through_you=True,
+                connected=True,
+            )
 
     def test_not_at_all_when_neither_reaches_it(self):
         task = _conversation(type=ConversationType.TASK)
@@ -331,13 +333,15 @@ class TestALinkConversation:
         conversation = _conversation(
             metadata={ASK_KEY: _link_ask(from_pod=asker).to_metadata()}
         )
-        assert linked_asker(conversation) == asker
-        assert answers_outsiders(conversation)
+        audience = Audience.of(conversation)
+        assert audience.asking_pod_id == asker
+        assert audience.answers_outsiders
 
     def test_an_ask_as_a_person_is_not_one(self):
         conversation = _conversation(metadata={ASK_KEY: _ask().to_metadata()})
-        assert linked_asker(conversation) is None
-        assert not answers_outsiders(conversation)
+        audience = Audience.of(conversation)
+        assert audience.asking_pod_id is None
+        assert not audience.answers_outsiders
 
     def test_asking_as_a_person_needs_a_person(self):
         raw = {**_ask().to_metadata(), "for_user_id": None}

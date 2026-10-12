@@ -24,7 +24,7 @@ from app.modules.workspace.contracts.host_execution import (
     host_reachable_addresses,
 )
 from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
-from app.modules.agent.domain.outsiders import OutsiderRunRefused
+from app.modules.agent.domain.outsiders import OutsiderRunRefused, run_audience
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.services.runtime_model_factory import provider_model_settings
 from app.modules.agent.domain.entities import Agent, Conversation, Message
@@ -175,7 +175,7 @@ async def mcp_payload[DepsT: AgentContext](
     returning 401, which the agent experiences as its tools quietly vanishing.
     Publishing the real expiry lets the dispatcher bound the run by it instead.
     """
-    if getattr(ctx, "answers_outsider", False):
+    if run_audience(ctx).answers_outsiders:
         # Dispatch keeps such a run in this process (services/outsider_runtime).
         # Were one to arrive here, the token below would be the member's, given
         # to a shell a stranger in the group can steer -- so it is refused twice.
@@ -462,7 +462,7 @@ def _render_history(messages: Sequence[Message]) -> str:
     return "\n\n".join(lines)
 
 
-def _user_turn_text(message: Message) -> str:
+def _user_turn_text(message: Message, *, with_roster: bool = True) -> str:
     """Everything the surface knows about one user message.
 
     A user turn carries more than its text: who sent it, what it quotes, which
@@ -473,7 +473,7 @@ def _user_turn_text(message: Message) -> str:
     reply, and no sign of the files already in the datastore -- reading as though
     the agent had ignored the attachment. One builder now serves both paths.
     """
-    body = user_prompt_text(message)
+    body = user_prompt_text(message, with_roster=with_roster)
     attachments = (message.metadata or {}).get("attachments")
     if isinstance(attachments, list) and attachments:
         body += f"\n\nAttachments: {json.dumps(to_json_value(attachments))}"
@@ -542,7 +542,7 @@ def _message_text(message: Message) -> str:
             f"{_history_tool_result(message.tool_result)}"
         )
     elif message.role == MessageRole.USER:
-        return _user_turn_text(message)
+        return _user_turn_text(message, with_roster=False)
     else:
         body = message.text or ""
     metadata = message.metadata or {}

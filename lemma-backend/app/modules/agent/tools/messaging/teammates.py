@@ -91,6 +91,13 @@ class AskTeammateRequest(BaseModel):
 class AskTeammateResponse(BaseToolResponse):
     teammate: str | None = None
     teammate_name: str | None = None
+    asked_as: str | None = Field(
+        default=None,
+        description=(
+            "AS_PERSON: it worked with the person's own access there. LINK: "
+            "with what that pod shared with this one."
+        ),
+    )
     conversation_id: UUID | None = Field(
         default=None,
         description="The other pod's conversation for this request.",
@@ -99,7 +106,8 @@ class AskTeammateResponse(BaseToolResponse):
         default=None,
         description=(
             "ANSWERED (read `answer`) / WORKING (end your turn; the answer comes "
-            "here) / WAITING (it needs the person first) / UNFINISHED."
+            "here) / WAITING (it needs someone there first) / UNFINISHED / "
+            "DISCONNECTED (the connection was removed)."
         ),
     )
     answer: str | None = None
@@ -112,9 +120,7 @@ def _service() -> PodAskService:
 
 
 async def _teammates(deps: BaseAgentContext) -> list[Teammate]:
-    return await _service().teammates(
-        user_id=deps.user_id, organization_id=deps.org_id, pod_id=deps.pod_id
-    )
+    return await _service().reachable(deps)
 
 
 async def list_teammates(ctx: RunContext[BaseAgentContext]) -> ListTeammatesResponse:
@@ -128,8 +134,9 @@ async def list_teammates(ctx: RunContext[BaseAgentContext]) -> ListTeammatesResp
         return ListTeammatesResponse(
             success=True,
             message=(
-                "There is no other pod to ask: the person isn't in one, and none "
-                "is connected to this pod."
+                "There is no other pod this conversation can ask: the person "
+                "isn't in one, none is connected to this pod, or other people "
+                "read this thread."
             ),
         )
     return ListTeammatesResponse(
@@ -139,7 +146,7 @@ async def list_teammates(ctx: RunContext[BaseAgentContext]) -> ListTeammatesResp
                 teammate=str(teammate.pod_id),
                 name=teammate.name,
                 job=teammate.description,
-                reach=_reach(teammate),
+                reach=teammate.reach,
             )
             for teammate in teammates
         ],
@@ -180,30 +187,21 @@ async def ask_teammate(
         teammate_name=outcome.pod_name,
         conversation_id=outcome.conversation_id,
         status=outcome.status,
+        asked_as=outcome.mode.value if outcome.mode else None,
         answer=outcome.answer,
         message=outcome.detail,
     )
 
 
 async def _approved(deps: BaseAgentContext, target: Teammate) -> bool:
-    if deps.approved_execution is not None:
+    approved = deps.approved_execution
+    if approved is not None and approved.tool_name == ASK_TEAMMATE_TOOL_NAME:
         return True
     return await has_session_approval(
         session_id=str(deps.conversation_id),
         workload_actor_id=workload_actor_id(deps),
         permission_id=ask_permission_id(target.pod_id),
     )
-
-
-def _reach(teammate: Teammate) -> list[str]:
-    return [
-        word
-        for word, reachable in (
-            ("through the person", teammate.through_you),
-            ("connected", teammate.connected),
-        )
-        if reachable
-    ]
 
 
 def _approval_needed(

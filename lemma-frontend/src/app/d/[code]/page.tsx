@@ -1,12 +1,13 @@
 import { configuredApiUrl, MISSING_API_URL } from "@/session/origins";
 import { readAs, toRows } from "./kinds";
+import { rewriteHtml } from "./embedded";
 import { SharedProse } from "./shared-prose";
 import { SharedShell } from "./shared-shell";
 
 /** What the recipient of a public link sees.
  *
  *  A short code serves bytes, and bytes are not a document: a shared markdown
- *  report opened as a raw `/s/{code}` is a wall of asterisks in a browser tab,
+ *  report opened as a raw `/public/s/{code}` is a wall of asterisks in a browser tab,
  *  which is a poor answer for something somebody chose to send a colleague. So
  *  the link people copy points here, and this renders it the way the app does.
  *
@@ -54,7 +55,7 @@ export default async function SharedDocument({ params }: { params: Promise<{ cod
 
     let response: Response;
     try {
-        response = await fetch(origin + "/s/" + safe, { next: { revalidate: CACHE_SECONDS } });
+        response = await fetch(origin + "/public/s/" + safe, { next: { revalidate: CACHE_SECONDS } });
     } catch {
         return <SharedShell title="This link could not be reached" note="Couldn’t load the document. Try again in a moment." />;
     }
@@ -112,18 +113,19 @@ export default async function SharedDocument({ params }: { params: Promise<{ cod
         const text = await response.text();
 
         if (kind === "markdown") {
-            return <SharedShell name={name} download={download}><SharedProse text={text} /></SharedShell>;
+            return <SharedShell name={name} download={download}><SharedProse text={text} code={code} /></SharedShell>;
         }
 
         if (kind === "html") {
             /* Sandboxed with nothing granted. Inside the app an agent's HTML
                may run scripts, because a signed-in member asked for it; this
                page is opened by strangers from a link, so the markup renders
-               and nothing executes. */
+               and nothing executes. What it loads from the pod — pictures,
+               stylesheets — comes through the link (`embedded.ts`). */
             return (
                 <SharedShell name={name} download={download} bleed>
                     {/* A shared HTML file is a page. It gets the screen. */}
-                    <iframe className="shared__frame" sandbox="" srcDoc={text} title={name} />
+                    <iframe className="shared__frame" sandbox="" srcDoc={rewriteHtml(text, code)} title={name} />
                 </SharedShell>
             );
         }

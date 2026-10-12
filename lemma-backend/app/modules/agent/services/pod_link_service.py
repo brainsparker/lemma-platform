@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.authorization.context import ResourceType
+from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.grants import (
     ResourceGrantInputProtocol,
     normalize_pod_resource_grants,
@@ -30,6 +31,13 @@ from app.core.authorization.grants import (
 from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import BadRequestError, DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
+from app.modules.agent.infrastructure.pod_ask_queries import PodAskQueries
+from app.modules.agent.infrastructure.repositories import (
+    AgentRepository,
+    ConversationRepository,
+)
+from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.infrastructure.pod_link_queries import (
     LinkRow,
     PodLinkQueries,
@@ -39,6 +47,9 @@ from app.modules.identity.contracts.profiles import UserProfileRef, user_profile
 from app.modules.pod.contracts.agent_access import pod_organization_id
 from app.modules.pod.contracts.members import pod_member_id
 from app.modules.pod.contracts.user_pods import AttachablePod, pods_by_ids
+from app.modules.usage.contracts.execution import build_usage_service
+
+logger = get_logger(__name__)
 
 #: What a link may share, per kind of resource: reading, and nothing else.
 SHAREABLE: dict[ResourceType, frozenset[str]] = {
@@ -104,7 +115,12 @@ class PodLinkService:
         )
 
     async def disconnect(self, *, answering_pod_id: UUID, asking_pod_id: UUID) -> bool:
-        """Take the link away. False when there was none."""
+        """Take the link away, and stop its asks. False when there was none.
+
+        The grants go first, so a run still answering reads nothing it was
+        shared from here on. Each of its threads still working is then stopped;
+        one that finishes anyway is never delivered (``settled_answer``).
+        """
         if (
             await self.links.link(
                 answering_pod_id=answering_pod_id, asking_pod_id=asking_pod_id
@@ -115,7 +131,37 @@ class PodLinkService:
         await self.links.disconnect(
             answering_pod_id=answering_pod_id, asking_pod_id=asking_pod_id
         )
+        await self._stop_asks(
+            answering_pod_id=answering_pod_id, asking_pod_id=asking_pod_id
+        )
         return True
+
+    async def _stop_asks(self, *, answering_pod_id: UUID, asking_pod_id: UUID) -> None:
+        threads = await PodAskQueries(self.uow).busy_link_threads(
+            to_pod_id=answering_pod_id, from_pod_id=asking_pod_id
+        )
+        conversations = ConversationService(
+            uow=self.uow,
+            conversation_repository=ConversationRepository(self.uow),
+            agent_repository=AgentRepository(self.uow),
+            authorization_service=create_authorization_data_service(self.uow),
+            usage_service=build_usage_service(self.uow),
+        )
+        for conversation_id, owner in threads:
+            try:
+                await conversations.stop_conversation(
+                    conversation_id=conversation_id,
+                    user_id=owner,
+                    pod_id=answering_pod_id,
+                )
+            except DomainError:
+                # Its answer is withheld either way; a run left going costs
+                # only what it reads, and what it reads is Public now.
+                logger.warning(
+                    "agent.pod_link.stop_ask_failed.degraded",
+                    conversation_id=str(conversation_id),
+                    exc_info=True,
+                )
 
     async def incoming(self, *, answering_pod_id: UUID) -> list[PodLinkView]:
         """The pods that may ask this one, and what each was shared."""

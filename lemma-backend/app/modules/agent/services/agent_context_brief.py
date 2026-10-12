@@ -218,6 +218,18 @@ class AgentContextBriefBuilder:
             brief = with_run_framing(
                 cached, conversation=conversation, run_source=run_source
             )
+            if is_default:
+                # Per conversation too: which other pods this thread may ask,
+                # and how, depends on who reads it and whether anyone is here.
+                asks = await askable_pod_lines(
+                    self.uow_factory,
+                    self._repo_factory(),
+                    conversation=conversation,
+                    pod_id=pod_id,
+                    user_id=user_id,
+                )
+                if asks:
+                    brief = brief + "\n" + "\n".join(asks)
             return await self._with_memory(
                 brief, agent=agent, pod_id=pod_id, user_id=user_id, toolsets=toolsets
             )
@@ -312,11 +324,6 @@ class AgentContextBriefBuilder:
         lines.extend(await self._table_lines(pod_id=pod_id, user_id=user_id))
         lines.extend(await self._agent_lines(pod_id=pod_id))
         lines.extend(await self._people_lines(pod_id=pod_id, user_id=user_id))
-        lines.extend(
-            await askable_pod_lines(
-                self.uow_factory, self._repo_factory(), pod_id=pod_id, user_id=user_id
-            )
-        )
         lines.extend(await self._workflow_lines(pod_id=pod_id, user_id=user_id))
         lines.extend(await self._function_lines(pod_id=pod_id))
         lines.extend(await self._file_lines(pod_id=pod_id, user_id=user_id))

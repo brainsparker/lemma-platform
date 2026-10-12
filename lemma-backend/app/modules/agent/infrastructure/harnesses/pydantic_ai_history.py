@@ -38,6 +38,7 @@ from app.modules.agent.domain.surface_prompts import attachment_listing_block
 from app.modules.agent.infrastructure.harnesses.channel_context import (
     audience_block,
     channel_context_block,
+    participants_block,
 )
 from app.modules.agent.domain.value_objects import (
     TEXTUAL_MESSAGE_KINDS,
@@ -110,7 +111,11 @@ def _to_pydantic_ai_messages(
         if role == MessageRole.USER:
             pending.drop()
             converted.append(
-                ModelRequest(parts=[UserPromptPart(content=user_prompt_text(msg))])
+                ModelRequest(
+                    parts=[
+                        UserPromptPart(content=user_prompt_text(msg, with_roster=False))
+                    ]
+                )
             )
             index += 1
             continue
@@ -368,13 +373,17 @@ def _message_text(msg: object) -> str:
     return getattr(msg, "text", None) or ""
 
 
-def user_prompt_text(msg: object) -> str:
+def user_prompt_text(msg: object, *, with_roster: bool = True) -> str:
     """What the model actually reads for one user message.
 
     The stored text plus everything the surface knows about it: who sent it,
     what else was said in the thread, what they attached. Each block is
     independent and any of them can be absent, which is why they are appended
     to a list rather than formatted into a template.
+
+    ``with_roster`` is off for a turn replayed as history: who is in a group is
+    what it is now, and an old turn's roster still naming somebody since
+    removed from the pod as a member would contradict the current one.
     """
     body = _message_text(msg)
     metadata = getattr(msg, "metadata", None) or {}
@@ -387,6 +396,7 @@ def user_prompt_text(msg: object) -> str:
         _sender_label(metadata, platform),
         body,
         _quoted_message_block(metadata),
+        participants_block(metadata) if with_roster else None,
         channel_context_block(metadata),
         audience_block(metadata),
         *_shared_files_blocks(metadata, platform),

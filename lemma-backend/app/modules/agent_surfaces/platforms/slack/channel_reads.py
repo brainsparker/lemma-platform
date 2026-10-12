@@ -28,6 +28,7 @@ from app.modules.agent.contracts.surface_prompts import (
 )
 from app.modules.agent_surfaces.platforms.common import (
     PLATFORM_TRANSPORT_ERRORS,
+    UnsafeApiBaseError,
     channel_author_label,
     payload_first,
     payload_text,
@@ -342,8 +343,17 @@ class SlackChannelReadsMixin:
         )
         if not _unnamed_authors(messages):
             return messages
-        client = await build_slack_client(self.credentials)
-        return await name_authors(messages, lookup=partial(_display_name, client))
+        try:
+            client = await build_slack_client(self.credentials)
+            return await name_authors(messages, lookup=partial(_display_name, client))
+        except (SlackApiError, UnsafeApiBaseError, *PLATFORM_TRANSPORT_ERRORS) as exc:
+            # Naming is a nicety on history already in hand; losing it is no
+            # reason to lose the history.
+            logger.warning(
+                "agent_surfaces.service.slack_name_authors_failed.degraded",
+                error_type=type(exc).__name__,
+            )
+            return messages
 
     async def _recent_messages(
         self, *, channel: str, thread_ts: Any, limit: int

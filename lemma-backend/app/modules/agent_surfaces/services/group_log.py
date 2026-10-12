@@ -381,15 +381,17 @@ def participants_in_lines(
     outsider who took a member's name drop out of the roster behind them. The
     asker is not on it -- the roster is who *else* is there -- and nor is an
     app's line, the bot's own answers among them: an app is nobody to answer
-    in front of, and named as outside the pod it read as a stranger.
+    in front of, and named as outside the pod it read as a stranger. An author
+    still showing their bare platform id has no name, and is counted as such.
     """
     seen: list[SurfaceGroupParticipant] = []
     people: set[str] = set()
     for line in lines:
-        name = " ".join(str(line.get("author") or "").split())
         external_id = _external_id(line)
+        shown = " ".join(str(line.get("author") or "").split())
+        name = "" if shown == external_id else shown
         if (
-            not name
+            not (name or external_id)
             or line.get("from_bot")
             or (asker_external_id and external_id == asker_external_id)
         ):

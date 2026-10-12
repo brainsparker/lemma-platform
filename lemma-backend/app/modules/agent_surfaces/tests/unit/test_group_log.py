@@ -93,6 +93,14 @@ def test_the_asker_and_the_bot_are_not_on_the_roster():
     assert [(person.name, person.in_pod) for person in roster] == [("Tom", False)]
 
 
+def test_an_author_still_showing_their_slack_id_is_counted_unnamed():
+    """A Slack id that could not be named is no name, and "U0ABC123" is in
+    this pod is nothing a model can match to anybody in the thread."""
+    roster = participants_in_lines([_line("U9", external="U9")])
+
+    assert [(person.name, person.in_pod) for person in roster] == [("", False)]
+
+
 def test_a_line_with_no_author_names_nobody():
     assert participants_in_lines([_line(""), _line("   ")]) == ()
 

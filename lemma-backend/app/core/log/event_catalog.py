@@ -419,6 +419,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.service.slack_get_user_display_name.observed': EventSpec('debug', frozenset({'user_id'})),
     'agent_surfaces.service.slack_interaction_acknowledgement_best.observed': EventSpec('debug', frozenset()),
     'agent_surfaces.service.slack_list_channels_private_unavailable.diagnostic': EventSpec('debug', frozenset({'error_code'})),
+    'agent_surfaces.service.slack_name_authors_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
     'agent_surfaces.service.slack_open_setup_modal.diagnostic': EventSpec('debug', frozenset({'error_code'})),
     'agent_surfaces.service.slack_processing_reaction_not_removed.diagnostic': EventSpec('debug', frozenset()),
     'agent_surfaces.service.slack_publish_home_view.diagnostic': EventSpec('debug', frozenset({'error_code'})),

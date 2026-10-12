@@ -78,7 +78,7 @@ async def _child_that_asked(scenario, parent: Seeded) -> tuple[Seeded, UUID]:
 
 
 async def test_a_run_from_another_conversation_is_not_readable(scenario) -> None:
-    """A3-F6. `interact_subagent(action='await')` and `wait_for` both take a
+    """`interact_subagent(action='await')` and `wait_for` both take a
     run id from the model."""
     parent = await seeded_conversation(scenario)
     child = await seeded_conversation(scenario, parent_id=parent.conversation_id)
@@ -106,7 +106,7 @@ async def test_a_run_from_another_conversation_is_not_readable(scenario) -> None
 async def test_a_child_that_asked_a_question_is_reported_as_needing_input(
     scenario,
 ) -> None:
-    """A3-F5, read side: every way a parent looks at the child says so."""
+    """Read side: every way a parent looks at the child says so."""
     parent = await seeded_conversation(scenario)
     child, asked = await _child_that_asked(scenario, parent)
     deps = _as_parent(parent)
@@ -134,7 +134,7 @@ async def test_a_child_that_asked_a_question_is_reported_as_needing_input(
 
 
 async def test_a_waiting_parent_is_woken_to_the_question_not_a_result(scenario) -> None:
-    """A3-F5, relay side: the parent wakes knowing its child is waiting on an
+    """Relay side: the parent wakes knowing its child is waiting on an
     answer it has to arrange, rather than "the sub-agent run finished"."""
     parent = await seeded_conversation(scenario)
     child, asked = await _child_that_asked(scenario, parent)
@@ -185,7 +185,7 @@ async def test_a_waiting_parent_is_woken_to_the_question_not_a_result(scenario) 
 async def test_a_spawn_reissued_in_one_run_gets_the_child_it_already_has(
     scenario,
 ) -> None:
-    """A3-F8, spawn side."""
+    """The same spawn twice in one run makes one child."""
     parent = await seeded_conversation(scenario)
     parent_run = await running_run(parent)
     deps = _as_parent(parent, run_id=parent_run)

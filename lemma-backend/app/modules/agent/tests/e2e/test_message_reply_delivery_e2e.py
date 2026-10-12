@@ -86,7 +86,7 @@ async def test_a_finished_conversation_gets_the_news_as_its_next_turn(scenario):
 
 
 async def test_an_open_question_is_not_answered_by_the_news(scenario):
-    """A3-F4. The owner's approval stays pending; the news waits behind it."""
+    """The owner's approval stays pending; the news waits behind it."""
     seeded = await seeded_conversation(scenario)
     asking = await running_run(seeded)
     approval_id = await pausing_call(

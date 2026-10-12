@@ -82,7 +82,7 @@ def _returns_for(found, tool_call_id: str):
 async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
     scenario,
 ) -> None:
-    """A3-F1. Approved, then the person types before the tool's result lands.
+    """Approved, then the person types before the tool's result lands.
 
     The message used to start a run of its own, whose history showed the
     approval unanswered ("the user did not answer this"), and the result then
@@ -181,7 +181,7 @@ async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
 async def test_an_answer_that_lands_before_the_pause_is_written_still_resumes(
     scenario,
 ) -> None:
-    """A3-F2. The card renders from the persisted call, before the run that
+    """The card renders from the persisted call, before the run that
     asked is written as finished. An answer in that gap found the run still
     RUNNING, left the resume to it -- and nothing resumed, ever."""
     seeded = await seeded_conversation(scenario)
@@ -216,7 +216,7 @@ async def test_an_answer_that_lands_before_the_pause_is_written_still_resumes(
 async def test_a_message_after_stop_is_answered_and_one_before_it_is_not(
     scenario,
 ) -> None:
-    """A3-F3. "Stop, do X instead" is the commonest message after Stop, and it
+    """ "Stop, do X instead" is the commonest message after Stop, and it
     joined the dying run as queued -- then the follow-up was skipped because
     the run had stopped, and the person heard nothing."""
     seeded = await seeded_conversation(scenario)
@@ -261,7 +261,7 @@ async def test_a_message_after_stop_is_answered_and_one_before_it_is_not(
 async def test_a_remote_harness_question_is_answered_inside_its_own_run(
     scenario,
 ) -> None:
-    """A3-F2, the other half: a question a remote harness asked over MCP is
+    """The other half of the same race: a question a remote harness asked over MCP is
     parked in a run that keeps going, and its answer is read by that run. That
     -- and only that -- is what keeps a resume from starting beside it, so the
     mark is Lemma's, written when it records the call."""
@@ -305,7 +305,7 @@ async def test_a_remote_harness_question_is_answered_inside_its_own_run(
 async def test_stop_keeps_an_already_approved_pause_from_waking_the_agent(
     scenario,
 ) -> None:
-    """A3-F10. Stop closed only pauses nobody had decided. An approval whose
+    """Stop closed only pauses nobody had decided. An approval whose
     tool was already running finished it -- it cannot be taken back -- and then
     started the resume, so the agent carried on after Stop."""
     seeded = await seeded_conversation(scenario)
@@ -364,7 +364,7 @@ class _ExhaustedUsage:
 
 
 async def test_resuming_a_pause_is_held_to_the_usage_limit(scenario) -> None:
-    """A3-F13. Every other way a run starts asks for headroom first; answering a
+    """Every other way a run starts asks for headroom first; answering a
     question did not, so it was a way past an exhausted limit."""
     seeded = await seeded_conversation(scenario)
     paused = await running_run(seeded)
@@ -396,7 +396,7 @@ async def test_resuming_a_pause_is_held_to_the_usage_limit(scenario) -> None:
 async def test_messages_queued_behind_a_question_say_so_and_ride_its_answer(
     scenario,
 ) -> None:
-    """A3-F14. Said while the run worked, then the run stopped to ask something:
+    """Said while the run worked, then the run stopped to ask something:
     nothing answers those until the question is answered, and they used to be
     drawn as ordinary sent messages with no reply coming."""
     seeded = await seeded_conversation(scenario)
@@ -428,7 +428,7 @@ async def test_messages_queued_behind_a_question_say_so_and_ride_its_answer(
 
 
 async def test_a_client_cannot_mark_its_own_message_delivered(scenario) -> None:
-    """A3-F26. The delivery keys are the server's: a message that arrived
+    """The delivery keys are the server's: a message that arrived
     claiming `steered_into_run` was never answered and could not be withdrawn."""
     seeded = await seeded_conversation(scenario)
     working = await running_run(seeded)
@@ -461,7 +461,7 @@ async def test_a_client_cannot_mark_its_own_message_delivered(scenario) -> None:
 
 @pytest.mark.parametrize("content", ["", "x" * 60_001])
 async def test_an_empty_or_oversized_message_is_refused(scenario, content) -> None:
-    """A3-F21. An empty message started a paid run with nothing to answer; an
+    """An empty message started a paid run with nothing to answer; an
     unbounded one is replayed into every later turn."""
     seeded = await seeded_conversation(scenario)
 

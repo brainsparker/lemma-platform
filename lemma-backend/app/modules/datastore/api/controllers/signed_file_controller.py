@@ -7,7 +7,7 @@ object-store signed URL) so the budget genuinely bounds egress.
 
 The link is live: it serves the file at its path as it is now, re-checked as the
 person who shared it (``shared_link_files``). A shared page also serves what it
-embeds, at ``{api_url}/s/{code}/a?ref=<reference as the page writes it>`` — the
+embeds, at ``{api_url}/public/s/{code}/a?ref=<reference as the page writes it>`` — the
 reference rather than a path, so the reader's page never needs to know where in
 the pod the page lives.
 
@@ -181,7 +181,7 @@ async def serve_signed_url(code: str, request: Request) -> Response:
     return response
 
 
-@router.api_route("/{code}/a", methods=["GET", "HEAD"], include_in_schema=False)
+@router.api_route("/public/s/{code}/a", methods=["GET", "HEAD"], include_in_schema=False)
 async def serve_embedded_resource(
     code: str,
     request: Request,

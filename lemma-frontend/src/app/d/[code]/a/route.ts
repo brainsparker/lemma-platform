@@ -37,7 +37,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ cod
         if (value) forwarded.set(name, value);
     }
     const upstream = await fetch(
-        origin + "/s/" + encodeURIComponent(code) + "/a?ref=" + encodeURIComponent(reference),
+        origin + "/public/s/" + encodeURIComponent(code) + "/a?ref=" + encodeURIComponent(reference),
         { cache: "no-store", headers: forwarded },
     );
     if (upstream.status === 304) {

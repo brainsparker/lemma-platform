@@ -450,7 +450,7 @@ class DatastoreSteps:
         self, link: JSON, *, embedded: str | None = None
     ) -> bytes | None:
         code = str(link["signed_url"]).rstrip("/").rsplit("/", 1)[-1]
-        path = f"/s/{code}" + ("/a" if embedded is not None else "")
+        path = f"/public/s/{code}" + ("/a" if embedded is not None else "")
         params = {"ref": embedded} if embedded is not None else None
         async with httpx.AsyncClient(base_url=self.api.base_url, timeout=60) as nobody:
             response = await nobody.get(path, params=params)

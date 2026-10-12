@@ -45,7 +45,7 @@ async def _share(api: DatastoreApi, path: str, body: dict | None = None) -> str:
 
 
 def _embedded(code: str, reference: str) -> str:
-    return f"/s/{code}/a?ref={quote(reference, safe='')}"
+    return f"/public/s/{code}/a?ref={quote(reference, safe='')}"
 
 
 async def test_an_edit_is_what_the_next_reader_sees(
@@ -55,7 +55,7 @@ async def test_an_edit_is_what_the_next_reader_sees(
     page = await pod_api.upload_file("Plan.md", b"# First", directory_path="/pages")
     code = await _share(pod_api, page["path"])
 
-    first = await async_client.get(f"/s/{code}")
+    first = await async_client.get(f"/public/s/{code}")
     assert first.status_code == status.HTTP_200_OK, first.text
     assert first.content == b"# First"
     stale_etag = first.headers["etag"]
@@ -64,7 +64,7 @@ async def test_an_edit_is_what_the_next_reader_sees(
 
     # The browser holding the first copy asks whether it is still current. It
     # is not, so it gets the edit rather than a 304 that would pin it forever.
-    again = await async_client.get(f"/s/{code}", headers={"If-None-Match": stale_etag})
+    again = await async_client.get(f"/public/s/{code}", headers={"If-None-Match": stale_etag})
     assert again.status_code == status.HTTP_200_OK, again.text
     assert again.content == b"# Second"
     assert again.headers["etag"] != stale_etag
@@ -92,7 +92,7 @@ async def test_a_page_carries_the_pictures_it_shows_without_spending_opens(
         assert picture.content == PNG
         assert picture.headers["content-type"].startswith("image/png")
 
-    opened = await async_client.get(f"/s/{code}")
+    opened = await async_client.get(f"/public/s/{code}")
     assert opened.status_code == status.HTTP_200_OK, opened.text
 
     # The open was the page's last; what it carried goes with it.

@@ -11,7 +11,8 @@
  *  - a schedule firing:   `source: "SCHEDULE"`, `schedule_name`, `schedule_type`
  *  - a workflow's agent:  `source: "WORKFLOW_RUN"`, `workflow_run_id`
  *  - another teammate:    `source: "pod_ask"`, `ask.from_pod_name` — a
- *                         request it put to this one, as you
+ *                         request it put to this one, as you or over its
+ *                         connection
  *  - a doc/table's chat:  `lemma_resource: "file:/path"` (type PROJECT)
  *  - anything else TASK:  a run nobody typed into
  */

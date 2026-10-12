@@ -120,11 +120,20 @@ export interface HumanMessage {
     pending?: PendingState;
 }
 
-/** Who answered, and where their side of the request lives. */
+/** How a request to another teammate ended, as the backend writes it on the
+ *  message that carries the outcome back. */
+export type AskOutcome = "ANSWERED" | "NO_ANSWER" | "UNFINISHED" | "DISCONNECTED";
+
+/** Who answered, how it ended, and where their side of the request lives.
+ *  `asPerson` when it was asked as the reader, so that side is a conversation
+ *  of theirs; over a connection it belongs to whoever looks after the
+ *  connection, and the reader is not linked to it. */
 export interface AnsweredBy {
     name: string;
     podId: string;
     conversationId: string;
+    asPerson: boolean;
+    outcome: AskOutcome;
 }
 
 /** Who asked. `forYou` when it asked as the reader, from a conversation of
@@ -274,6 +283,11 @@ export function humanMarks(
             name: name || "Another teammate",
             podId: typeof meta.asked_pod_id === "string" ? meta.asked_pod_id : "",
             conversationId: typeof meta.ask_conversation_id === "string" ? meta.ask_conversation_id : "",
+            /* Strict: an answer from before the mode was written down links
+               nowhere rather than to a conversation that may not be the
+               reader's to open. */
+            asPerson: meta.ask_mode === "AS_PERSON",
+            outcome: askOutcomeOf(meta.ask_outcome),
         };
         return marks;
     }
@@ -353,14 +367,79 @@ function step(message: RawMessage, metadata: Record<string, unknown> | null, ear
     };
 }
 
-/** The answer itself, without the line telling the model whose it is.
+const OUTCOMES: readonly AskOutcome[] = ["ANSWERED", "NO_ANSWER", "UNFINISHED", "DISCONNECTED"];
+
+/** An outcome the backend wrote. One from before outcomes were written down
+ *  was an answer: nothing else was carried back then. */
+function askOutcomeOf(value: unknown): AskOutcome {
+    return OUTCOMES.find((one) => one === value) ?? "ANSWERED";
+}
+
+/** What the chip on a relayed answer says, by how the request ended. */
+export function answerChip(outcome: AskOutcome): string {
+    switch (outcome) {
+        case "ANSWERED":
+            return "Answered your request";
+        case "NO_ANSWER":
+            return "No answer";
+        case "UNFINISHED":
+            return "Couldn’t finish";
+        case "DISCONNECTED":
+            return "Disconnected";
+    }
+}
+
+/** What a person reads in the message that carried an ask's outcome back.
  *
- *  The backend writes "{name} answered your request:" above the answer, because
- *  the model reads this message as input and needs to be told. A person reading
- *  it sees the name already, on the message itself. */
-function withoutAnswerPreamble(text: string, name: string): string {
-    const preamble = name + " answered your request:";
-    return text.startsWith(preamble) ? text.slice(preamble.length).trim() || text : text;
+ *  The message itself is written for the model, which reads it as input and
+ *  must be told whose words follow and what to do with them. A person sees the
+ *  name on the message already. So: an answer is the other teammate's own
+ *  words, from `answer_offset` on; every other outcome is said here, in the
+ *  app's words, and never the model's instructions or a run's raw error. An
+ *  answer with no offset -- one from before it was written down -- is shown
+ *  whole rather than guessed at. */
+export function relayedAnswerText(raw: string, answeredBy: AnsweredBy, offset: unknown): string {
+    const { name } = answeredBy;
+    switch (answeredBy.outcome) {
+        case "ANSWERED": {
+            const at = typeof offset === "number" && Number.isInteger(offset) && offset >= 0 && offset <= raw.length ? offset : 0;
+            return raw.slice(at).trim() || raw.trim();
+        }
+        case "NO_ANSWER":
+            return name + " finished without writing an answer.";
+        case "UNFINISHED":
+            return name + " couldn’t finish this request. You can ask again.";
+        case "DISCONNECTED":
+            return name + " was disconnected before it answered, so its answer wasn’t passed back. Someone needs to connect the two teammates again before it can be asked.";
+    }
+}
+
+/** A message another teammate put here: its answer to a request of yours, or a
+ *  request of its own. Either way it is input, not yours, so it is drawn under
+ *  that teammate's name with a chip saying which, and -- only where the other
+ *  side is the reader's own conversation -- the place to link to. Over a
+ *  connection neither side is: the conversation it opened belongs to whoever
+ *  looks after the connection, and where it asked from to whoever started
+ *  that run. */
+export function relayedBy(message: Pick<HumanMessage, "answeredBy" | "askedBy">): {
+    name: string;
+    chip: string;
+    place: { podId: string; conversationId: string } | null;
+} | null {
+    const at = (podId: string, conversationId: string) => (podId && conversationId ? { podId, conversationId } : null);
+    const answered = message.answeredBy;
+    if (answered) {
+        return {
+            name: answered.name,
+            chip: answerChip(answered.outcome),
+            place: answered.asPerson ? at(answered.podId, answered.conversationId) : null,
+        };
+    }
+    const asked = message.askedBy;
+    if (!asked) return null;
+    return asked.forYou
+        ? { name: asked.name, chip: "Asked for you", place: at(asked.podId, asked.conversationId) }
+        : { name: asked.name, chip: "Asked over its connection", place: null };
 }
 
 export function buildTurns(messages: RawMessage[]): Turn[] {
@@ -577,7 +656,9 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
             const marks = humanMarks(message.metadata);
             current.human = {
                 id: message.id ?? "u" + turns.length,
-                text: marks.answeredBy ? withoutAnswerPreamble(text, marks.answeredBy.name) : text,
+                text: marks.answeredBy
+                    ? relayedAnswerText(message.text ?? message.content ?? "", marks.answeredBy, message.metadata?.answer_offset)
+                    : text,
                 at: clockOf(message.created_at),
                 ...marks,
                 ...(pending ? { pending } : {}),

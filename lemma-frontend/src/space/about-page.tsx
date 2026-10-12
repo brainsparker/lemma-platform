@@ -22,7 +22,7 @@ import { AgentMark } from "./agent-mark";
 import { WhatItRemembers } from "./what-it-remembers";
 import { sayHired } from "./teammates";
 import { TeammateFace } from "./teammate-face";
-import { AskedBy, ConnectTeammate } from "./connect-teammate";
+import { AskedBy, ConnectTeammate, useMayConnect } from "./connect-teammate";
 import { DeleteTeammate } from "./delete-teammate";
 
 /** Where a link into About lands. Each is a section of the one page.
@@ -78,7 +78,10 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
     onDeleted: () => void;
 }) {
     const page = useRef<HTMLDivElement>(null);
-    const [connecting, setConnecting] = useState(false);
+    /* Open on nobody for a new connection; on one teammate to change what it
+       reads. */
+    const [connecting, setConnecting] = useState<{ asker?: string } | null>(null);
+    const manageLinks = useMayConnect(pod.id);
     useEffect(() => {
         if (!section) return;
         page.current?.querySelector(`[data-about="${section}"]`)?.scrollIntoView({ block: "start" });
@@ -133,14 +136,20 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
 
                 <Section
                     id="works-with"
-                    title="Works with"
-                    note={"Through you: " + pod.name + " asks with your access there, and checks with you first. Connected: it asks with nobody present, reading what was shared."}
-                    action={<button className="aboutpage__action" onClick={() => setConnecting(true)}><PlusIcon size={14} /> Let a teammate ask {pod.name}</button>}
+                    title="Can ask"
+                    note={"As you: " + pod.name + " asks with your access there, and checks with you first. Allowed: that teammate lets " + pod.name + " ask it with nobody present, reading only what it shared."}
+                    action={manageLinks
+                        ? (
+                            <button className="aboutpage__action aboutpage__action--long" onClick={() => setConnecting({})}>
+                                <PlusIcon size={14} /> Let another teammate ask {pod.name}
+                            </button>
+                        )
+                        : undefined}
                 >
                     <WorksWith pod={pod} onOpen={onOpenTeammate} />
-                    <AskedBy pod={pod} onOpen={onOpenTeammate} />
+                    <AskedBy pod={pod} onOpen={onOpenTeammate} onEdit={(asker) => setConnecting({ asker })} />
                 </Section>
-                {connecting && <ConnectTeammate pod={pod} onClose={() => setConnecting(false)} />}
+                {connecting && <ConnectTeammate pod={pod} asker={connecting.asker} onClose={() => setConnecting(null)} />}
 
                 <Section id="model" title="Runs on" note={"What " + pod.name + " thinks with, unless an agent names its own."}>
                     <RunsOn podId={pod.id} orgId={pod.orgId} />
@@ -210,7 +219,7 @@ const JUMPS: { id: AboutSection; label: string }[] = [
     { id: "memory", label: "Remembers" },
     { id: "schedules", label: "Standing work" },
     { id: "agents", label: "Hands work to" },
-    { id: "works-with", label: "Works with" },
+    { id: "works-with", label: "Can ask" },
     { id: "model", label: "Runs on" },
     { id: "ai-tools", label: "AI tools" },
     { id: "connectors", label: "Connectors" },
@@ -421,7 +430,7 @@ function WorksWith({ pod, onOpen }: { pod: Pod; onOpen: (podId: string) => void 
                             <span className="agentlist__title"><b>{other.name}</b></span>
                             <small>{other.description || "No job written down yet."}</small>
                         </span>
-                        <span className="agentlist__can">{[other.throughYou && "Through you", other.connected && "Connected"].filter(Boolean).join(" · ")}</span>
+                        <span className="agentlist__can">{[other.throughYou && "As you", other.connected && "Allowed by " + other.name].filter(Boolean).join(" · ")}</span>
                         <ChevronRightIcon size={16} />
                     </button>
                 </li>

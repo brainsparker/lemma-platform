@@ -461,7 +461,7 @@ export const liveSource: PodSource = {
     },
 
     async askablePods(podId: string): Promise<AskablePod[]> {
-        const listed = (await lemma(podId).request("GET", `/pods/${podId}/askable-pods`)) as Listish;
+        const listed = (await lemma(podId).request("GET", `/pods/${encodeURIComponent(podId)}/askable-pods`)) as Listish;
         return itemsOf(listed)
             .map((raw) => raw as { pod_id?: string; name?: string; icon_url?: string | null; description?: string | null; through_you?: boolean; connected?: boolean })
             .filter((pod): pod is { pod_id: string; name: string; icon_url?: string | null; description?: string | null; through_you?: boolean; connected?: boolean } => Boolean(pod.pod_id && pod.name))
@@ -476,7 +476,7 @@ export const liveSource: PodSource = {
     },
 
     async podLinks(podId: string): Promise<PodLink[]> {
-        const listed = (await lemma(podId).request("GET", `/pods/${podId}/pod-links`)) as Listish;
+        const listed = (await lemma(podId).request("GET", `/pods/${encodeURIComponent(podId)}/pod-links`)) as Listish;
         return itemsOf(listed)
             .map((raw) => raw as {
                 pod_id?: string; name?: string; icon_url?: string | null; description?: string | null;
@@ -500,7 +500,7 @@ export const liveSource: PodSource = {
     },
 
     async connectPod(podId: string, askingPodId: string, shares: LinkShare[]): Promise<void> {
-        await lemma(podId).request("PUT", `/pods/${podId}/pod-links/${askingPodId}`, {
+        await lemma(podId).request("PUT", `/pods/${encodeURIComponent(podId)}/pod-links/${encodeURIComponent(askingPodId)}`, {
             body: {
                 shares: shares.map((share) => share.kind === "table"
                     ? { resource_type: "datastore_table", resource_name: share.name, permission_ids: ["datastore.table.read", "datastore.record.read"] }
@@ -510,7 +510,7 @@ export const liveSource: PodSource = {
     },
 
     async disconnectPod(podId: string, askingPodId: string): Promise<void> {
-        await lemma(podId).request("DELETE", `/pods/${podId}/pod-links/${askingPodId}`);
+        await lemma(podId).request("DELETE", `/pods/${encodeURIComponent(podId)}/pod-links/${encodeURIComponent(askingPodId)}`);
     },
 
     async getPod(podId: string): Promise<Pod> {

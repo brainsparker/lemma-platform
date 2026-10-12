@@ -17,13 +17,22 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_index(
-        "ix_rpg_pod_grantee",
-        "resource_permission_grants",
-        ["grantee_id", "permission_id"],
-        postgresql_where=sa.text("grantee_type = 'POD'"),
-    )
+    # Concurrently: the grants table is read on every authorization check, and
+    # a plain build would block its writers for the length of the scan.
+    with op.get_context().autocommit_block():
+        op.create_index(
+            "ix_rpg_pod_grantee",
+            "resource_permission_grants",
+            ["grantee_id", "permission_id"],
+            postgresql_where=sa.text("grantee_type = 'POD'"),
+            postgresql_concurrently=True,
+        )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_rpg_pod_grantee", table_name="resource_permission_grants")
+    with op.get_context().autocommit_block():
+        op.drop_index(
+            "ix_rpg_pod_grantee",
+            table_name="resource_permission_grants",
+            postgresql_concurrently=True,
+        )

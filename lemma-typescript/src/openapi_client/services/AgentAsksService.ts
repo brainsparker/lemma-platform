@@ -71,6 +71,7 @@ export class AgentAsksService {
                 'asking_pod_id': askingPodId,
             },
             errors: {
+                403: `The caller can't manage members of this pod`,
                 404: `That pod is not connected to this one`,
                 422: `Validation Error`,
             },
@@ -101,7 +102,8 @@ export class AgentAsksService {
             mediaType: 'application/json',
             errors: {
                 400: `Something named can't be shared, or not for that`,
-                409: `The two pods can't be connected`,
+                403: `The caller can't manage members of this pod`,
+                409: `The two pods can't be connected: another organization, the same pod, or the caller isn't in the other pod`,
                 422: `Validation Error`,
             },
         });

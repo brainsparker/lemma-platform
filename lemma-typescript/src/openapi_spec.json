@@ -35993,6 +35993,16 @@
           "204": {
             "description": "Successful Response"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller can't manage members of this pod"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -36078,6 +36088,16 @@
             },
             "description": "Something named can't be shared, or not for that"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller can't manage members of this pod"
+          },
           "409": {
             "content": {
               "application/json": {
@@ -36086,7 +36106,7 @@
                 }
               }
             },
-            "description": "The two pods can't be connected"
+            "description": "The two pods can't be connected: another organization, the same pod, or the caller isn't in the other pod"
           },
           "422": {
             "content": {

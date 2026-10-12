@@ -114,7 +114,11 @@ async def list_pod_links(pod_id: UUID, uow: UoWDep) -> PodLinkListResponse:
     ),
     responses={
         400: {"description": "Something named can't be shared, or not for that"},
-        409: {"description": "The two pods can't be connected"},
+        403: {"description": "The caller can't manage members of this pod"},
+        409: {
+            "description": "The two pods can't be connected: another "
+            "organization, the same pod, or the caller isn't in the other pod"
+        },
     },
 )
 async def connect_pod(
@@ -141,7 +145,10 @@ async def connect_pod(
     dependencies=[LINK_ADMIN],
     summary="Disconnect A Pod From This One",
     description="Stop another pod asking this one, and take back what it was shared.",
-    responses={404: {"description": "That pod is not connected to this one"}},
+    responses={
+        403: {"description": "The caller can't manage members of this pod"},
+        404: {"description": "That pod is not connected to this one"},
+    },
 )
 async def disconnect_pod(pod_id: UUID, asking_pod_id: UUID, uow: UoWDep) -> Response:
     if not await PodLinkService(uow).disconnect(

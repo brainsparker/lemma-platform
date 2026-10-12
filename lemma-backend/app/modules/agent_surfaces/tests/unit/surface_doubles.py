@@ -292,6 +292,7 @@ def build_doubles(
     # A bare AsyncMock answers every call with a truthy mock, which the binder
     # would read as "this person has an earlier private-chat link".
     conversation_link_repository.find_latest_dm_link_for_person.return_value = None
+    conversation_link_repository.latest_dm_links_for_person.return_value = []
     conversation_link_repository.create.side_effect = lambda link, **_: link
     conversation_link_repository.update_last_event.side_effect = lambda **kwargs: (
         existing_link
@@ -650,6 +651,7 @@ def build_turn_starter(
     uow_factory: object | None = None,
     file_ingest_service: object | None = None,
     pooled_numbers: object | None = None,
+    roster_reads: object | None = None,
 ) -> SurfaceTurnStarter:
     """The worker's half, over doubled collaborators.
 
@@ -678,4 +680,5 @@ def build_turn_starter(
             ingest_attachments=AsyncMock(return_value=AttachmentIngest())
         ),
         pooled_numbers=pooled_numbers,
+        **({"roster_reads": roster_reads} if roster_reads is not None else {}),
     )

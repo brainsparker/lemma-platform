@@ -147,15 +147,20 @@ class SurfaceEgress:
         message: str,
         metadata: dict[str, Any] | None = None,
         attach_files_of: RunFiles | None = None,
+        sender_only: bool = False,
     ) -> bool:
         """Send a message; ``attach_files_of`` names the run whose held files ride it.
 
         Left out, nothing is attached: a notification or a nudge is not the reply
         those files were shown for, and one run's files are never another's.
+        ``sender_only`` keeps it to the person the thread answers, dropping the
+        copies a reply-all would carry.
         """
         target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
             return False
+        if sender_only:
+            target = target.to_sender_only()
         # Safety net: never deliver model reasoning/thinking tokens
         # (``<tool_call>…``) as a chat message to any surface. Some
         # OpenAI-compatible models emit these inline in the text content.

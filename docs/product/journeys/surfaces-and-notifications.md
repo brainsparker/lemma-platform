@@ -549,9 +549,18 @@ by its link.
 - Where the only place a person has spoken to the bot is a group, the system
   shall reach them another way -- email, or their Lemma inbox -- rather than in
   front of the group.
-- When the agent sends the person it is working for something mid-task, the
-  system shall deliver it to that person alone -- to their own chat with the bot
-  -- and shall not post it in a group the conversation is in.
+- When the agent sends the person it is working for something mid-task from a
+  group chat, the system shall deliver it to that person's own chat with the bot
+  in the same pod.
+- If that person has no private chat with the bot, then the system shall not
+  post the message in the group.
+- If that person has no private chat with the bot, then the system shall tell
+  the agent that nobody was reached.
+- If the delivery fails for another reason, then the system shall not tell the
+  agent that the person has no private chat.
+- When the agent sends the person it is working for something mid-task on an
+  email thread that copies other people, the system shall send it to that
+  person alone.
 
 **Contracts:** `notification.send`
 

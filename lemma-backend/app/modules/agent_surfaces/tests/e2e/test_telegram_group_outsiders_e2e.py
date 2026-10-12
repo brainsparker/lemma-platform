@@ -76,12 +76,14 @@ def _bot_added(*, by: int) -> dict:
     }
 
 
-def _group_message(*, text: str, message_id: int, sender_id: int) -> dict:
+def _group_message(
+    *, text: str, message_id: int, sender_id: int, first_name: str = "Tom"
+) -> dict:
     return {
         "update_id": 6000 + message_id,
         "message": {
             "message_id": message_id,
-            "from": {"id": sender_id, "is_bot": False, "first_name": "Tom"},
+            "from": {"id": sender_id, "is_bot": False, "first_name": first_name},
             "chat": {"id": GROUP_CHAT, "type": "supergroup", "title": "Launch crew"},
             "date": 1700000100,
             "text": text,

@@ -318,7 +318,7 @@ async def test_execute_chat_holds_no_session_during_io(monkeypatch):
     assert factory.active == 0
 
 
-async def test_a_speaker_the_pod_cannot_place_is_not_reported_as_a_member(monkeypatch):
+async def test_a_speaker_the_pod_cannot_place_is_not_reported_as_a_member():
     """The roster in a fetched Slack window is the pod's answer, not Slack's.
 
     Slack marks a line only when it comes from another company's workspace, so
@@ -343,16 +343,14 @@ async def test_a_speaker_the_pod_cannot_place_is_not_reported_as_a_member(monkey
             ),
         ]
     )
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.turn_starter.ExternalSurfaceUserRepository",
-        lambda _uow: ExternalIdentityDouble({"U-ARJUN": member}),
-    )
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.turn_starter.SqlAlchemySurfaceRoutingResolutionAdapter",
-        lambda _uow: MembershipDouble({member}),
-    )
     starter = build_turn_starter(
-        adapter=adapter, surfaces=[surface], conversation=conversation
+        adapter=adapter,
+        surfaces=[surface],
+        conversation=conversation,
+        roster_reads=lambda _uow: (
+            MembershipDouble({member}),
+            ExternalIdentityDouble({"U-ARJUN": member}),
+        ),
     )
     context = SurfaceChatContext(
         platform="SLACK",

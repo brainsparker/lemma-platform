@@ -63,6 +63,36 @@ def test_a_speaker_the_pod_never_vouched_for_is_not_a_member():
     assert [(person.name, person.in_pod) for person in roster] == [("Dana", False)]
 
 
+def test_an_outsider_showing_a_members_name_is_still_on_the_roster():
+    """Two people, one name: folding them by it let an outsider who took a
+    member's name drop out of the roster behind the member."""
+    roster = participants_in_lines(
+        [_line("Tom", external="U1"), _line("Tom", external="U2")],
+        verified={"U1"},
+    )
+
+    assert [(person.name, person.in_pod) for person in roster] == [
+        ("Tom", True),
+        ("Tom", False),
+    ]
+
+
+def test_the_asker_and_the_bot_are_not_on_the_roster():
+    """It is who *else* is there; and an app -- the bot's own answers -- is
+    nobody to answer in front of, and named as outside it read as a stranger."""
+    roster = participants_in_lines(
+        [
+            _line("Asha", external="U1"),
+            {**_line("Lemma", external="UBOT"), "from_bot": True},
+            _line("Tom", external="U2"),
+        ],
+        verified={"U1"},
+        asker_external_id="U1",
+    )
+
+    assert [(person.name, person.in_pod) for person in roster] == [("Tom", False)]
+
+
 def test_a_line_with_no_author_names_nobody():
     assert participants_in_lines([_line(""), _line("   ")]) == ()
 

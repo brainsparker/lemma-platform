@@ -193,8 +193,21 @@ class SurfaceConversationLinkRepository:
         platform. Ordered by inbound recency for the reason
         ``list_latest_by_surface_and_external_users`` gives.
         """
+        person = {"platform": platform, "external_user_id": external_user_id}
+        links = await self.latest_dm_links_for_person(**person, surface_ids=surface_ids)
+        return links[0] if links else None
+
+    async def latest_dm_links_for_person(
+        self,
+        *,
+        platform: str,
+        external_user_id: str,
+        surface_ids: Collection[UUID],
+        limit: int = 1,
+    ) -> list[AgentSurfaceConversationLink]:
+        """The above, several deep, for a caller that wants one pod's chat."""
         if not surface_ids:
-            return None
+            return []
         recency = func.coalesce(
             AgentSurfaceConversationLinkModel.last_inbound_at,
             AgentSurfaceConversationLinkModel.updated_at,
@@ -208,10 +221,10 @@ class SurfaceConversationLinkRepository:
                 AgentSurfaceConversationLinkModel.surface_id.in_(list(surface_ids)),
             )
             .order_by(recency.desc())
-            .limit(1)
+            .limit(limit)
         )
-        model = (await self.session.execute(stmt)).scalar_one_or_none()
-        return model.to_entity() if model else None
+        models = (await self.session.execute(stmt)).scalars().all()
+        return [model.to_entity() for model in models]
 
     async def rebind_thread_address(
         self,

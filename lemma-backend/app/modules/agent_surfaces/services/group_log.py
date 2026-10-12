@@ -19,11 +19,15 @@ has left reads as a stranger.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence, Set
+from collections.abc import Callable, Mapping, Sequence, Set
 from dataclasses import dataclass
 from uuid import UUID
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
@@ -41,6 +45,9 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceGroupParticipant,
 )
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
+from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
+    SqlAlchemySurfaceRoutingResolutionAdapter,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (  # noqa: E501
     ExternalSurfaceUserRepository,
 )
@@ -54,6 +61,8 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
 from app.modules.agent_surfaces.services.slack_groups import note_slack_channel
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +199,7 @@ async def group_background(
     membership: SurfacePodMembershipPort,
     agent_display_name: str | None,
     for_stranger: bool,
+    asker_external_id: str | None = None,
     limit: int = GROUP_CONTEXT_LINES,
 ) -> GroupBackground:
     """The group's recent lines, as the background a run is handed.
@@ -238,7 +248,9 @@ async def group_background(
     participants = (
         ()
         if for_stranger
-        else await _participants(uow, group=group, membership=membership)
+        else await _participants(
+            uow, group=group, membership=membership, asker=asker_external_id
+        )
     )
     return GroupBackground(
         lines=kept,
@@ -283,10 +295,77 @@ async def pod_members_in_lines(
     return {external for external, user_id in resolved.items() if user_id in members}
 
 
+#: The two reads a live group's roster asks, over one unit of work: who the pod
+#: has resolved each platform sender to, and which of those are in the pod.
+RosterReads = Callable[
+    [SqlAlchemyUnitOfWork],
+    tuple[SurfacePodMembershipPort, ExternalSurfaceUserRepository],
+]
+
+
+def roster_reads(
+    uow: SqlAlchemyUnitOfWork,
+) -> tuple[SurfacePodMembershipPort, ExternalSurfaceUserRepository]:
+    membership = SqlAlchemySurfaceRoutingResolutionAdapter(uow)
+    return membership, ExternalSurfaceUserRepository(uow)
+
+
+async def live_participants(
+    uow_factory: UnitOfWorkFactory,
+    *,
+    lines: Sequence[Mapping[str, object]],
+    pod_id: UUID,
+    platform: str,
+    tenant_id: str | None,
+    asker_external_id: str | None,
+    conversation_id: UUID,
+    reads: RosterReads = roster_reads,
+) -> tuple[SurfaceGroupParticipant, ...]:
+    """The roster of a group whose history was fetched live (Slack, Teams).
+
+    The platform hands over lines and nothing else, and a line says who spoke
+    rather than who holds access, so the roster is the pod's own answer about
+    those speakers (``pod_members_in_lines``). A colleague in the same
+    workspace who never spoke to the bot, and anyone there with no Lemma
+    account, is named as outside the pod rather than as a member.
+
+    Nothing where nothing was fetched: an empty roster claims nothing, where a
+    guessed one claims access somebody may not hold. The same answer when the
+    read fails -- the history beside it is best-effort, and a roster is not a
+    reason to fail the member's turn and replay it from the top.
+    """
+    if not lines:
+        return ()
+    try:
+        async with uow_factory() as uow:
+            membership, external_users = reads(uow)
+            verified = await pod_members_in_lines(
+                lines=lines,
+                pod_id=pod_id,
+                platform=platform,
+                tenant_id=tenant_id,
+                membership=membership,
+                external_users=external_users,
+            )
+    except (SQLAlchemyError, OSError) as exc:
+        # The database's family, because the database is all this touches.
+        logger.warning(
+            "agent_surfaces.ingress_service.group_roster_failed.degraded",
+            conversation_id=str(conversation_id),
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+        return ()
+    return participants_in_lines(
+        lines, verified=verified, asker_external_id=asker_external_id
+    )
+
+
 def participants_in_lines(
     lines: Sequence[Mapping[str, object]],
     *,
     verified: Set[str] = frozenset(),
+    asker_external_id: str | None = None,
 ) -> tuple[SurfaceGroupParticipant, ...]:
     """The people a fetched history names, and which of them hold access here.
 
@@ -296,17 +375,30 @@ def participants_in_lines(
     pod itself says belong to it (``pod_members_in_lines``), and a speaker whose
     id is not in it is somebody the pod cannot vouch for. Saying otherwise is
     how a room of clients came to read like a room of colleagues.
+
+    One entry per person, told apart by their platform id where the line has
+    one: two people may show the same name, and folding them by it let an
+    outsider who took a member's name drop out of the roster behind them. The
+    asker is not on it -- the roster is who *else* is there -- and nor is an
+    app's line, the bot's own answers among them: an app is nobody to answer
+    in front of, and named as outside the pod it read as a stranger.
     """
     seen: list[SurfaceGroupParticipant] = []
-    named: set[str] = set()
+    people: set[str] = set()
     for line in lines:
         name = " ".join(str(line.get("author") or "").split())
-        if not name or name.casefold() in named:
+        external_id = _external_id(line)
+        if (
+            not name
+            or line.get("from_bot")
+            or (asker_external_id and external_id == asker_external_id)
+        ):
             continue
-        named.add(name.casefold())
-        seen.append(
-            SurfaceGroupParticipant(name=name, in_pod=_external_id(line) in verified)
-        )
+        person = f"id:{external_id}" if external_id else f"name:{name.casefold()}"
+        if person in people:
+            continue
+        people.add(person)
+        seen.append(SurfaceGroupParticipant(name=name, in_pod=external_id in verified))
         if len(seen) >= _MAX_PARTICIPANTS:
             break
     return tuple(seen)
@@ -347,6 +439,7 @@ async def _participants(
     *,
     group: SurfaceGroup,
     membership: SurfacePodMembershipPort,
+    asker: str | None,
 ) -> tuple[SurfaceGroupParticipant, ...]:
     """Who the pod knows is in this group, and which of them hold access to it.
 
@@ -355,22 +448,27 @@ async def _participants(
     answers in front of them should know so. The log is the pod's whole
     knowledge of a group on the platforms whose history cannot be fetched --
     everybody in it who has ever spoken to the bot or past it.
+
+    One entry per speaker, as the log keys them -- never folded by name, since
+    an outsider showing a member's name is two people, and only one of them
+    holds access. The asker is left off: it is who *else* is there. A speaker
+    the log has no name for stays on it unnamed, never under their platform id
+    -- on WhatsApp that is their phone number, and the answer is posted where
+    everybody in the group reads it.
     """
-    speakers = await GroupPageRepository(uow.session).speakers([group])
-    recent = sorted(speakers, key=lambda speaker: speaker.last_said_at, reverse=True)[
+    speakers = await GroupPageRepository(uow.session).recent_speakers(
+        group, limit=_MAX_PARTICIPANTS + 1
+    )
+    recent = [speaker for speaker in speakers if speaker.external_id != asker][
         :_MAX_PARTICIPANTS
     ]
     members = await membership.pod_members_among(
         group.pod_id, (speaker.user_id for speaker in recent if speaker.user_id)
     )
-    seen: list[SurfaceGroupParticipant] = []
-    named: set[str] = set()
-    for speaker in recent:
-        name = " ".join(str(speaker.name or speaker.external_id or "").split())
-        if not name or name.casefold() in named:
-            continue
-        named.add(name.casefold())
-        seen.append(
-            SurfaceGroupParticipant(name=name, in_pod=speaker.user_id in members)
+    return tuple(
+        SurfaceGroupParticipant(
+            name=" ".join(str(speaker.name or "").split()),
+            in_pod=speaker.user_id in members,
         )
-    return tuple(seen)
+        for speaker in recent
+    )

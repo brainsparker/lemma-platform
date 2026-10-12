@@ -48,9 +48,6 @@ from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapt
 from app.modules.agent_surfaces.infrastructure.adapters.user_directory_adapter import (
     IdentityUserDirectoryAdapter,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (  # noqa: E501
-    ExternalSurfaceUserRepository,
-)
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
     SurfaceGroupRepository,
 )
@@ -81,8 +78,9 @@ from app.modules.agent_surfaces.services.group_log import (
     for_member_run,
     group_background,
     keeps_group_log,
-    participants_in_lines,
-    pod_members_in_lines,
+    RosterReads,
+    live_participants,
+    roster_reads,
 )
 from app.modules.agent_surfaces.services.group_audience import (
     Audience,
@@ -130,8 +128,10 @@ class SurfaceTurnStarter:
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
         file_ingest_service: SurfaceFileIngestService | None = None,
         pooled_numbers: PooledNumberReader | None = None,
+        roster_reads: RosterReads = roster_reads,
     ) -> None:
         self.uow_factory = uow_factory
+        self.roster_reads = roster_reads
         # `None` reads the pool through each short scope's own unit of work.
         self.pooled_numbers = pooled_numbers
         self.adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
@@ -398,32 +398,19 @@ class SurfaceTurnStarter:
         context: SurfaceChatContext,
         lines: Sequence[Mapping[str, object]],
     ) -> tuple[SurfaceGroupParticipant, ...]:
-        """Who the pod can vouch for among the speakers a fetched window names.
-
-        The platforms the pod keeps no log for -- Slack, Teams -- hand it the
-        lines and nothing else, and a line says who spoke rather than who holds
-        access. So the roster is the pod's own answer about those speakers: the
-        ones it has resolved to a member of this pod. A colleague in the same
-        workspace who has never spoken to the bot, and anyone there with no
-        Lemma account, is named as outside the pod rather than as a member.
-
-        No roster where the run has no pod to check against, or nothing was
-        fetched: an empty roster claims nothing, where a guessed one claims
-        access somebody may not hold.
-        """
-        pod_id = context.pod_id
-        if pod_id is None or not lines:
+        """Who the pod can vouch for among a fetched window's speakers."""
+        if context.pod_id is None:
             return ()
-        async with self.uow_factory() as uow:
-            verified = await pod_members_in_lines(
-                lines=lines,
-                pod_id=pod_id,
-                platform=context.platform.value,
-                tenant_id=context.event.tenant_id,
-                membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
-                external_users=ExternalSurfaceUserRepository(uow),
-            )
-        return participants_in_lines(lines, verified=verified)
+        return await live_participants(
+            self.uow_factory,
+            lines=lines,
+            pod_id=context.pod_id,
+            platform=context.platform.value,
+            tenant_id=context.event.tenant_id,
+            asker_external_id=context.message_external_user_id,
+            conversation_id=context.conversation_id,
+            reads=self.roster_reads,
+        )
 
     async def _group_background(
         self, context: SurfaceChatContext
@@ -454,6 +441,7 @@ class SurfaceTurnStarter:
                 membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
                 agent_display_name=context.agent_display_name,
                 for_stranger=context.audience.answers_outsiders,
+                asker_external_id=context.message_external_user_id,
             )
         return group, logged
 

@@ -78,6 +78,9 @@ class SurfaceContextMessage(BaseModel):
     #: pod's own group log, and where the platform marks the workspace it came
     #: from (Slack) -- which is another company's, not merely another person.
     outside_pod: bool = False
+    #: Posted by an app rather than a person -- the bot's own earlier answers
+    #: among them. Background still, but nobody to name on a group's roster.
+    from_bot: bool = False
 
 
 class SurfaceGroupParticipant(BaseModel):

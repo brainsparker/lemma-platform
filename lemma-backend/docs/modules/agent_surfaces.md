@@ -369,7 +369,13 @@ is answered *for the pod*, in a group the pod has opened to them.
   run instead, and membership is never read off it: a platform names who spoke,
   and marks only a line from another company's workspace, so a speaker counts as
   a member only where the pod itself resolved them to one
-  (`group_log.pod_members_in_lines`, then `group_log.participants_in_lines`).
+  (`group_log.live_participants`). The roster is who *else* is there: the asker
+  is left off, and so is an app's line -- the bot's own answers among them.
+  People are told apart by platform id, never folded by name, so an outsider
+  showing a member's name stays on it. Somebody with no name is counted, never
+  named by their platform id (a phone number on WhatsApp). Only the current turn
+  carries a roster -- a replayed one would still name people since removed --
+  and a failed roster read leaves the turn without one rather than failing it.
 - **Own bots are no different.** A pod's own Telegram bot or WhatsApp number is
   delivered to at `/surfaces/{id}/webhook`; its group messages go through the
   same log, mention check, name addressing and admission as a shared bot's
@@ -387,8 +393,11 @@ is answered *for the pod*, in a group the pod has opened to them.
   reaches the current conversation's user alone. In a group that conversation is
   one member's but its address is the group, so the message goes to that
   member's own chat with the bot (`services/private_message.py`, over
-  `SurfaceDelivery.private_thread_for`) -- and a member who has never had one is
-  not reached at all rather than reached in front of everybody.
+  `SurfaceDelivery.private_thread_for`, the latest one *in this pod*) -- and a
+  member who has never had one is not reached at all rather than reached in
+  front of everybody. On an email thread that copies other people it goes to the
+  sender alone on the same thread, without the copies. The tool tells the run
+  which happened: sent, nobody to reach privately, or a send that failed.
 - **An email thread with other people on it is a group.** The inbound
   normalizer keeps To and Cc; a reply goes to the sender and copies the others
   (at most `MAX_REPLY_CC`). Copied is not asked: an email that only Cc's the

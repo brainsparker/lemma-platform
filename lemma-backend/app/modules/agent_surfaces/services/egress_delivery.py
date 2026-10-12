@@ -64,6 +64,12 @@ from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgres
 logger = get_logger(__name__)
 
 
+#: How many of a person's private chats on one surface are looked through for
+#: the one in a given pod. One per pod they reach through this installation is
+#: the ordinary count, and it is rarely more than two.
+_PRIVATE_THREADS_CHECKED = 5
+
+
 class SurfaceDelivery:
     """Resolve where a reply goes, and put one envelope there."""
 
@@ -236,27 +242,27 @@ class SurfaceDelivery:
         The conversation's pod is checked as well as its surface's: a personal
         DM arrives through a company's installation and is answered in the
         person's own pod, and a word meant for one pod's member must not land in
-        another pod's conversation. The shared outsiders' key is not a platform
-        identity at all, so there is nothing to look up for it.
+        another pod's conversation. So it is the latest private chat *in this
+        pod*, not the latest one checked afterwards -- a newer chat in their own
+        pod would otherwise hide this pod's. The shared outsiders' key is not a
+        platform identity at all, so there is nothing to look up for it.
         """
         external_user_id = target.link.external_user_id
         if not external_user_id or external_user_id == OUTSIDERS_LINK_USER:
             return None
-        private = (
-            await self.conversation_link_repository.find_latest_dm_link_for_person(
-                platform=target.surface.surface_type.value,
-                external_user_id=external_user_id,
-                surface_ids=[target.surface.id],
+        candidates = await self.conversation_link_repository.latest_dm_links_for_person(
+            platform=target.surface.surface_type.value,
+            external_user_id=external_user_id,
+            surface_ids=[target.surface.id],
+            limit=_PRIVATE_THREADS_CHECKED,
+        )
+        for private in candidates:
+            conversation = await agent_conversations.surface_conversation(
+                self.uow, private.conversation_id
             )
-        )
-        if private is None:
-            return None
-        conversation = await agent_conversations.surface_conversation(
-            self.uow, private.conversation_id
-        )
-        if conversation is None or conversation.pod_id != target.pod_id:
-            return None
-        return private
+            if conversation is not None and conversation.pod_id == target.pod_id:
+                return private
+        return None
 
     async def _answers_lemma_message(self, link: AgentSurfaceConversationLink) -> bool:
         """Whether what goes out now answers a message typed in Lemma.

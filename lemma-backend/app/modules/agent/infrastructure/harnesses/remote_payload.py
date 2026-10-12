@@ -462,7 +462,7 @@ def _render_history(messages: Sequence[Message]) -> str:
     return "\n\n".join(lines)
 
 
-def _user_turn_text(message: Message) -> str:
+def _user_turn_text(message: Message, *, with_roster: bool = True) -> str:
     """Everything the surface knows about one user message.
 
     A user turn carries more than its text: who sent it, what it quotes, which
@@ -473,7 +473,7 @@ def _user_turn_text(message: Message) -> str:
     reply, and no sign of the files already in the datastore -- reading as though
     the agent had ignored the attachment. One builder now serves both paths.
     """
-    body = user_prompt_text(message)
+    body = user_prompt_text(message, with_roster=with_roster)
     attachments = (message.metadata or {}).get("attachments")
     if isinstance(attachments, list) and attachments:
         body += f"\n\nAttachments: {json.dumps(to_json_value(attachments))}"
@@ -542,7 +542,7 @@ def _message_text(message: Message) -> str:
             f"{_history_tool_result(message.tool_result)}"
         )
     elif message.role == MessageRole.USER:
-        return _user_turn_text(message)
+        return _user_turn_text(message, with_roster=False)
     else:
         body = message.text or ""
     metadata = message.metadata or {}

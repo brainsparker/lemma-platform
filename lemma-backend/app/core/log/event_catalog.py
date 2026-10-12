@@ -334,6 +334,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.ingress_service.agent_surface_resolved_user_not.observed': EventSpec('debug', frozenset({'internal_user_id', 'pod_id', 'surface_type'})),
     'agent_surfaces.ingress_service.attachment_ingest_failed.degraded': EventSpec('warning', frozenset({'error_type', 'surface_id'})),
     'agent_surfaces.ingress_service.clear_stale_surface_default_user.diagnostic': EventSpec('debug', frozenset({'user_id'})),
+    'agent_surfaces.ingress_service.group_roster_failed.degraded': EventSpec('warning', frozenset({'conversation_id', 'error_type'})),
     'agent_surfaces.ingress_service.inbound_enrichment_failed.degraded': EventSpec('warning', frozenset({'failure_type', 'provider_error', 'status_code', 'surface_type'})),
     'agent_surfaces.ingress_service.inbound_message_empty.degraded': EventSpec('warning', frozenset({'conversation_id', 'platform'})),
     'agent_surfaces.ingress_service.interaction_submitter_refused.degraded': EventSpec('warning', frozenset({'conversation_id', 'external_user_id'})),

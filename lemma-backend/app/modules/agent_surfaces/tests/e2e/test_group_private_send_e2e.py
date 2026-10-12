@@ -113,10 +113,12 @@ async def _tool_result(scenario, conversation_id: UUID, tool_call_id: str) -> di
         pod_id=scenario.pod_id,
         conversation_id=str(conversation_id),
     )
+    # The call and its result share the id; only the result carries one.
     raw = next(
         message["tool_result"]
         for message in messages
         if message.get("tool_call_id") == tool_call_id
+        and message.get("tool_result") is not None
     )
     return raw if isinstance(raw, dict) else json.loads(raw)
 

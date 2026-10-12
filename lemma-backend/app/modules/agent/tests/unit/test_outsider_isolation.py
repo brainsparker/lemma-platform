@@ -388,3 +388,44 @@ def test_a_run_with_no_roster_is_told_nothing_about_who_is_here():
     """A stranger's run is handed none (``agent_surfaces.services.group_log``)."""
     assert _participants_block({}) is None
     assert _participants_block({"channel_participants": []}) is None
+
+
+def test_somebody_with_no_name_is_counted_and_never_named_by_their_number():
+    """The log's fallback for a nameless WhatsApp speaker is their phone number,
+    and the answer is posted in front of the group -- so they are counted."""
+    notice = _participants_block(
+        {
+            "channel_participants": [
+                {"name": "", "in_pod": False},
+                {"name": "", "in_pod": False},
+                {"name": "Asha", "in_pod": True},
+            ]
+        }
+    )
+
+    assert notice is not None
+    assert "2 people with no name shown are not in this pod" in notice
+    assert '"Asha" is in this pod' in notice
+
+
+def test_the_roster_is_for_judging_the_answer_not_for_reciting():
+    notice = _participants_block(
+        {"channel_participants": [{"name": "Tom", "in_pod": False}]}
+    )
+
+    assert notice is not None
+    assert "do not tell the group who is or is not in this pod" in notice
+
+
+def test_a_turn_replayed_as_history_carries_no_roster():
+    """Who is in a group is what it is now; an old turn's roster could still
+    name somebody since removed from the pod as a member."""
+    message = SimpleNamespace(
+        text="earlier question",
+        metadata={"channel_participants": [{"name": "Tom", "in_pod": True}]},
+    )
+
+    assert "WHO ELSE IS IN THIS CHAT" in user_prompt_text(message)
+    assert "WHO ELSE IS IN THIS CHAT" not in user_prompt_text(
+        message, with_roster=False
+    )

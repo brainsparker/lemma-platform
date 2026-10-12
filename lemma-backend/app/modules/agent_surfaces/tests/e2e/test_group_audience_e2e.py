@@ -84,6 +84,7 @@ async def test_a_members_turn_in_a_mixed_group_is_told_who_reads_it_and_not_show
                 text="@lemmabot what's our margin on this deal?",
                 message_id=403,
                 sender_id=MEMBER_TELEGRAM_ID,
+                first_name="Arjun",
             ),
             headers={},
         ),
@@ -99,10 +100,12 @@ async def test_a_members_turn_in_a_mixed_group_is_told_who_reads_it_and_not_show
     assert "Tom" in carried
     # Who else is in the room, and which of them hold access to this pod: the
     # run acts with the member's access and its answer is posted where all of
-    # them read it.
+    # them read it. The asker is not "else", so Arjun is not on it. (The
+    # requests are recorded as JSON, so a quoted name arrives escaped.)
     assert "WHO ELSE IS IN THIS CHAT" in carried
-    assert '"Arjun" is in this pod' in carried
-    assert '"Tom" is not in this pod' in carried
+    assert r"\"Tom\" is not in this pod" in carried
+    assert r"\"Arjun\" is in this pod" not in carried
+    assert "do not tell the group who is or is not in this pod" in carried
 
 
 async def test_an_email_with_an_outside_cc_tells_the_run_who_reads_the_reply(

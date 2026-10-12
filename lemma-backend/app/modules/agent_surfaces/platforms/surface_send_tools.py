@@ -14,6 +14,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
+from app.modules.agent_surfaces.services.private_message import PrivateSend
 from app.modules.agent_surfaces.services.surface_display_delivery import (
     deliver_surface_message_to_surface,
 )
@@ -39,7 +40,8 @@ def build_surface_send_toolset(
         interim result) rather than waiting for your final reply. It reaches
         that person alone and never the group: in a group chat it goes to their
         own chat with you, and if they have never had one it is not sent at all
-        -- put anything for everybody in your reply instead.
+        -- put anything for everybody in your reply instead. On an email thread
+        it goes to the sender only, without the people copied on it.
         """
         conversation_id = getattr(ctx.deps, "conversation_id", None)
         if conversation_id is None:
@@ -58,13 +60,9 @@ def build_surface_send_toolset(
             tool="surface_send_message",
             failure=None,
         )
-        if sent is None:
-            return SurfaceSendMessageResult(
-                success=False, message="Could not deliver the message."
-            )
-        if sent:
+        if sent is PrivateSend.SENT:
             return SurfaceSendMessageResult(success=True, message=None)
-        if getattr(ctx.deps, "surface_conversation_kind", None) == "CHANNEL":
+        if sent is PrivateSend.NO_PRIVATE_CHAT:
             return SurfaceSendMessageResult(
                 success=False,
                 message=(
@@ -74,8 +72,10 @@ def build_surface_send_toolset(
                     "Say it in your reply if everybody may read it."
                 ),
             )
+        # Failed, not missing: whether they have a private chat is unknown here,
+        # so the run is not told they lack one.
         return SurfaceSendMessageResult(
-            success=False, message="No reachable surface for this conversation."
+            success=False, message="Could not deliver the message."
         )
 
     return FunctionToolset[ConversationContext](tools=[surface_send_message])

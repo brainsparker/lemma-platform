@@ -12,6 +12,10 @@ ever answered to. A member who has never had one is not reached at all, because
 a bot cannot open a chat and the group is not a fallback -- the run's reply is
 the group's answer, and this is the aside.
 
+An email thread with other people on it is a group as well, but one whose
+thread can still be answered privately: the aside goes to the sender on the same
+thread, without the copies a reply-all would carry.
+
 The other direction from :class:`SurfaceEgress`, which answers the thread that
 was spoken in; the sibling of :class:`MemberReach`, which reaches a named person
 on a named surface. This one has a conversation and wants the person in it.
@@ -19,6 +23,7 @@ on a named surface. This one has a conversation and wants the person in it.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from uuid import UUID
 
 from app.core.log.log import get_logger
@@ -30,25 +35,50 @@ logger = get_logger(__name__)
 _GROUP_CONVERSATION_KIND = "CHANNEL"
 
 
+class PrivateSend(StrEnum):
+    """What became of a word for one person.
+
+    Two ways of not sending are kept apart because the run is told different
+    things: a member with no private chat will never be reached this way, and
+    the run should say it in its reply; a send that failed says nothing about
+    whether they have one.
+    """
+
+    SENT = "sent"
+    NO_PRIVATE_CHAT = "no_private_chat"
+    NOT_DELIVERED = "not_delivered"
+
+
+def _outcome(delivered: bool) -> PrivateSend:
+    return PrivateSend.SENT if delivered else PrivateSend.NOT_DELIVERED
+
+
 class PrivateMessage:
     """The current conversation's user, privately, on their surface."""
 
     def __init__(self, *, egress: SurfaceEgress) -> None:
         self.egress = egress
 
-    async def send(self, *, conversation_id: UUID, message: str) -> bool:
-        """Deliver to this conversation's user, or say that nobody was reached.
+    async def send(self, *, conversation_id: UUID, message: str) -> PrivateSend:
+        """Deliver to this conversation's user, or say why nobody was reached.
 
-        ``False`` is not "the surface is down": it is also the answer for a
-        group member with no private chat to receive it in, which is why the
-        caller has to read it rather than assume the message went somewhere.
+        A group member with no private chat to receive it in is
+        ``NO_PRIVATE_CHAT``, apart from a send that failed: the caller tells
+        the run which, rather than letting it assume the message went somewhere.
         """
         target = await self.egress.delivery.resolve_egress_target(conversation_id)
         if target is None:
-            return False
+            return PrivateSend.NOT_DELIVERED
         if target.link.conversation_kind != _GROUP_CONVERSATION_KIND:
-            return await self.egress.send_agent_message_for_conversation(
-                conversation_id=conversation_id, message=message
+            # An email thread with other people on it is a group too, but one
+            # that can be answered privately: the same thread, to the sender
+            # alone, without the copies a reply-all carries.
+            return _outcome(
+                await self.egress.send_agent_message_for_conversation(
+                    conversation_id=conversation_id,
+                    message=message,
+                    sender_only=target.copies_others,
+                )
             )
         private = await self.egress.delivery.private_thread_for(target)
         if private is None:
@@ -57,7 +87,9 @@ class PrivateMessage:
                 conversation_id=str(conversation_id),
                 platform=target.surface.surface_type.value,
             )
-            return False
-        return await self.egress.send_agent_message_for_conversation(
-            conversation_id=private.conversation_id, message=message
+            return PrivateSend.NO_PRIVATE_CHAT
+        return _outcome(
+            await self.egress.send_agent_message_for_conversation(
+                conversation_id=private.conversation_id, message=message
+            )
         )

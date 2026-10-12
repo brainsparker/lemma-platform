@@ -217,11 +217,19 @@ class TestSignedUrlServing:
             assert ok.status_code == status.HTTP_200_OK, ok.text
             assert ok.content == content
 
-        # One past the cap → 410 Gone (and the link is burned)…
-        gone = await async_client.get(f"/public/s/{code}")
-        assert gone.status_code == status.HTTP_410_GONE
+        # One past the cap → 410 Gone (and the link is burned), and it keeps
+        # saying so while what the last open embeds may still load…
+        for _ in range(2):
+            gone = await async_client.get(f"/public/s/{code}")
+            assert gone.status_code == status.HTTP_410_GONE
 
-        # …then the burned code is simply unknown → 404.
+        # …then, once that entry lapses, the burned code is simply unknown → 404.
+        from app.modules.datastore.services.files.signed_url import (
+            get_signed_url_store,
+        )
+
+        store = get_signed_url_store()
+        await (await store._get_redis()).delete(store._key(code))
         after = await async_client.get(f"/public/s/{code}")
         assert after.status_code == status.HTTP_404_NOT_FOUND
 

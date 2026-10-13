@@ -19,6 +19,7 @@ from app.modules.agent.domain.agent_host import (
     effective_agent_host_status,
 )
 from app.modules.agent.domain.runtime_profiles import (
+    DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
     RuntimeProfileScope,
     AgentRuntimeProfile,
     RuntimeProfileKind,
@@ -175,7 +176,7 @@ class AgentRuntimeProfileService:
         description: str | None = None,
         default_model_name: str | None = None,
         config_selections: JsonObject | None = None,
-        host_wait_timeout_seconds: int = 300,
+        host_wait_timeout_seconds: int = DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
     ) -> AgentRuntimeProfile:
         """Bind a runtime profile to one harness on one paired Agent Host."""
         return await self.creation.create_agent_host_profile(

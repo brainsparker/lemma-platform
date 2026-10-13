@@ -192,6 +192,11 @@ class AnthropicCompatibleRuntimeConfig(BaseModel):
     model_settings: JsonObject = Field(default_factory=dict)
 
 
+#: How long a dispatched Agent Host run waits for its computer to take it,
+#: when the profile does not say.
+DEFAULT_HOST_WAIT_TIMEOUT_SECONDS = 300
+
+
 class HarnessRuntimeConfig(BaseModel):
     """Everything an Agent Host run needs beyond the harness binding itself.
 
@@ -202,7 +207,9 @@ class HarnessRuntimeConfig(BaseModel):
 
     harness_snapshot_revision: str = Field(min_length=1)
     config_selections: JsonObject = Field(default_factory=dict)
-    host_wait_timeout_seconds: int = Field(default=300, ge=1)
+    host_wait_timeout_seconds: int = Field(
+        default=DEFAULT_HOST_WAIT_TIMEOUT_SECONDS, ge=1
+    )
 
 
 RuntimeProfileConfig = (

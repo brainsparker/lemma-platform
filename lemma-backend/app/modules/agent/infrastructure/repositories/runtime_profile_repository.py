@@ -155,6 +155,10 @@ class AgentRuntimeProfileRepository:
     def _to_model(self, entity: AgentRuntimeProfile) -> AgentRuntimeProfileModel:
         return self._apply_entity(
             AgentRuntimeProfileModel(
+                # The id the caller built the entity with is the row's id: one
+                # assigned here instead would leave the caller holding an id
+                # that names nothing.
+                id=UUID(entity.id),
                 organization_id=entity.organization_id,
                 user_id=entity.user_id,
                 harness_id=entity.harness_id,

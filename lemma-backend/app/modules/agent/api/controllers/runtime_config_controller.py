@@ -34,6 +34,7 @@ from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import effective_agent_host_status
 from app.modules.agent.domain.organization_default import organization_default_of
 from app.modules.agent.domain.runtime_profiles import (
+    DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
     RuntimeProfileScope,
     RuntimeProfileStatus,
 )
@@ -249,6 +250,9 @@ async def create_runtime_profile(
             description=data.description,
             default_model_name=data.default_model_name,
             config_selections=data.config_selections,
+            host_wait_timeout_seconds=(
+                data.host_wait_timeout_seconds or DEFAULT_HOST_WAIT_TIMEOUT_SECONDS
+            ),
         )
     elif isinstance(data, CreateOpenAICompatibleRuntimeProfileRequest):
         profile = await service.create_openai_compatible_profile(

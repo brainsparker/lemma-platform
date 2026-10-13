@@ -34,6 +34,7 @@ from app.modules.agent.domain.agent_host_selections import (
 )
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
+    DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
     with_reasoning_declared,
     checked_profile,
     AnthropicCompatibleRuntimeConfig,
@@ -132,7 +133,7 @@ class RuntimeProfileCreation:
         description: str | None = None,
         default_model_name: str | None = None,
         config_selections: JsonObject | None = None,
-        host_wait_timeout_seconds: int = 300,
+        host_wait_timeout_seconds: int = DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
     ) -> AgentRuntimeProfile:
         """Bind a runtime profile to one harness on one paired Agent Host.
 

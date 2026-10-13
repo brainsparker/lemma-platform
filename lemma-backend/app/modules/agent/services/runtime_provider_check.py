@@ -17,7 +17,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-import httpx
+import httpx2
 from pydantic_ai.direct import model_request
 from pydantic_ai.exceptions import (
     ModelAPIError,
@@ -193,12 +193,14 @@ async def _answer_one_message(
         if exc.status_code in _KEY_REJECTED_STATUSES:
             raise _CheckFailed(discovery.key_rejected_message(profile.name)) from exc
         raise _CheckFailed(_did_not_answer_message(resolved)) from exc
-    except (TimeoutError, httpx.TimeoutException) as exc:
+    except (TimeoutError, httpx2.TimeoutException) as exc:
         _log_failure(resolved, exc)
         raise _CheckFailed(_unreachable_message(profile.name, None)) from exc
-    except (ModelAPIError, UnexpectedModelBehavior, httpx.HTTPError) as exc:
+    except (ModelAPIError, UnexpectedModelBehavior, httpx2.HTTPError) as exc:
         # Anything else the provider or its SDK raises -- a refused connection
         # wrapped in the SDK's own error type, a response it could not parse.
+        # `httpx2`, not `httpx`: the completion goes through the provider SDK's
+        # client, and neither stack's errors subclass the other's.
         # Logged in full here; the person gets a fixed sentence, never the
         # provider's text.
         _log_failure(resolved, exc)

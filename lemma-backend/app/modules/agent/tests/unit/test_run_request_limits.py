@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
-import httpx
+import httpx2
 import pytest
 from pydantic_ai.messages import ModelMessage, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
@@ -135,7 +135,7 @@ async def test_a_request_retried_after_a_drop_is_counted_once() -> None:
         attempts.append(1)
         if len(attempts) == 1:
             yield "half an answer"
-            raise httpx.ReadError("connection reset by peer")
+            raise httpx2.ReadError("connection reset by peer")
         yield "the answer"
 
     spend = _spend(agent_settings.agent_run_budget_model_requests)

@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
+import httpx2
 import pytest
 
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
@@ -28,9 +29,9 @@ pytestmark = pytest.mark.unit
 
 def _refused(url: str) -> Exception:
     """What the OpenAI SDK raises when nothing listens: its own wrapper around
-    httpx's `ConnectError`."""
-    request = httpx.Request("POST", url)
-    cause = httpx.ConnectError("All connection attempts failed", request=request)
+    httpx2's `ConnectError`."""
+    request = httpx2.Request("POST", url)
+    cause = httpx2.ConnectError("All connection attempts failed", request=request)
 
     class APIConnectionError(Exception):
         pass
@@ -65,6 +66,15 @@ class TestLocalModelServerDown:
 
         assert message.startswith("Ollama isn't running on this computer.")
         assert "kept dropping" not in message
+
+    def test_a_refused_loopback_on_the_httpx_stack_is_named_too(self) -> None:
+        """Tools and other callers still raise `httpx`, not `httpx2`."""
+        request = httpx.Request("POST", "http://127.0.0.1:11434/v1/chat/completions")
+        refused = httpx.ConnectError("refused", request=request)
+
+        assert local_model_server_down_message(refused) == (
+            "Ollama isn't running on this computer. Start it, then send again."
+        )
 
     def test_a_remote_provider_is_not_called_a_local_server(self) -> None:
         assert (

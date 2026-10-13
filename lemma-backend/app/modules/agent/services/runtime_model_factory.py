@@ -6,6 +6,9 @@ no keep-alive reuse across a conversation's many model requests, a new TLS
 handshake per turn, and a pool that was never closed. Half-open sockets left
 behind by that churn are a plausible source of the mid-stream ``ReadError``s the
 harness now has to recover from, so this is the other half of that fix.
+
+The pool is an ``httpx2`` client, not an ``httpx`` one: both provider SDKs are
+built on ``httpx2``, and the anthropic SDK refuses an ``httpx`` client outright.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ from collections.abc import Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from dataclasses import replace
 
-import httpx
+import httpx2
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionStreamOptionsParam
 from pydantic import ConfigDict, TypeAdapter, with_config
@@ -41,12 +44,12 @@ logger = get_logger(__name__)
 
 # Bounded. Keyed per runtime profile, so on a multi-tenant deployment the key
 # space grows with the customer list and nothing ever removed an entry -- and
-# each entry pins an httpx.AsyncClient with its own connection pool. The cap is
+# each entry pins an httpx2.AsyncClient with its own connection pool. The cap is
 # generous because eviction costs a reconnect, not a correctness problem; it
 # exists so the ceiling is a number somebody chose.
 _MAX_PROVIDER_CLIENTS = 256
 
-_provider_clients: BoundedDict[str, httpx.AsyncClient] = BoundedDict(
+_provider_clients: BoundedDict[str, httpx2.AsyncClient] = BoundedDict(
     _MAX_PROVIDER_CLIENTS,
     name="agent.provider_clients",
     touch_on_get=True,
@@ -77,7 +80,7 @@ def provider_model_settings(
     )
 
 
-def _close_later(client: httpx.AsyncClient) -> None:
+def _close_later(client: httpx2.AsyncClient) -> None:
     """Close an evicted client on the loop, if there is one to close it on."""
     try:
         loop = asyncio.get_running_loop()
@@ -88,7 +91,7 @@ def _close_later(client: httpx.AsyncClient) -> None:
     task.add_done_callback(_closing_clients.discard)
 
 
-async def _aclose_quietly(client: httpx.AsyncClient) -> None:
+async def _aclose_quietly(client: httpx2.AsyncClient) -> None:
     try:
         await client.aclose()
     except Exception:  # pragma: no cover - eviction is best-effort
@@ -114,36 +117,36 @@ def _client_cache_key(protocol: str, base_url: str, profile_id: str | None) -> s
 def _no_cookies() -> CookieJar:
     """A jar that stores nothing, so a pool shared across runs shares no state.
 
-    A provider or the gateway in front of it may set cookies, and httpx keeps
+    A provider or the gateway in front of it may set cookies, and httpx2 keeps
     them for the client's life and sends them on every later request -- from
     whichever run uses the pool next.
     """
     return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))
 
 
-def _build_provider_client() -> httpx.AsyncClient:
+def _build_provider_client() -> httpx2.AsyncClient:
     # Limits belong to the transport, not to the client. `AsyncClient._init_transport`
     # returns a transport passed to it *before* it ever looks at `limits`, so a
     # `limits=` beside a custom `transport=` is accepted and silently discarded:
-    # this pool ran on httpx's defaults (20 keepalive, 5s expiry) while the
+    # this pool ran on the library's defaults (20 keepalive, 5s expiry) while the
     # settings said 100 and 30, and `agent_model_http_max_connections` did
     # nothing at all. Building the base transport here is what makes the setting
     # real. Retries belong to the metered model boundary so each dispatch
     # receives spending authority before reaching this transport.
-    pooled = httpx.AsyncHTTPTransport(
-        limits=httpx.Limits(
+    pooled = httpx2.AsyncHTTPTransport(
+        limits=httpx2.Limits(
             max_connections=agent_settings.agent_model_http_max_connections,
             max_keepalive_connections=agent_settings.agent_model_http_max_connections,
             keepalive_expiry=30.0,
         ),
     )
-    return httpx.AsyncClient(
+    return httpx2.AsyncClient(
         # Split timeouts: the read timeout is per-chunk, so it is the "provider
         # has gone away" threshold rather than a budget for the whole turn — a
         # long tool-using answer streams for minutes without tripping it. What
         # it therefore cannot see is a provider that keeps sending *something*
         # forever, which is what the stream budget outside it is for.
-        timeout=httpx.Timeout(
+        timeout=httpx2.Timeout(
             connect=agent_settings.agent_model_http_connect_timeout_seconds,
             read=agent_settings.agent_model_http_read_timeout_seconds,
             write=30.0,
@@ -162,7 +165,7 @@ def _build_provider_client() -> httpx.AsyncClient:
 
 def get_provider_http_client(
     *, protocol: str, base_url: str, profile_id: str | None
-) -> httpx.AsyncClient:
+) -> httpx2.AsyncClient:
     """The shared client for one provider endpoint, created on first use.
 
     It holds no credential and no header: pass those to the SDK client built
@@ -294,9 +297,7 @@ def _unmetered_model_from_runtime_profile(
             api_key=api_key or "EMPTY",
             default_headers=default_headers,
             # Disable SDK retries: each attempt must pass through metering.
-            # OpenAI 3.x types its client as httpx2; our shared httpx client is
-            # also used by Anthropic and implements the same client interface.
-            http_client=get_provider_http_client(  # type: ignore[arg-type]
+            http_client=get_provider_http_client(
                 protocol="openai", base_url=base_url, profile_id=profile_id
             ),
             max_retries=0,

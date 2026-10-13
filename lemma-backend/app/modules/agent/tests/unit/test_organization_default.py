@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
-import httpx
+import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
@@ -335,9 +335,9 @@ class TestTestingASavedProvider:
 
     async def test_a_refused_local_completion_names_the_server(self) -> None:
         def refuse() -> ModelResponse:
-            raise httpx.ConnectError(
+            raise httpx2.ConnectError(
                 "refused",
-                request=httpx.Request("POST", "http://127.0.0.1:1234/v1/chat"),
+                request=httpx2.Request("POST", "http://127.0.0.1:1234/v1/chat"),
             )
 
         result = await _check(_provider_that(answers=refuse), name="Studio")

@@ -1,7 +1,7 @@
 """A dropped model stream must not end the conversation run.
 
-Production loses ~20 runs a week to `httpx.ReadError` raised while iterating the
-provider's SSE stream: the request was accepted, the connection died mid-answer,
+Runs were lost to a `ReadError` raised while iterating the provider's SSE
+stream: the request was accepted, the connection died mid-answer,
 and the exception unwound past the graph into the harness catch-all. These tests
 pin the recovery — and, just as importantly, that recovering does not duplicate
 the half-written response the user already saw.
@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
-import httpx
+import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
@@ -35,7 +35,7 @@ def _drop_then_succeed(drop_after: str, final: str, attempts: list[int]):
         attempts.append(1)
         if len(attempts) == 1:
             yield drop_after
-            raise httpx.ReadError("connection reset by peer")
+            raise httpx2.ReadError("connection reset by peer")
         yield final
 
     return stream_fn
@@ -55,10 +55,10 @@ def _budget_expiry_then_succeed(final: str, attempts: list[int]):
         attempts.append(1)
         if len(attempts) == 1:
             yield "a trickle "
-            raise httpx.ReadTimeout(
+            raise httpx2.ReadTimeout(
                 "Model stream abandoned after 300.0s: "
                 "the provider stopped making progress.",
-                request=httpx.Request("POST", "https://provider.example/v1/chat"),
+                request=httpx2.Request("POST", "https://provider.example/v1/chat"),
             )
         yield final
 
@@ -265,7 +265,7 @@ async def test_the_retry_does_not_replay_the_truncated_response(monkeypatch) -> 
         )
         if len(attempts) == 1:
             yield "half a sentence that gets"
-            raise httpx.ReadError("connection reset by peer")
+            raise httpx2.ReadError("connection reset by peer")
         yield "a whole answer"
 
     await _run_harness(
@@ -332,7 +332,7 @@ async def test_a_retry_never_re_executes_a_completed_tool(monkeypatch) -> None:
         # Second model request — the one that drops the first time it runs.
         if len(attempts) == 2:
             yield "partial"
-            raise httpx.ReadError("connection reset by peer")
+            raise httpx2.ReadError("connection reset by peer")
         yield "done"
 
     monkeypatch.setattr(
@@ -424,12 +424,12 @@ async def test_retrying_stops_at_the_configured_attempt_ceiling(monkeypatch) -> 
         del messages, info
         attempts.append(1)
         yield "x"
-        raise httpx.ReadError("connection reset by peer")
+        raise httpx2.ReadError("connection reset by peer")
 
     monkeypatch.setattr(
         harness_module.agent_settings, "agent_model_stream_max_attempts", 3
     )
-    with pytest.raises(httpx.ReadError):
+    with pytest.raises(httpx2.ReadError):
         await _run_harness(
             FunctionModel(stream_function=always_drops), monkeypatch=monkeypatch
         )
@@ -445,12 +445,12 @@ async def test_retrying_can_be_disabled(monkeypatch) -> None:
         del messages, info
         attempts.append(1)
         yield "x"
-        raise httpx.ReadError("boom")
+        raise httpx2.ReadError("boom")
 
     monkeypatch.setattr(
         harness_module.agent_settings, "agent_model_stream_max_attempts", 1
     )
-    with pytest.raises(httpx.ReadError):
+    with pytest.raises(httpx2.ReadError):
         await _run_harness(
             FunctionModel(stream_function=always_drops), monkeypatch=monkeypatch
         )
@@ -467,7 +467,7 @@ async def test_a_stop_request_wins_over_a_pending_retry(monkeypatch) -> None:
         del messages, info
         attempts.append(1)
         yield "x"
-        raise httpx.ReadError("boom")
+        raise httpx2.ReadError("boom")
 
     async def stop_now() -> bool:
         return True

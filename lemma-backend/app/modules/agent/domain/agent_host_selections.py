@@ -60,8 +60,7 @@ def validate_agent_host_selections(
         # rule sets that disagreed, so a profile could save and then fail on
         # its first run. Plan mode, which the host publishes, is a choice a
         # person may make.
-        allowed_values = _agent_host_option_values(option.get("options"))
-        if allowed_values and value not in allowed_values:
+        if not _option_accepts(option, value):
             raise RuntimeProfileValidationError(
                 f"Invalid value for Agent Host configuration selection: {key}"
             )
@@ -125,8 +124,7 @@ def carry_agent_host_selections(
         option_category = str(option.get("category") or "").strip()
         if option_category == "model":
             continue
-        allowed_values = _agent_host_option_values(option.get("options"))
-        if allowed_values and value not in allowed_values:
+        if not _option_accepts(option, value):
             continue
         carried[normalized_key] = value
     return carried
@@ -154,6 +152,35 @@ def carry_agent_host_model(
         )
     except ValueError:
         return None
+
+
+_SCALAR_TYPES: tuple[type, ...] = (bool, int, float, str)
+
+
+def _option_accepts(option: dict[str, object], value: object) -> bool:
+    """Whether ``value`` is one the harness published for ``option``.
+
+    An enumerated option takes a member. One with no enumeration -- a free
+    text field such as a working directory -- used to take anything at all, a
+    nested object or a list forwarded to the host as a setting. It now takes a
+    scalar, of the same type as the value the harness reports it holds when it
+    reports one.
+    """
+    allowed_values = _agent_host_option_values(option.get("options"))
+    if allowed_values:
+        return value in allowed_values
+    if not isinstance(value, _SCALAR_TYPES):
+        return False
+    current = option.get("current_value")
+    if not isinstance(current, _SCALAR_TYPES):
+        return True
+    # bool is an int; a toggle must not take 3, nor a number True.
+    return type(value) is type(current) or (
+        not isinstance(value, bool)
+        and not isinstance(current, bool)
+        and isinstance(value, int | float)
+        and isinstance(current, int | float)
+    )
 
 
 def _agent_host_option_values(raw_options: object) -> list[object]:

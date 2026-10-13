@@ -106,6 +106,57 @@ def test_a_selection_may_be_keyed_by_category_instead_of_id():
     ) == {"workdir": "/repo"}
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param({"nested": "object"}, id="object"),
+        pytest.param(["a", "list"], id="list"),
+        pytest.param(None, id="null"),
+    ],
+)
+def test_an_option_without_an_enumeration_takes_only_a_scalar(value: object):
+    """Nothing was published to check membership against, and anything at all
+    used to be saved and forwarded to the host as the setting."""
+    options = [{"id": "workdir", "category": "workdir", "options": []}]
+
+    with pytest.raises(ValueError, match="Invalid value"):
+        validate_agent_host_selections(
+            config_options=options, selections={"workdir": value}
+        )
+    assert (
+        carry_agent_host_selections(
+            config_options=options, selections={"workdir": value}
+        )
+        == {}
+    )
+
+
+@pytest.mark.parametrize(
+    ("current", "value", "accepted"),
+    [
+        pytest.param(True, False, True, id="toggle takes a bool"),
+        pytest.param(True, 1, False, id="toggle refuses a number"),
+        pytest.param(30, True, False, id="number refuses a bool"),
+        pytest.param(30, 45.5, True, id="number takes a number"),
+        pytest.param("auto", 3, False, id="text refuses a number"),
+    ],
+)
+def test_an_unenumerated_value_matches_the_type_the_harness_reports(
+    current: object, value: object, accepted: bool
+):
+    options = [{"id": "knob", "category": "knob", "current_value": current}]
+
+    if accepted:
+        assert validate_agent_host_selections(
+            config_options=options, selections={"knob": value}
+        ) == {"knob": value}
+    else:
+        with pytest.raises(ValueError, match="Invalid value"):
+            validate_agent_host_selections(
+                config_options=options, selections={"knob": value}
+            )
+
+
 class TestValidateAgentHostModel:
     def test_none_stays_none(self):
         assert validate_agent_host_model(config_options=[], model_name=None) is None

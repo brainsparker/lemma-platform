@@ -127,6 +127,8 @@ def _coordinator(conversation: Conversation):
         get_active_agent_run_for_update=AsyncMock(return_value=None),
         create_agent_run=AsyncMock(return_value=created),
         append_message=AsyncMock(side_effect=append_message),
+        # No pause is open, so nothing holds the message back.
+        pausing_calls_decided_awaiting_a_return=AsyncMock(return_value=[]),
     )
     agents = SimpleNamespace(
         get=AsyncMock(return_value=SimpleNamespace(name="lem", kind=None))
@@ -143,8 +145,13 @@ def _coordinator(conversation: Conversation):
         ),
         SimpleNamespace(),
         None,
+        runtime_check=_runtime_is_available,
     )
     return coordinator, repository
+
+
+async def _runtime_is_available(*_args: object, **_kwargs: object) -> None:
+    """These tests are about the message's stamp, not the model it runs on."""
 
 
 def _conversation(metadata: dict) -> Conversation:

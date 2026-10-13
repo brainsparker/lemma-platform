@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 171 |
+| `covered` | 172 |
 | `gap` | 3 |
 | `manual` | 24 |
-| `planned` | 19 |
+| `planned` | 23 |
 | `withdrawn` | 0 |
-| **total** | **217** |
+| **total** | **222** |
 
-Scenario tests declaring a promise: 432.
+Scenario tests declaring a promise: 440.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 244 | 308 |
+| OpenAPI operations | 248 | 313 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -79,6 +79,10 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-AGENT-031` An agent can show a person something interactive | `covered` | `test_an_embed_token_needs_a_real_result` |
 | `PS-AGENT-040` A person pairs a local agent host with their account | `covered` | `test_an_agent_host_can_be_paired_and_revoked`, `test_an_unpaired_host_cannot_claim_anything`, `test_harnesses_of_an_unknown_host_are_refused` |
 | `PS-AGENT-041` Work dispatched to a host runs exactly once | `covered` | `test_dispatched_work_is_claimed_exactly_once`, `test_an_unpaired_host_is_refused` |
+| `PS-AGENT-042` A pod's assistant asks another pod as the person it works for | `planned` | `test_an_assistant_asks_another_pod_as_the_person` |
+| `PS-AGENT-043` A person can see which other pods a pod can ask | `planned` | `test_a_pod_lists_only_the_pods_it_can_ask` |
+| `PS-AGENT-044` Another pod's answer comes back as information, with how the ask ended | `planned` | — |
+| `PS-ACCESS-045` An admin lets another pod ask theirs, sharing only what they choose | `planned` | `test_an_admin_connects_a_pod_sharing_one_table`, `test_a_connection_refuses_to_share_more_than_reading`, `test_only_an_admin_in_both_pods_can_connect`, `test_disconnecting_ends_the_connection` |
 
 ## [Automating work](journeys/automating-work.md)
 
@@ -277,7 +281,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-007` The owner of a Desktop install chats with the shared Telegram bot by sharing their contact | `manual` | — |
 | `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_message_is_answered`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_an_image_is_understood`, `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
-| `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_reaching_the_bot_is_not_membership_of_the_pod`, `test_a_sender_is_the_same_person_on_every_message` |
+| `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_reaching_the_bot_is_not_membership_of_the_pod`, `test_a_members_handle_alone_does_not_let_anybody_in`, `test_a_sender_is_the_same_person_on_every_message` |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `covered` | `test_a_chat_is_one_conversation`, `test_a_separate_chat_is_a_separate_conversation`, `test_a_surface_conversation_records_its_origin` |
 | `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
 | `PS-SURF-015` Somebody outside the pod is answered in a group opened to them | `planned` | — |
@@ -330,4 +334,5 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-DATA-042` One person's bulk upload does not stall everyone else | `covered` | `test_backpressure_is_legible`, `test_a_declined_upload_can_be_retried`, `test_a_burst_does_not_starve_another_pod`, `test_every_accepted_upload_survives` |
 | `PS-DATA-043` A person searches what is in their documents | `covered` | `test_documents_are_searchable` |
 | `PS-DATA-050` A person gets a link to a file that works and then stops | `covered` | `test_a_file_has_a_link`, `test_a_signed_link_is_issued` |
+| `PS-DATA-051` A shared page is live and carries what it shows | `covered` | `test_a_shared_page_is_live_and_carries_its_pictures` |
 | `PS-DATA-060` A person sees records change as they change | `covered` | `test_a_new_record_arrives_live`, `test_updates_and_deletions_arrive`, `test_a_stranger_is_sent_nothing`, `test_a_reconnecting_watcher_resumes` |

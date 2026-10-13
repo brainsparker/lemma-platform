@@ -11,8 +11,8 @@ harness now has to recover from, so this is the other half of that fix.
 from __future__ import annotations
 
 import asyncio
-import itertools
 from collections.abc import Mapping
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from dataclasses import replace
 
 import httpx
@@ -38,12 +38,11 @@ from app.modules.agent.services.openai_schema_compat import (
 
 logger = get_logger(__name__)
 
-# Both caches below are bounded. They are keyed by tenant credential, so on a
-# multi-tenant deployment their key space grows with the customer list and
-# nothing ever removed an entry -- and each provider-client entry pins an
-# httpx.AsyncClient with its own connection pool. The cap is generous because
-# eviction costs a reconnect, not a correctness problem; it exists so the
-# ceiling is a number somebody chose.
+# Bounded. Keyed per runtime profile, so on a multi-tenant deployment the key
+# space grows with the customer list and nothing ever removed an entry -- and
+# each entry pins an httpx.AsyncClient with its own connection pool. The cap is
+# generous because eviction costs a reconnect, not a correctness problem; it
+# exists so the ceiling is a number somebody chose.
 _MAX_PROVIDER_CLIENTS = 256
 
 _provider_clients: BoundedDict[str, httpx.AsyncClient] = BoundedDict(
@@ -57,23 +56,6 @@ _provider_clients: BoundedDict[str, httpx.AsyncClient] = BoundedDict(
 # the close is handed to the loop. The set keeps a strong reference until it
 # finishes; without one the task can be collected mid-close.
 _closing_clients: set[asyncio.Task[None]] = set()
-
-
-# Opaque per-process labels standing in for credentials in cache keys. The
-# first version hashed the key instead, which is the wrong shape twice over: a
-# digest of a secret is still derived from the secret (and offline-comparable),
-# and the cache only ever needs to know whether two credentials are the *same*,
-# never anything about them. A counter answers that exactly, and leaves nothing
-# to leak if a key ever reaches a log line or a traceback.
-_credential_labels: BoundedDict[str, str] = BoundedDict(
-    _MAX_PROVIDER_CLIENTS, name="agent.credential_labels", touch_on_get=True
-)
-
-# Monotonic, deliberately not `len(_credential_labels)`. Once the map evicts,
-# its length repeats, so a length-derived label would eventually be handed to a
-# second, different credential -- and two tenants whose labels collide share a
-# client, and therefore an Authorization header. The counter never rewinds.
-_credential_sequence = itertools.count(1)
 
 
 @with_config(ConfigDict(arbitrary_types_allowed=True, extra="allow"))
@@ -92,16 +74,6 @@ def provider_model_settings(
         if settings is not None
         else None
     )
-
-
-def _credential_label(api_key: str | None) -> str:
-    if not api_key:
-        return "anonymous"
-    label = _credential_labels.get(api_key)
-    if label is None:
-        label = f"credential-{next(_credential_sequence)}"
-        _credential_labels[api_key] = label
-    return label
 
 
 def _close_later(client: httpx.AsyncClient) -> None:
@@ -125,19 +97,30 @@ async def _aclose_quietly(client: httpx.AsyncClient) -> None:
         )
 
 
-def _client_cache_key(
-    protocol: str, base_url: str, api_key: str | None, headers: Mapping[str, object]
-) -> str:
-    """Identify an endpoint+credential pair without putting the key in the key.
+def _client_cache_key(protocol: str, base_url: str, profile_id: str | None) -> str:
+    """One pool per endpoint per runtime profile, named by nothing secret.
 
-    Two profiles pointing at the same base URL with different credentials must
-    not share a client — same endpoint, different tenant.
+    The pooled client carries no credential: the API key and the profile's
+    headers ride on the SDK client built over it, request by request, and the
+    pool keeps no cookies. So a key needs no credential in it, nor anything
+    derived from one -- a digest of a secret is still the secret's, to anyone
+    who can guess candidates. The profile keeps one tenant's traffic in its own
+    pool, so a busy tenant cannot take every connection to a shared endpoint.
     """
-    header_sig = ",".join(f"{k}={v}" for k, v in sorted(headers.items()))
-    return f"{protocol}|{base_url}|{_credential_label(api_key)}|{header_sig}"
+    return f"{protocol}|{base_url}|{profile_id or 'unprofiled'}"
 
 
-def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
+def _no_cookies() -> CookieJar:
+    """A jar that stores nothing, so a pool shared across runs shares no state.
+
+    A provider or the gateway in front of it may set cookies, and httpx keeps
+    them for the client's life and sends them on every later request -- from
+    whichever run uses the pool next.
+    """
+    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))
+
+
+def _build_provider_client() -> httpx.AsyncClient:
     # Limits belong to the transport, not to the client. `AsyncClient._init_transport`
     # returns a transport passed to it *before* it ever looks at `limits`, so a
     # `limits=` beside a custom `transport=` is accepted and silently discarded:
@@ -165,7 +148,7 @@ def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
             write=30.0,
             pool=10.0,
         ),
-        headers={str(key): str(value) for key, value in headers.items()},
+        cookies=_no_cookies(),
         transport=ModelStreamBudgetTransport(
             pooled,
             first_chunk_seconds=(
@@ -177,13 +160,17 @@ def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
 
 
 def get_provider_http_client(
-    *, protocol: str, base_url: str, api_key: str | None, headers: Mapping[str, object]
+    *, protocol: str, base_url: str, profile_id: str | None
 ) -> httpx.AsyncClient:
-    """The shared client for one provider endpoint, created on first use."""
-    key = _client_cache_key(protocol, base_url, api_key, headers)
+    """The shared client for one provider endpoint, created on first use.
+
+    It holds no credential and no header: pass those to the SDK client built
+    over it, which sends them with each request.
+    """
+    key = _client_cache_key(protocol, base_url, profile_id)
     client = _provider_clients.get(key)
     if client is None or client.is_closed:
-        client = _build_provider_client(headers)
+        client = _build_provider_client()
         _provider_clients[key] = client
     return client
 
@@ -231,6 +218,32 @@ class _UsageOnlyStreamOptionsChatModel(OpenAIChatModel):
         return {"include_usage": True}
 
 
+def _nonempty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _provider_access(
+    runtime_profile: Mapping[str, object],
+    config: Mapping[str, object],
+    runtime_credentials: Mapping[str, object] | None,
+) -> tuple[str | None, dict[str, str] | None, str | None]:
+    """The key and headers the SDK client sends, and the profile it pools under."""
+    credentials = (
+        runtime_credentials if isinstance(runtime_credentials, Mapping) else {}
+    )
+    headers = config.get("headers")
+    default_headers = (
+        {str(key): str(value) for key, value in headers.items()}
+        if isinstance(headers, Mapping)
+        else None
+    )
+    return (
+        _nonempty_str(credentials.get("api_key")),
+        default_headers or None,
+        _nonempty_str(runtime_profile.get("profile_id")),
+    )
+
+
 def _unmetered_model_from_runtime_profile(
     *,
     runtime_profile: Mapping[str, object] | None,
@@ -267,14 +280,9 @@ def _unmetered_model_from_runtime_profile(
     if not isinstance(config, Mapping):
         return None
 
-    credentials = (
-        runtime_credentials if isinstance(runtime_credentials, Mapping) else {}
+    api_key, default_headers, profile_id = _provider_access(
+        runtime_profile, config, runtime_credentials
     )
-    api_key = credentials.get("api_key")
-    api_key = api_key if isinstance(api_key, str) and api_key else None
-
-    headers = config.get("headers")
-    headers = headers if isinstance(headers, Mapping) else {}
 
     if protocol == "OPENAI_COMPATIBLE":
         base_url = config.get("base_url")
@@ -283,14 +291,12 @@ def _unmetered_model_from_runtime_profile(
         client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key or "EMPTY",
+            default_headers=default_headers,
             # Disable SDK retries: each attempt must pass through metering.
             # OpenAI 3.x types its client as httpx2; our shared httpx client is
             # also used by Anthropic and implements the same client interface.
             http_client=get_provider_http_client(  # type: ignore[arg-type]
-                protocol="openai",
-                base_url=base_url,
-                api_key=api_key,
-                headers=headers,
+                protocol="openai", base_url=base_url, profile_id=profile_id
             ),
             max_retries=0,
         )
@@ -314,11 +320,11 @@ def _unmetered_model_from_runtime_profile(
                 max_retries=0,
                 api_key=api_key,
                 base_url=resolved_base_url,
+                default_headers=default_headers,
                 http_client=get_provider_http_client(
                     protocol="anthropic",
                     base_url=resolved_base_url or "https://api.anthropic.com",
-                    api_key=api_key,
-                    headers=headers,
+                    profile_id=profile_id,
                 ),
             )
         )

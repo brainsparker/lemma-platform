@@ -27,6 +27,7 @@ from app.modules.agent.capabilities.open_notifications import (
 )
 from app.modules.agent.domain.queued_messages import is_queued
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
@@ -35,7 +36,7 @@ from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.infrastructure.agent_host import session_memory
+from app.modules.agent.infrastructure.agent_host import run_resume, session_memory
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostRepositoryError,
 )
@@ -64,6 +65,42 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
 from app.modules.agent.services.workspace_location import resolve_workspace_location
 
 logger = get_logger(__name__)
+
+
+def run_spec_from(
+    payload: JsonObject,
+    *,
+    conversation: Conversation,
+    harness_id: UUID,
+    profile_revision: str,
+    run_config: AgentHostRunConfig,
+    system_prompt: str,
+    system_prompt_delivery: str | None,
+    resume_session_id: str | None,
+    run_deadline: datetime,
+) -> AgentHostRunSpec:
+    """The START_RUN spec for one run, out of its ``run_start_payload``.
+
+    ``context`` stays on the wire, empty: both sides declare it
+    (``tests/fixtures/wire_contract.json``) and the host accepts it absent or
+    empty, but nothing on the host reads it, so nothing is put there. The spec
+    rests in plaintext in the command row and in the host's own journal.
+    """
+    prompt = json_object(payload.get("prompt"))
+    return AgentHostRunSpec(
+        agent_run_id=UUID(str(payload["agent_run_id"])),
+        conversation_id=conversation.id,
+        harness_id=harness_id,
+        profile_revision=profile_revision,
+        model_name=run_config.model_name,
+        config_selections=run_config.config_selections,
+        system_prompt=system_prompt,
+        system_prompt_delivery=system_prompt_delivery,
+        prompt=[{"type": "text", "text": str(prompt.get("user_prompt") or "")}],
+        resume_session_id=resume_session_id,
+        workspace_cwd=resolve_workspace_location(conversation).cwd,
+        run_deadline=run_deadline,
+    )
 
 
 async def refresh_credential[DepsT: AgentContext](
@@ -105,6 +142,11 @@ async def refresh_credential[DepsT: AgentContext](
                 run_id=agent_run_id,
                 encrypted_mcp_payload=encrypted,
             )
+            if command is not None:
+                # Read back only by a worker that reclaims the run.
+                await run_resume.record_credential_expiry(
+                    uow, run_id=agent_run_id, expires_at=token_expires_at(mcp)
+                )
             await uow.commit()
     except (AgentHostRepositoryError, RuntimeError, ValueError, KeyError) as exc:
         logger.warning(
@@ -140,6 +182,13 @@ async def enqueue_run[DepsT: AgentContext](
     agent_run_id: UUID,
     run_config: AgentHostRunConfig,
 ) -> DispatchedRun:
+    resumed = await _resumed_dispatch(
+        uow_factory,
+        agent_run_id=agent_run_id,
+        event_timeout_seconds=event_timeout_seconds,
+    )
+    if resumed is not None:
+        return resumed
     # Resolved first, because it decides what the prompt has to contain: a
     # run that will not even try to resume a session is talking to an agent
     # with no history, so the prompt must carry it.
@@ -224,6 +273,42 @@ async def enqueue_run[DepsT: AgentContext](
 
 
 _ADMISSION_ATTEMPTS = 3
+
+
+async def _resumed_dispatch(
+    uow_factory: UnitOfWorkFactory,
+    *,
+    agent_run_id: UUID,
+    event_timeout_seconds: float,
+) -> DispatchedRun | None:
+    """The dispatch an earlier worker made for this run, if it made one.
+
+    A run is reclaimed with its lease, its START_RUN and its host's journal
+    all in place: dispatching it again could only find the same command, so
+    this hands the consume loop what that dispatch settled instead of
+    building a prompt and minting a credential nobody would use.
+    """
+    async with uow_factory() as uow:
+        point = await run_resume.resume_point(uow, run_id=agent_run_id)
+    if point is None:
+        return None
+    remaining = event_timeout_seconds
+    if point.run_deadline is not None:
+        remaining = (point.run_deadline - datetime.now(timezone.utc)).total_seconds()
+    logger.info(
+        "agent.harnesses.agent_host.dispatch_resumed",
+        agent_run_id=str(agent_run_id),
+        stream_cursor=point.stream_cursor,
+    )
+    return DispatchedRun(
+        harness_key=point.harness_key,
+        event_timeout_seconds=max(remaining, 0.0),
+        credential_bounded=False,
+        credential_expires_at=point.credential_expires_at,
+        steerable=supports_steering(point.harness_capabilities),
+        stream_cursor=point.stream_cursor,
+        resumed=True,
+    )
 
 
 class CarriedChanged(Exception):
@@ -350,24 +435,15 @@ async def _admit[DepsT: AgentContext](
         # First, so a claim that comes back short rolls back before anything
         # else is written; see `claim_exactly`.
         await claim_exactly(uow, agent_run_id=agent_run_id, carried=carried)
-        run_spec = AgentHostRunSpec(
-            agent_run_id=agent_run_id,
-            conversation_id=conversation.id,
+        run_spec = run_spec_from(
+            payload,
+            conversation=conversation,
             harness_id=harness_id,
             profile_revision=admission.config_revision,
-            model_name=run_config.model_name,
-            config_selections=run_config.config_selections,
+            run_config=run_config,
             system_prompt=system_prompt,
             system_prompt_delivery=system_prompt_delivery,
-            prompt=[{"type": "text", "text": str(prompt.get("user_prompt") or "")}],
             resume_session_id=resume_session_id,
-            workspace_cwd=resolve_workspace_location(conversation).cwd,
-            context={
-                "agent": payload.get("agent"),
-                "conversation": payload.get("conversation"),
-                "lemma": payload.get("context"),
-                "session_id": prompt.get("session_id"),
-            },
             run_deadline=dispatched_at + timedelta(seconds=timeout_seconds),
         )
         await AgentHostDispatchRepository(uow).enqueue_run(
@@ -387,6 +463,9 @@ async def _admit[DepsT: AgentContext](
             conversation_id=conversation.id,
             run_id=agent_run_id,
             digest=digest,
+        )
+        await run_resume.record_credential_expiry(
+            uow, run_id=agent_run_id, expires_at=token_expires_at(mcp)
         )
         await uow.commit()
     await poke_host(host_id)

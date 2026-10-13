@@ -37,6 +37,9 @@ from app.modules.agent_surfaces.services.pending_interaction_resume import (
     ResumeOutcome,
     maybe_resume_pending_interaction,
 )
+from app.modules.agent_surfaces.services.attachment_ingest_memo import (
+    AttachmentIngestMemo,
+)
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     IngestedAttachment,
 )
@@ -135,7 +138,7 @@ async def write_inbound_message(
     message_text: str,
     metadata: dict[str, Any],
     uow: SqlAlchemyUnitOfWork,
-):
+) -> list[str]:
     """Persist the inbound message, or resume the run it answers.
 
     Free functions rather than a mixin, and the reason is visible in the
@@ -146,6 +149,10 @@ async def write_inbound_message(
     What went with the mixin is a mode. This used to pick between
     ``self._uow_factory`` and ``self.uow`` and raise ``RuntimeError`` when it had
     neither; the caller opens the scope it wants and hands it over.
+
+    Returns the pauses the new turn cancelled, by tool call id: starting a turn
+    denies every undecided pause on the person's behalf, and their cards are
+    still on screen. Empty when nothing was cancelled.
     """
     if context.pod_id is None:
         raise ValueError("Surface chat context requires a pod")
@@ -162,7 +169,7 @@ async def write_inbound_message(
         ):
             raise ValueError("The onboarding handoff is unavailable")
         if pending.message_committed_at is not None:
-            return None
+            return []
         # This marker commits with transcript persistence and the run's outbox
         # event. A queue retry cannot record or execute the request twice.
         pending.message_committed_at = datetime.now(timezone.utc)
@@ -176,7 +183,7 @@ async def write_inbound_message(
             conversation_id=str(context.conversation_id),
             platform=context.platform,
         )
-        return None
+        return []
     auth_ctx = await create_authorization_data_service(uow).build_user_context(
         user_id=context.user_id,
         pod_id=context.pod_id,
@@ -205,20 +212,34 @@ async def write_inbound_message(
             # there, so saying so and letting them answer again is the one
             # move that loses nothing.
             await _say_the_decision_was_not_recorded(context, uow)
-            return None
+            return []
         if outcome is ResumeOutcome.NOT_A_DECISION:
-            return await agent_conversations.start_surface_turn(
-                uow,
-                conversation_id=context.conversation_id,
-                user_id=context.user_id,
-                content=message_text,
-                pod_id=context.pod_id,
-                agent_name=context.agent_name,
-                message_metadata=metadata,
-            )
-        return None
+            return await _start_turn(context, message_text, metadata, uow)
+        return []
     finally:
         reset_current_context(token)
+
+
+async def _start_turn(
+    context: SurfaceChatContext,
+    message_text: str,
+    metadata: dict[str, object],
+    uow: SqlAlchemyUnitOfWork,
+) -> list[str]:
+    """Start the turn this message asks for; the pauses it cancelled."""
+    undecided = await agent_conversations.undecided_pauses(uow, context.conversation_id)
+    started = await agent_conversations.start_surface_turn(
+        uow,
+        conversation_id=context.conversation_id,
+        user_id=context.user_id,
+        content=message_text,
+        pod_id=context.pod_id,
+        agent_name=context.agent_name,
+        message_metadata=metadata,
+    )
+    # Only a turn that starts supersedes: a message arriving while a run is
+    # going joins that run, and the pauses it holds stay open.
+    return undecided if started is not None else []
 
 
 async def fetch_channel_context(
@@ -249,6 +270,7 @@ async def transcribe_voice_attachments(
     ingested: list[IngestedAttachment],
     original_text: str | None,
     metadata: dict[str, Any],
+    memo: AttachmentIngestMemo | None = None,
 ) -> str:
     """Transcribe inbound voice notes and fold them into the message text.
 
@@ -264,7 +286,7 @@ async def transcribe_voice_attachments(
         return original
 
     results = await _transcribe_all(
-        [item for item in ingested if item.is_audio and item.audio_bytes is not None]
+        [item for item in ingested if item.is_audio], memo=memo
     )
     combined = _combined_voice_text(_record_transcripts(results, metadata))
     if original and not _is_a_type_word(original, ingested):
@@ -273,16 +295,42 @@ async def transcribe_voice_attachments(
 
 
 async def _transcribe_all(
-    items: list[IngestedAttachment],
+    items: list[IngestedAttachment], *, memo: AttachmentIngestMemo | None
 ) -> list[tuple[IngestedAttachment, VoiceTranscript | None]]:
-    """Transcribe every voice note at once; a failure yields None for that one."""
-    transcripts = await transcribe_voice_notes(
+    """Transcribe every voice note at once; a failure yields None for that one.
+
+    A transcript a previous attempt at this message already paid for is reused
+    rather than bought again (see ``attachment_ingest_memo``).
+    """
+    known: dict[int, VoiceTranscript] = {}
+    if memo is not None:
+        for index, item in enumerate(items):
+            cached = await memo.transcript(item.memo_key)
+            if cached is not None:
+                known[index] = cached
+    pending = [
+        (index, item)
+        for index, item in enumerate(items)
+        if index not in known and item.audio_bytes is not None
+    ]
+    fresh = await transcribe_voice_notes(
         [
             VoiceClip(audio_bytes=item.audio_bytes, mime=item.mime or "audio/ogg")
-            for item in items
+            for _, item in pending
+            if item.audio_bytes is not None
         ]
     )
-    return list(zip(items, transcripts))
+    for (index, item), transcript in zip(pending, fresh):
+        if transcript is None:
+            continue
+        known[index] = transcript
+        if memo is not None:
+            await memo.remember_transcript(item.memo_key, transcript)
+    return [
+        (item, known.get(index))
+        for index, item in enumerate(items)
+        if index in known or item.audio_bytes is not None
+    ]
 
 
 async def _say_the_decision_was_not_recorded(

@@ -104,6 +104,42 @@ async def handle_telegram_command(
     return True
 
 
+#: What a person types to re-run a request that failed. Exact words only: a
+#: sentence that merely contains "retry" is a message for the agent.
+_TYPED_RETRY = frozenset({"retry", "try again", "/retry"})
+
+
+async def handle_typed_retry(
+    *,
+    context: SurfaceChatContext,
+    adapter: SurfacePlatformAdapterPort,
+    credentials: dict[str, Any],
+    uow_factory: UnitOfWorkFactory,
+) -> bool:
+    """A typed "retry" re-runs the conversation's failed request, on any platform.
+
+    The failure notice tells the person to reply "retry" wherever there is no
+    button to tap -- email, or a notice too long for one -- so the word has to
+    work there. True only when a failed run was actually retried; otherwise the
+    message is an ordinary one, and goes to the agent like any other.
+
+    Never for somebody outside the pod: the conversation is the member's, and a
+    retry would re-run their request under their authority.
+    """
+    text = str(context.message_text or "").strip().rstrip(".!").lower()
+    if context.audience.answers_outsiders or text not in _TYPED_RETRY:
+        return False
+    if not await _retry_failed_conversation(context, uow_factory=uow_factory):
+        return False
+    await _reply(
+        adapter=adapter,
+        credentials=credentials,
+        context=context,
+        message="Retrying the last failed request.",
+    )
+    return True
+
+
 async def _telegram_mini_app_for_context(
     context: SurfaceChatContext, *, uow_factory: UnitOfWorkFactory
 ) -> TelegramMiniApp | None:

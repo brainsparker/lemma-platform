@@ -226,6 +226,15 @@ it is asked, not skipped.
 - When a message arrives from an external identity, the system shall resolve it
   to a Lemma user where one exists, and shall keep that resolution stable across
   later messages.
+- The system shall resolve a Telegram account only on proof: a contact the
+  person shares themselves whose number is verified on their Lemma account. A
+  Telegram @username is never proof — anyone can claim a free one, and one
+  given up is taken by a stranger — and a profile does not hold one. Until the
+  person has shared that contact, the system shall ask them for it and shall not
+  act as any Lemma user.
+- Where a person creates a Telegram bot from Lemma, the system shall not treat
+  opening the setup link as proof of who opened it; they are recognised in the
+  new bot the same way, by sharing their own contact.
 - The system shall give a resolved person exactly the access their Lemma
   identity has, and no more — being present in the Slack channel shall not by
   itself grant access to the pod.
@@ -541,13 +550,26 @@ by its link.
 ### PS-SURF-033 — What is meant for one person is not said in a group
 **Status:** planned
 
-> Proven at module level by `agent_surfaces/tests/e2e/test_member_reach_private_e2e.py`.
+> Proven at module level by `agent_surfaces/tests/e2e/test_member_reach_private_e2e.py`
+> and `agent_surfaces/tests/e2e/test_group_private_send_e2e.py`.
 
 - The system shall deliver a notification meant for one person only somewhere
   private to them.
 - Where the only place a person has spoken to the bot is a group, the system
   shall reach them another way -- email, or their Lemma inbox -- rather than in
   front of the group.
+- When the agent sends the person it is working for something mid-task from a
+  group chat, the system shall deliver it to that person's own chat with the bot
+  in the same pod.
+- If that person has no private chat with the bot, then the system shall not
+  post the message in the group.
+- If that person has no private chat with the bot, then the system shall tell
+  the agent that nobody was reached.
+- If the delivery fails for another reason, then the system shall not tell the
+  agent that the person has no private chat.
+- When the agent sends the person it is working for something mid-task on an
+  email thread that copies other people, the system shall send it to that
+  person alone.
 
 **Contracts:** `notification.send`
 

@@ -41,12 +41,14 @@ from app.modules.agent.domain.errors import (
     ApprovalNotOwnedError,
     UnknownApprovalError,
 )
-from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pausing_tools import (
+    PAUSING_TOOL_NAMES,
+    parked_suspension_of,
+)
 from app.modules.agent.domain.ports import ConversationRepository
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
-    MessageDraft,
 )
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
@@ -56,6 +58,9 @@ from app.modules.agent.services.approval_reconciliation import (
     should_defer_approved_tool,
 )
 from app.modules.agent.services.pause_resume import PauseResume
+from app.modules.agent.services.pause_supersession import (
+    supersede_stale_pending_interactions,
+)
 
 logger = get_logger(__name__)
 
@@ -349,14 +354,19 @@ class ApprovalCoordinator:
                 # return, so it stays up and a retry finishes this.
                 return
 
-        if agent_host_permission_request(tool_args) is not None:
+        host_permission = agent_host_permission_request(tool_args) is not None
+        if host_permission and not await self._turn_ended_while_parked(paused_run_id):
             # An Agent Host pauses *inside* a live run: the decision was just
             # handed to the host, which carries the same run on from where it
             # stopped. Starting a resume run here would dispatch a second,
-            # duplicate host run for the same turn.
+            # duplicate host run for the same turn. Unless Lemma ended that
+            # turn because the request sat past its parked window: then the
+            # decision reaches the agent only by resuming, like any pause.
             return
 
-        if await self.pauses.resume_would_duplicate_a_live_turn(paused_run_id):
+        if await self.pauses.resume_would_duplicate_a_live_turn(
+            paused_run_id, conversation_id=conversation.id, tool_call_id=approval_id
+        ):
             return
 
         await self.pauses.start_resume_run_if_ready(
@@ -368,6 +378,10 @@ class ApprovalCoordinator:
             agent_name=agent_name,
             source="approval_resume",
         )
+
+    async def _turn_ended_while_parked(self, paused_run_id: UUID) -> bool:
+        run = await self.conversation_repository.get_agent_run(paused_run_id)
+        return run is not None and parked_suspension_of(run.metadata) is not None
 
     async def _close_an_abandoned_execution(
         self,
@@ -436,107 +450,12 @@ class ApprovalCoordinator:
         conversation: Conversation,
         user_id: UUID,
     ) -> list[Message]:
-        """Auto-deny any ask_user/request_approval call left unresolved from an
-        earlier WAITING pause, before starting a fresh run for a new message.
-
-        This only ever runs when no run is currently active (the caller checked
-        that already), so any pausing call still unresolved at this point belongs
-        to a run that already finished — the user moved on without answering it.
-        Always DENY, never approve: this is a safety fallback synthesizing a
-        response on the user's behalf, not a real decision, so a request_approval
-        must never auto-execute here. Writes ride the caller's transaction (no
-        commit here) so they land atomically with the new run/message it creates;
-        the caller is responsible for publishing the returned messages once that
-        transaction actually commits. That also rules out side effects Lemma
-        could not take back on a rollback, which is why an Agent Host permission
-        is not delivered from here.
-        """
-        stale = await self.conversation_repository.pausing_calls_awaiting_a_decision(
-            conversation_id=conversation.id,
-            pausing_tool_names=PAUSING_TOOL_NAMES,
-        )
-        synthesized_returns: list[Message] = []
-        for message in stale:
-            saved_return = await self._deny_stale_pending_interaction(
-                conversation=conversation,
-                message=message,
-                user_id=user_id,
-            )
-            if saved_return is not None:
-                synthesized_returns.append(saved_return)
-        return synthesized_returns
-
-    async def _deny_stale_pending_interaction(
-        self,
-        *,
-        conversation: Conversation,
-        message: Message,
-        user_id: UUID,
-    ) -> Message | None:
-        # Re-established rather than assumed: the caller's filter proves the
-        # call id and the tool name, but none of that survives being passed as a
-        # `Message`. A call missing any of the three cannot have a faithful
-        # return synthesized for it.
-        tool_call_id = message.tool_call_id
-        tool_name = message.tool_name
-        agent_run_id = message.agent_run_id
-        if tool_call_id is None or tool_name is None or agent_run_id is None:
-            # Only the run id is genuinely unproven here, and losing it is not
-            # cosmetic: the pause stays unresolved, so the next run rebuilds a
-            # history still showing an open question nobody can now answer.
-            # Said out loud because the alternative is a conversation that
-            # quietly stops making sense.
-            logger.warning(
-                "agent.conversation_approvals.pause_without_run_skipped.degraded",
-                conversation_id=str(conversation.id),
-                tool_call_id=tool_call_id,
-                tool_name=tool_name,
-            )
-            return None
-        tool_args = message.tool_args if isinstance(message.tool_args, dict) else {}
-        decision_tool_name = (
-            "ask_user"
-            if tool_name == "ask_user"
-            else str(tool_args.get("tool_name") or "request_approval")
-        )
-        response: JsonObject = {"superseded_by_new_message": True}
-        recorded = await self.conversation_repository.record_approval_decision(
-            conversation_id=conversation.id,
-            approval_id=tool_call_id,
-            agent_run_id=agent_run_id,
-            tool_name=decision_tool_name,
-            decision=AgentRunApprovalDecision.DENY,
-            response=response,
-            resolved_by_user_id=user_id,
-        )
-        if not recorded:
-            # A concurrent resolve already recorded a real decision for this call;
-            # that resolve (or its own reconcile) owns synthesizing the return.
-            return None
-        existing_return = await self.conversation_repository.get_tool_return(
-            conversation_id=conversation.id,
-            tool_call_id=tool_call_id,
-        )
-        if existing_return is not None:
-            return None
-        return_tool_name, tool_result = await self.resume_returns.build(
+        """DENY every pause nobody decided; see ``pause_supersession``."""
+        return await supersede_stale_pending_interactions(
+            repository=self.conversation_repository,
+            resume_returns=self.resume_returns,
             conversation=conversation,
             user_id=user_id,
-            kind=tool_name,
-            tool_args=tool_args,
-            decision=AgentRunApprovalDecision.DENY,
-            response=response,
-            paused_agent_run_id=agent_run_id,
-            deliver_to_host=False,
-        )
-        return await self.conversation_repository.append_message(
-            conversation_id=conversation.id,
-            agent_run_id=agent_run_id,
-            draft=MessageDraft.of_tool_return(
-                tool_call_id=tool_call_id,
-                tool_name=return_tool_name,
-                tool_result=tool_result,
-            ),
         )
 
     async def _paused_call_from_messages(

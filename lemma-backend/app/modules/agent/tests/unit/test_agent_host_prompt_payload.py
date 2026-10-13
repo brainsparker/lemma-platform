@@ -184,6 +184,28 @@ class TestWakingUp:
 
         assert "Friday." in prompt
 
+    async def test_a_resume_carries_its_return_and_what_was_said_meanwhile(self):
+        """A message sent while the pause was open is claimed by the resume run,
+        and both are what the session has not seen: the answer it was waiting
+        on, and the message. Carrying only the message lost the answer."""
+        paused, resume = uuid7(), uuid7()
+        said = _in_run(
+            5,
+            MessageRole.USER,
+            "Also do the patio booking.",
+            paused,
+            {"during_active_run": True, "steered_into_run": str(resume)},
+        )
+        prompt = _user_prompt(
+            carries_history=False,
+            messages=[*_transcript(), said, _woke_up(6, "lemma-mcp-1")],
+            resumed_tool_call_id="lemma-mcp-1",
+            agent_run_id=resume,
+        )
+
+        assert "check the build" in prompt
+        assert "patio booking" in prompt
+
     async def test_a_resume_whose_return_is_gone_falls_back(self):
         """History is trimmed by size, so the message may not have survived.
 
@@ -277,6 +299,79 @@ class TestCredentials:
         )
 
         assert "runtime_credentials" not in payload
+
+    async def test_the_start_run_spec_carries_no_run_context_at_any_depth(self):
+        """The spec rests in plaintext in the command row and in the host's own
+        journal, on somebody's laptop. It used to carry the whole run context,
+        the agent and the conversation's metadata, none of which the host reads;
+        the check above looked only at the top level of a payload that nested
+        them one level down."""
+        from datetime import datetime, timezone
+
+        from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
+            run_spec_from,
+        )
+        from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+            AgentHostRunConfig,
+        )
+
+        ctx = _ctx().model_copy(
+            update={
+                "runtime_credentials": {"api_key": "sk-provider-secret"},
+                "configured_accounts": {"github": uuid7()},
+                "surface_metadata": {"external_user_id": "U-private"},
+            }
+        )
+        conversation = _conversation().model_copy(
+            update={
+                "metadata": {
+                    "surface_metadata": {"external_user_id": "U-private"},
+                    "external_channel_id": "C-private",
+                }
+            }
+        )
+        payload = run_start_payload(
+            agent=_agent(),
+            conversation=conversation,
+            messages=_transcript(),
+            ctx=ctx,
+            agent_run_id=uuid7(),
+            runtime_instructions="",
+            carries_history=False,
+        )
+
+        spec = run_spec_from(
+            payload,
+            conversation=conversation,
+            harness_id=uuid7(),
+            profile_revision="rev-1",
+            run_config=AgentHostRunConfig(
+                harness_id=uuid7(),
+                runtime_profile_id=uuid7(),
+                config_selections={},
+                wait_timeout_seconds=300,
+                model_name=None,
+            ),
+            system_prompt="instructions",
+            system_prompt_delivery=None,
+            resume_session_id=None,
+            run_deadline=datetime.now(timezone.utc),
+        )
+        wire = json.dumps(spec.model_dump(mode="json")) + json.dumps(
+            payload, default=str
+        )
+
+        for leaked in (
+            "runtime_credentials",
+            "sk-provider-secret",
+            "configured_accounts",
+            "surface_metadata",
+            "U-private",
+            "C-private",
+        ):
+            assert leaked not in wire, leaked
+        assert spec.context == {}
+        assert spec.prompt[0]["text"].endswith("Friday.")
 
     async def test_the_host_agent_is_given_the_users_lemma_identity(self):
         """Distinct from the assertion above, and deliberately so.

@@ -51,6 +51,9 @@ from uuid import UUID
 from app.core.infrastructure.db.transaction_locks import connection_released
 
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_agent_id
+from app.modules.agent_surfaces.services.telegram_addressing import (
+    addressed_to_this_bot,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -409,20 +412,11 @@ class SurfaceRouter:
         parsed: ParsedInboundSurfaceEvent,
         surface: AgentSurfaceEntity,
     ) -> ParsedInboundSurfaceEvent:
-        """Upgrade mentioned_agent when a Telegram group message actually
-        targets this bot.
+        """Settle whether a Telegram group message targets this bot.
 
-        The parser records @username / text_mention entities without claiming
-        they mention the bot (a `mention` entity is just a plain @username and
-        doesn't identify the user). Here we resolve the bot's @username and
-        numeric user id via getMe and check:
-
-        - whether ``@{bot_username}`` appears in the mention entities (precise),
-        - whether the bot's user id is in the text_mention entities (precise),
-        - whether ``@{bot_username}`` appears in the message text (fallback for
-          a manually typed name that produced no entity).
-
-        Best-effort; returns the event unchanged on any failure."""
+        Resolves the bot's @username and numeric id via getMe; the rules are
+        `telegram_addressing.addressed_to_this_bot`. Best-effort: returns the
+        event unchanged on any failure."""
         with suppress(*PLATFORM_TRANSPORT_ERRORS, ImportError):
             from app.modules.agent_surfaces.platforms.telegram.service import (
                 TelegramPlatformService,
@@ -430,27 +424,11 @@ class SurfaceRouter:
 
             credentials = await self.credential_resolver.for_surface(surface)
             service = TelegramPlatformService(credentials)
-            bot_username = (await service.get_bot_username() or "").lower()
-            bot_user_id = await service.get_bot_user_id()
-            metadata = parsed.metadata or {}
-            mentioned_usernames = {
-                str(name).lower() for name in metadata.get("mentioned_usernames") or []
-            }
-            text_mention_user_ids = {
-                str(uid) for uid in metadata.get("text_mention_user_ids") or []
-            }
-            text = (parsed.message_text or "").lower()
-
-            matched = False
-            if bot_username and bot_username in mentioned_usernames:
-                matched = True
-            elif bot_user_id and bot_user_id in text_mention_user_ids:
-                matched = True
-            elif bot_username and f"@{bot_username}" in text:
-                matched = True
-
-            if matched:
-                return parsed.model_copy(update={"mentioned_agent": True})
+            return addressed_to_this_bot(
+                parsed,
+                bot_username=await service.get_bot_username() or "",
+                bot_user_id=await service.get_bot_user_id(),
+            )
         return parsed
 
     async def resolve_route(
@@ -556,18 +534,27 @@ class SurfaceRouter:
         credentials: dict[str, Any],
         installation_id: UUID | None = None,
     ) -> ResolvedSurfaceUser:
+        profile_unavailable = False
         try:
             async with connection_released(self.uow.session):
                 sender_profile = await adapter.fetch_sender_profile(
                     credentials=credentials,
                     event=parsed,
                 )
-        except Exception:
-            sender_profile = None
+        except PLATFORM_TRANSPORT_ERRORS:
+            # Without the profile there is no email to match, so a member reads
+            # as a stranger -- for this message only: the miss is not cached.
+            logger.warning(
+                "agent_surfaces.surface_router.sender_profile_unavailable.degraded",
+                platform=str(parsed.platform),
+                exc_info=True,
+            )
+            sender_profile, profile_unavailable = None, True
         resolved = await self.identity_service.resolve(
             event=parsed,
             sender_profile=sender_profile,
             installation_id=installation_id,
+            profile_unavailable=profile_unavailable,
         )
         return await self._hydrate_resolved_user(resolved)
 

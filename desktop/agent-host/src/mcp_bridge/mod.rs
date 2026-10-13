@@ -99,7 +99,7 @@ pub async fn run_bridge(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> any
             }
             continue;
         };
-        let params = message.get("params").cloned().unwrap_or(Value::Null);
+        let params = request_params(&message);
         let relay = relay.clone();
         let answers = answers.clone();
         let key = id.to_string();
@@ -129,6 +129,19 @@ pub async fn run_bridge(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> any
     drop(answers);
     let _ = writer.await;
     Ok(())
+}
+
+/// A request's `params`, as the object Lemma expects.
+///
+/// MCP lets a client leave `params` out of a request that needs none, and
+/// Claude Code 2.1.296 sends `tools/list` that way. Relayed as `null`, Lemma
+/// refused the listing, and the agent started every turn with none of Lemma's
+/// tools -- no approvals, no questions, no browser -- and nothing said so.
+fn request_params(message: &Value) -> Value {
+    match message.get("params") {
+        None | Some(Value::Null) => json!({}),
+        Some(params) => params.clone(),
+    }
 }
 
 struct Failure {

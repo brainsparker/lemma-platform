@@ -18,10 +18,8 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.core.log.log import get_logger
-from httpx import HTTPError
 
 from app.modules.agent_surfaces.domain.errors import (
-    AgentSurfaceError,
     AgentSurfaceValidationError,
     NotificationNotFoundError,
 )
@@ -32,23 +30,19 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationStatus,
 )
 from app.modules.agent_surfaces.domain.ports import SurfaceNotificationEgressPort
-from app.modules.agent_surfaces.services.notification_delivery import (
-    DeliveryChannel,
-    UndeliverableReason,
-)
+from app.modules.agent_surfaces.services.notification_delivery import DeliveryChannel
 from app.modules.agent_surfaces.services.notification_channels import (
     NotificationChannelResolver,
     SurfaceProvisioner,
-    can_cold_open,
+)
+from app.modules.agent_surfaces.services.notification_dispatch import (
+    send_on_first_channel,
 )
 from app.modules.agent_surfaces.services.notification_egress import NotificationEgress
 from app.modules.agent_surfaces.services.outside_questions import (
     MAX_OUTSIDE_QUESTION_CHARS,
     OutsideOriginReader,
     outside_question_message,
-)
-from app.modules.agent_surfaces.services.notification_rate_limiter import (
-    EmailSendLimitExceeded,
 )
 
 logger = get_logger(__name__)
@@ -223,8 +217,17 @@ class NotificationService:
                 expires_at=expires_at or default_expiry(),
             )
         )
-        # An idempotency hit returns the original, already-delivered row. Sending
-        # again is the exact double-post the key exists to prevent.
+        # An idempotency hit returns the original row. Sending again is the
+        # exact double-post the key exists to prevent -- whether it was
+        # delivered, or its send was started and never recorded, which is when
+        # the platform may well have it and only the bookkeeping failed.
+        if idempotency_key and notification.send_outcome_unknown:
+            logger.warning(
+                "agent_surfaces.notification_service.send_outcome_unknown.degraded",
+                notification_id=str(notification.id),
+                pod_id=str(pod_id),
+            )
+            return notification
         if idempotency_key and notification.delivered_at is not None:
             logger.info(
                 "agent_surfaces.notification_service.duplicate_suppressed.observed",
@@ -291,88 +294,17 @@ class NotificationService:
             )
         )
 
-        # First success wins. Three copies of one message across three apps is
-        # how a useful feature comes to read as spam.
-        last_error: str | None = None
-        for channel in channels:
-            try:
-                if can_cold_open(channel.surface) and self.rate_limiter is not None:
-                    # Charged per email, not per notification: a message that
-                    # went out on Slack costs the shared sending domain nothing.
-                    # Refusing here rather than raising leaves the notification
-                    # in the recipient's inbox with an explanation, which is the
-                    # right outcome for a budget being spent — the thing is real,
-                    # we just will not mail it.
-                    try:
-                        await self.rate_limiter.check_email(pod_id=notification.pod_id)
-                    except EmailSendLimitExceeded as exc:
-                        last_error = str(exc)
-                        continue
-
-                conversation_id = await self.egress.conversation_for(
-                    channel, notification=notification
-                )
-                if conversation_id is None:
-                    last_error = UndeliverableReason.NEVER_INTERACTED
-                    continue
-
-                # Persist before send: a failed platform call must still leave
-                # the person a message they can read, and the agent handling
-                # their reply a record of what was asked.
-                await self.egress.persist_outbound(
-                    conversation_id=conversation_id,
-                    notification=notification,
-                    message=message,
-                )
-                # Commit before the platform call, for two reasons that point
-                # the same way. It makes "persist before send" mean it — an
-                # uncommitted row is not a message anyone can read. And it hands
-                # the pooled connection back, so the send below does not hold
-                # one (nor the row locks it is sitting on) for the seconds a
-                # platform API can take. The update after the send opens its own
-                # transaction.
-                await self.uow.commit()
-                sent = await self.egress.send(
-                    channel,
-                    conversation_id=conversation_id,
-                    notification=notification,
-                    message=message,
-                    # Both names, unconditionally — wider than the body header
-                    # above. On email they become the From display name, which
-                    # is all an unopened inbox list shows; on chat the agent
-                    # name is the bot's username and avatar.
-                    agent_name=agent_name,
-                    actor_display_name=actor_display_name,
-                )
-                if not sent:
-                    last_error = (
-                        UndeliverableReason.COLD_OPEN_UNSUPPORTED
-                        if channel.link is None
-                        else f"{channel.platform.value} send returned no delivery."
-                    )
-                    continue
-
-                notification.mark_delivered(
-                    surface_id=channel.surface.id,
-                    conversation_id=conversation_id,
-                    platform=channel.platform.value,
-                )
-                return await self.notifications.update(notification)
-            except (AgentSurfaceError, HTTPError, OSError) as exc:
-                # Deliberately NOT bare `Exception`: a bug in our own code must
-                # surface rather than be reported as "that channel didn't work".
-                last_error = f"{channel.platform.value}: {exc}"
-                logger.warning(
-                    "agent_surfaces.notification_service.channel_send_failed.degraded",
-                    notification_id=str(notification.id),
-                    platform=channel.platform.value,
-                    error=str(exc),
-                )
-
-        notification.mark_delivery_failed(
-            last_error or "No channel accepted the message."
+        return await send_on_first_channel(
+            notification,
+            channels=channels,
+            message=message,
+            agent_name=agent_name,
+            actor_display_name=actor_display_name,
+            uow=self.uow,
+            notifications=self.notifications,
+            egress=self.egress,
+            rate_limiter=self.rate_limiter,
         )
-        return await self.notifications.update(notification)
 
     async def resolve_channels(
         self,

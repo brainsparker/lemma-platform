@@ -577,6 +577,15 @@ guarantee:
   rewound a refused run for replay, is followed by another without waiting for
   a new event. Connecting kicks delivery once, so a run that finished while
   the host was offline is delivered in full, terminal event included.
+- **Worker restarts.** The worker reading a run's stream records on the run's
+  lease the last entry whose messages it has persisted
+  (`consumed_stream_id`), at a point where nothing it read is still waiting to
+  become a message. A worker that reclaims the run after a deploy resumes
+  there, with the tool calls already on the record restored, instead of
+  dispatching again and re-reading the stream from its start
+  (`harnesses/agent_host/stream_resume.py`). The stream is trimmed only below
+  that cursor, never by length, and each event's payload is capped at 8 MiB
+  at intake.
 - **Control updates** are idempotent and stale ones are ignored.
   `control_ok.refused` names any update Lemma could not parse, and it is the
   only way one is refused. Lemma applies each update separately, so one bad
@@ -594,9 +603,13 @@ guarantee:
   every retry of that call, on any link. Lemma claims `(run_id, request_id)` in
   Redis (`SET NX`); the first arrival executes the call in a task the link does
   not own, so a socket that drops mid-call does not cancel it, and its outcome
-  -- the MCP result, or the failure -- is kept for an hour. A duplicate that
+  -- the MCP result, or the failure -- is kept for ten minutes (a result over
+  256 KiB is not kept: a retry is told the call finished). A duplicate that
   arrives while it runs waits for that outcome; one that arrives after is
-  answered from it. Nothing is executed twice
+  answered from it. The executing replica keeps a heartbeat beside the claim,
+  so a duplicate of a call whose replica died is told at once that it may have
+  run, rather than waiting for an outcome nobody will record. Nothing is
+  executed twice
   (`agent_host_link_tool_calls.py`). `welcome` says so with
   `idempotent_tool_calls: true`, and a host resends a `tools/call` after a drop
   only to a server that said it. A call without a `request_id`, from an older
@@ -612,6 +625,20 @@ guarantee:
   never stalls the runs still working. A wait whose run has ended is answered
   `TERMINAL_RUN`, not held for its full half hour. The bridge no longer polls
   every 2 seconds.
+- **The parked window.** A parked question, approval or ACP permission request
+  holds a run that is still RUNNING, and the worker job reading it. Pauses
+  never expire, so past `AGENT_HOST_PARKED_WINDOW_SECONDS` (10 minutes) the
+  worker marks the run (`suspended_while_parked`) and sends the ordinary
+  `CANCEL_RUN`; the host ends the ACP turn as it does for Stop, and the
+  terminal it reports is read as WAITING (`harnesses/agent_host/parked_window.py`).
+  Nothing on the wire changed: the bridge's wait ends with its run and hands
+  the agent the unchanged "waiting" result, never a denial, and the host
+  resolves a held permission request as the cancelled turn's. The pause stays
+  listed, and deciding it resumes a new run that carries the decision. A
+  permission request cannot be answered in the turn that asked, so its
+  decision tells the resumed agent that nothing ran and to do it again if it
+  is still needed -- the host asks once more. An answer inside the window is
+  delivered into the turn, as before.
 - **Steering.** A message the person sends while a run is working reaches a
   harness that published the `steering` capability as a `STEER_RUN` command,
   fenced on the run's lease epoch like every run command. The run's turn sends

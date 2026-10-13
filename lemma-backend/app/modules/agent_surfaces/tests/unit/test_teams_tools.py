@@ -189,7 +189,7 @@ async def test_teams_get_recent_channel_messages_resolves_graph_team_id(
             external_thread_id="thread-1",
             surface_metadata=TeamsSurfaceEventMetadata(
                 team_id="19:team@thread.tacv2",
-                service_url="https://smba.example.test/teams",
+                service_url="https://smba.trafficmanager.net/teams",
             ),
         )
     )
@@ -271,7 +271,7 @@ async def test_teams_fetch_recent_context_maps_graph_messages(monkeypatch):
         message_text="@lemma help",
         metadata={
             "team_id": "19:team@thread.tacv2",
-            "service_url": "https://smba.example.test/teams",
+            "service_url": "https://smba.trafficmanager.net/teams",
         },
     )
 
@@ -279,6 +279,10 @@ async def test_teams_fetch_recent_context_maps_graph_messages(monkeypatch):
     texts = {m.text for m in messages}
     assert "First message" in texts and "Second message" in texts
     assert all(m.author for m in messages)
+    # The sender's Graph id is kept beside the name it is shown under: a Teams
+    # channel names who spoke, and the roster asks the pod whether they hold
+    # access by that id.
+    assert {m.author_external_id for m in messages} == {"u1", "u2"}
 
 
 @pytest.mark.asyncio
@@ -347,7 +351,7 @@ async def test_teams_get_recent_thread_messages_include_files(
             external_thread_id="thread-1",
             surface_metadata=TeamsSurfaceEventMetadata(
                 team_id="19:team@thread.tacv2",
-                service_url="https://smba.example.test/teams",
+                service_url="https://smba.trafficmanager.net/teams",
             ),
         )
     )

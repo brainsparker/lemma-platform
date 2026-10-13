@@ -174,7 +174,7 @@ async def _answer_one_message(
 ) -> None:
     profile = resolved.profile
     model = seams.model_builder()(
-        runtime_profile=resolved.public_snapshot(),
+        runtime_profile=resolved.runtime_snapshot().as_payload(),
         runtime_credentials=resolved.credentials,
     )
     if model is None:

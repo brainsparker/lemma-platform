@@ -58,12 +58,19 @@ from app.modules.agent_surfaces.services.free_text_answer import (
 from app.modules.agent_surfaces.services.display_resource_renderer import (
     merge_other_answers,
 )
+from app.modules.agent_surfaces.services.interaction_acks import (
+    DONE,
+    REQUEST_MOVED,
+    RUNNING_NOW,
+    acknowledgement_for,
+)
 from app.modules.agent_surfaces.services.interaction_helpers import (
     InteractionDelivery,
     interaction_sender_matches,
     parse_interaction_target,
     resolve_current_interaction_delivery,
     resolve_interaction_delivery,
+    resolve_moved_interaction_delivery,
 )
 from app.core.log.log import get_logger
 
@@ -71,6 +78,18 @@ from app.modules.agent_surfaces.services.conversation_binder import Conversation
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 
 logger = get_logger(__name__)
+
+#: Taps that never reach a conversation, by why: what to say, and whether the
+#: buttons go. An unreadable tap keeps them -- the store behind the token
+#: could not be asked, so the very same button may work a moment later, and
+#: clearing it would leave the person nothing to tap.
+_UNRESOLVED_TAPS: dict[str, tuple[str, bool]] = {
+    "expired": (
+        "This button expired. Just reply here with your answer, or ask again.",
+        True,
+    ),
+    "unreadable": ("Couldn't read that tap, try again.", False),
+}
 
 # Recent thread/channel messages fetched per run for group-mention continuity.
 
@@ -143,21 +162,23 @@ class SurfaceInteractionMixin:
             )
         if parsed is None:
             return False
-        if parsed.interaction_state == "expired":
+        unresolved = _UNRESOLVED_TAPS.get(parsed.interaction_state or "")
+        if unresolved is not None:
             if surface is None and isinstance(request, SurfacePlatformWebhookIngress):
                 for surface_id in request.receiver_surface_ids or []:
                     surface = await self.surface_repository.get(surface_id)
                     if surface is not None:
                         break
             if surface is not None:
+                text, clear_actions = unresolved
                 credentials = await self.credential_resolver.for_surface(surface)
                 async with connection_released(self.uow.session):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
                         interaction=parsed,
-                        text="This button expired. Just reply here with your answer, or ask again.",
+                        text=text,
                         show_alert=True,
-                        clear_actions=True,
+                        clear_actions=clear_actions,
                     )
             return True
         await self.handle_interaction(
@@ -350,7 +371,23 @@ class SurfaceInteractionMixin:
             conversation_id,
             authorized_surface_ids=authorized_surface_ids,
         )
-        return (delivery, tool_call_id) if delivery is not None else None
+        if delivery is not None:
+            return delivery, tool_call_id
+        moved = await resolve_moved_interaction_delivery(
+            self,
+            parsed,
+            conversation_id,
+            authorized_surface_ids=authorized_surface_ids,
+        )
+        if moved is not None:
+            await self._acknowledge(
+                parsed,
+                moved,
+                text=REQUEST_MOVED,
+                show_alert=True,
+                clear_actions=True,
+            )
+        return None
 
     async def _acknowledge(
         self,
@@ -434,7 +471,7 @@ class SurfaceInteractionMixin:
         )
         token = set_current_context(auth_ctx)
         try:
-            await agent_conversations.resolve_pending_interaction(
+            resolution = await agent_conversations.resolve_pending_interaction(
                 self.uow,
                 conversation_id=conversation.id,
                 approval_id=tool_call_id,
@@ -446,7 +483,14 @@ class SurfaceInteractionMixin:
         finally:
             reset_current_context(token)
         attempt.applied = True
-        await self._acknowledge(parsed, delivery, text="Done", clear_actions=True)
+        text = acknowledgement_for(decision, resolution)
+        await self._acknowledge(
+            parsed,
+            delivery,
+            text=text,
+            show_alert=text not in (DONE, RUNNING_NOW),
+            clear_actions=True,
+        )
 
     async def _recover_from_failed_interaction(
         self,

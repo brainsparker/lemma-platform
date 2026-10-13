@@ -13,7 +13,7 @@ from app.modules.agent_surfaces.domain.surface_connectors import (
     surface_connector_binding,
 )
 from app.modules.agent_surfaces.services.managed_bot_identity import (
-    link_managed_bot_creator,
+    refuse_a_creator_linked_elsewhere,
 )
 from app.modules.agent_surfaces.services.telegram_manager_store import (
     TelegramManagedBotSetup,
@@ -88,12 +88,12 @@ async def persist_managed_bot(
                 surface_id=surface.id,
                 is_active=setup.is_enabled,
             )
-        await link_managed_bot_creator(
+        # The creator is not bound to the user here: opening the setup link
+        # proves nothing about who opened it. They are recognised once they
+        # share a contact matching a number verified on the account.
+        await refuse_a_creator_linked_elsewhere(
             uow=uow,
             telegram_user_id=setup.telegram_user_id,
-            telegram_username=setup.telegram_username,
-            telegram_display_name=setup.telegram_display_name,
-            setup_id=setup.setup_id,
             user_id=setup.user_id,
         )
         await uow.commit()

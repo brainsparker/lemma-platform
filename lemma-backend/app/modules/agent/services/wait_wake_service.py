@@ -120,6 +120,7 @@ class AgentWaitService:
             target_ref=spec.get("target_ref"),
             user_id=UUID(str(user_id)),
             pod_id=wait.pod_id,
+            conversation_id=wait.conversation_id,
         )
 
     async def _wake_claimed(

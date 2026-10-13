@@ -90,6 +90,10 @@ class AgentWaitWakeReason(str, Enum):
     # The ceiling ran out with the target still unfinished. Distinct from TIMER,
     # which is a TIME wait arriving exactly where it meant to.
     DEADLINE = "DEADLINE"
+    # The target stopped to ask a question and will not go on until it is
+    # answered: a sub-agent that paused on ask_user or request_approval. Not
+    # finished, so not TARGET_FINISHED, and nobody else can see its question.
+    TARGET_NEEDS_INPUT = "TARGET_NEEDS_INPUT"
 
 
 class AgentConversationWaitEntity(AggregateRoot):

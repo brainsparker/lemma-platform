@@ -437,7 +437,7 @@ def test_user_update_profile_uses_generated_model():
     lemma.user._transport = transport
 
     lemma.user.update_profile(
-        {"mobile_number": "+15551234567", "telegram_username": "surfaceuser"}
+        {"mobile_number": "+15551234567", "first_name": "Surface"}
     )
 
     assert transport.calls[0]["endpoint"].endswith("user_profile_upsert")
@@ -445,7 +445,7 @@ def test_user_update_profile_uses_generated_model():
     assert transport.calls[0]["body_model"] == "UserProfileRequest"
     assert transport.calls[0]["body"] == {
         "mobile_number": "+15551234567",
-        "telegram_username": "surfaceuser",
+        "first_name": "Surface",
     }
 
 

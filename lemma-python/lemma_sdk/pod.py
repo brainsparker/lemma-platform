@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         PodRecords,
         PodSchedules,
         PodNotifications,
+        PodLinks,
         PodSurfaces,
         PodGroups,
         PodContacts,
@@ -145,6 +146,12 @@ class Pod:
         from .resources import PodDecisions
 
         return self._resource(PodDecisions)
+
+    @cached_property
+    def pod_links(self) -> "PodLinks":
+        from .resources import PodLinks
+
+        return self._resource(PodLinks)
 
     @cached_property
     def apps(self) -> "PodApps":

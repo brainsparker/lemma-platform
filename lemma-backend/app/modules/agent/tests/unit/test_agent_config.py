@@ -28,6 +28,12 @@ EXPECTED = [
         7200.0,
     ),
     ("agent_run_warn_at", "AGENT_RUN_WARN_AT", 0.8),
+    # How long an Agent Host turn may hold its worker parked on a person.
+    (
+        "agent_host_parked_window_seconds",
+        "AGENT_HOST_PARKED_WINDOW_SECONDS",
+        600.0,
+    ),
     (
         "agent_run_stop_poll_interval_seconds",
         "AGENT_RUN_STOP_POLL_INTERVAL_SECONDS",

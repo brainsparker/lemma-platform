@@ -14,6 +14,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
+from app.modules.agent_surfaces.services.private_message import PrivateSend
 from app.modules.agent_surfaces.services.surface_display_delivery import (
     deliver_surface_message_to_surface,
 )
@@ -33,11 +34,14 @@ def build_surface_send_toolset(
         ctx: RunContext[ConversationContext],
         message: str,
     ) -> SurfaceSendMessageResult:
-        """Send a message to the current user on this surface right now.
+        """Send a private message to the current user on this surface right now.
 
         Use to reach the person you're working for mid-task (a heads-up, an
-        interim result) rather than waiting for your final reply. Delivered to
-        the current conversation's user only.
+        interim result) rather than waiting for your final reply. It reaches
+        that person alone and never the group: in a group chat it goes to their
+        own chat with you, and if they have never had one it is not sent at all
+        -- put anything for everybody in your reply instead. On an email thread
+        it goes to the sender only, without the people copied on it.
         """
         conversation_id = getattr(ctx.deps, "conversation_id", None)
         if conversation_id is None:
@@ -56,13 +60,22 @@ def build_surface_send_toolset(
             tool="surface_send_message",
             failure=None,
         )
-        if sent is None:
+        if sent is PrivateSend.SENT:
+            return SurfaceSendMessageResult(success=True, message=None)
+        if sent is PrivateSend.NO_PRIVATE_CHAT:
             return SurfaceSendMessageResult(
-                success=False, message="Could not deliver the message."
+                success=False,
+                message=(
+                    "Nobody was reached. This is a group chat, so the message "
+                    "was not posted in it: it can only go to this person's own "
+                    "chat with you, and they do not have one on this platform. "
+                    "Say it in your reply if everybody may read it."
+                ),
             )
+        # Failed, not missing: whether they have a private chat is unknown here,
+        # so the run is not told they lack one.
         return SurfaceSendMessageResult(
-            success=sent,
-            message=None if sent else "No reachable surface for this conversation.",
+            success=False, message="Could not deliver the message."
         )
 
     return FunctionToolset[ConversationContext](tools=[surface_send_message])

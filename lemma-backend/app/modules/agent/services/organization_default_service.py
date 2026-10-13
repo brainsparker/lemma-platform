@@ -45,19 +45,23 @@ class OrganizationDefaultService:
 
         Raises `OrganizationDefaultNotFoundError` when the profile is not an
         organization-wide one here (a personal key is not visible to the
-        organization-wide read, so it lands here too), and ``ValueError`` when
-        it is visible but cannot be the default.
+        organization-wide read, so it lands here too), ``ValueError`` when it
+        is visible but cannot be the default, and
+        `OrganizationDefaultConflictError` (a 409) when another default was set
+        at the same moment.
         """
         profiles = await self._organization_profiles(organization_id)
         target = next((item for item in profiles if item.id == profile_id), None)
         if target is None:
             raise OrganizationDefaultNotFoundError(profile_id)
-        marked = await self._repository.update(
-            with_default_mark(target, model_name=model_name)
-        )
+        # The old mark goes first: at most one profile may carry it, and the
+        # database refuses a second for the length of this transaction.
         for profile in profiles:
             if profile.id != profile_id and is_marked_default(profile):
                 await self._repository.update(without_default_mark(profile))
+        marked = await self._repository.update(
+            with_default_mark(target, model_name=model_name)
+        )
         chosen = organization_default_of([marked])
         if chosen is None:
             # with_default_mark refuses anything organization_default_of would

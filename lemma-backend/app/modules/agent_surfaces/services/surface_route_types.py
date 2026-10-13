@@ -12,7 +12,7 @@ private by spelling.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import UUID
 
@@ -61,3 +61,18 @@ class SurfaceEgressTarget:
     credentials: dict[str, Any]
     #: Whose conversation this is: the member a group answer was made for.
     conversation_user_id: UUID | None = None
+
+    @property
+    def copies_others(self) -> bool:
+        """Whether what goes out here also reaches people besides the one it
+        answers -- an email thread's reply-all, which copies everybody on it."""
+        return bool(self.event.reply_target.get("cc"))
+
+    def to_sender_only(self) -> SurfaceEgressTarget:
+        """The same thread, reaching only the person it answers."""
+        reply_target = {
+            key: value for key, value in self.event.reply_target.items() if key != "cc"
+        }
+        return replace(
+            self, event=self.event.model_copy(update={"reply_target": reply_target})
+        )

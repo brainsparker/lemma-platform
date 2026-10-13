@@ -30,6 +30,7 @@ _NAME_TO_MODULE = {
     "BoundConnectors": "connectors",
     "PodMembers": "members",
     "PodNotifications": "notifications",
+    "PodLinks": "pod_links",
     "BoundOrg": "orgs",
     "Orgs": "orgs",
     "BoundOrgRuntime": "runtime",
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
     from .connectors import BoundConnectors
     from .members import PodMembers
     from .notifications import PodNotifications
+    from .pod_links import PodLinks
     from .orgs import BoundOrg, Orgs
     from .pods import BoundPods
     from .runtime import BoundOrgRuntime
@@ -100,6 +102,7 @@ __all__ = [
     "PodWebWidgets",
     "PodMembers",
     "PodNotifications",
+    "PodLinks",
     "PodQueries",
     "PodRecords",
     "PodSchedules",

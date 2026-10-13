@@ -10,7 +10,8 @@ import pytest
 
 from app.modules.agent.services.pause_resume import PauseResume
 
-import app.modules.agent.services.conversation_turns as turns
+import app.modules.agent.services.conversation_stop as stops
+from app.modules.agent.domain.value_objects import ConversationStatus
 import app.modules.agent.tools.waiting.pydantic_adapter as adapter
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
@@ -544,11 +545,11 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
         async def set_conversation_status(self, *, conversation_id, status):
             statuses.append(status)
 
-    monkeypatch.setattr(turns, "AgentConversationWaitRepository", _Waits)
+    monkeypatch.setattr(stops, "AgentConversationWaitRepository", _Waits)
 
     conversations = _Conversations()
-    service = turns.TurnCoordinator(
-        None, conversations, None, None, PauseResume(None, conversations, None), None
+    service = stops.StopCoordinator(
+        None, conversations, None, None, PauseResume(None, conversations, None)
     )
 
     async def _append(**kwargs):
@@ -570,8 +571,8 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
     # is now invisible to both. There used to be a `cancel_snooze_wake` call
     # here, which by the end was `del timer_id`.
     assert wait.status is AgentWaitStatus.CANCELLED
-    assert statuses == [turns.ConversationStatus.STOPPED]
-    assert conversation.status is turns.ConversationStatus.STOPPED
+    assert statuses == [ConversationStatus.STOPPED]
+    assert conversation.status is ConversationStatus.STOPPED
 
     # The paused call still gets a return: a tool call with no return is dropped
     # when history is rebuilt, and the model would see a turn ending mid-thought.

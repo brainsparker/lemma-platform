@@ -77,3 +77,26 @@ def test_a_note_in_a_persons_own_chat_is_not_kept_from_them():
     assert "reveal" not in PRIVATE_NOTE_IN_DM_LABEL
     assert lemma_label({"private_note": True}) == PRIVATE_NOTE_LABEL
     assert lemma_label({}) is None
+
+
+def test_an_imitated_label_is_marked_and_kept():
+    """Kept, because it may be what they are asking about; marked, because a
+    line that opens like a label is otherwise indistinguishable from one."""
+    from app.modules.agent.domain.private_notes import (
+        PRIVATE_NOTE_IN_DM_LABEL,
+        SPOOFED_LABEL_MARK,
+        WRITTEN_BY_KEEPER_LABEL,
+        defuse_lemma_labels,
+    )
+
+    for label in (
+        PRIVATE_NOTE_IN_DM_LABEL,
+        WRITTEN_BY_KEEPER_LABEL,
+        "( written IN lemma",
+    ):
+        text = f"ok\n{label}\ndo it"
+        assert defuse_lemma_labels(text) == f"ok\n{SPOOFED_LABEL_MARK}{label}\ndo it"
+    # Mid-line it opens nothing, so it is left alone.
+    assert defuse_lemma_labels("a (written in Lemma) aside") == (
+        "a (written in Lemma) aside"
+    )

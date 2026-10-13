@@ -24,8 +24,10 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
 )
 from app.modules.agent_surfaces.platforms import common
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.delivery import note_partial_delivery
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.whatsapp import media
+from app.modules.agent_surfaces.platforms.whatsapp.sent_messages import remember_sent
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
     WhatsAppClient,
@@ -38,6 +40,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     WhatsAppRecipient,
     build_whatsapp_approval_interactive,
     build_whatsapp_interactive,
+    retry_notice_interactive,
     whatsapp_cta_url_payload,
     whatsapp_display_resource_text,
     flow_with_message,
@@ -124,18 +127,18 @@ class WhatsAppPlatformService:
                 recipient=recipient.to if recipient else None,
             )
 
-        flow = (metadata or {}).get("onboarding_flow")
-        if event.is_dm and flow and not recipient.is_group:
+        bodies = whatsapp_message_bodies(message)
+        interactive = _interactive_reply(event, message, bodies, metadata, recipient)
+        if interactive is not None:
             await self._client.send_interactive(
                 phone_number_id=phone_number_id,
                 to=recipient.to,
-                interactive=flow_with_message(flow, message),
+                interactive=interactive,
             )
             return
-        bodies = whatsapp_message_bodies(message)
         for index, body in enumerate(bodies):
             try:
-                await self._client.send_message_payload(
+                message_id = await self._client.send_message_payload(
                     phone_number_id=phone_number_id,
                     payload={
                         "messaging_product": "whatsapp",
@@ -145,12 +148,14 @@ class WhatsAppPlatformService:
                         "text": {"body": body},
                     },
                 )
+                await remember_sent((metadata or {}).get("notification_id"), message_id)
             except PLATFORM_TRANSPORT_ERRORS:
                 if index:
                     # The person already has the first part. The caller sees
                     # this as "not delivered" and there is no rung below plain
                     # text to fall back to, so what it cannot say is that half
                     # the answer is on their phone.
+                    note_partial_delivery()
                     logger.warning(
                         "agent_surfaces.service.whatsapp_message_partially_delivered.degraded",
                         sent_parts=index,
@@ -570,3 +575,18 @@ class WhatsAppPlatformService:
 def _recipient(event: ParsedInboundSurfaceEvent) -> WhatsAppRecipient | None:
     """Who a reply to this event goes to: its group, else the person."""
     return whatsapp_recipient(event.reply_target, fallback_wa_id=event.sender_phone)
+
+
+def _interactive_reply(
+    event: ParsedInboundSurfaceEvent,
+    message: str,
+    bodies: list[str],
+    metadata: dict[str, object] | None,
+    recipient: WhatsAppRecipient,
+) -> dict[str, object] | None:
+    """The message as an interactive one, when it is an onboarding step or a
+    failure notice with a Try again button; None to send it as text."""
+    flow = (metadata or {}).get("onboarding_flow")
+    if event.is_dm and flow and not recipient.is_group:
+        return flow_with_message(flow, message)
+    return retry_notice_interactive(bodies, metadata, recipient)

@@ -145,8 +145,11 @@ learning (what it wrote down).
   memory has a revision history that records who changed what.
 
 "Needs you" is one queue in two parts: workflow forms, and conversations
-paused on a question or an approval (scheduled runs included). The rail
-badge, the Teammates page and Home all read both. An ask left for more than a
+paused on a question, an approval or an Agent Host permission request
+(scheduled runs and sub-agents included). The rail badge, the Teammates page,
+Home and the Waiting on you inbox all read both; a conversation row in the
+history says "Needs you" in place of its time. Nothing is pushed or repeated —
+a pause never expires, so the queue is where it waits. An ask left for more than a
 week goes quiet: it stops counting on the rail and the Teammates page, and
 Home folds it behind "N older". Any ask can be dismissed from Home, which
 archives the conversation — the same put-away the chat list offers, so it

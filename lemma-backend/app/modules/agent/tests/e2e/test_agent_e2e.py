@@ -2635,6 +2635,10 @@ class TestAgentRuntimeConfigApis:
             item["name"] for item in system_profile["model_catalog"]
         ] == system_lemma_model_names()
         assert system_profile["derived_harness_kind"] == "LEMMA"
+        # Models the system catalog really lists: a pin it does not list is
+        # refused when saved.
+        agent_model = system_lemma_model_names()[0]
+        conversation_model = system_lemma_model_names()[-1]
 
         pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
         patched_pod = await authenticated_client.put(
@@ -2662,14 +2666,14 @@ class TestAgentRuntimeConfigApis:
             json={
                 "agent_runtime": {
                     "profile_id": "system:lemma",
-                    "model_name": "deepseek-v4-pro",
+                    "model_name": agent_model,
                 }
             },
         )
         assert patched_agent.status_code == 200, patched_agent.text
         assert patched_agent.json()["agent_runtime"] == {
             "profile_id": "system:lemma",
-            "model_name": "deepseek-v4-pro",
+            "model_name": agent_model,
         }
 
         create_conversation = await authenticated_client.post(
@@ -2685,14 +2689,14 @@ class TestAgentRuntimeConfigApis:
             json={
                 "agent_runtime": {
                     "profile_id": "system:lemma",
-                    "model_name": "deepseek-v4-flash",
+                    "model_name": conversation_model,
                 }
             },
         )
         assert patched_conversation.status_code == 200, patched_conversation.text
         assert patched_conversation.json()["agent_runtime"] == {
             "profile_id": "system:lemma",
-            "model_name": "deepseek-v4-flash",
+            "model_name": conversation_model,
         }
 
     async def test_create_provider_profiles_and_resolve_them(

@@ -28,6 +28,9 @@ from pydantic_ai.messages import (
     ModelMessage,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import NodeLoop
+from app.modules.agent.infrastructure.unavailable_models import (
+    remember_provider_refusal,
+)
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
     drive_with_retry,
     reraise_driver_failure,
@@ -186,6 +189,12 @@ class PydanticAIHarness:
                 exc,
                 agent_run_id=agent_run_id,
                 model_name=getattr(options, "model_name", None),
+            )
+            # A 404 for the model is remembered, so the next turn on it is
+            # refused at once rather than paying for the same answer.
+            await remember_provider_refusal(
+                (getattr(options, "extra", None) or {}).get("runtime_profile"),
+                status_code=exc.status_code,
             )
             terminal = AgentEvent(
                 type=AgentEventType.ERROR,

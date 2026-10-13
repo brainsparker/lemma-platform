@@ -35,6 +35,7 @@ class _Run:
         self.error: str | None = None
         self.output_data: object | None = None
         self.finished_at = None
+        self.run_metadata: dict[str, object] | None = None
 
 
 class _Conversation:
@@ -49,6 +50,9 @@ class _Result:
         self._model = model
 
     def scalar_one_or_none(self) -> object:
+        return self._model
+
+    def one_or_none(self) -> object:
         return self._model
 
 

@@ -385,6 +385,12 @@ class AgentHostDispatchRepository:
         ``option_id`` selects one of the options the agent offered; ``None``
         denies. Returns None when the run already ended, in which case there is
         nothing left holding the request and the host's own timeout applies.
+
+        None too once a cancel is queued: the host drops every request a run
+        holds when it cancels the run, so a decision behind the cancel reaches
+        nobody. Saying so is what lets a turn ended for its parked window
+        (``parked_window``) take the decision to a resumed run instead, and
+        keeps the agent from being told a decision was handed over that was not.
         """
         return await self._enqueue_for_live_run(
             run_id=run_id,
@@ -392,6 +398,9 @@ class AgentHostDispatchRepository:
             payload={"request_id": request_id, "option_id": option_id},
             ttl_seconds=DEFAULT_PERMISSION_COMMAND_TTL_SECONDS,
             now=now,
+            skip_if=lambda lease: recovery.cancel_already_queued(
+                self.session, run_id=run_id, lease_epoch=lease.lease_epoch
+            ),
         )
 
     async def enqueue_credential_refresh(

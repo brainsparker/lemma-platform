@@ -9,7 +9,13 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
-from app.modules.agent_surfaces.platforms.rendering import to_markdown_v2
+from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
+from app.modules.agent_surfaces.platforms.delivery import note_partial_delivery
+from app.modules.agent_surfaces.platforms.rendering import (
+    chunk_text,
+    to_markdown_v2,
+    utf16_length,
+)
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TELEGRAM_MESSAGE_LIMIT,
     TelegramApiError,
@@ -21,31 +27,104 @@ logger = get_logger(__name__)
 TelegramCall = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
+#: How many times a refused-as-too-long chunk is halved before giving up. Each
+#: halving at least halves the text, so a chunk that is still too long after
+#: this many is not being refused for its length.
+_MAX_RESPLITS = 3
+
+#: What only the first part of a message carries: the reply it threads under
+#: and its buttons belong to the message once, not to every part.
+_FIRST_PART_ONLY = ("reply_parameters", "reply_markup")
+
+
 async def send_chunk(
     call_with_retry: TelegramCall,
     payload: dict[str, Any],
     raw_text: str,
-) -> None:
+    *,
+    resplits_left: int = _MAX_RESPLITS,
+) -> dict[str, object]:
+    """Send one chunk; the Bot API's answer, which names the message it made.
+
+    Split smaller if Telegram says it is too long: the chunker counts UTF-16
+    units, but rendering adds escapes and a rich message measures its own way.
+    A "message is too long" refusal is permanent for those exact bytes and
+    nothing else, so the words go out in halves rather than not at all. The
+    answer returned is the first part's, the one a keyboard rides on.
+    """
     try:
-        await call_with_retry(
+        return await _send_one(call_with_retry, payload, raw_text)
+    except TelegramApiError as exc:
+        if not exc.is_message_too_long or resplits_left <= 0:
+            raise
+        halves = chunk_text(
+            raw_text, limit=max(utf16_length(raw_text) // 2, 1), length=utf16_length
+        )
+        rest = {k: v for k, v in payload.items() if k not in _FIRST_PART_ONLY}
+        first: dict[str, object] = {}
+        sent = 0
+        try:
+            for half in halves:
+                answer = await send_chunk(
+                    call_with_retry,
+                    payload if sent == 0 else rest,
+                    half,
+                    resplits_left=resplits_left - 1,
+                )
+                if sent == 0:
+                    first = answer
+                sent += 1
+        finally:
+            if 0 < sent < len(halves):
+                note_partial_delivery()
+        return first
+
+
+async def _send_one(
+    call_with_retry: TelegramCall,
+    payload: dict[str, Any],
+    raw_text: str,
+) -> dict[str, object]:
+    try:
+        return await call_with_retry(
             "sendRichMessage",
             {**payload, "rich_message": {"markdown": raw_text}},
         )
-        return
     except TelegramApiError as exc:
         if not can_fallback_from_rich_message(exc):
             raise
     rendered = to_markdown_v2(raw_text)
-    use_markdown = len(rendered) <= TELEGRAM_MESSAGE_LIMIT
+    use_markdown = utf16_length(rendered) <= TELEGRAM_MESSAGE_LIMIT
     body = {**payload, "text": rendered if use_markdown else raw_text}
     if use_markdown:
         body["parse_mode"] = "MarkdownV2"
     try:
-        await call_with_retry("sendMessage", body)
+        return await call_with_retry("sendMessage", body)
     except TelegramApiError as exc:
         if not (use_markdown and exc.is_parse_entities_error):
             raise
-        await call_with_retry("sendMessage", {**payload, "text": raw_text})
+        return await call_with_retry("sendMessage", {**payload, "text": raw_text})
+
+
+def first_message_id(sent: list[dict[str, object]]) -> str | None:
+    """The message the first chunk became -- the one a keyboard rides on."""
+    result = sent[0].get("result") if sent else None
+    message_id = result.get("message_id") if isinstance(result, dict) else None
+    return str(message_id) if message_id is not None else None
+
+
+async def retire_decision_card(
+    client: TelegramClient, handle: DecisionCardHandle
+) -> None:
+    """Take a superseded card's buttons away. Its words stay, as written."""
+    await client.call(
+        "editMessageReplyMarkup",
+        {
+            "chat_id": handle.channel,
+            "message_id": int(handle.message_id),
+            "reply_markup": {"inline_keyboard": []},
+        },
+    )
 
 
 async def acknowledge_interaction(

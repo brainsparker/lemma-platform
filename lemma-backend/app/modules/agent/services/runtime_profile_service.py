@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
 from uuid import UUID
 
 
-from pydantic import BaseModel, HttpUrl
+from pydantic import HttpUrl
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.domain.errors import DomainError
+from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import (
     AgentHostHarnessHealth,
@@ -21,8 +21,6 @@ from app.modules.agent.domain.agent_host import (
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileScope,
     AgentRuntimeProfile,
-    RuntimeModelCapability,
-    RuntimeModelCatalogEntry,
     RuntimeProfileKind,
     RuntimeProfileAvailability,
     RuntimeProfileStatus,
@@ -31,7 +29,6 @@ from app.modules.agent.domain.runtime_profiles import (
 from app.modules.agent.domain.value_objects import (
     JsonObject,
     AgentRuntimeConfig,
-    HarnessKind,
 )
 from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
 from app.modules.agent.infrastructure.runtime_models import (
@@ -55,6 +52,10 @@ from app.modules.agent.services.runtime_system_profiles import (
     system_lemma_profile,
     system_profile_by_id,
 )
+from app.modules.agent.services.runtime_resolution import (
+    ResolvedAgentRuntime as ResolvedAgentRuntime,
+    selected_model,
+)
 from app.modules.agent.services.runtime_capabilities import (
     unselected_capabilities,
     with_harness_vision,
@@ -68,66 +69,6 @@ logger = get_logger(__name__)
 # is published — typically to map short public names to provider model IDs and
 # declare per-model capabilities (vision). The core stays env-driven: without a
 # customizer the catalog is used verbatim (public name == provider model name).
-
-
-@dataclass(slots=True)
-class ResolvedAgentRuntime:
-    profile: AgentRuntimeProfile
-    harness_kind: HarnessKind
-    model: RuntimeModelCatalogEntry | None
-    provider_model_name: str | None
-    credentials: dict[str, object] | None
-    # What the runtime can do when no catalog entry is selected. A harness
-    # profile routinely pins no model -- the harness picks its own -- and
-    # capabilities must survive that, because "nothing selected" says nothing
-    # about whether the thing on the other end can read an image.
-    unselected_capabilities: list[RuntimeModelCapability] = field(default_factory=list)
-
-    @property
-    def capabilities(self) -> list[RuntimeModelCapability]:
-        """What this runtime can do, selected model or not.
-
-        Read this rather than `model.capabilities`: an Agent Host profile
-        routinely selects no model, and `model is None` says nothing about
-        whether the thing on the other end can read an image.
-        """
-        return list(
-            self.model.capabilities if self.model else self.unselected_capabilities
-        )
-
-    @property
-    def model_name_for_harness(self) -> str:
-        if self.model is None:
-            return "default"
-        return self.provider_model_name or self.model.name
-
-    def public_snapshot(self) -> dict[str, object | None]:
-        return {
-            "profile_id": self.profile.id,
-            "profile_name": self.profile.name,
-            "user_id": str(self.profile.user_id) if self.profile.user_id else None,
-            "harness_id": str(self.profile.harness_id)
-            if self.profile.harness_id
-            else None,
-            "scope": self.profile.scope.value,
-            "protocol": self.profile.protocol.value,
-            "model_name": self.model.name if self.model else None,
-            "provider_model_name": self.provider_model_name,
-            "model_metadata": dict(self.model.metadata) if self.model else {},
-            # Carried so paths that rebuild a context from the snapshot — the
-            # MCP bridges, notably — can work out whether this model reads
-            # images, instead of assuming it cannot and delegating needlessly.
-            # Sourced from the selected model when there is one, and from the
-            # runtime itself when there is not. It used to be `[] if not
-            # self.model`, which read "this model cannot see" for every Agent
-            # Host run -- those pin no model -- so `pod_view_document_pages`
-            # refused and `view_image` was withheld from hosts that read images
-            # natively.
-            "model_capabilities": [
-                capability.value for capability in self.capabilities
-            ],
-            "config": _config_dict(self.profile.config),
-        }
 
 
 class AgentRuntimeProfileService:
@@ -361,11 +302,19 @@ class AgentRuntimeProfileService:
                     code="runtime_profile_archived",
                     status_code=409,
                 )
-            raise RuntimeError(f"Agent runtime profile {profile_id!r} is not available")
-        model = _selected_model(profile, runtime.model_name)
+            owned_elsewhere = await self._someone_elses_personal_profile(
+                profile_id=profile_id,
+                organization_id=organization_id,
+                user_id=user_id,
+            )
+            if owned_elsewhere is not None:
+                raise owned_elsewhere
+            raise runtime_profile_unavailable_error()
+        model = selected_model(profile, runtime.model_name)
         if model is None and profile.kind is not RuntimeProfileKind.HARNESS:
-            raise RuntimeError(
-                f"Agent runtime profile {profile_id!r} has no selectable model"
+            raise RuntimeUnavailableError(
+                f"{profile.name} has no model to run. Add one in Settings "
+                "\u2192 Models, or pick another model for this teammate."
             )
         harness_sees = await self._harness_reads_images(profile)
         model = with_harness_vision(model, harness_sees=harness_sees)
@@ -418,6 +367,41 @@ class AgentRuntimeProfileService:
         if harness is None:
             return False
         return (getattr(harness, "capabilities", None) or {}).get("images") is True
+
+    async def _someone_elses_personal_profile(
+        self,
+        *,
+        profile_id: str,
+        organization_id: UUID | None,
+        user_id: UUID,
+    ) -> RuntimeUnavailableError | None:
+        """Name the owner when this is another member's own runtime.
+
+        A member may pin a teammate the pod sees to their own Claude Code or
+        their own provider; it runs for them. When anybody else's turn reaches
+        it, the run must neither borrow the owner's runtime nor fail with no
+        reason given, so this says whose it is. Failure path only.
+        """
+        if self.repository is None or organization_id is None:
+            return None
+        try:
+            profile = await self.repository.get_personal_by_id(
+                profile_id=profile_id, organization_id=organization_id
+            )
+            if profile is None or profile.user_id in (None, user_id):
+                return None
+            owner = await self.repository.owner_first_name(profile.user_id)
+        except SQLAlchemyError:
+            # A better message is not worth masking why the run cannot start.
+            logger.warning(
+                "agent.runtime_profile.owner_lookup_failed.degraded",
+                profile_id=str(profile_id),
+                exc_info=True,
+            )
+            return None
+        return personal_runtime_not_shareable_error(
+            profile_name=profile.name, owner_name=owner
+        )
 
     async def _archived_profile(
         self,
@@ -498,66 +482,30 @@ def _profile_availability(
     return RuntimeProfileAvailability.READY
 
 
-def _selected_model(
-    profile: AgentRuntimeProfile,
-    requested_model_name: str | None,
-) -> RuntimeModelCatalogEntry | None:
-    model_name = requested_model_name or profile.default_model_name
-    if not model_name:
-        return None
-    for model in profile.model_catalog:
-        if model_name == model.name:
-            return model
-    # The requested model is not in the catalog (e.g. a pinned default whose
-    # model was later deprecated, or a swapped BYO key). Degrade gracefully to
-    # the profile's own default — and then the first catalog entry — rather than
-    # hard-failing every run that relies on this profile.
-    #
-    # Except for a coding agent on someone's computer. That agent has a default
-    # of its own, which is what an unpinned profile already runs on, and it is
-    # the honest fallback: the first entry of its published list is an
-    # arbitrary model the person never chose, and pinning it explicitly
-    # replaced "whatever the agent would use" with a model nobody picked.
-    if profile.harness_id is not None:
-        logger.warning(
-            "agent.runtime_profile.model_substituted.degraded",
-            profile_id=profile.id,
-            requested_model_name=model_name,
-            selected_model_name=None,
-        )
-        return None
-    substitute: RuntimeModelCatalogEntry | None = None
-    if requested_model_name and profile.default_model_name:
-        substitute = next(
-            (
-                model
-                for model in profile.model_catalog
-                if model.name == profile.default_model_name
-            ),
-            None,
-        )
-    if substitute is None and profile.model_catalog:
-        substitute = profile.model_catalog[0]
-    if substitute is not None:
-        # Said out loud, because the substitution is otherwise undetectable: an
-        # agent pinned to one model runs -- and is billed -- on another, with
-        # different cost and different behaviour, indefinitely. The neighbouring
-        # archived-profile path went to real trouble to say what happened; this
-        # one used to say nothing at all.
-        logger.warning(
-            "agent.runtime_profile.model_substituted.degraded",
-            profile_id=profile.id,
-            requested_model_name=model_name,
-            selected_model_name=substitute.name,
-        )
-    return substitute
+def runtime_profile_unavailable_error() -> RuntimeUnavailableError:
+    """Not visible to the person whose run this is, and not known to be whose.
+
+    Gone, or another member's own runtime when the lookup that would name them
+    failed (`personal_runtime_not_shareable_error` is the usual answer for
+    that). It used to be a bare RuntimeError -- an opaque failure for everyone
+    but the owner.
+    """
+    return RuntimeUnavailableError(
+        "The model this teammate is set to use isn't available to you: it was "
+        "removed, or it is someone's personal model. Pick another model for "
+        "the teammate.",
+        code="runtime_profile_unavailable",
+    )
 
 
-def _config_dict(config: object | None) -> dict[str, object]:
-    if config is None:
-        return {}
-    if isinstance(config, BaseModel):
-        return config.model_dump(mode="json")
-    if isinstance(config, dict):
-        return config
-    return {}
+def personal_runtime_not_shareable_error(
+    *, profile_name: str, owner_name: str | None
+) -> RuntimeUnavailableError:
+    """Another member's own runtime, reached by someone who is not them."""
+    whose = f"{owner_name}'s" if owner_name else "a teammate's"
+    ask = f"Ask {owner_name}" if owner_name else "Ask its owner"
+    return RuntimeUnavailableError(
+        f"This teammate runs on {whose} own {profile_name}, which only they can "
+        f"use. {ask} to run it, or pick a model the organization shares.",
+        code="runtime_profile_not_shareable",
+    )

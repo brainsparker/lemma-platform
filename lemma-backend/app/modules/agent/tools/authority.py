@@ -38,6 +38,7 @@ from app.core.authorization.anonymous import build_outsider_context
 from app.core.authorization.context import Context
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.authorization.factory import create_authorization_data_service
+from app.core.authorization.pod_principal import build_pod_context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.context import AgentContext
 
@@ -47,6 +48,15 @@ async def tool_authorization_context(
 ) -> Context:
     """The authorization context one agent tool call runs under."""
     audience = deps.audience
+    if audience.asking_pod_id is not None:
+        # Another pod asking over a link: Public reads here, plus what this pod
+        # granted that pod, and nothing else.
+        return build_pod_context(
+            session=uow.session,
+            pod_id=deps.pod_id,
+            organization_id=deps.org_id,
+            asking_pod_id=audience.asking_pod_id,
+        )
     if audience.answers_outsiders:
         # A contact is named in the audit trail and narrows contact-owned
         # tables to their rows; a group's outsiders are one conversation.
@@ -67,14 +77,27 @@ async def tool_authorization_context(
         )
     return await authorization.build_delegated_workload_context(
         user_id=deps.user_id,
-        principal_type="AGENT",
+        principal_type=workload_principal_type(deps),
         principal_id=getattr(deps, "workload_id", None) or DEFAULT_POD_AGENT_ID,
         pod_id=deps.pod_id,
         is_default_pod_agent=deps.is_pod_default_agent,
+        delegation_scope=getattr(deps, "delegation_scope", None),
         delegation_actor_name=deps.agent_name,
         # Session approvals (APPROVE_FOR_SESSION) are keyed by conversation.
         delegation_session_id=str(deps.conversation_id),
     )
+
+
+def workload_principal_type(deps: AgentContext) -> str:
+    """``FUNCTION`` for a function's own delegated token, else ``AGENT``.
+
+    Only the pod MCP mount builds a function's tool context: a function calling
+    pod tools with its token must get the function's grants, not be read as an
+    agent -- or, worse, as the pod's assistant acting with the person's roles.
+    """
+    if getattr(deps, "workload_type", None) == "function":
+        return "FUNCTION"
+    return "AGENT"
 
 
 def workload_actor_id(deps: AgentContext) -> str:
@@ -84,6 +107,17 @@ def workload_actor_id(deps: AgentContext) -> str:
     must derive it the same way: from the agent's own id.
     """
     return f"agent:{getattr(deps, 'workload_id', None) or DEFAULT_POD_AGENT_ID}"
+
+
+def conversation_workload_actor_id(*, agent_id: UUID | None, pod_id: UUID) -> str:
+    """:func:`workload_actor_id` for a conversation, where there is no run.
+
+    A conversation with no agent of its own belongs to the pod's assistant,
+    whose id is its pod's. It used to fall back to ``DEFAULT_POD_AGENT_ID``,
+    which no run carries, so the assistant could never find an approval the
+    person gave it for the conversation.
+    """
+    return f"agent:{agent_id or pod_id}"
 
 
 @dataclass(frozen=True, slots=True)

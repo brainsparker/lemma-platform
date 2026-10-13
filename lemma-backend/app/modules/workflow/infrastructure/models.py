@@ -7,9 +7,11 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -29,6 +31,10 @@ class WorkflowModel(UUIDAuditBase):
     __table_args__ = (
         UniqueConstraint("pod_id", "name", name="uq_workflow_flow_pod_name"),
         Index("ix_workflow_flow_pod_name", "pod_id", "name"),
+        CheckConstraint(
+            "max_concurrent_runs IS NULL OR max_concurrent_runs >= 1",
+            name="ck_workflow_flows_max_concurrent_runs_positive",
+        ),
     )
 
     # Base provides id, created_at, updated_at
@@ -54,6 +60,8 @@ class WorkflowModel(UUIDAuditBase):
     mode: Mapped[str] = mapped_column(String, default="GLOBAL", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
+    #: How many of this workflow's runs may be in progress at once; None is no cap.
+    max_concurrent_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     runs: Mapped[list["WorkflowRunModel"]] = relationship(
         "WorkflowRunModel",

@@ -1726,7 +1726,7 @@ async def test_child_conversation_inherits_parent_cwd_and_workspace():
     child = Conversation(
         pod_id=parent.pod_id, user_id=parent.user_id, parent_id=parent_id
     )
-    await service._apply_inherited_cwd(child, parent_id=parent_id)
+    await service._apply_inherited_cwd(child, parent=parent)
 
     assert child.metadata["cwd"] == f"{WORKSPACE_ROOT}/projects/alpha"
     assert child.metadata["workspace_id"] == "ws-1"
@@ -1740,7 +1740,7 @@ async def test_root_conversation_gets_own_cwd():
 
     service = _conversation_service_with_repo(_Repo())
     convo = Conversation(pod_id=uuid4(), user_id=uuid4())
-    await service._apply_inherited_cwd(convo, parent_id=None)
+    await service._apply_inherited_cwd(convo, parent=None)
 
     # A root gets its own pretty c/{date}/{slug} cwd stamped into metadata.
     date = convo.created_at.date().isoformat()
@@ -1754,16 +1754,21 @@ async def test_root_conversation_gets_own_cwd():
 async def test_explicit_cwd_in_metadata_is_not_overridden():
     class _Repo:
         async def get_conversation(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError("parent should not be fetched when cwd is explicit")
+            raise AssertionError("the parent is handed over, never re-read")
 
     service = _conversation_service_with_repo(_Repo())
-    convo = Conversation(
+    parent = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        parent_id=uuid4(),
+        metadata={"cwd": f"{WORKSPACE_ROOT}/projects/parents"},
+    )
+    convo = Conversation(
+        pod_id=parent.pod_id,
+        user_id=parent.user_id,
+        parent_id=parent.id,
         metadata={"cwd": f"{WORKSPACE_ROOT}/custom"},
     )
-    await service._apply_inherited_cwd(convo, parent_id=convo.parent_id)
+    await service._apply_inherited_cwd(convo, parent=parent)
 
     assert convo.metadata["cwd"] == f"{WORKSPACE_ROOT}/custom"
 

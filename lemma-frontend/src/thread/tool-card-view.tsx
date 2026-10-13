@@ -31,7 +31,10 @@ import { requestSignIn } from "@/computer/sign-in-bridge";
 import { openSettings } from "@/desktop/open-settings";
 import { useConversationDirectory, useFileBody } from "@/computer/queries";
 import { clockOf } from "./turns";
+import { writeAddress } from "@/shell/address";
+import { PlaceLink } from "@/shell/place-link";
 import {
+    askCardView,
     restLength,
     waitEnding,
     type BrowserStep,
@@ -43,6 +46,7 @@ import {
     type SignInAsk,
     type SourceList,
     type SubTask,
+    type TeammateAsk,
     type TerminalRun,
     type ToolCard,
     type WaitFor,
@@ -780,6 +784,47 @@ function TaskCard({ task }: { task: SubTask }) {
     );
 }
 
+/* ── a request put to another teammate ───────────────────────────────── */
+
+/** Ask cards stay readable once the turn is over: the request and what came
+ *  back, and -- when it was asked as the person -- the way into the other side
+ *  of it, which is a conversation of theirs in that teammate's space. Over a
+ *  connection that conversation is not theirs to open, so there is no link. */
+function AskCard({ ask }: { ask: TeammateAsk }) {
+    const [open, setOpen] = useState(false);
+    const view = askCardView(ask);
+    return (
+        <section className="toolcard toolcard--task">
+            <Head
+                icon={<AgentIcon size={14} />}
+                what={"Asked " + ask.teammate}
+                status={view.status}
+                tone={view.tone}
+                open={open}
+                onToggle={() => setOpen((was) => !was)}
+            />
+            {open && (
+                <div className="toolcard__body">
+                    <p className="toolcard__note">{ask.request}</p>
+                    {ask.error && <p className="toolcard__note" data-tone="bad">{ask.error}</p>}
+                    {ask.answer && <pre className="toolcard__out" data-stream="value">{ask.answer}</pre>}
+                    {view.line && <p className="toolcard__note">{view.line}</p>}
+                    {view.linkable && (
+                        <p className="toolcard__note">
+                            <PlaceLink
+                                className="linkish"
+                                href={writeAddress({ podId: ask.podId, tabId: "conversation", conversationId: ask.conversationId, agentName: null })}
+                            >
+                                Open {ask.teammate}&rsquo;s conversation
+                            </PlaceLink>
+                        </p>
+                    )}
+                </div>
+            )}
+        </section>
+    );
+}
+
 /* ── one call out to a connected account ─────────────────────────────── */
 
 function ConnectorCard({ run }: { run: ConnectorRun }) {
@@ -1019,5 +1064,7 @@ export function ToolCardView({
             return <SearchCard search={card} />;
         case "task":
             return <TaskCard task={card} />;
+        case "ask":
+            return <AskCard ask={card} />;
     }
 }

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 from pydantic import (
@@ -209,7 +211,9 @@ class AgentRuntimeProfile(BaseModel):
     description: str | None = None
     default_model_name: str | None = None
     model_catalog: list[RuntimeModelCatalogEntry] = Field(default_factory=list)
-    config: RuntimeProfileConfig = Field(default_factory=dict)
+    # Out of the repr: custom headers live here, unmasked, and a profile is
+    # exactly the kind of object that ends up in a log line or a traceback.
+    config: RuntimeProfileConfig = Field(default_factory=dict, repr=False)
     credentials: RuntimeCredentials | None = None
     status: RuntimeProfileStatus = RuntimeProfileStatus.ACTIVE
     metadata: JsonObject = Field(default_factory=dict)
@@ -288,8 +292,12 @@ class AgentRuntimeProfile(BaseModel):
             # selected value. Guarded on the parsed type, so a legacy row whose
             # config stayed a raw dict is still redacted.
             data["config"] = data.get("config", {})
-        else:
+        elif self.kind is RuntimeProfileKind.HARNESS:
+            # A legacy harness row whose config stayed a raw dict: no known
+            # shape to allowlist, so the key-name redaction still applies.
             data["config"] = _redact_public_secrets(data.get("config", {}))
+        else:
+            data["config"] = public_provider_config(data.get("config", {}))
         data["has_credentials"] = self.has_credentials
         data["derived_harness_kind"] = self.derived_harness_kind().value
         return data
@@ -304,7 +312,75 @@ class AgentRuntimeProfile(BaseModel):
             raise ValueError("default_model_name must match a model catalog name")
 
 
-_REDACTED_VALUE = "<redacted>"
+REDACTED_VALUE = "<redacted>"
+
+# What any member may read of a provider's config. An allowlist, because the
+# key-name denylist it replaces passed every secret whose name it did not
+# guess -- a key in a base URL's query, a password in its userinfo, a gateway
+# subscription header -- while masking `max_tokens` for containing "token".
+_PUBLIC_URL_KEYS = ("base_url", "azure_endpoint")
+_PUBLIC_PLAIN_KEYS = ("azure_version", "deployment_id", "project_id", "location")
+
+
+def public_url(url: str) -> str:
+    """``url`` with its userinfo, query and fragment removed."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    netloc = f"{host}:{port}" if port is not None else host
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
+def public_provider_config(config: Mapping[str, object]) -> JsonObject:
+    """A provider config as anyone in the organization may see it.
+
+    Header values are write-only, like the API key: they are as often a
+    credential, so only their names are shown. ``model_settings`` is tuning,
+    not a secret store, and is returned as stored -- a masked value read back
+    and saved again would break every run on the profile.
+    """
+    public: JsonObject = {}
+    for key in _PUBLIC_URL_KEYS:
+        if key in config:
+            value = config[key]
+            public[key] = public_url(str(value)) if value else value
+    for key in _PUBLIC_PLAIN_KEYS:
+        if key in config:
+            public[key] = config[key]
+    headers = config.get("headers")
+    if isinstance(headers, Mapping):
+        public["header_names"] = sorted(str(name) for name in headers)
+    model_settings = config.get("model_settings")
+    if isinstance(model_settings, Mapping):
+        public["model_settings"] = dict(model_settings)
+    return public
+
+
+def refuse_redacted_values(value: object, *, field: str) -> None:
+    """Refuse a write carrying the mask an older listing showed for a secret.
+
+    A client that prefilled an edit from that listing sends the mask back, and
+    saving it would replace a working value with the literal string.
+    """
+    if isinstance(value, str):
+        if value == REDACTED_VALUE:
+            raise ValueError(
+                f"{field} contains {REDACTED_VALUE!r}; send the real value or "
+                "leave the field out to keep the stored one"
+            )
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            refuse_redacted_values(item, field=field)
+    elif isinstance(value, list):
+        for item in value:
+            refuse_redacted_values(item, field=field)
+
+
 _SENSITIVE_KEY_PARTS = (
     "api_key",
     "apikey",
@@ -325,7 +401,7 @@ def _redact_public_secrets(value: Any) -> Any:
         for key, item in value.items():
             key_text = str(key)
             if _is_sensitive_key(key_text):
-                redacted[key_text] = _REDACTED_VALUE
+                redacted[key_text] = REDACTED_VALUE
             else:
                 redacted[key_text] = _redact_public_secrets(item)
         return redacted

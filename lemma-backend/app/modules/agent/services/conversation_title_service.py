@@ -35,6 +35,7 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.repositories import ConversationRepository
@@ -213,7 +214,7 @@ class ConversationTitleGenerator:
         resolved = await self._resolve_runtime(
             organization_id=organization_id, user_id=user_id, pod_id=pod_id
         )
-        runtime_profile = resolved.public_snapshot()
+        runtime_profile = resolved.runtime_snapshot().as_payload()
         model = (
             self._model_for_profile or require_pydantic_ai_model_from_runtime_profile
         )(
@@ -283,8 +284,10 @@ class ConversationTitleGenerator:
                 organization_id=organization_id,
                 user_id=user_id,
             )
-        except RuntimeError:
-            # Model not in this deployment's catalog — use the profile default.
+        except RuntimeUnavailableError:
+            # The configured title model is not in this deployment's catalog.
+            # A documented fallback for a background helper, not a teammate's
+            # pinned model: a title on the default model is still a title.
             return await service.resolve(
                 runtime=AgentRuntimeConfig(
                     profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,

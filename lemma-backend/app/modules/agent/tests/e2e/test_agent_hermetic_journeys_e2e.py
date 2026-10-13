@@ -2445,6 +2445,9 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
         json={
             "source": "OPENAI_COMPATIBLE",
             "base_url": "http://169.254.169.254/latest",
+            # A new host needs its own key, or the move is refused before the
+            # address is even checked.
+            "api_key": "sk-for-the-new-host",
         },
     )
     assert unsafe_move.status_code == status.HTTP_400_BAD_REQUEST
@@ -2545,13 +2548,14 @@ async def test_a_server_key_without_model_names_still_lists_and_says_so(
 
 
 @pytest.mark.asyncio
-async def test_archived_runtime_profile_fails_a_pinned_agent_run_safely(
+async def test_archived_runtime_profile_refuses_a_pinned_agent_s_turn_safely(
     authenticated_client,
     fixed_test_org,
     e2e_settings,
     worker,
 ):
-    """A user cannot run an agent against a profile archived meanwhile."""
+    """A user cannot run an agent against a profile archived meanwhile, and is
+    told so before a run exists to fail."""
     del worker
     runtime = await _create_runtime_profile(
         authenticated_client,
@@ -2577,26 +2581,23 @@ async def test_archived_runtime_profile_fails_a_pinned_agent_run_safely(
     )
     assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
     conversation_id = conversation.json()["id"]
-    events = await _send_message(
-        authenticated_client,
-        pod["id"],
-        conversation_id,
-        "Run even though the profile was archived.",
+    refused = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations/{conversation_id}/messages",
+        json={"content": "Run even though the profile was archived."},
     )
-    assert events[-1]["type"] == "error", events
-    assert json.dumps(events).find(_RUNTIME_SECRET) == -1
-    # The message `resolve()` composed says which model went away and where to
-    # pick another. It used to be replaced with "check the agent runtime
-    # configuration", which is the one thing the server already knew the answer
-    # to.
-    assert runtime["name"] in str(events[-1]["data"]), events[-1]
-    assert "was retired" in str(events[-1]["data"]), events[-1]
+    assert refused.status_code == status.HTTP_409_CONFLICT, refused.text
+    assert refused.text.find(_RUNTIME_SECRET) == -1
+    # The message `resolve()` composes says which model went away and where to
+    # pick another, and the turn-start check reuses it rather than a vaguer one.
+    assert refused.json()["code"] == "runtime_profile_archived"
+    assert runtime["name"] in refused.json()["message"]
+    assert "was retired" in refused.json()["message"]
 
     durable = await authenticated_client.get(
         f"/pods/{pod['id']}/conversations/{conversation_id}"
     )
     assert durable.status_code == status.HTTP_200_OK, durable.text
-    assert durable.json()["status"] == "FAILED"
+    assert durable.json()["last_run_status"] is None
 
 
 @pytest.mark.asyncio

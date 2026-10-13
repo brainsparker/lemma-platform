@@ -204,6 +204,7 @@ class ResumeToolReturnBuilder:
                     record_session_approvals,
                     conversation_id=conversation.id,
                     agent_id=conversation.agent_id,
+                    pod_id=conversation.pod_id,
                     tool_args=tool_args,
                     user_id=user_id,
                 )
@@ -412,8 +413,7 @@ class ResumeToolReturnBuilder:
             workload_id=agent.id,
             is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
             configured_accounts=configured_accounts,
-            runtime_profile=resolved.public_snapshot(),
-            runtime_credentials=resolved.credentials or {},
+            runtime_profile=resolved.runtime_snapshot().as_payload(),
             workspace_id=workspace_location.workspace_id,
             workspace_cwd=workspace_location.cwd,
             workspace_repo=workspace_location.repo,

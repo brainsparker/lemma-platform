@@ -32,6 +32,7 @@ from app.modules.agent.services.attached_document_brief import (
     build_attached_document_section,
 )
 from app.modules.agent.services.outsider_brief import outsider_brief
+from app.modules.agent.services.link_brief import link_brief
 from app.modules.agent.services.brief_lines import run_source_of
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.services.surface_context import (
@@ -67,14 +68,12 @@ async def build_run_context(
     user_id: UUID,
     resolved_runtime: Any,
     runtime_profile_snapshot: dict[str, object | None] | None,
-    runtime_credentials: dict[str, Any],
     resolve_configured_accounts: Any,
 ) -> ConversationContext:
     """The context this run's tools execute against.
 
-    `runtime_profile_snapshot` and `runtime_credentials` are passed in rather
-    than recomputed: the caller needs the same snapshot for the run identity and
-    the harness options, and two calls to `public_snapshot()` would be two
+    `runtime_profile_snapshot` is passed in rather than recomputed: the caller needs the same snapshot for the run identity and
+    the harness options, and two calls to `runtime_snapshot()` would be two
     objects that only happen to agree.
     """
     surface_context = surface_context_from_conversation(conversation)
@@ -120,7 +119,6 @@ async def build_run_context(
             else await resolve_configured_accounts(agent=agent, user_id=user_id)
         ),
         runtime_profile=runtime_profile_snapshot,
-        runtime_credentials=runtime_credentials,
         workspace_id=workspace_location.workspace_id,
         workspace_cwd=workspace_location.cwd,
         workspace_repo=workspace_location.repo,
@@ -140,7 +138,14 @@ async def build_run_context(
     )
     try:
         ctx.context_brief = (
-            await outsider_brief(
+            await link_brief(
+                uow_factory,
+                pod_id=conversation.pod_id,
+                asking_pod_id=audience.asking_pod_id,
+                steward_user_id=user_id,
+            )
+            if audience.asking_pod_id is not None
+            else await outsider_brief(
                 uow_factory,
                 pod_id=conversation.pod_id,
                 owner_user_id=user_id,
@@ -206,7 +211,9 @@ async def build_run_context(
     # graph.
     from app.modules.agent.services.host_execution_selection import (
         choose_host_workspace,
-        host_runs_native_commands,
+    )
+    from app.modules.agent.services.host_native_commands import (
+        settle_native_commands,
     )
 
     if for_outsider:
@@ -218,5 +225,18 @@ async def build_run_context(
             conversation=conversation, agent_run=agent_run, user_id=user_id
         )
     else:
-        ctx.host_runs_native_commands = await host_runs_native_commands(conversation)
+        ctx.host_runs_native_commands = await settle_native_commands(
+            conversation=conversation,
+            agent_run=agent_run,
+            harness_id=_harness_id(runtime_profile_snapshot),
+        )
     return ctx
+
+
+def _harness_id(snapshot: dict[str, object | None] | None) -> UUID | None:
+    """The Agent Host harness a coding-agent run's profile names, if any."""
+    raw = (snapshot or {}).get("harness_id")
+    try:
+        return UUID(str(raw)) if raw else None
+    except ValueError:
+        return None

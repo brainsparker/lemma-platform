@@ -165,7 +165,7 @@ async def drive_with_retry(
                 # the next attempt's total, and a second event would either
                 # double-count for a consumer that sums or make the "exactly one
                 # usage total per run" contract false.
-                emit_usage()
+                await emit_usage()
                 raise
             # Resuming re-asks only the request that failed. Completed tool
             # results are replayed from the snapshot rather than re-executed,

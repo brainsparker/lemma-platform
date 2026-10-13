@@ -33,8 +33,23 @@ _NEXT_STEP: dict[int, str] = {
 }
 
 
+# What to try, by the server's code, where it says more than the status does.
+# An agent deleting a table gets a 403 that no grant or role fixes: a person has
+# to approve it. Told "a pod grant or an org role is missing", the agent and the
+# person it worked for both went looking for a setting that does not exist.
+_NEXT_STEP_BY_CODE: dict[str, str] = {
+    "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL": (
+        "An agent may not do this on its own. Ask the person to approve it "
+        "(request_approval), then try again, or ask them to do it themselves."
+    ),
+}
+
+
 def next_step_for(exc: object) -> str | None:
     """The one-line "now do this" for an API error, or None if there isn't one."""
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code in _NEXT_STEP_BY_CODE:
+        return _NEXT_STEP_BY_CODE[code]
     status = getattr(exc, "status_code", None)
     if status == 429:
         # 429 carries its own wait, when the server advised one. Kept out of the

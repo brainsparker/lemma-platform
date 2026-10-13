@@ -265,3 +265,18 @@ class TelegramManagedBotSetupAlreadyInProgressError(AgentSurfaceError):
             code="TELEGRAM_MANAGED_BOT_SETUP_ALREADY_IN_PROGRESS",
             status_code=409,
         )
+
+
+class SurfaceWebhookAuthenticationError(DomainError):
+    """Webhook signature / authenticity check failed.
+
+    A ``DomainError`` so the global handler translates it automatically (no
+    manual catch-and-remap in the webhook controller). ``status_code`` is
+    caller-supplied (401 for bad signatures, 404 for platforms without direct
+    ingress).
+    """
+
+    def __init__(self, detail: str, *, status_code: int = 401):
+        super().__init__(
+            detail, code="SURFACE_WEBHOOK_AUTH_FAILED", status_code=status_code
+        )

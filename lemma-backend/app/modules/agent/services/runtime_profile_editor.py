@@ -9,6 +9,7 @@ awake.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from uuid import UUID
 
 from pydantic import HttpUrl
@@ -39,9 +40,12 @@ from app.modules.agent.services.runtime_profile_creation import (
     normalize_profile_name,
 )
 from app.modules.agent.services.runtime_provider_patch import (
+    KeyMustBeReenteredError,
+    ProviderProfilePatch,
     resolve_catalog_names,
     resolve_provider_patch,
 )
+from app.core.log.log import get_logger
 from app.modules.agent.services.runtime_system_profiles import (
     agent_host_model_catalog,
 )
@@ -49,6 +53,8 @@ from app.modules.agent.services.runtime_system_profiles import (
 # Imported as a module so a patched discovery function is the one that runs.
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent.services import runtime_provider_discovery as discovery
+
+logger = get_logger(__name__)
 
 
 def _harness_config(profile: AgentRuntimeProfile) -> HarnessRuntimeConfig:
@@ -73,6 +79,35 @@ def _provider_config(
             return AnthropicCompatibleRuntimeConfig.model_validate(profile.config)
         return OpenAICompatibleRuntimeConfig.model_validate(profile.config)
     raise ValueError("This runtime profile has no provider configuration")
+
+
+def _audited_patch(
+    settle: Callable[[], ProviderProfilePatch],
+    *,
+    profile_id: str,
+    organization_id: UUID,
+    user_id: UUID,
+) -> ProviderProfilePatch:
+    """Settle an edit, and write down who moved a provider's address -- or
+    tried to move it with the stored key still attached."""
+    try:
+        patch = settle()
+    except KeyMustBeReenteredError:
+        logger.warning(
+            "agent.runtime_profile.provider_origin_change.refused",
+            profile_id=profile_id,
+            organization_id=str(organization_id),
+            user_id=str(user_id),
+        )
+        raise
+    if patch.origin_changed:
+        logger.info(
+            "agent.runtime_profile.provider_origin.changed",
+            profile_id=profile_id,
+            organization_id=str(organization_id),
+            user_id=str(user_id),
+        )
+    return patch
 
 
 class AgentRuntimeProfileEditor:
@@ -318,18 +353,23 @@ class AgentRuntimeProfileEditor:
         assert self._service.repository is not None
         is_anthropic = protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE
         stored = _provider_config(profile)
-        patch = resolve_provider_patch(
-            profile,
-            stored,
-            is_anthropic=is_anthropic,
-            name=name,
-            description=description,
-            base_url=base_url,
-            api_key=api_key,
-            model_names=model_names,
-            headers=headers,
-            model_settings=model_settings,
-            refresh_models=refresh_models,
+        patch = _audited_patch(
+            lambda: resolve_provider_patch(
+                profile,
+                stored,
+                is_anthropic=is_anthropic,
+                name=name,
+                description=description,
+                base_url=base_url,
+                api_key=api_key,
+                model_names=model_names,
+                headers=headers,
+                model_settings=model_settings,
+                refresh_models=refresh_models,
+            ),
+            profile_id=profile.id,
+            organization_id=organization_id,
+            user_id=user_id,
         )
         changes = patch.changes
 

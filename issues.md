@@ -134,9 +134,8 @@ their profile while the carrier gives it to somebody else, and there is no
 inbound signal that says so: Meta's Cloud API reports no reassignment.
 
 Telegram is not exposed the same way (the sender id is an account id, not a
-reassignable identifier), and neither is Slack or Teams. The
-`telegram_username` path is a different shape of the same problem and is
-already refused for binding by `_cache_is_attested`.
+reassignable identifier), and neither is Slack or Teams. A Telegram handle,
+which is reassignable, is not matched on at all.
 **Why it matters:** the new holder of the number reaches the previous holder's
 workspaces, conversations and pod content, having proved nothing. It needs no
 attacker — carriers reassign numbers routinely, and in several countries within

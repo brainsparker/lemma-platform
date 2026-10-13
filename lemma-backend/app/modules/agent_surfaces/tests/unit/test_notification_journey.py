@@ -353,6 +353,7 @@ class InMemoryLinks:
         self,
         *,
         link_id,
+        expected_conversation_id,
         conversation_id,
         last_event,
         last_message_id,
@@ -361,6 +362,8 @@ class InMemoryLinks:
         route_key=None,
     ):
         row = self.rows[link_id]
+        if row.conversation_id != expected_conversation_id:
+            return None
         row.conversation_id = conversation_id
         row.last_event, row.last_message_id = last_event, last_message_id
         row.routed_agent_id = routed_agent_id

@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import sys
 from collections.abc import Awaitable, Callable
 
 
@@ -28,9 +30,15 @@ from app.core.infrastructure.jobs.streaq_runtime import (
 )
 from app.modules.agent_surfaces.composition import (
     build_app_event_handler,
+    build_surface_egress,
     build_surface_ingress,
     build_surface_service,
     build_surface_turn_starter,
+)
+from app.modules.agent_surfaces.services.owed_reply import (
+    DELIVER_OWED_REPLY_JOB,
+    OwedReply,
+    deliver_owed_reply,
 )
 from app.modules.agent_surfaces.domain.events import (
     SurfaceWebhookReceivedEvent,
@@ -64,6 +72,9 @@ from app.modules.agent_surfaces.services.contact_keepers import (
     tell_admins_a_keeper_left,
 )
 from app.modules.agent_surfaces.services.group_updates import apply_group_updates
+from app.modules.agent_surfaces.services.whatsapp_delivery_status import (
+    apply_delivery_statuses,
+)
 from app.modules.agent_surfaces.services.telegram_group_join import (
     claim_telegram_group_join,
 )
@@ -75,10 +86,18 @@ from app.modules.pod.domain.events import (
     PodEvents,
     PodMemberRemovedEvent,
 )
-from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
+from app.modules.identity.domain.events import (
+    IdentityEvents,
+    UserMobileChangedEvent,
+)
 from app.core.log.log import get_logger
+from app.core.request_context import current_observability_context
+from app.modules.agent_surfaces.services.lost_delivery import after_failed_delivery
 
-from app.modules.agent_surfaces.domain.delivery_limits import CONSUMER_ATTEMPTS
+from app.modules.agent_surfaces.domain.delivery_limits import (
+    CONSUMER_ATTEMPTS,
+    OWED_REPLY_JOB_TRIES,
+)
 
 logger = get_logger(__name__)
 
@@ -167,13 +186,20 @@ async def handle_surface_webhook(
     received = SurfaceWebhookReceivedEvent.model_validate(event)
 
     async def process() -> None:
-        await _process_surface_webhook(
-            received,
-            fs_logger,
-            uow_factory=uow_factory,
-            job_queue=job_queue,
-            onboarding_handler=onboarding_handler,
-        )
+        finished = False
+        try:
+            await _process_surface_webhook(
+                received,
+                fs_logger,
+                uow_factory=uow_factory,
+                job_queue=job_queue,
+                onboarding_handler=onboarding_handler,
+            )
+            finished = True
+        finally:
+            failure = sys.exception()
+            if not finished and isinstance(failure, Exception):
+                await after_failed_delivery(received, failure, uow_factory=uow_factory)
 
     await inbox.process(
         "agent-surfaces.webhook", received, process, max_attempts=CONSUMER_ATTEMPTS
@@ -302,6 +328,8 @@ async def _process_surface_webhook(
         # A group the bot asked WhatsApp to create, confirmed or refused. Never
         # instead of the message paths: such a body carries no message.
         await apply_group_updates(uow, ingress_request, adapters=adapters)
+        # And a WhatsApp send Meta now says never arrived.
+        await apply_delivery_statuses(uow, ingress_request)
 
         from app.modules.agent_surfaces.services.onboarding_inputs import (
             is_onboarding_input,
@@ -490,4 +518,20 @@ async def process_surface_message(
     # calls, file ingestion, and voice transcription — so no pooled DB
     # connection is held during that I/O.
     starter = build_surface_turn_starter(worker_ctx.uow_factory)
-    await starter.execute_chat(task_payload.context)
+    attempt = current_observability_context().job_attempt
+    await starter.execute_queued_chat(
+        task_payload.context,
+        last_try=attempt is not None and attempt >= CONSUMER_ATTEMPTS,
+    )
+
+
+# One try: the job reschedules itself with the wait the platform asked for, and
+# a streaq retry would send again on its own clock instead.
+@streaq_task(name=DELIVER_OWED_REPLY_JOB, max_tries=OWED_REPLY_JOB_TRIES)
+async def deliver_owed_reply_task(payload: dict[str, object]) -> None:
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    await deliver_owed_reply(
+        OwedReply.model_validate(payload),
+        uow_factory=worker_ctx.uow_factory,
+        egress_factory=build_surface_egress,
+    )

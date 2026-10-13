@@ -184,7 +184,11 @@ async def maybe_resume_pending_interaction(
         # was recorded and there is no pause left to deny, so the caller may
         # carry on -- which is what it did for this case before, when the
         # conversation was loaded a few lines earlier and found missing.
-        return ResumeOutcome.CONSUMED if recorded else ResumeOutcome.NOT_A_DECISION
+        return (
+            ResumeOutcome.CONSUMED
+            if recorded is not None
+            else ResumeOutcome.NOT_A_DECISION
+        )
     except Exception:
         if recording:
             # The person decided and we could not write it down. Never fall

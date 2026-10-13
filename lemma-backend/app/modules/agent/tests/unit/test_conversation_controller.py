@@ -5,13 +5,14 @@ from datetime import datetime, timezone
 from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
 from starlette.datastructures import QueryParams
 
 from app.modules.agent.api.controllers import conversation_controller
+from app.modules.agent.api.schemas import SendMessageRequest
 from app.modules.agent.api.controllers.conversation_page_token import (
     encode_conversation_page_token,
     parse_conversation_page_token,
@@ -272,7 +273,7 @@ async def test_send_message_starts_run_before_stream_body_is_consumed(
     response = await send_message(
         pod_id=uuid4(),
         conversation_id=result.conversation_id,
-        data=SimpleNamespace(content="say ok", metadata=None),
+        data=SendMessageRequest(content="say ok"),
         user=SimpleNamespace(id=uuid4()),
         channel_service=channel_service,
         request=SimpleNamespace(),
@@ -340,7 +341,7 @@ async def test_append_message_returns_typed_response_without_streaming(
     response = await append_message(
         pod_id=uuid4(),
         conversation_id=result.conversation_id,
-        data=SimpleNamespace(content="say ok", metadata=None),
+        data=SendMessageRequest(content="say ok"),
         user=SimpleNamespace(id=uuid4()),
         request=SimpleNamespace(),
         uow_factory=uow_factory,
@@ -373,7 +374,7 @@ async def test_append_message_reports_joining_an_active_run(monkeypatch) -> None
     response = await append_message(
         pod_id=uuid4(),
         conversation_id=result.conversation_id,
-        data=SimpleNamespace(content="steer this run", metadata=None),
+        data=SendMessageRequest(content="steer this run"),
         user=SimpleNamespace(id=uuid4()),
         request=SimpleNamespace(),
         uow_factory=uow_factory,
@@ -493,7 +494,7 @@ async def test_send_message_encodes_a_dead_subscription_as_stream_error(
     response = await send_message(
         pod_id=uuid4(),
         conversation_id=result.conversation_id,
-        data=SimpleNamespace(content="say ok", metadata=None),
+        data=SendMessageRequest(content="say ok"),
         user=SimpleNamespace(id=uuid4()),
         channel_service=channel_service,
         request=SimpleNamespace(),
@@ -533,7 +534,7 @@ async def test_send_message_raises_usage_limit_before_stream_starts(
         await send_message(
             pod_id=uuid4(),
             conversation_id=uuid4(),
-            data=SimpleNamespace(content="say ok", metadata=None),
+            data=SendMessageRequest(content="say ok"),
             user=SimpleNamespace(id=uuid4()),
             channel_service=channel_service,
             request=SimpleNamespace(),
@@ -564,7 +565,7 @@ async def test_send_message_cancellation_releases_pubsub_subscription(
         await send_message(
             pod_id=uuid4(),
             conversation_id=uuid4(),
-            data=SimpleNamespace(content="say ok", metadata=None),
+            data=SendMessageRequest(content="say ok"),
             user=SimpleNamespace(id=uuid4()),
             channel_service=channel_service,
             request=SimpleNamespace(),
@@ -601,7 +602,7 @@ class TestTheStreamSaysWhetherTheMessageStartedARun:
         response = await send_message(
             pod_id=uuid4(),
             conversation_id=result.conversation_id,
-            data=SimpleNamespace(content="say ok", metadata=None),
+            data=SendMessageRequest(content="say ok"),
             user=SimpleNamespace(id=uuid4()),
             channel_service=_ChannelService(_empty_iterator()),
             request=SimpleNamespace(),
@@ -703,7 +704,12 @@ def test_conversation_page_token_round_trips_both_sort_keys() -> None:
         "not base64 at all!",
         # Well-formed, but a naive timestamp is no position in a tz-aware order.
         encode_conversation_page_token(
-            ConversationListCursor(last_activity_at=datetime(2026, 9, 25), id=uuid4())
+            ConversationListCursor(
+                last_activity_at=datetime(2026, 9, 25),
+                # Fixed: the token is the test's id, and pytest-xdist workers
+                # must all collect the same ids.
+                id=UUID("00000000-0000-4000-8000-000000000001"),
+            )
         ),
     ],
 )

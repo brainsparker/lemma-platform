@@ -74,7 +74,15 @@ async def _default_agent_brief(*, pod_id: str, user_id: str) -> str:
         )
     assert agent is not None, "every pod has its own agent as a row"
     conversation = type(
-        "_Conversation", (), {"id": uuid4(), "is_pod_assistant": True, "metadata": {}}
+        "_Conversation",
+        (),
+        {
+            "id": uuid4(),
+            "is_pod_assistant": True,
+            "metadata": {},
+            "user_id": UUID(user_id),
+            "type": None,
+        },
     )()
     return await AgentContextBriefBuilder(uow_factory).build(
         agent=agent,

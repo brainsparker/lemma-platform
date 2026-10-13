@@ -97,6 +97,7 @@ class WaitForResponse(BaseToolResponse):
             "DEADLINE",
             "ANSWERED",
             "CANCELLED",
+            "TARGET_NEEDS_INPUT",
         ]
         | None
     ) = Field(default=None, description="Why this wait ended.")
@@ -146,6 +147,13 @@ _WAKE_MESSAGES: dict[tuple[AgentWaitType, AgentWaitWakeReason], str] = {
         "You stopped waiting because your own limit ran out. The sub-agent may "
         "still be running — check with query_subagents before deciding it "
         "failed."
+    ),
+    (AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_NEEDS_INPUT): (
+        "The sub-agent has not finished: it stopped to ask a question and is "
+        "waiting for an answer, and nobody but you can see it. Read what it "
+        "asked with query_subagents(mode='messages'), answer it with "
+        "interact_subagent(action='send') -- or ask the person, if only they "
+        "can answer -- then wait for it again."
     ),
     (AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_GONE): (
         "That sub-agent run can no longer be found, so its outcome is unknown."

@@ -23,6 +23,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+
+from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
 import structlog
 
 from app.core.log.log import setup_logging
@@ -483,15 +485,16 @@ class _FakeResolved:
     credentials: dict[str, object] = {}
     model_name_for_harness = "deepseek-v4-flash"
 
-    def public_snapshot(self) -> dict[str, object | None]:
-        return {
-            "profile_id": "system:lemma",
-            "scope": "SYSTEM",
-            "protocol": "OPENAI_COMPATIBLE",
-            "model_name": "deepseek-v4-flash",
-            "provider_model_name": "accounts/fireworks/models/deepseek-v4-flash",
-            "config": {"base_url": "http://fireworks.test/v1"},
-        }
+    def runtime_snapshot(self) -> RuntimeSnapshot:
+        return RuntimeSnapshot(
+            profile_id="system:lemma",
+            profile_name="Lemma",
+            scope="SYSTEM",
+            protocol="OPENAI_COMPATIBLE",
+            model_name="deepseek-v4-flash",
+            provider_model_name="accounts/fireworks/models/deepseek-v4-flash",
+            config={"base_url": "http://fireworks.test/v1"},
+        )
 
 
 class _FakeProfileService:

@@ -80,7 +80,7 @@ async def resolve_summarization_model[T](
             user_id=user_id,
         )
         model = pydantic_ai_model_from_runtime_profile(
-            runtime_profile=resolved.public_snapshot(),
+            runtime_profile=resolved.runtime_snapshot().as_payload(),
             runtime_credentials=resolved.credentials,
         )
     except Exception:

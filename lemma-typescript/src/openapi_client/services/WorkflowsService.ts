@@ -396,15 +396,17 @@ export class WorkflowsService {
     }
     /**
      * Create Workflow Run
-     * Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint.
+     * Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same workflow, returns the run it already created.
      * @param podId
      * @param workflowName
+     * @param idempotencyKey
      * @returns WorkflowRunResponse Successful Response
      * @throws ApiError
      */
     public static workflowRunCreate(
         podId: string,
         workflowName: string,
+        idempotencyKey?: (string | null),
     ): CancelablePromise<WorkflowRunResponse> {
         return __request(OpenAPI, {
             method: 'POST',
@@ -412,6 +414,9 @@ export class WorkflowsService {
             path: {
                 'pod_id': podId,
                 'workflow_name': workflowName,
+            },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
             },
             errors: {
                 422: `Validation Error`,

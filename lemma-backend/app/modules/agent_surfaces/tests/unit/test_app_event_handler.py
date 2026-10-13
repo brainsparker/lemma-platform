@@ -145,3 +145,42 @@ async def test_an_event_with_no_actor_is_not_answered_at_all():
     )
 
     adapter.publish_home_view.assert_not_awaited()
+
+
+async def test_the_channel_setup_modal_opens_with_the_connection_handed_back(
+    monkeypatch,
+):
+    """`views.open` runs inside the webhook request, so nothing may hold a
+    pooled connection across it -- including a session that resolving the
+    clicker has written to, which `connection_released` alone will not let go.
+    """
+    events: list[str] = []
+
+    class _Uow:
+        async def commit(self) -> None:
+            events.append("commit")
+
+    uow = _Uow()
+    uow.session = SimpleNamespace(info={"lemma_uow": uow}, new=[object()])
+    adapter = AsyncMock()
+    adapter.channel_name = AsyncMock(return_value="#general")
+
+    async def _open_modal(**_: object) -> None:
+        events.append("views.open")
+
+    adapter.open_channel_setup_modal = _open_modal
+    monkeypatch.setattr(
+        "app.modules.agent.contracts.conversations_for_surfaces.surface_agent_identity",
+        AsyncMock(return_value=None),
+    )
+
+    await _handler(uow=uow)._open_channel_setup(
+        adapter,
+        {"access_token": "xoxb"},
+        {"trigger_id": "T-1"},
+        SimpleNamespace(id=uuid4(), agent_id=uuid4()),
+        None,
+        "C-1",
+    )
+
+    assert events == ["commit", "views.open"]

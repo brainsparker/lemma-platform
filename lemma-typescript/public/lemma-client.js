@@ -11724,6 +11724,20 @@ var LemmaClient = (() => {
 
   // src/namespaces/conversations.ts
   var POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT";
+  function newClientMessageId() {
+    const crypto = globalThis.crypto;
+    if (crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+  function withClientMessageId(payload) {
+    var _a;
+    if (payload.client_message_id) return payload;
+    const carried = (_a = payload.metadata) == null ? void 0 : _a.client_message_id;
+    return {
+      ...payload,
+      client_message_id: typeof carried === "string" && carried ? carried : newClientMessageId()
+    };
+  }
   function normalizeConversation(conversation) {
     var _a, _b, _c, _d, _e;
     if (!conversation) return conversation;
@@ -11776,7 +11790,7 @@ var LemmaClient = (() => {
         send: (conversationId, payload, options = {}) => {
           const podId = this.requirePodId(options.pod_id);
           return this.http.request("POST", `/pods/${podId}/conversations/${conversationId}/messages`, {
-            body: payload
+            body: withClientMessageId(payload)
           });
         }
       });
@@ -11960,7 +11974,7 @@ var LemmaClient = (() => {
       const podId = this.requirePodId(options.pod_id);
       return this.http.stream(`/pods/${podId}/conversations/${conversationId}/messages`, {
         method: "POST",
-        body: payload,
+        body: withClientMessageId(payload),
         signal: options.signal,
         headers: {
           "Content-Type": "application/json",
@@ -11974,7 +11988,7 @@ var LemmaClient = (() => {
         "POST",
         `/pods/${podId}/conversations/${conversationId}/messages/append`,
         {
-          body: payload,
+          body: withClientMessageId(payload),
           signal: options.signal
         }
       );
@@ -12017,6 +12031,21 @@ var LemmaClient = (() => {
       return this.http.request("POST", `/pods/${podId}/conversations/${conversationId}/stop`, {
         body: {}
       }).then(normalizeConversation);
+    }
+    /**
+     * Questions, approvals and Agent Host permission requests waiting on the
+     * caller, across their own conversations in the pod, longest-waiting first.
+     * Answer one with `approvals.resolve`, passing its `tool_call_id` as the
+     * approval id. Mirrors the Python SDK's `pending_interactions`.
+     */
+    pendingInteractions(options = {}) {
+      var _a;
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "GET",
+        `/pods/${podId}/conversations/pending-interactions`,
+        { params: { limit: (_a = options.limit) != null ? _a : 50, page_token: options.page_token } }
+      );
     }
   };
 
@@ -16352,6 +16381,140 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/openapi_client/services/AgentAsksService.ts
+  var AgentAsksService = class {
+    /**
+     * List Pods This Pod Can Ask
+     * The other pods this pod's assistant can ask: those the caller is also a member of, which it asks as the caller, and those connected to this pod, which it can ask with nobody present.
+     * @param podId
+     * @returns AskablePodListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentAskablePodList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/askable-pods",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Pods That Can Ask This Pod
+     * The other pods connected to this one: each may ask this pod's assistant with nobody present, and read what is Public here plus what this pod shared with it.
+     * @param podId
+     * @returns PodLinkListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentPodLinkList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/pod-links",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Disconnect A Pod From This One
+     * Stop another pod asking this one, and take back what it was shared.
+     * @param podId
+     * @param askingPodId
+     * @returns void
+     * @throws ApiError
+     */
+    static agentPodLinkDisconnect(podId, askingPodId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/pod-links/{asking_pod_id}",
+        path: {
+          "pod_id": podId,
+          "asking_pod_id": askingPodId
+        },
+        errors: {
+          403: `The caller can't manage members of this pod`,
+          404: `That pod is not connected to this one`,
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Connect A Pod To This One
+     * Let another pod in this organization ask this one, sharing the tables and folders named for reading. Connecting again replaces what is shared. Needs pod.member.manage here, and membership of the other pod; the caller looks after the link.
+     * @param podId
+     * @param askingPodId
+     * @param requestBody
+     * @returns void
+     * @throws ApiError
+     */
+    static agentPodLinkConnect(podId, askingPodId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/pod-links/{asking_pod_id}",
+        path: {
+          "pod_id": podId,
+          "asking_pod_id": askingPodId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `Something named can't be shared, or not for that`,
+          403: `The caller can't manage members of this pod`,
+          409: `The two pods can't be connected: another organization, the same pod, or the caller isn't in the other pod`,
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/pod-links.ts
+  var PodLinksNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+    }
+    /** The other pods this pod's assistant can ask, and how. */
+    askable(podId) {
+      return this.client.request(() => AgentAsksService.agentAskablePodList(podId));
+    }
+    /** The other pods connected to this one, with what each was shared. */
+    list(podId) {
+      return this.client.request(() => AgentAsksService.agentPodLinkList(podId));
+    }
+    /** Let `askingPodId` ask `podId`, reading what is named here as well as what is Public. */
+    connect(podId, askingPodId, shares = {}) {
+      var _a, _b;
+      const body = {
+        shares: [
+          ...((_a = shares.tables) != null ? _a : []).map((name) => ({
+            resource_type: "datastore_table",
+            resource_name: name,
+            permission_ids: ["datastore.table.read", "datastore.record.read"]
+          })),
+          ...((_b = shares.folders) != null ? _b : []).map((path) => ({
+            resource_type: "folder",
+            resource_name: path,
+            permission_ids: ["folder.read"]
+          }))
+        ]
+      };
+      return this.client.request(
+        () => AgentAsksService.agentPodLinkConnect(podId, askingPodId, body)
+      );
+    }
+    /** Stop `askingPodId` asking `podId`, and take back what it was shared. */
+    disconnect(podId, askingPodId) {
+      return this.client.request(
+        () => AgentAsksService.agentPodLinkDisconnect(podId, askingPodId)
+      );
+    }
+  };
+
   // src/openapi_client/services/ContactsService.ts
   var ContactsService = class {
     /**
@@ -18829,19 +18992,23 @@ var LemmaClient = (() => {
     }
     /**
      * Create Workflow Run
-     * Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint.
+     * Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same workflow, returns the run it already created.
      * @param podId
      * @param workflowName
+     * @param idempotencyKey
      * @returns WorkflowRunResponse Successful Response
      * @throws ApiError
      */
-    static workflowRunCreate(podId, workflowName) {
+    static workflowRunCreate(podId, workflowName, idempotencyKey) {
       return request(OpenAPI, {
         method: "POST",
         url: "/pods/{pod_id}/workflows/{workflow_name}/runs",
         path: {
           "pod_id": podId,
           "workflow_name": workflowName
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
         },
         errors: {
           422: `Validation Error`
@@ -19462,6 +19629,8 @@ var LemmaClient = (() => {
       __publicField(this, "podSurfaces");
       /** The WhatsApp, Telegram and Slack groups a pod's bots are in. */
       __publicField(this, "podGroups");
+      /** The other pods a pod can ask, and the pods connected to ask it. */
+      __publicField(this, "podLinks");
       __publicField(this, "contacts");
       /** The caller's own surfaces across all pods (grouped by platform). */
       __publicField(this, "notifications");
@@ -19525,6 +19694,7 @@ var LemmaClient = (() => {
       this.organizations = new OrganizationsNamespace(this._generated, this._http);
       this.podSurfaces = new PodSurfacesNamespace(this._generated);
       this.podGroups = new PodGroupsNamespace(this._generated);
+      this.podLinks = new PodLinksNamespace(this._generated);
       this.contacts = new ContactsNamespace(this._generated);
       this.userSurfaces = new UserSurfacesNamespace(this._generated);
     }

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from app.core.domain.aggregate import AggregateRoot
 from app.core.domain.entity import Entity
@@ -237,6 +237,9 @@ class ParsedSurfaceInteraction(BaseModel):
     external_user_id: str | None = None
     callback_id: str = ""
     action: str | None = None
+    #: ``"expired"`` (nothing the tap carried can be resolved), ``"other"``
+    #: (they want to type the answer) or ``"unreadable"`` (what the tap carried
+    #: could not be looked up just now, and tapping again may work).
     interaction_state: str | None = None
     values: dict[str, Any] = Field(default_factory=dict)
     # Set when the tapped control is a native approval button; carries the
@@ -289,7 +292,9 @@ class AgentSurfaceEntity(AggregateRoot):
     surface_identity_username: str | None = None
     #: The address this surface receives on, and the one it replies from.
     surface_identity_email: str | None = None
-    webhook_secret: str | None = None
+    #: Telegram's per-surface `secret_token`. A secret on the aggregate, so a
+    #: `repr` or a logged entity shows it masked; revealed where it is sent.
+    webhook_secret: SecretStr | None = None
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
 
     @property
@@ -381,8 +386,13 @@ class AgentSurfaceEntity(AggregateRoot):
         self.status = AgentSurfaceStatus.ACTIVE
         self.updated_at = datetime.now(timezone.utc)
 
+    def mark_webhook_unregistered(self) -> None:
+        """The platform never accepted this surface's webhook: nothing arrives."""
+        self.status = AgentSurfaceStatus.ERROR
+        self.updated_at = datetime.now(timezone.utc)
+
     def configure_webhook_secret(self, *, secret: str) -> None:
-        self.webhook_secret = secret
+        self.webhook_secret = SecretStr(secret)
         self.updated_at = datetime.now(timezone.utc)
 
     def update_config(
@@ -428,13 +438,21 @@ class AgentSurfaceEntity(AggregateRoot):
         return self.surface_type.value == str(platform).upper()
 
     def matches_tenant(self, tenant_id: str | None) -> bool:
+        """Whether an event from this tenant (or workspace) is this surface's.
+
+        Fails closed on the two platforms whose installations are scoped to a
+        tenant: a surface that never recorded its tenant, or an event that
+        names none, matches nothing. Reading either as "any" let a tenantless
+        row accept every tenant's events, and an event with no tenant reach
+        every surface.
+        """
         if self.surface_type is SurfacePlatform.TEAMS:
             expected = self.external_tenant_id
-            return not expected or not tenant_id or expected == tenant_id
-        if self.surface_type is SurfacePlatform.SLACK:
+        elif self.surface_type is SurfacePlatform.SLACK:
             expected = self.external_workspace_id
-            return not expected or not tenant_id or expected == tenant_id
-        return True
+        else:
+            return True
+        return bool(expected) and bool(tenant_id) and expected == tenant_id
 
     def should_ignore_sender(self, sender_external_user_id: str | None) -> bool:
         if self.surface_type is SurfacePlatform.SLACK:

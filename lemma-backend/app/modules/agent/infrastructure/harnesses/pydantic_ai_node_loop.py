@@ -61,6 +61,7 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     MessageDraft,
     MessageKind,
+    MessageRole,
     to_json_value,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
@@ -76,6 +77,60 @@ logger = get_logger(__name__)
 #: Fraction of the run's wall-clock budget past which an answer that ran out of
 #: time is not tried again.
 _LATE_IN_THE_RUN = 0.9
+
+
+def _is_open_answer(event: AgentEvent) -> bool:
+    """Assistant text nobody has yet said is, or is not, the final answer."""
+    draft = event.data
+    return (
+        event.type is AgentEventType.MESSAGE
+        and isinstance(draft, MessageDraft)
+        and draft.role is MessageRole.ASSISTANT
+        and draft.kind is MessageKind.TEXT
+        and "is_final_answer" not in (draft.metadata or {})
+    )
+
+
+def _not_final(event: AgentEvent) -> AgentEvent:
+    draft = event.data
+    assert isinstance(draft, MessageDraft)
+    metadata = {**(draft.metadata or {}), "is_final_answer": False}
+    return event.model_copy(
+        update={"data": draft.model_copy(update={"metadata": metadata})}
+    )
+
+
+def settle_response_answers(
+    messages: list[AgentEvent],
+) -> tuple[list[AgentEvent], list[AgentEvent]]:
+    """One finished response's messages: those settled, and those still open.
+
+    Unmarked assistant text is stored as the final answer, and a text part is
+    written before the rest of its response arrives -- so a preamble before a
+    tool call, and a run that answered and then went on working, each stored a
+    final answer the run did not end on. Only the text a run ends on is final:
+
+    - a response that calls a tool goes on, so none of its text is final;
+    - otherwise every text but the last is not, and the last -- with whatever
+      follows it, so the order holds -- waits for the next node to say whether
+      the run ends here.
+    """
+    open_at = [index for index, event in enumerate(messages) if _is_open_answer(event)]
+    if not open_at:
+        return messages, []
+    calls_a_tool = any(
+        isinstance(event.data, MessageDraft)
+        and event.data.kind is MessageKind.TOOL_CALL
+        for event in messages
+    )
+    last = None if calls_a_tool else open_at[-1]
+    settled = [
+        _not_final(event) if index in open_at and index != last else event
+        for index, event in enumerate(messages)
+    ]
+    if last is None:
+        return settled, []
+    return settled[:last], settled[last:]
 
 
 class FinalOutputWriter(Protocol):
@@ -119,6 +174,9 @@ class NodeLoop[DepsT]:
         # The model settings the current attempt runs under, when a retry
         # changed them; None means the run's own.
         self._attempt_settings: JsonObject | None = None
+        # A text-only response's closing text, held until the next node says
+        # whether the run ends on it (`settle_response_answers`).
+        self._undecided: list[AgentEvent] = []
 
     def shorter_answer_settings(self) -> JsonObject | None:
         """Settings for one more try at an answer that ran out of time, or None.
@@ -159,6 +217,8 @@ class NodeLoop[DepsT]:
             try:
                 async for node in run:
                     if PydanticAIAgent.is_model_request_node(node):
+                        # Another request: the run went on past that answer.
+                        await self._release_undecided(final=False)
                         # Counted before the request, not after: the ceiling is
                         # on what the run is about to spend, and a check that
                         # only ran afterwards would always allow one call past
@@ -173,6 +233,7 @@ class NodeLoop[DepsT]:
                         if await self._pump_tool_calls(node, run):
                             return
                     elif PydanticAIAgent.is_end_node(node):
+                        await self._release_undecided(final=True)
                         if await self._pump_end_node(node):
                             return
             except AgentInputRequired:
@@ -190,9 +251,21 @@ class NodeLoop[DepsT]:
                 trace.get_current_span().set_status(Status(StatusCode.OK))
                 raise
             finally:
+                # However the attempt ended, what the model said is kept, and
+                # nothing came after it.
+                await self._release_undecided(final=True)
                 # Billing is the metered model's, per request; this only says
                 # so when a provider reports a count that cannot be true.
                 warn_if_implausible_usage(getattr(run, "usage", None))
+
+    async def _release_undecided(self, *, final: bool) -> None:
+        """Hand on the held closing text, final or not as the run turned out."""
+        held, self._undecided = self._undecided, []
+        for event in held:
+            settled = (
+                event if final or not _is_open_answer(event) else _not_final(event)
+            )
+            await self.queue.put(("event", settled))
 
     async def _spend_a_model_request(self) -> None:
         """Count this step, and stop the run if it has spent its allowance.
@@ -300,7 +373,8 @@ class NodeLoop[DepsT]:
                 await self.queue.put(("event", event))
                 return True
             await self.queue.put(("event", event))
-        for held in buffered:
+        settled, self._undecided = settle_response_answers(buffered)
+        for held in settled:
             await self.queue.put(("event", held))
         return False
 
@@ -315,6 +389,10 @@ class NodeLoop[DepsT]:
             malformed_tool_call_ids=self.malformed_tool_call_ids,
             emitted_tool_response_ids=self.emitted_tool_response_ids,
         ):
+            if event.type is AgentEventType.MESSAGE:
+                # Tools ran after a response with none to call: a retry, so
+                # the run goes on and that response's text was not its answer.
+                await self._release_undecided(final=False)
             self._record_tool_outcome(event)
             terminal = event.type in {
                 AgentEventType.ERROR,

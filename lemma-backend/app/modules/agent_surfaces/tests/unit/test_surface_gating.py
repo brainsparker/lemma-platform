@@ -222,7 +222,7 @@ def test_a_slack_channel_off_the_allow_list_is_still_refused():
 
 
 def test_a_slack_group_dm_is_one_conversation_per_group_dm():
-    from app.modules.agent_surfaces.services.surface_router import _channel_route_key
+    from app.modules.agent_surfaces.services.route_resolver import _channel_route_key
 
     surface = _slack_surface(bot_user_id="U-BOT")
 

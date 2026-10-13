@@ -181,6 +181,11 @@ class PlatformCapabilities:
     # request (``retry_action`` in the message metadata)? Where it cannot, the
     # notice asks for a typed "retry", which works on every platform.
     supports_native_retry: bool = False
+    # Is being in a group the authorization to answer there? True for Telegram,
+    # where somebody added the bot, and WhatsApp, whose bot only ever is in a
+    # group it created. Elsewhere a channel is answered only once it is
+    # configured as a route.
+    group_membership_authorizes: bool = False
 
     @property
     def delivery_cardinality(self) -> DeliveryCardinality:
@@ -313,6 +318,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # ``domain/addressing``).
         is_channel_capable=True,
         bot_creates_groups=True,
+        group_membership_authorizes=True,
         markdown_mode="whatsapp",
         formatting_style=_WHATSAPP_FORMATTING,
         soft_char_limit=1500,
@@ -364,6 +370,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # so being wrong here withheld the channel-context section from the one
         # chat platform whose group history is actually fetched and injected.
         is_channel_capable=True,
+        group_membership_authorizes=True,
         markdown_mode="markdownv2_converted",
         formatting_style=_TELEGRAM_FORMATTING,
         soft_char_limit=3500,

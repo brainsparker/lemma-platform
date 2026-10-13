@@ -103,9 +103,12 @@ async def forward_queued_messages(
                 )
                 if command is None:
                     # The run is over, or the host has not accepted it yet.
-                    # Nothing is committed, so the messages are exactly as
-                    # queued as they were: the next check, or the follow-up
-                    # turn, takes them.
+                    # Rolled back explicitly: the factory commits on a clean
+                    # exit, and committing here would stamp the messages as
+                    # sent with no command behind them, so no later check would
+                    # ever send them. Undone, they are exactly as queued as they
+                    # were: the next check, or the follow-up turn, takes them.
+                    await uow.rollback()
                     return 0
                 host_id = command.host_id
             await uow.commit()

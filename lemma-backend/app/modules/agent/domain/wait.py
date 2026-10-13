@@ -154,7 +154,12 @@ class WaitSpec(BaseModel):
     poll_attempt: int = 0
     #: When the target first stopped answering, cleared when it answers again.
     unreadable_since: LenientDatetime = None
-    woke_because: str | None = None
+    #: Why the wait resolved. A reason a later release no longer knows reads
+    #: as unknown rather than making the wait unreadable.
+    woke_because: Annotated[
+        AgentWaitWakeReason | None, _lenient(AgentWaitWakeReason)
+    ] = None
+    #: The error that made the sweep give up on waking it.
     abandoned_because: str | None = None
 
     def to_json(self) -> dict[str, Any]:

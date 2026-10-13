@@ -7,6 +7,7 @@ checks, and nothing else the service carries.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import source_of
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -70,8 +71,7 @@ class RetryCoordinator:
             conversation.id
         )
         if active_run is not None:
-            active_metadata = active_run.metadata or {}
-            if active_metadata.get("source") == "manual_retry":
+            if source_of(active_run.metadata) == "manual_retry":
                 return AgentRunStartResult(
                     conversation_id=conversation.id,
                     agent_run_id=active_run.id,

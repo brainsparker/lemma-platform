@@ -15,6 +15,7 @@ goes to the host the conversation's most recent host run chose
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import source_of
 from uuid import UUID
 
 from sqlalchemy import func, literal, select, update
@@ -160,6 +161,5 @@ async def earlier_run_sources(
     ).scalars()
     sources: list[str | None] = []
     for metadata in rows:
-        source = metadata.get("source") if isinstance(metadata, dict) else None
-        sources.append(source if isinstance(source, str) else None)
+        sources.append(source_of(metadata))
     return sources

@@ -750,7 +750,7 @@ docker-reap:
 
 # Remove the containers LEMMA_E2E_REUSE=1 keeps running between e2e sessions.
 e2e-reuse-down:
-	uv run python -c "from app.core.test_utils import remove_reused_containers as r; print(*r(), sep='\n')"
+	uv run python -c "from app.core.test_shared_containers import remove_reused_containers as r; print(*r(), sep='\n')"
 
 # ── Sandbox images ────────────────────────────────────────────────────────────
 # The two images the workspace module provisions. They live here because the

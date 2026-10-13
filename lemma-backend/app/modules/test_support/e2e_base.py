@@ -29,18 +29,20 @@ from sqlalchemy import text
 from app.core.infrastructure.db.base import Base
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.test_utils import (
-    E2E_REUSE_ENV,
     SHARED_E2E_NETWORK_NAME,
     create_postgres_database,
-    drop_set_aside_databases,
-    e2e_reuse_requested,
-    recreate_postgres_database,
-    reused_container_name,
     get_postgres_uri_from_another_container,
     get_postgres_url,
     get_redis_url,
     get_supertokens_container,
     get_supertokens_url,
+)
+from app.core.test_shared_containers import (
+    E2E_REUSE_ENV,
+    drop_set_aside_databases,
+    e2e_reuse_requested,
+    recreate_postgres_database,
+    reused_container_name,
     shared_postgres,
     shared_redis,
 )
@@ -451,7 +453,7 @@ def _start_postgres(worker_id: str, basetemp_parent, *, schema: bool = True) -> 
     Each worker gets its own logical database inside it (created via
     ``create_postgres_database``), rather than its own full container -- one
     `docker run postgres` and one idle Postgres server process for the whole
-    run instead of N. See ``shared_postgres`` in test_utils for the
+    run instead of N. See ``shared_postgres`` in test_shared_containers for the
     coordination mechanism (mirrors ``shared_kreuzberg``).
     """
 
@@ -612,7 +614,7 @@ def _start_redis(worker_id: str, basetemp_parent) -> None:
     Each worker gets its own logical DB index inside it (selected via the
     connection URL, see ``_redis_worker_db_index``), rather than its own full
     container -- one `docker run redis` for the whole run instead of N. See
-    ``shared_redis`` in test_utils for the coordination mechanism (mirrors
+    ``shared_redis`` in test_shared_containers for the coordination mechanism (mirrors
     ``shared_postgres``/``shared_kreuzberg``). Unlike Postgres, no
     per-worker provisioning step is needed here -- Redis DBs exist by index
     already, nothing to create.

@@ -17,7 +17,9 @@ from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
-from app.core.test_utils import shared_kreuzberg
+from app.core.test_shared_containers import (
+    shared_kreuzberg,
+)
 from app.modules.datastore.infrastructure.session import get_datastore_session_maker
 from app.modules.datastore.infrastructure.transactional_events import (
     ensure_datastore_event_outbox,
@@ -165,6 +167,9 @@ def document_worker(
             "DOCLING_SERVE_URL": fake_document_processor_server.base_url,
             "DOCLING_REQUEST_TIMEOUT_SECONDS": "2",
             "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS": "0",
+            # One attempt, so a document failure is terminal within the test
+            # rather than after the production backoff.
+            "DOCUMENT_PROCESSING_MAX_ATTEMPTS": "1",
         }
         async with production_worker_process(
             e2e_settings,
@@ -184,7 +189,7 @@ def kreuzberg_url(tmp_path_factory, worker_id):
     """URL of the single Kreuzberg shared across all xdist workers + the worker.
 
     Shared so the heavy embedding container runs once (see
-    ``app.core.test_utils.shared_kreuzberg``). The streaq worker uses the same
+    ``app.core.test_shared_containers.shared_kreuzberg``). The streaq worker uses the same
     container via the ``worker`` fixture, which is why this lives in shared
     test_utils rather than inline here.
     """

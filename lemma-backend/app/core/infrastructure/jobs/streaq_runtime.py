@@ -75,9 +75,13 @@ from app.core.observability.telemetry import (
 )
 from app.core.origin import Origin, OriginKind, origin_from_payload, origin_scope
 from app.core.request_context import bind_job_context, create_background_task
+from app.core.infrastructure.work.streaq_bridge import (
+    drain_work_on_signal,
+    enter_work_runtime,
+    forget_work_runtime,
+)
 
 if TYPE_CHECKING:
-    from app.core.infrastructure.work.runtime import WorkRuntime
     from app.core.registry.contract import LemmaModule
 
 logger = get_logger(__name__)
@@ -128,42 +132,6 @@ def _silence_lane_signal_handler(worker: Worker[AppWorkerContext]) -> None:
         await asyncio.Event().wait()  # until the lane's task group unwinds
 
     worker.signal_handler = _never_receives_signals  # type: ignore[method-assign]
-
-
-@dataclass(slots=True)
-class _WorkRuntimeSlot:
-    """The process's work runtime, once the primary lifespan has started it."""
-
-    runtime: WorkRuntime | None = None
-
-
-_work_runtime = _WorkRuntimeSlot()
-
-
-def _drain_work_on_signal(worker: Worker[AppWorkerContext]) -> None:
-    """Start draining the work runtime the moment the primary lane gets SIGTERM.
-
-    streaq's handler cancels the lane's scope and then gives its in-flight
-    tasks up to ``grace_period`` before the lifespan unwinds -- and the work
-    runtime is stopped by that unwinding, so its own drain used to start only
-    after streaq's grace had run out, leaving its jobs to the platform's
-    SIGKILL. Wrapping the handler starts it as the signal arrives instead:
-    claiming stops, jobs reach a safe point and are released with nothing
-    charged, in parallel with streaq's grace rather than after it.
-
-    The wrapped handler returns without awaiting anything once it has
-    cancelled the scope, so the hook below runs before the cancellation is
-    delivered; ``begin_stop`` is synchronous for that reason.
-    """
-    original = worker.signal_handler
-
-    async def _signal_handler(scope: object) -> None:
-        await original(scope)  # type: ignore[arg-type]
-        runtime = _work_runtime.runtime
-        if runtime is not None:
-            runtime.begin_stop()
-
-    worker.signal_handler = _signal_handler  # type: ignore[method-assign]
 
 
 async def _stop_secondary_lanes() -> None:
@@ -475,16 +443,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 )
             )
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
-            # After the module lifespans, so it unwinds before them: handlers
-            # may use what those set up, and shutdown must stop claiming and
-            # release owned work while the engine is still open.
-            from app.core.infrastructure.work.runtime import work_runtime_lifespan
-
-            # Its own pool, sized to what its slots may hold, so a busy streaq
-            # lane can never make a work handler wait for a connection.
-            _work_runtime.runtime = await module_stack.enter_async_context(
-                work_runtime_lifespan(database_url=settings.database_url)
-            )
+            await enter_work_runtime(module_stack)
             ms, frozen = finish_startup(boot_started)
             logger.info("service.started", startup_ms=ms, gc_frozen_objects=frozen)
             started = True
@@ -501,7 +460,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         # nothing has told to stop. Stopping the other lanes first is the
         # ordering that makes the rest of this block finite.
         await _stop_secondary_lanes()
-        _work_runtime.runtime = None
+        forget_work_runtime()
         _primary_lane_ready.clear()
         _primary_lane_context = None
         for background_task in (
@@ -644,7 +603,7 @@ for _lane, _worker in LANE_WORKERS.items():
     if _lane is not _PRIMARY_LANE:
         _silence_lane_signal_handler(_worker)
     else:
-        _drain_work_on_signal(_worker)
+        drain_work_on_signal(_worker)
 
 
 def enabled_lanes() -> list[Lane]:

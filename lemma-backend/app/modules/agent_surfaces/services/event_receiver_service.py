@@ -40,6 +40,7 @@ from app.modules.agent_surfaces.services.native_receiver_base import (
     ReceiverRunnerFactory,
     receiver_key as _receiver_key,
     NativeReceiverConflict,
+    NativeReceiverCredentialsRejected,
 )
 from app.modules.agent_surfaces.services.resend_polling_receiver import (
     ResendPollingReceiverRunner,
@@ -80,8 +81,10 @@ async def notify_surface_receiver_config_changed(
             {"surface_id": str(surface_id) if surface_id else None},
         )
     except Exception:
-        logger.debug(
-            "agent_surfaces.event_receiver_service.could_not_publish_surface_receiver.observed",
+        # The coordinators still find the change on their next scan; this is
+        # the difference between a receiver starting now and in a minute.
+        logger.warning(
+            "agent_surfaces.event_receiver_service.receiver_wakeup_publish_failed.degraded",
             exc_info=True,
         )
 
@@ -273,8 +276,10 @@ class NativeSurfaceReceiverCoordinator:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.debug(
-                "agent_surfaces.event_receiver_service.native_surface_receiver_wakeup_listener.diagnostic",
+            # Without the listener a surface change waits for the next scan
+            # instead of starting its receiver at once.
+            logger.warning(
+                "agent_surfaces.event_receiver_service.wakeup_listener_failed.degraded",
                 exc_info=True,
             )
             self._wakeup.set()
@@ -289,14 +294,14 @@ class NativeSurfaceReceiverCoordinator:
         # with a traceback, so letting the conflict escape would report a
         # misconfiguration this function handles as an unhandled crash, once
         # per stand-down.
-        refused = False
+        refused: NativeReceiverConflict | None = None
 
         async def run_receiver() -> None:
             nonlocal refused
             try:
                 await runner.run()
-            except NativeReceiverConflict:
-                refused = True
+            except NativeReceiverConflict as exc:
+                refused = exc
 
         runner_task = create_background_task(
             run_receiver(), name=f"surface-runner-{candidate.key}"
@@ -313,7 +318,16 @@ class NativeSurfaceReceiverCoordinator:
             )
             for task in done:
                 task.result()
-            if refused:
+            if isinstance(refused, NativeReceiverCredentialsRejected):
+                logger.warning(
+                    "agent_surfaces.event_receiver_service.native_receiver_credentials_rejected.degraded",
+                    platform=candidate.platform.value,
+                    credential_label=candidate.credential_label,
+                    cooldown_seconds=_CONFLICT_COOLDOWN_SECONDS,
+                    reason=str(refused),
+                )
+                await self._mark_conflicted(candidate.key)
+            elif refused is not None:
                 # Loud, and at a level that survives LOG_LEVEL=INFO. Silence
                 # here is what made a bot shared between two installations
                 # look like an unreliable bot rather than a configuration to
@@ -332,8 +346,13 @@ class NativeSurfaceReceiverCoordinator:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.debug(
-                "agent_surfaces.event_receiver_service.native_surface_receiver_stopped_platform.diagnostic",
+            # A receiver that crashed is a bot nobody hears until the next
+            # scan restarts it -- and at debug, a bot that went quiet with no
+            # record of why.
+            logger.warning(
+                "agent_surfaces.event_receiver_service.native_receiver_stopped.failed",
+                platform=candidate.platform.value,
+                credential_label=candidate.credential_label,
                 exc_info=True,
             )
         finally:

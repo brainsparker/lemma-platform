@@ -479,3 +479,45 @@ async def test_a_matching_app_id_still_narrows_to_its_candidate(monkeypatch):
 
     assert verified.app_id == "A123"
     assert verified.receiver_surface_ids == (wanted,)
+
+
+async def test_an_org_whatsapp_account_that_cannot_be_read_is_a_warning(caplog):
+    """Refused as unverifiable either way; at debug, a broken connector account
+    read exactly like a setting nobody had configured."""
+    import logging
+
+    class _Uow:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class _BrokenResolver:
+        async def for_account(self, account_id):
+            raise ConnectionError("vault unreachable")
+
+    service = SurfaceWebhookSecurityService(
+        uow_factory=_Uow, resolver_factory=lambda _uow: _BrokenResolver()
+    )
+    surface = AgentSurfaceEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        name="whatsapp",
+        surface_type=SurfacePlatform.WHATSAPP,
+        config=SurfaceConfig(type="WHATSAPP"),
+        account_id=uuid4(),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert await service.resolve_whatsapp_verify_token(surface) is None
+
+    record = next(
+        r
+        for r in caplog.records
+        if "whatsapp_credentials_unavailable" in r.getMessage()
+    )
+    assert record.levelno == logging.WARNING
+    assert "ConnectionError" in caplog.text
+    assert str(surface.account_id) in caplog.text

@@ -345,9 +345,13 @@ class SurfaceCredentialResolver:
                     )
                 )
             except Exception:
-                logger.debug(
-                    "agent_surfaces.credential_resolver.could_not_refresh_credentials_account.diagnostic",
-                    account_id=account_id,
+                # The stored token is used instead, and if it has expired every
+                # call it makes is refused -- which reads as a broken surface
+                # unless this line says why.
+                logger.warning(
+                    "agent_surfaces.credential_resolver.credential_refresh_failed.degraded",
+                    account_id=str(account_id),
+                    exc_info=True,
                 )
                 payload = dict(stored)
 
@@ -455,8 +459,10 @@ class SurfaceCredentialResolver:
         try:
             install = await auth_config(self._uow, connected.auth_config_id)
         except Exception:
-            logger.debug(
-                "agent_surfaces.credential_resolver.could_not_resolve_provider_account.diagnostic"
+            logger.warning(
+                "agent_surfaces.credential_resolver.provider_lookup_failed.degraded",
+                auth_config_id=str(connected.auth_config_id),
+                exc_info=True,
             )
             return None
         if install is None:

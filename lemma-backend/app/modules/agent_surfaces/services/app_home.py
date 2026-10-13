@@ -131,9 +131,10 @@ class AppHomeView:
                 uow=self.uow, pod_id=surface.pod_id, ctx=auth_ctx
             )
         except SQLAlchemyError:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_home_apps.diagnostic",
+            logger.warning(
+                "agent_surfaces.app_event_handler.home_apps_unavailable.degraded",
                 surface_id=str(surface.id),
+                exc_info=True,
             )
             return []
         domain = settings.app_base_domain.strip()

@@ -83,9 +83,12 @@ class SurfaceProgress:
                     metadata=metadata,
                 )
         except Exception:
-            logger.debug(
-                "agent_surfaces.egress.progress_update_failed.diagnostic",
+            # Best-effort, but not invisible: a progress line that never
+            # updates looks like a stuck run from the person's side.
+            logger.warning(
+                "agent_surfaces.egress.progress_update_failed.degraded",
                 conversation_id=conversation_id,
+                exc_info=True,
             )
             return progress_handle
 
@@ -195,9 +198,11 @@ class SurfaceProgress:
                     progress_handle=progress_handle,
                 )
             except Exception:
-                logger.debug(
-                    "agent_surfaces.egress.progress_clear_failed.diagnostic",
+                # A progress message left behind sits above the answer.
+                logger.warning(
+                    "agent_surfaces.egress.progress_clear_failed.degraded",
                     conversation_id=conversation_id,
+                    exc_info=True,
                 )
 
     async def show_typing(

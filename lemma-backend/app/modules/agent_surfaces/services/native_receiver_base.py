@@ -14,12 +14,16 @@ from app.modules.agent_surfaces.domain.source_event_ids import native_source_eve
 
 import hashlib
 import hmac
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
+from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+
+logger = get_logger(__name__)
 
 
 class NativeReceiverConflict(RuntimeError):
@@ -35,6 +39,73 @@ class NativeReceiverConflict(RuntimeError):
     longer than a handover could explain raises this rather than returning as
     though it had finished its work.
     """
+
+
+class NativeReceiverCredentialsRejected(NativeReceiverConflict):
+    """Upstream refused the credential itself -- a revoked or deleted token.
+
+    Retrying cannot fix that, and a poller that kept retrying every few seconds
+    looked, from the outside, like a bot that had simply gone quiet. Standing
+    down on the same cooldown as a conflict means the bot is retried after it,
+    so a token restored in the meantime comes back without anyone intervening.
+    """
+
+
+class ReceiverFailureStreak:
+    """Warn on the first failure of a streak, then at most once per interval.
+
+    A receiver that fails keeps failing on every poll; a warning per poll would
+    bury the log, and the debug line it replaced was dropped at `LOG_LEVEL=INFO`
+    so a dead receiver left no trace at all. One warning when the streak starts,
+    a reminder while it lasts, and a line when it ends.
+    """
+
+    def __init__(
+        self,
+        *,
+        platform: SurfacePlatform,
+        credential_label: str,
+        repeat_after_seconds: float = 300.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._platform = platform
+        self._credential_label = credential_label
+        self._repeat_after_seconds = repeat_after_seconds
+        self._clock = clock
+        self._failures = 0
+        self._last_warned_at: float | None = None
+
+    @property
+    def failures(self) -> int:
+        return self._failures
+
+    def failed(self, exc: BaseException) -> None:
+        self._failures += 1
+        now = self._clock()
+        if (
+            self._last_warned_at is not None
+            and now - self._last_warned_at < self._repeat_after_seconds
+        ):
+            return
+        self._last_warned_at = now
+        logger.warning(
+            "agent_surfaces.native_receiver.poll_failed.degraded",
+            platform=self._platform.value,
+            credential_label=self._credential_label,
+            failure_count=self._failures,
+            exc_info=exc,
+        )
+
+    def succeeded(self) -> None:
+        if self._failures:
+            logger.info(
+                "agent_surfaces.native_receiver.poll_recovered.observed",
+                platform=self._platform.value,
+                credential_label=self._credential_label,
+                failure_count=self._failures,
+            )
+        self._failures = 0
+        self._last_warned_at = None
 
 
 class ReceiverRunner(Protocol):

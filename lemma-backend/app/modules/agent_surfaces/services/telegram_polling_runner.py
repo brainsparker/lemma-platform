@@ -31,11 +31,16 @@ from app.modules.agent_surfaces.services.native_receiver_base import (
     _publish_native_receiver_event,
     NativeReceiverCandidate,
     NativeReceiverConflict,
+    NativeReceiverCredentialsRejected,
+    ReceiverFailureStreak,
 )
 
 logger = get_logger(__name__)
 
 _TELEGRAM_CONFLICT_GRACE_SECONDS = 75
+# Telegram answers 401 for a revoked token and 404 for a deleted bot: neither
+# is fixed by asking again.
+_TELEGRAM_REJECTED_TOKEN_STATUSES = frozenset({401, 404})
 
 
 def _poll_params(offset: int | None) -> dict[str, Any]:
@@ -54,6 +59,10 @@ class TelegramPollingReceiverRunner:
         self._candidate = candidate
         self._bot_token = str(candidate.credentials.get("bot_token") or "").strip()
         self._api_base = resolve_api_base(candidate.credentials)
+        self._failures = ReceiverFailureStreak(
+            platform=candidate.platform,
+            credential_label=candidate.credential_label,
+        )
 
     async def run(self) -> None:
         if not self._bot_token:
@@ -92,6 +101,7 @@ class TelegramPollingReceiverRunner:
                     updates = await self._with_drain(client, base_url, data, offset)
                     for update in _assemble_telegram_updates(updates):
                         offset = await self._dispatch(update, offset)
+                    self._failures.succeeded()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -167,7 +177,14 @@ class TelegramPollingReceiverRunner:
         handover that is normal for a few seconds, so it is tolerated for a grace
         period and only then read as "someone else owns this bot" and given up.
         """
-        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 409:
+        status = (
+            exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        )
+        if status in _TELEGRAM_REJECTED_TOKEN_STATUSES:
+            raise NativeReceiverCredentialsRejected(
+                f"Telegram refused this bot's token ({status})"
+            ) from exc
+        if status == 409:
             now = asyncio.get_running_loop().time()
             if conflict_deadline is None:
                 conflict_deadline = now + _TELEGRAM_CONFLICT_GRACE_SECONDS
@@ -198,10 +215,7 @@ class TelegramPollingReceiverRunner:
             await asyncio.sleep(1)
             return conflict_deadline, True
 
-        logger.debug(
-            "agent_surfaces.event_receiver_service.telegram_polling_receiver_s.diagnostic",
-            exc_info=exc,
-        )
+        self._failures.failed(exc)
         await asyncio.sleep(5)
         return conflict_deadline, True
 

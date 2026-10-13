@@ -175,12 +175,42 @@ class AppEventHandler:
                 channel_id=channel_id,
             )
         except SQLAlchemyError:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_channel_setup_handling.diagnostic",
+            logger.warning(
+                "agent_surfaces.app_event_handler.channel_setup_failed.failed",
                 surface_id=str(surface.id),
+                kind=kind,
                 exc_info=True,
             )
+            await self._report_setup_not_saved(
+                adapter=adapter,
+                credentials=credentials,
+                setup=setup,
+                kind=kind,
+                channel_id=channel_id,
+            )
         return True
+
+    async def _report_setup_not_saved(
+        self, *, adapter, credentials, setup, kind: str, channel_id: str
+    ) -> None:
+        """Say so in the channel when a submitted setting was not saved.
+
+        The modal has already closed by the time the write fails, so without
+        this the person is left believing the channel is configured.
+        """
+        actor = str(setup.get("actor_external_user_id") or "")
+        if kind != "submit" or not channel_id or not actor:
+            return
+        await self.uow.rollback()
+        async with connection_released(self.uow.session):
+            await adapter.send_channel_setup_prompt(
+                credentials=credentials,
+                channel_id=channel_id,
+                user_id=actor,
+                configuration_error=(
+                    "Lemma could not save that setting. Try again in a moment."
+                ),
+            )
 
     @staticmethod
     def _configuration_action(kind: str) -> str:
@@ -396,8 +426,8 @@ class AppEventHandler:
         try:
             await self._handle_lifecycle_event(surface=surface, parsed=parsed, ctx=ctx)
         except SQLAlchemyError:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_lifecycle_handling.diagnostic",
+            logger.warning(
+                "agent_surfaces.app_event_handler.lifecycle_event_failed.failed",
                 surface_id=str(surface.id),
                 exc_info=True,
             )

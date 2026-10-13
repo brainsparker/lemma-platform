@@ -363,11 +363,15 @@ class SurfaceWebhookSecurityService:
                     if resolver is None:
                         return None, None
                     credentials = await resolver.for_account(surface.account_id)
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.webhook_security_service.could_not_resolve_whatsapp_credentials.diagnostic",
-                    account_id=surface.account_id,
-                    exc_info=True,
+            except Exception as exc:
+                # The request is refused as unverifiable either way; this is
+                # what tells a broken connector account apart from a setting
+                # nobody configured.
+                logger.warning(
+                    "agent_surfaces.webhook_security_service.whatsapp_credentials_unavailable.degraded",
+                    account_id=str(surface.account_id),
+                    error_type=type(exc).__name__,
+                    exc_info=exc,
                 )
                 return None, None
             return credentials.get("app_secret"), credentials.get("verify_token")

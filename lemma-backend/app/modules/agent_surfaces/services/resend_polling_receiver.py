@@ -12,6 +12,7 @@ ingress path fills the body and runs the agent. The email id is the
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.core.config import settings
@@ -40,6 +41,7 @@ from app.modules.agent_surfaces.services.resend_recipients import (
 )
 from app.modules.agent_surfaces.services.native_receiver_base import (
     NativeReceiverCandidate,
+    ReceiverFailureStreak,
     receiver_key,
 )
 
@@ -49,6 +51,15 @@ logger = get_logger(__name__)
 # (or a first run against a large mailbox) so one tick can't fan out unboundedly.
 _RESEND_POLL_INTERVAL_SECONDS = 20.0
 _RESEND_POLL_PAGE_CAP = 10
+# How many polls one email may fail before it is skipped. The cursor cannot
+# move past an email that has not been ingested, so without a limit a single
+# email that always fails -- a malformed row, a recipient that breaks routing --
+# holds back every email that arrives after it, for good.
+_RESEND_POISON_EMAIL_ATTEMPTS = 3
+
+# Any: one row of Resend's received-emails list, provider JSON with no shape
+# until `normalize_resend_inbound` reads it.
+ResendEmailIngest = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 def resend_receiver_credentials() -> dict[str, Any] | None:
@@ -100,8 +111,22 @@ def _emails_before_cursor(
 
 
 class ResendPollingReceiverRunner:
-    def __init__(self, candidate: NativeReceiverCandidate) -> None:
+    def __init__(
+        self,
+        candidate: NativeReceiverCandidate,
+        *,
+        ingest: ResendEmailIngest | None = None,
+    ) -> None:
         self._candidate = candidate
+        self._ingest = ingest or self._ingest_email
+        self._failures = ReceiverFailureStreak(
+            platform=candidate.platform,
+            credential_label=candidate.credential_label,
+        )
+        # Failed attempts per email id, for the emails still short of the
+        # limit. Cleared as each one is ingested or skipped, so it holds at
+        # most the one email the cursor is waiting on.
+        self._email_attempts: dict[str, int] = {}
 
     async def run(self) -> None:
         api_key = str(self._candidate.credentials.get("api_key") or "").strip()
@@ -116,23 +141,73 @@ class ResendPollingReceiverRunner:
 
         while True:
             try:
-                new_items, newest_id = await self._collect_new_emails(service, cursor)
-                if newest_id and newest_id != cursor:
-                    # Oldest first, so a conversation's messages ingest in order.
-                    # On the first run new_items is empty (history is seeded, not
-                    # replayed), so this just advances the cursor.
-                    for item in reversed(new_items):
-                        await self._ingest_email(item)
-                    cursor = newest_id
-                    await _store_resend_cursor(self._candidate.key, cursor)
+                cursor = await self.poll_once(service, cursor)
+                self._failures.succeeded()
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.resend_polling_receiver.resend_polling_receiver_error.diagnostic",
-                    exc_info=True,
-                )
+            except Exception as exc:
+                self._failures.failed(exc)
             await asyncio.sleep(_RESEND_POLL_INTERVAL_SECONDS)
+
+    async def poll_once(
+        self, service: ResendPlatformService, cursor: str | None
+    ) -> str | None:
+        """Ingest what arrived since ``cursor``; the cursor to resume from.
+
+        The cursor advances one email at a time, so an email that fails stops
+        it just short of itself and is retried on the next poll, while the ones
+        before it are not read again.
+        """
+        new_items, newest_id = await self._collect_new_emails(service, cursor)
+        if not newest_id or newest_id == cursor:
+            return cursor
+        if not new_items:
+            # The first poll: history is seeded, not replayed.
+            await _store_resend_cursor(self._candidate.key, newest_id)
+            return newest_id
+        reached = cursor
+        # Oldest first, so a conversation's messages ingest in order.
+        for item in reversed(new_items):
+            if not await self._ingest_or_skip(item):
+                break
+            reached = _email_id(item) or reached
+        if reached and reached != cursor:
+            await _store_resend_cursor(self._candidate.key, reached)
+        return reached
+
+    async def _ingest_or_skip(self, item: dict[str, Any]) -> bool:
+        """Whether the cursor may move past this email.
+
+        True once it is ingested, and also once it has failed too often to be
+        worth holding everything behind it for -- skipped with a warning that
+        names it, so it is lost on the record rather than silently.
+        """
+        email_id = _email_id(item)
+        try:
+            await self._ingest(item)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            attempts = self._email_attempts.get(email_id, 0) + 1
+            if attempts < _RESEND_POISON_EMAIL_ATTEMPTS:
+                self._email_attempts[email_id] = attempts
+                logger.warning(
+                    "agent_surfaces.resend_polling_receiver.email_ingest_failed.degraded",
+                    email_id=email_id,
+                    attempts=attempts,
+                    exc_info=exc,
+                )
+                return False
+            self._email_attempts.pop(email_id, None)
+            logger.warning(
+                "agent_surfaces.resend_polling_receiver.poison_email_skipped.degraded",
+                email_id=email_id,
+                attempts=attempts,
+                exc_info=exc,
+            )
+            return True
+        self._email_attempts.pop(email_id, None)
+        return True
 
     async def _collect_new_emails(
         self, service: ResendPlatformService, cursor: str | None

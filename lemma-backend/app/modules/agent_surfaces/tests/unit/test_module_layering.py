@@ -44,3 +44,11 @@ def _violations(layer: str, forbidden: str) -> list[str]:
 )
 def test_nothing_below_the_http_layer_imports_it(layer: str) -> None:
     assert _violations(layer, f"{_PACKAGE}.api") == []
+
+
+@pytest.mark.parametrize("forbidden", ["services", "infrastructure", "api"])
+def test_platform_adapters_reach_nothing_above_them(forbidden: str) -> None:
+    """An adapter talks to its platform. Anything that composes services --
+    a tool that checks a member's rights, then sends -- is a service, and
+    living under `platforms/` hid an inverted dependency."""
+    assert _violations("platforms", f"{_PACKAGE}.{forbidden}") == []

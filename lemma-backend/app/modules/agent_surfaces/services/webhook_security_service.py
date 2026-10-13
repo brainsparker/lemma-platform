@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    get_platform_capabilities,
+)
+
 from app.modules.agent_surfaces.domain.credentials import WhatsAppCredentials
 
 from collections.abc import Callable
@@ -104,7 +108,9 @@ class SurfaceWebhookSecurityService:
         return surface_webhook_verification_enabled()
 
     def assert_platform_request_allowed(self, platform: str) -> None:
-        if str(platform).upper() not in {"SLACK", "TEAMS", "WHATSAPP", "TELEGRAM"}:
+        # Every chat platform; mail arrives on its own provider's route.
+        capabilities = get_platform_capabilities(str(platform).upper())
+        if capabilities is None or capabilities.is_email:
             raise SurfaceWebhookAuthenticationError(
                 f"Platform '{platform}' does not support direct webhook ingress",
                 status_code=404,

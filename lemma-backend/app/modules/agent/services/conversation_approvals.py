@@ -35,7 +35,10 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host_permissions import (
     agent_host_permission_request,
 )
-from app.modules.agent.domain.approvals import ApprovalResolution
+from app.modules.agent.domain.approvals import (
+    ApprovalResolution,
+    ApprovalResolutionStatus,
+)
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.errors import (
     ApprovalNotOwnedError,
@@ -43,6 +46,8 @@ from app.modules.agent.domain.errors import (
 )
 from app.modules.agent.domain.pausing_tools import (
     PAUSING_TOOL_NAMES,
+    PausingKind,
+    PendingPause,
     parked_suspension_of,
 )
 from app.modules.agent.domain.ports import ConversationRepository
@@ -89,7 +94,7 @@ class PausedCall:
     """
 
     agent_run_id: UUID
-    kind: str
+    kind: PausingKind
     tool_args: JsonObject
 
 
@@ -193,7 +198,7 @@ class ApprovalCoordinator:
                 effective_decision, effective_response, status = (
                     decision,
                     response or {},
-                    "resolved",
+                    ApprovalResolutionStatus.RESOLVED,
                 )
             else:
                 # A concurrent resolve won the race; adopt its stored decision and
@@ -205,13 +210,13 @@ class ApprovalCoordinator:
                 effective_decision, effective_response = (
                     stored if stored is not None else (decision, response or {})
                 )
-                status = "reconciled"
+                status = ApprovalResolutionStatus.RECONCILED
         else:
             # Decision already recorded (retry / self-heal). Do NOT re-record or
             # re-run the tool; adopt the stored decision and finish whatever the
             # prior attempt left undone.
             effective_decision, effective_response = decision_row
-            status = "reconciled"
+            status = ApprovalResolutionStatus.RECONCILED
 
         existing_return = (
             await self.conversation_repository.get_tool_return(
@@ -242,7 +247,9 @@ class ApprovalCoordinator:
                     pod_id=pod_id,
                 )
             )
-            return ApprovalResolution(status="queued", decision=effective_decision)
+            return ApprovalResolution(
+                status=ApprovalResolutionStatus.QUEUED, decision=effective_decision
+            )
 
         await self._reconcile_resume(
             conversation=conversation,
@@ -484,7 +491,7 @@ class ApprovalCoordinator:
         tool_args = message.tool_args if isinstance(message.tool_args, dict) else {}
         return PausedCall(
             agent_run_id=message.agent_run_id,
-            kind=message.tool_name,
+            kind=PausingKind(message.tool_name),
             tool_args=tool_args,
         )
 
@@ -493,7 +500,7 @@ class ApprovalCoordinator:
         *,
         conversation_id: UUID,
         tool_names: Sequence[str],
-    ) -> dict[str, object] | None:
+    ) -> PendingPause | None:
         """The pause a typed reply routes to, or the card renders.
 
         Asked in SQL rather than by scanning the newest 500 messages: past that
@@ -508,11 +515,11 @@ class ApprovalCoordinator:
         if not pending:
             return None
         message = pending[0]
-        return {
-            "tool_call_id": message.tool_call_id,
-            "kind": message.tool_name,
-            "tool_args": (
+        return PendingPause(
+            tool_call_id=message.tool_call_id or "",
+            kind=PausingKind(message.tool_name),
+            tool_args=(
                 message.tool_args if isinstance(message.tool_args, dict) else {}
             ),
-            "agent_run_id": message.agent_run_id,
-        }
+            agent_run_id=message.agent_run_id,
+        )

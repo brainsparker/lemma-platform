@@ -38,9 +38,6 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
     MessageModel,
 )
-from app.modules.agent.infrastructure.conversation_origin_store import (
-    create_conversation_for_origin,
-)
 from app.modules.agent.infrastructure.conversation_run_queries import (
     ConversationRunQueriesMixin,
 )
@@ -86,30 +83,7 @@ class ConversationRepository(
         self,
         conversation: ConversationEntity,
     ) -> ConversationEntity:
-        model = ConversationModel(
-            id=conversation.id,
-            created_at=conversation.created_at,
-            updated_at=conversation.updated_at,
-            user_id=conversation.user_id,
-            pod_id=conversation.pod_id,
-            organization_id=conversation.organization_id,
-            agent_id=conversation.agent_id,
-            title=conversation.title,
-            instructions=conversation.instructions,
-            agent_runtime=(
-                conversation.agent_runtime.model_dump(mode="json")
-                if conversation.agent_runtime
-                else None
-            ),
-            origin_type=conversation.origin_type,
-            origin_id=conversation.origin_id,
-            conversation_type=conversation.type.value,
-            status=conversation.status.value if conversation.status else None,
-            output_data=conversation.output,
-            parent_id=conversation.parent_id,
-            conversation_metadata=conversation.metadata,
-            is_archived=conversation.is_archived,
-        )
+        model = ConversationModel(**ConversationModel.values_from(conversation))
         self.session.add(model)
         await self.session.flush()
         self.uow.collect_events(
@@ -124,13 +98,6 @@ class ConversationRepository(
             ]
         )
         return model.to_entity()
-
-    async def create_conversation_once(
-        self,
-        conversation: ConversationEntity,
-    ) -> tuple[ConversationEntity, bool]:
-        """Create one conversation for a durable external invocation origin."""
-        return await create_conversation_for_origin(self.session, conversation)
 
     async def update_conversation(
         self,
@@ -151,8 +118,11 @@ class ConversationRepository(
             else None
         )
         model.conversation_type = conversation.type.value
-        model.status = conversation.status.value if conversation.status else None
-        model.output_data = conversation.output
+        # Not `status` or `output_data`: those move with the run, in the run's
+        # own transaction (`conversation_run_lifecycle`). An entity read before a
+        # run ended and saved after -- a rename, an auto-title -- would write the
+        # old RUNNING back over a finished conversation, and nothing would move
+        # it again.
         model.conversation_metadata = conversation.metadata
         model.is_archived = conversation.is_archived
         await self.session.flush()

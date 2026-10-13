@@ -19,7 +19,6 @@ from app.modules.agent.domain.entities import (
 from app.modules.agent.domain.run_projections import (
     ConversationOpeningTexts,
     StaleAgentRunRef,
-    StrandedConversationRef,
 )
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.pending_interactions import (
@@ -116,11 +115,6 @@ class ConversationRepository(Protocol):
     """
 
     async def create_conversation(self, conversation: Conversation) -> Conversation: ...
-
-    async def create_conversation_once(
-        self,
-        conversation: Conversation,
-    ) -> tuple[Conversation, bool]: ...
 
     async def update_conversation(self, conversation: Conversation) -> Conversation: ...
 
@@ -242,13 +236,6 @@ class ConversationRepository(Protocol):
         cutoff_seconds: int,
         limit: int = 200,
     ) -> list[StaleAgentRunRef]: ...
-
-    async def list_conversations_stranded_by_a_finished_run(
-        self,
-        *,
-        cutoff_seconds: int,
-        limit: int = 200,
-    ) -> list[StrandedConversationRef]: ...
 
     async def run_has_only_user_messages(self, agent_run_id: UUID) -> bool: ...
 

@@ -65,8 +65,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.conversation_mcp_service.pod_membership_missing.denied': EventSpec('warning', frozenset({'conversation_id'})),
     'agent.conversation_mcp_service.run_token.denied': EventSpec('warning', frozenset({'agent_run_id', 'conversation_id', 'reason'})),
     'agent.conversation_mcp_service.session_lookup.failed': EventSpec('error', frozenset()),
-    'agent.conversation_repository.conversation_status_reconciled.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent.conversation_status_repair.stranded_conversations_settled.degraded': EventSpec('warning', frozenset({'count'})),
     'agent.conversation_title.generation.failed': EventSpec('error', frozenset({'conversation_id'})),
     'agent.conversation_title.language_mismatch.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent.conversation_title.llm_call.failed': EventSpec('error', frozenset({'conversation_id'})),

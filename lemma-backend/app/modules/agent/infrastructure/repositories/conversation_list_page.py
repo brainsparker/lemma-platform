@@ -23,9 +23,6 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
 )
 from app.modules.agent.infrastructure.models import ConversationModel
-from app.modules.agent.infrastructure.repository_status import (
-    conversation_status_values_for_db,
-)
 
 
 def list_statement(
@@ -68,9 +65,7 @@ def list_statement(
         )
         stmt = stmt.where(agent_scope_id == selected_agent_id)
     if status is not None:
-        stmt = stmt.where(
-            ConversationModel.status.in_(conversation_status_values_for_db(status))
-        )
+        stmt = stmt.where(ConversationModel.status == status.value)
     if conversation_type is not None:
         stmt = stmt.where(
             ConversationModel.conversation_type == conversation_type.value

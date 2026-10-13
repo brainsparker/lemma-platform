@@ -48,7 +48,10 @@ from app.modules.agent.domain.outsiders import (
     OUTSIDE_ANSWER_TOOL,
     Audience,
 )
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pausing_tools import (
+    USER_PAUSING_TOOL_NAMES,
+    PendingPause,
+)
 from app.modules.agent.domain.private_notes import answers_lemma_message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -139,16 +142,14 @@ def _service(uow: SqlAlchemyUnitOfWork):
     return get_conversation_service(uow)
 
 
-def _pending(raw: dict[str, object] | None) -> PendingInteraction | None:
-    if raw is None:
+def _pending(pause: PendingPause | None) -> PendingInteraction | None:
+    if pause is None:
         return None
-    tool_args = raw.get("tool_args")
-    agent_run_id = raw.get("agent_run_id")
     return PendingInteraction(
-        tool_call_id=str(raw.get("tool_call_id") or ""),
-        kind=str(raw.get("kind") or ""),
-        tool_args=tool_args if isinstance(tool_args, dict) else {},
-        agent_run_id=agent_run_id if isinstance(agent_run_id, UUID) else None,
+        tool_call_id=pause.tool_call_id,
+        kind=pause.kind.value,
+        tool_args=pause.tool_args,
+        agent_run_id=pause.agent_run_id,
     )
 
 

@@ -49,9 +49,6 @@ from app.modules.agent.infrastructure.repositories.parked_pause_queries import (
     is_host_permission_call as _is_host_permission,
     in_a_run_suspended_while_parked,
 )
-from app.modules.agent.infrastructure.repository_status import (
-    conversation_status_values_for_db,
-)
 
 
 def _summary_text() -> ColumnElement[str | None]:
@@ -91,17 +88,11 @@ def pending_pause_conditions() -> list[ColumnElement[bool]]:
         returned_message.kind == MessageKind.TOOL_RETURN.value,
         returned_message.tool_call_id == MessageModel.tool_call_id,
     )
-    running = ConversationModel.status.in_(
-        conversation_status_values_for_db(ConversationStatus.RUNNING)
-    )
+    running = ConversationModel.status == ConversationStatus.RUNNING.value
     waiting_or_running = ConversationModel.status.in_(
-        conversation_status_values_for_db(
-            [ConversationStatus.WAITING, ConversationStatus.RUNNING]
-        )
+        [ConversationStatus.WAITING.value, ConversationStatus.RUNNING.value]
     )
-    waiting = ConversationModel.status.in_(
-        conversation_status_values_for_db(ConversationStatus.WAITING)
-    )
+    waiting = ConversationModel.status == ConversationStatus.WAITING.value
     still_answerable = (
         MessageModel.created_at > func.now() - AGENT_HOST_PERMISSION_DECISION_WINDOW
     )

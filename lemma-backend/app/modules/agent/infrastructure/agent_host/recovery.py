@@ -25,9 +25,6 @@ from app.modules.agent.infrastructure.agent_host.repository_common import (
     utcnow,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.repository_status import (
-    run_status_values_for_db,
-)
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentHostPairingModel,
@@ -44,11 +41,9 @@ _DISPATCH_RETENTION = timedelta(days=30)
 # declared unknown rather than retried.
 DEFAULT_RECOVERY_GRACE_SECONDS = 120
 
-# Legacy rows carry lower-cased statuses, so the comparison goes through the
-# same helper every other status query uses rather than the enum values alone.
-_TERMINAL_AGENT_RUN_STATUS_VALUES = run_status_values_for_db(
-    TERMINAL_AGENT_RUN_STATUSES
-)
+_TERMINAL_AGENT_RUN_STATUS_VALUES = [
+    status.value for status in TERMINAL_AGENT_RUN_STATUSES
+]
 _NON_TERMINAL_HOST_RUN_STATES = [
     state.value
     for state in AgentHostRunState

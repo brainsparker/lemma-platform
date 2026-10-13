@@ -49,18 +49,9 @@ from app.modules.agent.infrastructure.queued_message_queries import (
     stamp,
     unclaimed_queued_messages,
 )
-from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
-    list_conversations_stranded_by_a_finished_run,
-)
-from app.modules.agent.infrastructure.repository_status import (
-    run_status_values_for_db as _run_status_values_for_db,
-)
-from app.modules.agent.domain.run_projections import (
-    StaleAgentRunRef,
-    StrandedConversationRef,
-)
+from app.modules.agent.domain.run_projections import StaleAgentRunRef
 
-_ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
+_ACTIVE_AGENT_RUN_STATUS_VALUES = [status.value for status in ACTIVE_AGENT_RUN_STATUSES]
 
 #: How far back to look for a transcript of the file `listen` was asked for.
 #: Bounded because a long-running chat holds thousands of messages and the
@@ -214,21 +205,6 @@ class ConversationRunQueriesMixin:
             .limit(limit)
         )
         return [StaleAgentRunRef(*row) for row in result.all()]
-
-    async def list_conversations_stranded_by_a_finished_run(
-        self,
-        *,
-        cutoff_seconds: int,
-        limit: int = 200,
-    ) -> list[StrandedConversationRef]:
-        """Conversations still active whose most recent run already finished.
-
-        Implemented next to the write that settles them; see
-        `repositories.conversation_status_repair`.
-        """
-        return await list_conversations_stranded_by_a_finished_run(
-            self.session, cutoff_seconds=cutoff_seconds, limit=limit
-        )
 
     async def list_agent_runs_with_messages(
         self,

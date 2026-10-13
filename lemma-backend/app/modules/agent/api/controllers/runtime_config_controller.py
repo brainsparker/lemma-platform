@@ -31,6 +31,7 @@ from app.modules.agent.domain.agent_host import effective_agent_host_status
 from app.modules.agent.domain.organization_default import organization_default_of
 from app.modules.agent.domain.runtime_profiles import (
     DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
+    AgentRuntimeProfile,
     RuntimeProfileScope,
     RuntimeProfileStatus,
 )
@@ -113,13 +114,52 @@ async def _require_profile_editor(
     """Who may change or read the full detail of one profile.
 
     A workspace profile is shared configuration, so it takes the same
-    ORG_UPDATE the create route requires. A personal one is usable only by its
-    owner, so the owner qualifies on their own - an org editor still does too,
-    because they can already see it in the listing.
+    ORG_UPDATE the create route requires. A personal one is its owner's alone:
+    the repository loads another member's personal profile for nobody, an org
+    editor included, so only its owner ever reaches this check for it.
     """
     if profile.scope is RuntimeProfileScope.PERSONAL and profile.user_id == user.id:
         return
     await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(organization_id))
+
+
+async def _require_profile_archiver(
+    *,
+    service: AgentRuntimeProfileService,
+    profile: AgentRuntimeProfile,
+    organization_id: UUID,
+    user: CurrentUser,
+    ctx: OrgContextDep,
+) -> None:
+    """Who may archive one profile: an editor, or the computer's own owner.
+
+    A workspace profile bound to a computer is that person's machine opened to
+    everyone. Its owner must be able to stop sharing it even after losing
+    ORG_UPDATE -- otherwise their laptop keeps taking the organization's runs
+    until an admin notices. Only archiving: sharing it again, or changing what
+    it runs, stays an editor's decision.
+    """
+    if await _owns_the_machine(service, profile, user_id=user.id):
+        return
+    await _require_profile_editor(
+        profile=profile, organization_id=organization_id, user=user, ctx=ctx
+    )
+
+
+async def _owns_the_machine(
+    service: AgentRuntimeProfileService,
+    profile: AgentRuntimeProfile,
+    *,
+    user_id: UUID,
+) -> bool:
+    hosts = service.host_repository
+    if profile.harness_id is None or hosts is None:
+        return False
+    harness = await hosts.get_harness(harness_id=profile.harness_id)
+    if harness is None:
+        return False
+    host = await hosts.get_for_user(host_id=harness.host_id, user_id=user_id)
+    return host is not None and host.revoked_at is None
 
 
 async def _load_profile_or_404(
@@ -410,8 +450,12 @@ async def archive_runtime_profile(
     profile = await _load_profile_or_404(
         service, profile_id=profile_id, organization_id=organization_id, user=user
     )
-    await _require_profile_editor(
-        profile=profile, organization_id=organization_id, user=user, ctx=ctx
+    await _require_profile_archiver(
+        service=service,
+        profile=profile,
+        organization_id=organization_id,
+        user=user,
+        ctx=ctx,
     )
     await AgentRuntimeProfileEditor(service).archive_profile(
         profile_id=profile_id,

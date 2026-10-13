@@ -82,6 +82,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.handlers.reconciled_d_orphaned_agent_run.diagnostic': EventSpec('debug', frozenset({'count'})),
     'agent.harnesses.agent_host.credential_expiry_unknown.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.harnesses.agent_host.credential_refresh_failed.degraded': EventSpec('warning', frozenset({'agent_run_id', 'error_type'})),
+    'agent.harnesses.agent_host.dispatch_deadlock_retried.degraded': EventSpec('warning', frozenset({'agent_run_id', 'host_id'})),
     'agent.harnesses.agent_host.dispatch_resumed': EventSpec('info', frozenset({'agent_run_id', 'stream_cursor'})),
     'agent.harnesses.agent_host.event_stream_read.degraded': EventSpec('warning', frozenset({'agent_run_id', 'attempt', 'error_type'})),
     'agent.harnesses.agent_host.malformed_event.degraded': EventSpec('warning', frozenset({'agent_host_sequence', 'agent_run_id', 'error', 'payload_model', 'tool_call_id'})),

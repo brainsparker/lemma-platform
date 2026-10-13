@@ -21,6 +21,7 @@ from uuid import UUID
 from sqlalchemy.exc import DBAPIError
 
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.transient_errors import is_deadlock
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -91,16 +92,6 @@ def _stored_host_execution(
 ) -> dict[str, object]:
     """What the host row's ``capacity`` keeps under ``host_execution``."""
     return (host_execution or HostExecutionCapability()).model_dump(mode="json")
-
-
-def is_deadlock(exc: DBAPIError) -> bool:
-    """Whether Postgres aborted this transaction to break a deadlock (40P01).
-
-    Read off the driver error rather than the message: asyncpg surfaces the
-    SQLSTATE, and matching on text would break the moment a locale or a driver
-    changes.
-    """
-    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "40P01"
 
 
 class AgentHostLinkStore:

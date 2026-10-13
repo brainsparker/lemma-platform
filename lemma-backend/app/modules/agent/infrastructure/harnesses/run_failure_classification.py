@@ -25,6 +25,7 @@ from pydantic_ai.exceptions import (
 )
 
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.transient_errors import is_transient_database_error
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
     HarnessDriverCancelled,
 )
@@ -37,6 +38,7 @@ from app.modules.agent.infrastructure.transport_errors import (
 from app.modules.usage.contracts import UsageLimitExceededError
 
 __all__ = [
+    "TRANSIENT_DATABASE_ERROR",
     "RunFailure",
     "classify_run_failure",
     "is_usage_limit_error",
@@ -53,6 +55,17 @@ _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]{0,63}$")
 _TOKEN_LIMIT = re.compile(r"\btoken limit\b.*\bexceeded\b", re.IGNORECASE)
 
 _SETTINGS = "Settings → Models"
+
+#: A deadlock, a serialization failure or an exhausted connection pool: Lemma's
+#: own database was momentarily contended. Nothing about the teammate, its model
+#: or the message is wrong, and the same turn sent again is expected to work.
+TRANSIENT_DATABASE_ERROR = "TRANSIENT_DATABASE_ERROR"
+
+_DATABASE_BUSY = (
+    "Lemma could not run this turn because its database was briefly busy. "
+    "That has nothing to do with this teammate or its settings. "
+    "Nothing you sent was lost — send your message again."
+)
 
 _UNCLASSIFIED = (
     f"The run failed. Check the model settings for this teammate ({_SETTINGS})."
@@ -136,6 +149,8 @@ def classify_run_failure(exc: BaseException) -> RunFailure:
         return RunFailure(exc.code, exc.message)
     if isinstance(exc, ModelHTTPError):
         return RunFailure(None, _http_error_message(exc))
+    if is_transient_database_error(exc):
+        return RunFailure(TRANSIENT_DATABASE_ERROR, _DATABASE_BUSY)
     return RunFailure(None, _runtime_failure_message(exc))
 
 

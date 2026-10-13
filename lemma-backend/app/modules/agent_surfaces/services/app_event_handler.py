@@ -9,7 +9,7 @@ explanation of why one cannot be made.
 Configuration and lifecycle were two classes, and the reason they could not be
 untangled is that they are one responsibility. `SurfaceConfigurationMixin`
 inherited `SurfaceLifecycleMixin`, and lifecycle called back into
-`_publish_home`, which is configuration's -- a cycle if they are layers, and not
+the home tab, which is configuration's -- a cycle if they are layers, and not
 a cycle at all once they stop pretending to be. They are one object here.
 
 The authorization half *is* separable and is `ConfigurationAccess`: it answers
@@ -24,19 +24,12 @@ from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.core.authorization.context import Context
-from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
-from app.core.config import settings
 from app.core.infrastructure.db.session_uow import commit_now
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -59,6 +52,10 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.modules.agent_surfaces.services.app_home import (
+    AppHomeView,
+    surface_agent_name,
+)
 from app.modules.agent_surfaces.services.configuration_prompt import (
     prompt_for_configuration,
 )
@@ -73,7 +70,6 @@ from app.modules.agent_surfaces.services.configuration_access import (
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
-from app.modules.pod.contracts.members import pod_name
 
 logger = get_logger(__name__)
 
@@ -102,6 +98,11 @@ class AppEventHandler:
         self.pod_membership_port = pod_membership_port
         self.external_user_repository = external_user_repository
         self.access = access
+        self.home = AppHomeView(
+            uow=uow,
+            access=access,
+            external_user_repository=external_user_repository,
+        )
 
     async def try_handle_channel_setup(
         self,
@@ -199,7 +200,7 @@ class AppEventHandler:
             user_id, surface.surface_type.value, surface.id
         )
         await self.uow.commit()
-        await self._publish_home(
+        await self.home.publish(
             surface=surface,
             adapter=adapter,
             credentials=await self.credential_resolver.for_surface(surface),
@@ -258,7 +259,7 @@ class AppEventHandler:
     async def _open_channel_setup(
         self, adapter, credentials, setup, surface, ctx, channel_id
     ) -> None:
-        agent_name = await self._surface_agent_name(surface)
+        agent_name = await surface_agent_name(self.uow, surface)
         # Committed, not only released: resolving who clicked may have upserted
         # their external-user row, and `connection_released` declines to let go
         # of a session with writes in it. This runs inside the webhook request,
@@ -279,7 +280,7 @@ class AppEventHandler:
     async def _submit_channel_setup(
         self, adapter, credentials, setup, surface, ctx, channel_id
     ) -> None:
-        agent_name = await self._surface_agent_name(surface)
+        agent_name = await surface_agent_name(self.uow, surface)
         await self._allow_channel(
             surface=surface,
             channel_id=channel_id,
@@ -292,79 +293,6 @@ class AppEventHandler:
                 user_id=str(setup.get("actor_external_user_id") or ""),
                 confirmed_agent=agent_name,
             )
-
-    async def _publish_home(
-        self, *, surface, adapter, credentials, external_user_id: str, ctx
-    ) -> None:
-        """Render the Home tab for one viewer."""
-        if not external_user_id:
-            return
-        agents = await self.access._visible_agents(
-            surface=surface, ctx=ctx, action=Permissions.AGENT_READ
-        )
-        name_of_pod = await pod_name(self.uow.session, surface.pod_id)
-        # Egress: the pod and agent rows are read above; the connection
-        # goes back before the view is pushed to the platform.
-        async with connection_released(self.uow.session):
-            await adapter.publish_home_view(
-                credentials=credentials,
-                user_id=external_user_id,
-                pod_name=name_of_pod or None,
-                agent_name=await self._surface_agent_name(surface),
-                # The channels this bot answers in. Ids alone: each entry used
-                # to name the agent routed to that channel, and there is one
-                # agent now, so the Home tab states it once above the list.
-                channel_ids=[
-                    route.channel_id
-                    for route in surface.config.channels
-                    if route.channel_id
-                ],
-                agents=[(agent.name, agent.description) for agent in agents],
-                apps=await self._home_apps(
-                    surface=surface,
-                    external_user_id=external_user_id,
-                    auth_ctx=ctx,
-                ),
-                workspace_url=settings.frontend_url or None,
-                logo_url=surface_settings.slack_home_logo_url,
-            )
-
-    async def _home_apps(
-        self, *, surface, external_user_id: str, auth_ctx=None
-    ) -> list[tuple[str, str]]:
-        """Apps this *viewer* may open, as (name, url) — never the pod's full list.
-
-        Visibility is per-user, so an unresolvable Slack identity gets no apps
-        rather than everyone else's.
-        """
-        try:
-            from app.modules.apps.contracts import list_ready_pod_apps
-
-            if auth_ctx is None:
-                external = await self.external_user_repository.get_by_identity(
-                    platform="SLACK",
-                    tenant_id=surface.external_workspace_id,
-                    external_user_id=external_user_id,
-                )
-                resolved_user_id = getattr(external, "resolved_user_id", None)
-                if resolved_user_id is None:
-                    return []
-                auth_ctx = await create_authorization_data_service(
-                    self.uow
-                ).build_user_context(user_id=resolved_user_id, pod_id=surface.pod_id)
-            apps = await list_ready_pod_apps(
-                uow=self.uow, pod_id=surface.pod_id, ctx=auth_ctx
-            )
-        except SQLAlchemyError:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_home_apps.diagnostic",
-                surface_id=str(surface.id),
-            )
-            return []
-        domain = settings.app_base_domain.strip()
-        if not domain:
-            return []
-        return [(app.name, f"https://{app.public_slug}.{domain}") for app in apps]
 
     async def _allow_channel(
         self, *, surface, channel_id: str, owner_user_id: UUID | None = None
@@ -394,15 +322,6 @@ class AppEventHandler:
             owner_user_id=owner_user_id,
         )
         await self.uow.commit()
-
-    async def _surface_agent_name(self, surface) -> str:
-        """What this surface's agent is called in front of a person."""
-        agent = await agent_conversations.surface_agent_identity(
-            self.uow, surface.agent_id
-        )
-        if agent is None or agent.is_pod_default:
-            return DEFAULT_RESPONDER_NAME
-        return agent.name
 
     def _adapter_for_request(self, request):
         if isinstance(request, SurfaceDirectWebhookIngress):
@@ -538,7 +457,7 @@ class AppEventHandler:
             # every open — including the very first, before anything is set up.
             if not parsed.actor_external_user_id:
                 return
-            await self._publish_home(
+            await self.home.publish(
                 surface=surface,
                 adapter=adapter,
                 credentials=credentials,

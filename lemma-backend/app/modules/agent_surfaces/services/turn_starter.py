@@ -88,7 +88,7 @@ from app.modules.agent_surfaces.services.surface_inbound_message import (
     transcribe_voice_attachments,
     write_inbound_message,
 )
-from app.modules.agent_surfaces.services.surface_inbound import release_ingress_claim
+from app.modules.agent_surfaces.services.delivery_claims import release_ingress_claim
 from app.modules.agent_surfaces.services.telegram_command_service import (
     handle_telegram_command,
     handle_typed_retry,

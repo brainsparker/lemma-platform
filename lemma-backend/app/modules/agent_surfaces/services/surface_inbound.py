@@ -90,33 +90,6 @@ logger = get_logger(__name__)
 # Recent thread/channel messages fetched per run for group-mention continuity.
 
 
-async def release_ingress_claim(
-    context: AgentSurfaceContext,
-    *,
-    event_dedup_store: SurfaceEventDedupStorePort,
-) -> None:
-    """Give back the delivery claim ``prepare_ingress`` took for this context.
-
-    The claim is spent inside preparation but the work it guards -- the queued
-    run -- is dispatched afterwards, so a caller that fails to dispatch has to
-    hand the claim back. Otherwise the inbox's retry re-enters preparation, is
-    told the message is already claimed, and drops it: the delivery is gone
-    for good.
-
-    Keyed off the context rather than the parsed event the claim was taken
-    from, because that is what the dispatcher still holds -- and the two carry
-    the same ids by construction (``context.event`` *is* the parsed event, and
-    ``surface_id`` is the installation the claim named).
-    """
-    await event_dedup_store.release_message(
-        surface_installation_id=context.surface_id,
-        platform=context.platform.value,
-        external_channel_id=context.event.external_channel_id,
-        external_thread_id=context.event.external_thread_id,
-        external_message_id=context.event.external_message_id,
-    )
-
-
 class SurfaceInboundMixin:
     #: Supplied by `AgentSurfaceIngressService`, which composes these mixins.
     #: Not optional any more: the worker's factory mode went to

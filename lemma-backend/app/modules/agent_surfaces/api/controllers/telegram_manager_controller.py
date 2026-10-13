@@ -30,7 +30,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.services.surface_service import pod_scope
+from app.modules.agent_surfaces.services.pod_scope import pod_scope
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceAlreadyExistsError,
 )

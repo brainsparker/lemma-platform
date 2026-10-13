@@ -29,7 +29,6 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceRuntimeUnsupportedError,
     AgentSurfaceAlreadyExistsError,
     AgentSurfaceNotFoundError,
-    AgentSurfacePodNotFoundError,
     AgentSurfaceValidationError,
 )
 from app.modules.agent_surfaces.domain.ports import (
@@ -67,9 +66,6 @@ from app.modules.agent_surfaces.services.surface_consent import (
     SurfaceConsentMixin,
 )
 from app.core.infrastructure.db.session_uow import active_uow
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.pod.contracts.agent_access import pod_organization_id
-from app.modules.pod.contracts.members import pod_name
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -578,17 +574,3 @@ class AgentSurfaceService(
         await ensure_unique_platform_identity(
             surface, surface_repository=self.surface_repository
         )
-
-
-async def pod_scope(uow: SqlAlchemyUnitOfWork, pod_id: UUID) -> tuple[UUID, str]:
-    """The pod's organization and name, which a surface set-up records.
-
-    Raises the surface module's not-found error: a pod deleted between the
-    permission check and this read answers 404, where a bare `ValueError`
-    answered 500.
-    """
-    organization_id = await pod_organization_id(uow, pod_id)
-    name = await pod_name(uow.session, pod_id)
-    if organization_id is None or name is None:
-        raise AgentSurfacePodNotFoundError(str(pod_id))
-    return organization_id, name

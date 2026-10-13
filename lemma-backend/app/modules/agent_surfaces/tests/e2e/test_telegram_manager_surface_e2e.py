@@ -375,7 +375,7 @@ async def test_a_setup_for_a_pod_with_no_row_is_not_found_not_a_server_error(
     from uuid import UUID, uuid4
 
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.services.surface_service import pod_scope
+    from app.modules.agent_surfaces.services.pod_scope import pod_scope
     from app.modules.agent_surfaces.domain.errors import (
         AgentSurfacePodNotFoundError,
     )

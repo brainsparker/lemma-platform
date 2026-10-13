@@ -47,6 +47,7 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
                 mcp: Value::Null,
                 run_deadline: Utc::now() + chrono::Duration::minutes(10),
                 system_prompt_delivery: None,
+                pre_approvals: Vec::new(),
             },
             scratch_directory: scratch.path().to_path_buf(),
             mcp_server: None,

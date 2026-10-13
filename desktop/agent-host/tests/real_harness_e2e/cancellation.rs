@@ -95,6 +95,7 @@ async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
                     mcp: Value::Null,
                     run_deadline: Utc::now() + chrono::Duration::minutes(5),
                     system_prompt_delivery: None,
+                    pre_approvals: Vec::new(),
                 },
                 scratch_directory: scratch.clone(),
                 mcp_server: None,

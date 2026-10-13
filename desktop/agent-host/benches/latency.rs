@@ -322,6 +322,7 @@ fn start_command(state: &BenchState) -> Option<Command> {
                 mcp: state.mcp.clone(),
                 run_deadline: Utc::now() + chrono::Duration::minutes(5),
                 system_prompt_delivery: None,
+                pre_approvals: Vec::new(),
             })
             .unwrap(),
         })

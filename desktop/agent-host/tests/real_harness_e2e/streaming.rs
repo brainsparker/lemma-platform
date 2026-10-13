@@ -39,6 +39,7 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
                         mcp: Value::Null,
                         run_deadline: chrono::Utc::now() + chrono::Duration::minutes(5),
                         system_prompt_delivery: None,
+                        pre_approvals: Vec::new(),
                     },
                     scratch_directory: paths
                         .root

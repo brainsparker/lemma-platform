@@ -18,7 +18,11 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
-from app.modules.agent.domain.agent_host import NEW_SESSION_ONLY, AgentHostRunSpec
+from app.modules.agent.domain.agent_host import (
+    NEW_SESSION_ONLY,
+    AgentHostPreApproval,
+    AgentHostRunSpec,
+)
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
@@ -36,6 +40,10 @@ from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.agent_host import run_resume, session_memory
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostRepositoryError,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host.pre_approvals import (
+    pre_approvals_for,
+    supports_pre_approval,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
     AgentHostRunConfig,
@@ -75,6 +83,7 @@ def run_spec_from(
     system_prompt_delivery: str | None,
     resume_session_id: str | None,
     run_deadline: datetime,
+    pre_approvals: Sequence[AgentHostPreApproval] = (),
 ) -> AgentHostRunSpec:
     """The START_RUN spec for one run, out of its ``run_start_payload``.
 
@@ -97,6 +106,7 @@ def run_spec_from(
         resume_session_id=resume_session_id,
         workspace_cwd=resolve_workspace_location(conversation).cwd,
         run_deadline=run_deadline,
+        pre_approvals=list(pre_approvals),
     )
 
 
@@ -204,6 +214,7 @@ async def enqueue_run[DepsT: AgentContext](
         harness_id = harness.id
         host_id = harness.host_id
         steerable = supports_steering(harness.capabilities)
+        pre_approving = supports_pre_approval(harness.capabilities)
         harness_key = harness.harness_key
         config_revision = harness.config_revision
         # Set only on a run started to answer a pausing tool call. Read from
@@ -231,6 +242,7 @@ async def enqueue_run[DepsT: AgentContext](
             for message in messages
             if message.agent_run_id == agent_run_id and is_queued(message.metadata)
         )
+    resumed_tool_call_id = _resumed_tool_call_id(run)
     admission = _Admission(
         resume_session_id=resume_session_id,
         harness_id=harness_id,
@@ -238,7 +250,14 @@ async def enqueue_run[DepsT: AgentContext](
         steerable=steerable,
         harness_key=harness_key,
         config_revision=config_revision,
-        resumed_tool_call_id=_resumed_tool_call_id(run),
+        resumed_tool_call_id=resumed_tool_call_id,
+        # Only to a host that says it honours them; any other would ignore the
+        # field and ask the person again, which is what it does without one.
+        pre_approvals=tuple(
+            pre_approvals_for(messages, resumed_tool_call_id=resumed_tool_call_id)
+            if pre_approving
+            else ()
+        ),
     )
     # The prompt is built with no transaction open, so the person can withdraw
     # a carried message while it is being built. The admission then finds it
@@ -349,6 +368,7 @@ class _Admission:
     harness_key: str
     config_revision: str
     resumed_tool_call_id: str | None
+    pre_approvals: tuple[AgentHostPreApproval, ...]
 
 
 async def _admit[DepsT: AgentContext](
@@ -443,6 +463,7 @@ async def _admit[DepsT: AgentContext](
             system_prompt_delivery=system_prompt_delivery,
             resume_session_id=resume_session_id,
             run_deadline=dispatched_at + timedelta(seconds=timeout_seconds),
+            pre_approvals=admission.pre_approvals,
         )
         await AgentHostDispatchRepository(uow).enqueue_run(
             host_id=host_id,

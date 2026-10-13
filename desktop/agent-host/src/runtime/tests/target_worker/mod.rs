@@ -178,6 +178,7 @@ impl Harness {
             mcp: serde_json::json!({}),
             run_deadline: Utc::now() + chrono::Duration::minutes(5),
             system_prompt_delivery: None,
+            pre_approvals: Vec::new(),
         };
         let command = Command {
             command_id: Uuid::new_v4(),

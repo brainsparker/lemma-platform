@@ -102,6 +102,7 @@ fn start_command(harness_id: Uuid, run_id: Uuid, revision: &str) -> Command {
         mcp: serde_json::Value::Null,
         run_deadline: Utc::now() + chrono::Duration::minutes(5),
         system_prompt_delivery: None,
+        pre_approvals: Vec::new(),
     };
     Command {
         command_id: Uuid::new_v4(),

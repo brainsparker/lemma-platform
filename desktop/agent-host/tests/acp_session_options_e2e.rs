@@ -110,6 +110,7 @@ fn request(
             mcp,
             run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),
             system_prompt_delivery: None,
+            pre_approvals: Vec::new(),
         },
         scratch_directory: cwd,
         mcp_server: None,

@@ -59,6 +59,7 @@ pub(crate) fn capabilities_from_acp(value: &Value) -> HarnessCapabilities {
         // `agentCapabilities`, in `initialize`'s `_meta`, so the probe reports
         // it separately and the caller sets it.
         steering: false,
+        pre_approval: true,
     }
 }
 

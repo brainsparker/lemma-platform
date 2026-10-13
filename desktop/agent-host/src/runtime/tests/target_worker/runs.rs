@@ -254,6 +254,7 @@ fn start_command(harness_id: Uuid, expires_at: chrono::DateTime<Utc>) -> Command
         mcp: serde_json::json!({}),
         run_deadline: Utc::now() + chrono::Duration::minutes(5),
         system_prompt_delivery: None,
+        pre_approvals: Vec::new(),
     };
     Command {
         command_id: Uuid::new_v4(),

@@ -13,7 +13,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.domain.value_objects import (
+    AgentRunApprovalDecision,
+    JsonObject,
+)
 
 
 # 3 is the WebSocket link with normalized run events (see
@@ -115,6 +118,10 @@ class AgentHostHarnessCapabilities(BaseModel):
     # one. Only a host that knows STEER_RUN ever publishes it, which is what
     # keeps that command away from hosts that would refuse to parse it.
     steering: bool = False
+    # The host honours a run spec's ``pre_approvals``: a permission the person
+    # granted after the turn that asked had ended is answered on the next turn
+    # without asking again. Only a host that publishes it is sent any.
+    pre_approval: bool = False
 
     model_config = {"extra": "allow"}
 
@@ -387,6 +394,20 @@ class AgentHostCommandRejection(BaseModel):
 NEW_SESSION_ONLY = "NEW_SESSION_ONLY"
 
 
+class AgentHostPreApproval(BaseModel):
+    """A permission the person granted for a call the turn never got to make.
+
+    The ACP request it answers was dropped with the turn that asked it, which
+    had waited past its parked window. The host allows the next request for
+    exactly this tool and input, once, and allows nothing else by it.
+    """
+
+    approval_id: str = Field(min_length=1, max_length=512)
+    tool_name: str = Field(min_length=1, max_length=255)
+    input: JsonObject = Field(default_factory=dict)
+    decision: AgentRunApprovalDecision
+
+
 class AgentHostRunSpec(BaseModel):
     agent_run_id: UUID
     conversation_id: UUID
@@ -417,6 +438,11 @@ class AgentHostRunSpec(BaseModel):
             "ends up opening a new session, which is the case Lemma cannot "
             "predict. Absent means send them every turn."
         ),
+    )
+    # Filled only for a host whose harness publishes ``pre_approval``; see
+    # ``harnesses/agent_host/pre_approvals.py``.
+    pre_approvals: list[AgentHostPreApproval] = Field(
+        default_factory=list, max_length=8
     )
 
 

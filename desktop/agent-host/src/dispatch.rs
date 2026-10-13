@@ -322,6 +322,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                 mcp: Value::Null,
                 run_deadline: chrono::Utc::now() + chrono::Duration::minutes(10),
                 system_prompt_delivery: None,
+                pre_approvals: Vec::new(),
             };
             let outcome = AcpDriver
                 .run(

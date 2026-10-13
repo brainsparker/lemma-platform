@@ -25,6 +25,7 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceRuntimeUnsupportedError,
     AgentSurfaceAlreadyExistsError,
     AgentSurfaceNotFoundError,
+    AgentSurfacePodNotFoundError,
     AgentSurfaceValidationError,
 )
 from app.modules.agent_surfaces.domain.ports import (
@@ -62,6 +63,8 @@ from app.modules.agent_surfaces.services.surface_consent import (
     SurfaceConsentMixin,
 )
 from app.core.infrastructure.db.session_uow import active_uow
+from app.modules.pod.contracts.agent_access import pod_organization_id
+from app.modules.pod.contracts.members import pod_name
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -270,6 +273,27 @@ class AgentSurfaceService(
         if surface is None:
             raise AgentSurfaceNotFoundError(name)
         return surface
+
+    async def surface_name_taken(self, *, pod_id: UUID, name: str) -> bool:
+        """Whether a surface of this name already exists in the pod."""
+        existing = await self.surface_repository.get_by_pod_and_name(
+            pod_id=pod_id, name=name
+        )
+        return existing is not None
+
+    async def pod_scope(self, pod_id: UUID) -> tuple[UUID, str]:
+        """The pod's organization and name, which a surface set-up records.
+
+        Raises the surface module's not-found error: a pod deleted between the
+        permission check and this read answers 404, where a bare `ValueError`
+        answered 500.
+        """
+        uow = self.surface_repository.uow
+        organization_id = await pod_organization_id(uow, pod_id)
+        name = await pod_name(uow.session, pod_id)
+        if organization_id is None or name is None:
+            raise AgentSurfacePodNotFoundError(str(pod_id))
+        return organization_id, name
 
     async def resend_surface_for_agent(
         self,

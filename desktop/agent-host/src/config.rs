@@ -161,6 +161,11 @@ pub struct HostConfig {
     pub targets: Vec<TargetConfig>,
     #[serde(default = "default_max_runs")]
     pub max_runs: u16,
+    /// Which defaults this file was written under. Absent means before
+    /// [`CONFIG_VERSION`] existed; [`HostConfig::migrate_old_defaults`] reads
+    /// it to tell a default an older build wrote from a number somebody chose.
+    #[serde(default)]
+    pub config_version: u32,
     /// The host-wide switch older builds wrote. It applied to every pairing
     /// -- a hosted workspace's and a teammate's shared install's included --
     /// so it is read once, moved onto the local pairing (`TargetConfig::
@@ -278,8 +283,24 @@ impl TargetConfig {
     }
 }
 
+/// How many runs at once a new install takes.
+///
+/// Each run is a coding agent process on this computer, mostly waiting on its
+/// model. Two meant a third conversation sat queued behind two long ones with
+/// nothing on screen, so eight: enough for a person working several threads,
+/// few enough that the processes do not crowd an ordinary laptop.
+pub const DEFAULT_MAX_RUNS: u16 = 8;
+
+/// The run slots every install wrote before [`DEFAULT_MAX_RUNS`] was raised.
+/// Nothing ever offered a way to choose it, so a stored 2 in a file without a
+/// `config_version` is that old default, not a choice.
+const PREVIOUS_DEFAULT_MAX_RUNS: u16 = 2;
+
+/// The defaults the current build writes. See [`HostConfig::config_version`].
+pub const CONFIG_VERSION: u32 = 1;
+
 const fn default_max_runs() -> u16 {
-    2
+    DEFAULT_MAX_RUNS
 }
 
 const fn default_enabled() -> bool {
@@ -293,12 +314,14 @@ impl HostConfig {
             let mut value: Self = serde_json::from_slice(&std::fs::read(&paths.config)?)?;
             value.migrate_host_execution();
             value.migrate_retired_local_hosts();
+            value.migrate_old_defaults();
             return Ok(value);
         }
         let config = Self {
             installation_id: Uuid::new_v4().to_string(),
             targets: Vec::new(),
             max_runs: default_max_runs(),
+            config_version: CONFIG_VERSION,
             legacy_host_execution: false,
             own_settings: std::collections::BTreeSet::new(),
         };
@@ -317,6 +340,23 @@ impl HostConfig {
                 target.host_execution = true;
             }
         }
+    }
+
+    /// Lift the run slots an older build wrote as its default to today's.
+    ///
+    /// Every install wrote `"max_runs": 2` into its file, so changing the
+    /// default alone would have reached only new installs. A number somebody
+    /// wrote by hand is kept; only the old default, in a file from before
+    /// `config_version`, moves. In memory; the next save writes it that way,
+    /// with the version, so the move happens once.
+    fn migrate_old_defaults(&mut self) {
+        if self.config_version >= CONFIG_VERSION {
+            return;
+        }
+        if self.max_runs == PREVIOUS_DEFAULT_MAX_RUNS {
+            self.max_runs = DEFAULT_MAX_RUNS;
+        }
+        self.config_version = CONFIG_VERSION;
     }
 
     /// Move a local pairing off a hostname Lemma Desktop no longer serves.
@@ -544,6 +584,7 @@ mod tests {
                 target("http://app.10.0.0.7.sslip.io:61003/", true),
             ],
             max_runs: default_max_runs(),
+            config_version: CONFIG_VERSION,
             legacy_host_execution: false,
             own_settings: std::collections::BTreeSet::new(),
         };
@@ -651,6 +692,7 @@ mod tests {
             own_settings: std::collections::BTreeSet::default(),
             installation_id: "installation".into(),
             max_runs,
+            config_version: CONFIG_VERSION,
             targets: Vec::new(),
         };
 
@@ -671,6 +713,7 @@ mod tests {
             own_settings: std::collections::BTreeSet::default(),
             installation_id: "installation".into(),
             max_runs: 1,
+            config_version: CONFIG_VERSION,
             targets: vec![TargetConfig {
                 target_id: Uuid::new_v4(),
                 name: "unsafe".into(),
@@ -750,6 +793,7 @@ mod tests {
             installation_id: "installation".into(),
             targets: vec![pairing(me), pairing(them)],
             max_runs: 1,
+            config_version: CONFIG_VERSION,
             legacy_host_execution: false,
             own_settings: std::collections::BTreeSet::default(),
         };
@@ -812,6 +856,30 @@ mod tests {
         assert!(config.targets.is_empty());
         assert_eq!(config.installation_id, "installation");
         assert_eq!(config.max_runs, 2);
+    }
+
+    #[test]
+    fn the_old_default_run_slots_move_up_once_and_a_chosen_number_stays() {
+        let file = |max_runs: u16, version: Option<u32>| {
+            let mut value = serde_json::json!({
+                "installation_id": "installation",
+                "max_runs": max_runs,
+            });
+            if let Some(version) = version {
+                value["config_version"] = version.into();
+            }
+            let mut config: HostConfig = serde_json::from_value(value).unwrap();
+            config.migrate_old_defaults();
+            (config.max_runs, config.config_version)
+        };
+
+        // Every install before `config_version` wrote 2 without anyone choosing it.
+        assert_eq!(file(2, None), (DEFAULT_MAX_RUNS, CONFIG_VERSION));
+        // Anything else in an old file was written by hand.
+        assert_eq!(file(5, None), (5, CONFIG_VERSION));
+        assert_eq!(file(1, None), (1, CONFIG_VERSION));
+        // Once versioned, 2 is somebody's choice.
+        assert_eq!(file(2, Some(CONFIG_VERSION)), (2, CONFIG_VERSION));
     }
 
     #[test]

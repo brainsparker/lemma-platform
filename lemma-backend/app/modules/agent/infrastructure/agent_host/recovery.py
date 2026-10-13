@@ -7,6 +7,7 @@ a file: it adds indirection without adding polymorphism.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -18,6 +19,8 @@ from app.modules.agent.domain.agent_host import (
     AgentHostCommandKind,
     AgentHostCommandState,
     AgentHostRunState,
+    AgentHostStatus,
+    effective_agent_host_status,
 )
 from app.modules.agent.domain.value_objects import TERMINAL_AGENT_RUN_STATUSES
 from app.modules.agent.infrastructure.agent_host.repository_common import (
@@ -30,6 +33,7 @@ from app.modules.agent.infrastructure.repository_status import (
 )
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
+    AgentHostModel,
     AgentHostPairingModel,
     AgentHostRunLeaseModel,
 )
@@ -61,6 +65,74 @@ _LIVE_COMMAND_STATES = (
     AgentHostCommandState.DELIVERED.value,
     AgentHostCommandState.ACKNOWLEDGED.value,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class BusyHost:
+    """The computer a queued run is waiting on: online, every run slot taken."""
+
+    name: str
+    active_runs: int
+
+
+async def hold_for_busy_host(
+    session: AsyncSession,
+    *,
+    run_id: UUID,
+    wait_seconds: int,
+    now: datetime | None = None,
+) -> BusyHost | None:
+    """Keep a queued run's place while its computer is online and full.
+
+    A run handed to a computer whose slots are all taken is not lost, only
+    early: the computer is there and will take it when one of its runs ends.
+    Expiring it at the wait deadline failed a conversation for no better reason
+    than that two others on the same machine ran long. So while the computer
+    keeps heartbeating with no slot free, the run's lease and its START_RUN are
+    pushed out by another ``wait_seconds``. Anything else -- the computer gone
+    quiet, draining, revoked, or with a slot free and still not taking the run
+    -- is left to expire exactly as before. The run's own deadline still ends
+    the wait.
+
+    Returns the busy computer, so the conversation can say what it waits on.
+    """
+    timestamp = now or utcnow()
+    lease = await session.get(AgentHostRunLeaseModel, run_id, with_for_update=True)
+    if (
+        lease is None
+        or lease.accepted_at is not None
+        or lease.state != AgentHostRunState.QUEUED_FOR_HOST.value
+    ):
+        return None
+    host = await session.get(AgentHostModel, lease.host_id)
+    if host is None or host.revoked_at is not None:
+        return None
+    online = effective_agent_host_status(host.status, host.last_seen_at, now=timestamp)
+    capacity = host.capacity or {}
+    if online is not AgentHostStatus.ONLINE or capacity.get("available_runs") != 0:
+        return None
+    held_until = timestamp + timedelta(seconds=wait_seconds)
+    # Renewed at half the window rather than on every check, so a run waiting
+    # an hour writes a few rows, not one every few seconds.
+    if lease.lease_expires_at < timestamp + timedelta(seconds=wait_seconds / 2):
+        lease.lease_expires_at = held_until
+        lease.updated_at = timestamp
+        await session.execute(
+            update(AgentHostCommandModel)
+            .where(
+                AgentHostCommandModel.run_id == run_id,
+                AgentHostCommandModel.kind == AgentHostCommandKind.START_RUN.value,
+                AgentHostCommandModel.lease_epoch == lease.lease_epoch,
+                AgentHostCommandModel.state == AgentHostCommandState.QUEUED.value,
+            )
+            .values(expires_at=held_until)
+        )
+        await session.flush()
+    active = capacity.get("active_runs")
+    return BusyHost(
+        name=host.display_name,
+        active_runs=active if isinstance(active, int) else 0,
+    )
 
 
 async def expire_unaccepted_run(

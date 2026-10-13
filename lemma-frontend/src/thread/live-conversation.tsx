@@ -31,6 +31,10 @@ import { useStableCallback } from "./stable-callback";
 import { conversationRefOf } from "@/data/live";
 import { draftKeyFor } from "./drafts";
 
+/** The notice a run sends while it waits for a free slot on the person's
+ *  computer; `WAITING_FOR_SLOT_STATUS` in the backend's `event_text.py`. */
+const WAITING_FOR_SLOT = "agent_host.waiting_for_slot";
+
 /** The conversation, on the SDK's own session.
  *
  *  Streaming, reattaching to a run that is already going, stop, retry and the
@@ -138,6 +142,9 @@ export function LiveConversation({
        session owns. A ref rather than the session's own field, which cannot be
        read from inside the options that construct it. */
     const streamingIn = useRef<string | null>(null);
+    /* The run is queued behind others on the person's own computer, which
+       otherwise shows as "Working" with nothing under it for minutes. */
+    const [slotWait, setSlotWait] = useState<string | null>(null);
 
     const historyRequestFailed = useRef(false);
     /* Set below, once the session it reloads exists; read here from the
@@ -164,6 +171,9 @@ export function LiveConversation({
             const target = id ?? streamingIn.current;
             if (!target) return;
             patchConversationLists(queryClient, pod.id, (list) => applyTitle(list, target, title));
+        },
+        onNotice: (notice, kind) => {
+            if (kind === WAITING_FOR_SLOT) setSlotWait(notice);
         },
         // Omit agentName: creation uses the pod default when no named agent is supplied.
         conversationId: conversationId === NEW_CONVERSATION ? null : conversationId,
@@ -266,6 +276,13 @@ export function LiveConversation({
     }, [openId, olderToken, loadMessages]);
 
     useEffect(() => { streamingIn.current = session.conversationId; }, [session.conversationId]);
+
+    /* Gone the moment the run shows any sign of having started, or ends: the
+       server says it once, not again when the wait is over. */
+    const underway = !session.isStreaming
+        || Boolean(session.streamingText || session.streamingThinking || session.streamingTool);
+    const landed = session.messages.length;
+    useEffect(() => { setSlotWait(null); }, [underway, landed]);
 
     /* What this conversation looked like the last time it was open here, or
        when someone last rested on it in the history: drawn while the server is
@@ -797,6 +814,7 @@ export function LiveConversation({
                         args: session.streamingTool.args,
                     }
                   : null,
+              waiting: slotWait,
           }
         : null;
 

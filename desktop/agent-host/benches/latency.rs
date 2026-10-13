@@ -557,6 +557,7 @@ async fn start_host(
         installation_id,
         targets: vec![target],
         max_runs: 1,
+        config_version: lemma_agent_host::config::CONFIG_VERSION,
         own_settings: std::collections::BTreeSet::default(),
     };
     config.save(&paths).unwrap();

@@ -455,6 +455,17 @@ class AgentHostDispatchRepository:
             skip_if=_not_accepted_yet,
         )
 
+    async def hold_for_busy_host(
+        self,
+        *,
+        run_id: UUID,
+        wait_seconds: int,
+        now: datetime | None = None,
+    ) -> recovery.BusyHost | None:
+        return await recovery.hold_for_busy_host(
+            self.session, run_id=run_id, wait_seconds=wait_seconds, now=now
+        )
+
     async def expire_unaccepted_run(
         self,
         *,

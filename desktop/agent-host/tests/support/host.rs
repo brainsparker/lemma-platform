@@ -39,6 +39,7 @@ impl HostProcess {
             installation_id,
             targets: vec![target],
             max_runs: 1,
+            config_version: lemma_agent_host::config::CONFIG_VERSION,
         }
         .save(&paths)
         .unwrap();
@@ -145,6 +146,7 @@ impl InProcessHost {
             installation_id,
             targets: vec![target],
             max_runs: 1,
+            config_version: lemma_agent_host::config::CONFIG_VERSION,
         };
         config.save(&paths).unwrap();
         let runtime = lemma_agent_host::runtime::HostRuntime::new(config, paths)

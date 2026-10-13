@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -63,6 +63,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.parked_window import 
     DEFAULT_PARKED_CHECK_SECONDS,
     ParkedWindow,
 )
+from app.modules.agent.infrastructure.harnesses.agent_host.slot_wait import SlotWait
 from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
     AgentHostRunConfig,
     agent_host_run_config,
@@ -120,12 +121,15 @@ class _ConsumeState:
     deadline: float
     deadline_message: str
     accept_deadline: float
+    slot_wait: SlotWait
     lease_check_due_at: float
     steering: SteerSchedule
     parked: ParkedWindow
     credential_expires_at: datetime | None
     terminal_checkpoint_seen_at: float | None = None
     stop_sent: bool = False
+    #: Events a check wants shown without ending the run.
+    notices: list[AgentEvent] = field(default_factory=list)
 
 
 class RemoteHarness:
@@ -261,6 +265,7 @@ class RemoteHarness:
             deadline=loop.time() + dispatch.event_timeout_seconds,
             deadline_message=dispatch.deadline_message,
             accept_deadline=loop.time() + run_config.wait_timeout_seconds,
+            slot_wait=SlotWait(wait_seconds=run_config.wait_timeout_seconds),
             lease_check_due_at=loop.time(),
             steering=SteerSchedule(
                 enabled=dispatch.steerable,
@@ -323,6 +328,8 @@ class RemoteHarness:
                 conversation=conversation,
                 options=options,
             )
+            while state.notices:
+                yield state.notices.pop(0)
             if ending is not None:
                 for event in ending:
                     yield event
@@ -422,7 +429,7 @@ class RemoteHarness:
         outcome = await self._check_lease(
             agent_run_id=agent_run_id,
             seen_at=state.terminal_checkpoint_seen_at,
-            accept_deadline=state.accept_deadline,
+            state=state,
             now=loop.time(),
         )
         state.terminal_checkpoint_seen_at = outcome.seen_at
@@ -483,7 +490,7 @@ class RemoteHarness:
         *,
         agent_run_id: UUID,
         seen_at: float | None,
-        accept_deadline: float,
+        state: _ConsumeState,
         now: float,
     ) -> LeaseOutcome:
         """Reconcile lease state, which never arrives as an event.
@@ -509,10 +516,19 @@ class RemoteHarness:
                 terminal_detail=lease_terminal_detail(lease),
             )
 
+        if getattr(lease, "state", None) == AgentHostRunState.QUEUED_FOR_HOST.value:
+            held, notice = await state.slot_wait.check(
+                self.uow_factory, agent_run_id=agent_run_id
+            )
+            if held:
+                wait = state.slot_wait.wait_seconds
+                state.accept_deadline = max(state.accept_deadline, now + wait)
+            if notice is not None:
+                state.notices.append(notice)
         expired_state = await self._expire_if_unaccepted(
             lease=lease,
             now=now,
-            accept_deadline=accept_deadline,
+            accept_deadline=state.accept_deadline,
             agent_run_id=agent_run_id,
         )
         return LeaseOutcome(seen_at=seen_at, expired_state=expired_state)

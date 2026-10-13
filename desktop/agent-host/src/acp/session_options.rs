@@ -426,12 +426,11 @@ mod tests {
         for own in [false, true] {
             let options = claude_code(&empty_spec(), own, &no_web_tools(), None, Some(bin));
             let options = &options.meta.unwrap()["claudeCode"]["options"];
+            // Joined the way the host joins it: Windows separates with `\`.
+            let exact = format!("Bash({}:*)", bin.join("lemma").display());
             assert_eq!(
                 options["allowedTools"],
-                json!([
-                    "Bash(/Lemma/runtime/releases/7/backend/bin/lemma:*)",
-                    "Bash(lemma:*)"
-                ]),
+                json!([exact, "Bash(lemma:*)"]),
                 "own_settings={own}"
             );
         }
@@ -487,10 +486,8 @@ mod tests {
             })
         );
         // Lemma's own rule stays its own, apart from the person's.
-        assert_eq!(
-            options["allowedTools"],
-            json!(["Bash(/pack/bin/lemma:*)", "Bash(lemma:*)"])
-        );
+        let exact = format!("Bash({}:*)", Path::new("/pack/bin").join("lemma").display());
+        assert_eq!(options["allowedTools"], json!([exact, "Bash(lemma:*)"]));
     }
 
     #[test]

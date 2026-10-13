@@ -26,10 +26,18 @@ BACKEND = Path(__file__).resolve().parents[4]
 BEFORE = "0052_folder_visibility_index"
 REVISION = "0053_work_runtime"
 
+_TABLES = {"work_items", "work_queues", "work_rate_buckets"}
 _INDEXES = """
     SELECT indexname, regexp_replace(indexdef, ' ON [a-z_.]+ ', ' ON ') AS definition
-      FROM pg_indexes WHERE tablename IN ('work_items', 'work_queues')
+      FROM pg_indexes
+     WHERE tablename IN ('work_items', 'work_queues', 'work_rate_buckets')
      ORDER BY indexname
+"""
+_COLUMNS = """
+    SELECT table_name, column_name, data_type, is_nullable, column_default
+      FROM information_schema.columns
+     WHERE table_name IN ('work_items', 'work_queues', 'work_rate_buckets')
+     ORDER BY table_name, column_name
 """
 
 
@@ -46,7 +54,8 @@ def _migrate(url: str, direction: str, revision: str) -> None:
 def _tables(sync_url: str) -> set[str]:
     with psycopg.connect(sync_url) as connection:
         rows = connection.execute(
-            "SELECT tablename FROM pg_tables WHERE tablename IN ('work_items', 'work_queues')"
+            "SELECT tablename FROM pg_tables WHERE tablename = ANY(%s)",
+            (sorted(_TABLES),),
         ).fetchall()
     return {row[0] for row in rows}
 
@@ -54,6 +63,11 @@ def _tables(sync_url: str) -> set[str]:
 def _indexes(sync_url: str) -> list[tuple[str, str]]:
     with psycopg.connect(sync_url) as connection:
         return [(r[0], r[1]) for r in connection.execute(_INDEXES).fetchall()]
+
+
+def _columns(sync_url: str) -> list[tuple[object, ...]]:
+    with psycopg.connect(sync_url) as connection:
+        return [tuple(r) for r in connection.execute(_COLUMNS).fetchall()]
 
 
 async def test_the_migration_round_trips_and_matches_the_model(
@@ -66,12 +80,13 @@ async def test_the_migration_round_trips_and_matches_the_model(
     sync_url = url.replace("postgresql+asyncpg", "postgresql")
 
     _migrate(url, "upgrade", REVISION)
-    assert _tables(sync_url) == {"work_items", "work_queues"}
+    assert _tables(sync_url) == _TABLES
     migrated = _indexes(sync_url)
 
     model_url = work_db.engine.url.render_as_string(hide_password=False)
-    modelled = _indexes(model_url.replace("postgresql+asyncpg", "postgresql"))
-    assert migrated == modelled
+    model_sync_url = model_url.replace("postgresql+asyncpg", "postgresql")
+    assert migrated == _indexes(model_sync_url)
+    assert _columns(sync_url) == _columns(model_sync_url)
     assert {n for n, _ in migrated} >= {
         "work_items_dedup",
         "work_items_ready",
@@ -79,9 +94,10 @@ async def test_the_migration_round_trips_and_matches_the_model(
         "work_items_keyed",
         "work_items_leases",
         "work_queues_served",
+        "work_rate_buckets_full",
     }
 
     _migrate(url, "downgrade", BEFORE)
     assert _tables(sync_url) == set()
     _migrate(url, "upgrade", REVISION)
-    assert _tables(sync_url) == {"work_items", "work_queues"}
+    assert _tables(sync_url) == _TABLES

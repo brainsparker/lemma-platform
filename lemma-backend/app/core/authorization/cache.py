@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.core.authorization.authz_epoch import bump_pod_authz_epoch
 from app.core.authorization.context import PrincipalRef
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
@@ -196,7 +197,10 @@ async def invalidate_role_snapshot_cache(
     stale authorization. The ``organization_id``/``pod_id`` args are accepted for
     call-site clarity.
     """
-    _ = (organization_id, pod_id)
+    _ = organization_id
+    # Anything keyed by the pod's permissions (the search scope) goes with the
+    # snapshots; without a pod, every pod's.
+    await bump_pod_authz_epoch(pod_id)
     cache = _get_role_cache()
     if cache is None:
         return

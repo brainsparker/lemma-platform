@@ -221,17 +221,24 @@ def _routers():
 
 
 def _event_routers():
-    from app.modules.datastore.events.handlers import router
     from app.modules.datastore.events.pod_schema_consumer import (
         router as pod_schema_router,
     )
 
-    return [router, pod_schema_router]
+    return [pod_schema_router]
 
 
 def _register_streaq() -> None:
+    import app.modules.datastore.events.handlers  # noqa: F401
     import app.modules.datastore.events.orphan_schema_tasks  # noqa: F401
     import app.modules.datastore.events.outbox_retention_tasks  # noqa: F401
+
+    # Work-runtime kinds, registered here so the worker's dispatchers can
+    # claim them; the API registers ``file_work`` by importing the repository
+    # that enqueues it.
+    import app.modules.datastore.events.file_work  # noqa: F401
+    import app.modules.datastore.events.pod_schema_work  # noqa: F401
+    import app.modules.datastore.events.storage_work  # noqa: F401
 
 
 @asynccontextmanager
@@ -273,8 +280,8 @@ async def _close_datastore_engine(context):
 
     Registered *first* on purpose. `AsyncExitStack` unwinds last-entered-first,
     so entering this one first makes it the last of datastore's to unwind --
-    after `_close_reindex_queue` and the outbox dispatcher, both of which can
-    still want the engine on their way out.
+    after the outbox dispatcher, which can still want the engine on its way
+    out.
     """
     try:
         yield
@@ -284,18 +291,6 @@ async def _close_datastore_engine(context):
         )
 
         await close_datastore_engine()
-
-
-@asynccontextmanager
-async def _close_reindex_queue(context):
-    try:
-        yield
-    finally:
-        from app.modules.datastore.infrastructure.reindex_queue import (
-            close_datastore_reindex_queue,
-        )
-
-        await close_datastore_reindex_queue()
 
 
 def _resource_names():
@@ -349,10 +344,6 @@ module = LemmaModule(
         _close_datastore_engine,
         _preload_local_embeddings,
         _datastore_outbox_dispatcher,
-        _close_reindex_queue,
     ),
-    stream_groups=(
-        ("datastore.events", "datastore-file-events"),
-        ("pod_events", "pod-provisioning-events"),
-    ),
+    stream_groups=(("pod_events", "pod-provisioning-events"),),
 )

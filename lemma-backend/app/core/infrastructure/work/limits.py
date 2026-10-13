@@ -21,24 +21,32 @@ from uuid import UUID
 from pydantic import JsonValue
 
 from app.core.infrastructure.work.config import default_max_running, work_settings
+from app.core.infrastructure.work.rates import Rate, default_rates, parse_rates
 from app.core.infrastructure.work.types import WorkClass
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-
-@dataclass(frozen=True, slots=True)
-class Rate:
-    limit: int
-    per_seconds: float
+__all__ = [
+    "ConfiguredWorkLimitPort",
+    "NamespaceDirectory",
+    "Rate",
+    "WorkLimitPort",
+    "WorkLimits",
+    "current_namespace_directory",
+    "current_work_limit_port",
+    "declare_namespace_directory",
+    "install_work_limit_port",
+    "reset_work_limit_port",
+]
 
 
 @dataclass(frozen=True, slots=True)
 class WorkLimits:
     max_running: dict[WorkClass, int]
-    #: Named token buckets ('llm_filter', 'email_out'). Parsed and carried so a
-    #: provider can state them today; enforcement at claim lands with the first
-    #: handler that declares a rate key.
+    #: Every named rate for the namespace: deployment defaults with any
+    #: override on top. Stored on the namespace's queue rows and enforced at
+    #: claim for the kinds that declare them.
     rates: dict[str, Rate]
 
     def cap(self, cls: WorkClass) -> int:
@@ -52,9 +60,9 @@ class WorkLimitPort(Protocol):
 class NamespaceDirectory(Protocol):
     """Who owns a namespace, for overrides keyed by organization.
 
-    Core cannot read the pods or organizations tables, so a module that can
-    installs this; without one, org rules match only ``org:`` namespaces and
-    slug rules match nothing.
+    Core cannot read the pods or organizations tables, so the pod module
+    supplies this through ``LemmaModule.namespace_directory``; without one, org
+    rules match only ``org:`` namespaces and slug rules match nothing.
     """
 
     async def organization_of(self, ns: str) -> tuple[UUID, str] | None: ...
@@ -62,14 +70,16 @@ class NamespaceDirectory(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class OverrideRule:
-    specificity: int
+    #: (tier, prefix length): ns/pod_id beats org_id beats slug beats any
+    #: prefix, and a longer prefix beats a shorter one.
+    specificity: tuple[int, int]
     key: str
     value: str
     max_running: tuple[tuple[WorkClass, int], ...]
     rates: tuple[tuple[str, Rate], ...]
 
 
-_EXACT_KEYS = {"ns": 40, "pod_id": 40, "org_id": 30, "slug": 20, "slug_prefix": 10}
+_TIERS = {"ns": 4, "pod_id": 4, "org_id": 3, "slug": 2, "slug_prefix": 1}
 
 
 def _class_caps(raw: JsonValue) -> tuple[tuple[WorkClass, int], ...]:
@@ -83,35 +93,19 @@ def _class_caps(raw: JsonValue) -> tuple[tuple[WorkClass, int], ...]:
     )
 
 
-def _rates(raw: JsonValue) -> tuple[tuple[str, Rate], ...]:
-    if not isinstance(raw, dict):
-        return ()
-    rates: list[tuple[str, Rate]] = []
-    for name, spec in raw.items():
-        if not isinstance(spec, dict):
-            continue
-        limit, per = spec.get("limit"), spec.get("per_seconds")
-        if isinstance(limit, int) and isinstance(per, (int, float)) and per > 0:
-            rates.append((name, Rate(limit, float(per))))
-    return tuple(rates)
-
-
 def _rule(entry: JsonValue) -> OverrideRule | None:
     if not isinstance(entry, dict):
         return None
-    for key, specificity in _EXACT_KEYS.items():
+    for key, tier in _TIERS.items():
         value = entry.get(key)
         if isinstance(value, str) and value:
             caps = _class_caps(entry.get("max_running"))
-            rates = _rates(entry.get("rates"))
+            rates = parse_rates(entry.get("rates"))
             if not caps and not rates:
                 return None
-            if key == "slug_prefix":
-                specificity += min(len(value), 9)
-            return OverrideRule(specificity, key, value, caps, rates)
+            prefix_length = len(value) if key == "slug_prefix" else 0
+            return OverrideRule((tier, prefix_length), key, value, caps, rates)
     return None
-
-
 @lru_cache(maxsize=8)
 def parse_overrides(raw: str) -> tuple[OverrideRule, ...]:
     """Override rules from ``WORK_LIMIT_OVERRIDES_JSON``.
@@ -159,7 +153,7 @@ def select_override(
     rules: tuple[OverrideRule, ...], ns: str, owner: tuple[UUID, str] | None
 ) -> OverrideRule | None:
     """The most specific matching rule; a tie goes to the one written last."""
-    best: tuple[int, int] | None = None
+    best: tuple[tuple[int, int], int] | None = None
     chosen: OverrideRule | None = None
     for position, rule in enumerate(rules):
         if not _matches(rule, ns, owner):
@@ -188,24 +182,28 @@ class ConfiguredWorkLimitPort:
         )
         rules = parse_overrides(raw)
         caps = {cls: default_max_running(cls) for cls in WorkClass}
+        rates = default_rates()
         if not rules:
-            return WorkLimits(max_running=caps, rates={})
+            return WorkLimits(max_running=caps, rates=rates)
         owner = None
-        if self._directory is not None and ns.startswith("pod:"):
-            owner = await self._directory.organization_of(ns)
+        directory = self._directory or current_namespace_directory()
+        if directory is not None and ns.startswith("pod:"):
+            owner = await directory.organization_of(ns)
         rule = select_override(rules, ns, owner)
         if rule is None:
-            return WorkLimits(max_running=caps, rates={})
+            return WorkLimits(max_running=caps, rates=rates)
         caps.update(dict(rule.max_running))
-        return WorkLimits(max_running=caps, rates=dict(rule.rates))
+        rates.update(dict(rule.rates))
+        return WorkLimits(max_running=caps, rates=rates)
 
 
 @dataclass(slots=True)
-class _InstalledPort:
+class _Installed:
     port: WorkLimitPort | None = None
+    directory: NamespaceDirectory | None = None
 
 
-_installed = _InstalledPort()
+_installed = _Installed()
 
 
 def install_work_limit_port(port: WorkLimitPort) -> None:
@@ -219,3 +217,12 @@ def reset_work_limit_port() -> None:
 
 def current_work_limit_port() -> WorkLimitPort:
     return _installed.port or ConfiguredWorkLimitPort()
+
+
+def declare_namespace_directory(directory: NamespaceDirectory | None) -> None:
+    """Register who can say which organization owns a pod (``configure_namespace_directory``)."""
+    _installed.directory = directory
+
+
+def current_namespace_directory() -> NamespaceDirectory | None:
+    return _installed.directory

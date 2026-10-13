@@ -10,6 +10,10 @@
    candidate is taken only while its key has room, counted under a
    transaction-scoped advisory lock on the key -- that lock is what makes
    "count, then take" race-free across dispatchers.
+4. A candidate of a rate-limited kind is taken only with a token from each of
+   its buckets (``rates.py``), spent in this same transaction. One whose
+   bucket is empty is moved to when its token will be there -- not charged,
+   not dropped -- and the walk goes on to the next.
 
 Every visited namespace has its ``last_served`` bumped, taken or not, so a
 namespace stuck behind a busy key cannot hold the head of the line; a namespace
@@ -18,15 +22,28 @@ the round never reached keeps its place for the next round.
 
 from __future__ import annotations
 
+import math
+from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.work import rates as rate_buckets
 from app.core.infrastructure.work.lifecycle import item_from_row
+from app.core.infrastructure.work.rates import (
+    BucketId,
+    BucketState,
+    Rate,
+    RateUse,
+    bucket_ids,
+    rates_from_json,
+    wait_for_token,
+    wanted_buckets,
+)
 from app.core.infrastructure.work.types import ClaimedItem, WorkClass
 
 # Readiness is a per-queue probe, LIMIT 1 inside LATERAL, on purpose: written
@@ -36,7 +53,7 @@ from app.core.infrastructure.work.types import ClaimedItem, WorkClass
 # the LIMIT, so the cost tracks the namespaces visited, not the backlog.
 _READY_QUEUES = text(
     """
-    SELECT q.ns,
+    SELECT q.ns, q.rates,
            q.max_running - (SELECT count(*) FROM work_items r
                              WHERE r.class = q.class AND r.ns = q.ns
                                AND r.state = 'running') AS room
@@ -57,7 +74,7 @@ _READY_QUEUES = text(
 )
 _CANDIDATES = text(
     """
-    SELECT id, kind, concurrency_key, concurrency_limit
+    SELECT id, kind, concurrency_key, concurrency_limit, rate_key
       FROM work_items
      WHERE class = :cls AND ns = :ns AND state = 'queued' AND run_at <= now()
        AND kind = ANY(CAST(:kinds AS text[]))
@@ -98,35 +115,71 @@ class Candidate:
     kind: str
     concurrency_key: str | None
     concurrency_limit: int | None
+    #: Rate buckets this item draws a token from; empty for unlimited kinds.
+    buckets: tuple[BucketId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class ReadyQueue:
     ns: str
     room: int
+    rates: Mapping[str, Rate] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class Walk:
+    taken: list[UUID]
+    #: Rate-limited candidates and the seconds until their token is there.
+    throttled: dict[UUID, float]
+    #: Tokens spent per bucket by what was taken.
+    spent: Counter[BucketId]
 
 
 def take(
-    candidates: Sequence[Candidate], budget: int, key_room: Mapping[str, int]
-) -> list[UUID]:
+    candidates: Sequence[Candidate],
+    budget: int,
+    key_room: Mapping[str, int],
+    buckets: Mapping[BucketId, BucketState] | None = None,
+) -> Walk:
     """Walk candidates in order and take up to ``budget`` of them.
 
     Unkeyed candidates are always takeable. A keyed one is taken while its key
     has room; taking it uses that room up. Skipping a busy key does not stop
     the walk, so keyed work never blocks unkeyed work behind it.
+
+    A rate-limited candidate also needs a token in each of its buckets. With
+    one bucket empty it is throttled: the k-th candidate queued behind an
+    empty bucket waits until k tokens beyond what is there have refilled. A
+    bucket missing from ``buckets`` is held by another claim, so its
+    candidates are left for the next round, neither taken nor moved.
     """
     remaining = dict(key_room)
-    taken: list[UUID] = []
+    tokens = {b: state.tokens for b, state in (buckets or {}).items()}
+    owed: Counter[BucketId] = Counter()
+    walk = Walk(taken=[], throttled={}, spent=Counter())
     for candidate in candidates:
-        if len(taken) >= budget:
+        if len(walk.taken) >= budget:
             break
         key = candidate.concurrency_key
-        if key is None:
-            taken.append(candidate.id)
-        elif remaining.get(key, 0) > 0:
+        if key is not None and remaining.get(key, 0) <= 0:
+            continue
+        if any(b not in tokens for b in candidate.buckets):
+            continue
+        empty = [b for b in candidate.buckets if tokens[b] < 1]
+        if empty:
+            owed.update(empty)
+            walk.throttled[candidate.id] = max(
+                wait_for_token(owed[b] - tokens[b], buckets[b].rate)  # type: ignore[index]
+                for b in empty
+            )
+            continue
+        for b in candidate.buckets:
+            tokens[b] -= 1
+            walk.spent[b] += 1
+        if key is not None:
             remaining[key] -= 1
-            taken.append(candidate.id)
-    return taken
+        walk.taken.append(candidate.id)
+    return walk
 
 
 def fair_share(*, quantum: int, free: int, ready: int) -> int:
@@ -153,6 +206,8 @@ class ClaimRequest:
     #: kind -> lease. Only these kinds are claimed: a process never takes work
     #: it has no handler for.
     leases: Mapping[str, timedelta]
+    #: kind -> the rate buckets each of its items draws from, for rated kinds.
+    rates: Mapping[str, tuple[RateUse, ...]] = field(default_factory=dict)
 
 
 async def _ready_queues(
@@ -166,7 +221,7 @@ async def _ready_queues(
             "limit": request.free,
         },
     )
-    return [ReadyQueue(row.ns, row.room) for row in rows]
+    return [ReadyQueue(row.ns, row.room, rates_from_json(row.rates)) for row in rows]
 
 
 async def _candidates(
@@ -184,7 +239,14 @@ async def _candidates(
         },
     )
     return [
-        Candidate(r.id, r.kind, r.concurrency_key, r.concurrency_limit) for r in rows
+        Candidate(
+            r.id,
+            r.kind,
+            r.concurrency_key,
+            r.concurrency_limit,
+            bucket_ids(request.rates.get(r.kind, ()), r.rate_key, r.concurrency_key),
+        )
+        for r in rows
     ]
 
 
@@ -208,6 +270,17 @@ async def _key_room(
         running = await session.scalar(_RUNNING_WITH_KEY, {"key": key}) or 0
         known[key] = max(0, (candidate.concurrency_limit or 1) - running)
     return known
+
+
+async def _open_buckets(
+    session: AsyncSession, queue: ReadyQueue, candidates: Sequence[Candidate]
+) -> dict[BucketId, BucketState]:
+    needed = {b for c in candidates for b in c.buckets}
+    wanted = wanted_buckets(needed, queue.rates)
+    # A name with no rate anywhere (registration refuses one, so only a
+    # deployment that dropped a default mid-flight) is unlimited.
+    unlimited = {b: BucketState(math.inf, Rate(1, 1.0)) for b in needed - set(wanted)}
+    return {**unlimited, **await rate_buckets.open_buckets(session, queue.ns, wanted)}
 
 
 def _consume_keys(
@@ -238,10 +311,21 @@ async def claim(session: AsyncSession, request: ClaimRequest) -> list[ClaimedIte
         visited.append(queue.ns)
         candidates = await _candidates(session, request, queue.ns, budget)
         key_room = await _key_room(session, candidates, known_keys)
-        chosen = take(candidates, budget, key_room)
-        _consume_keys(candidates, chosen, known_keys)
+        buckets = (
+            await _open_buckets(session, queue, candidates)
+            if any(c.buckets for c in candidates)
+            else {}
+        )
+        walk = take(candidates, budget, key_room, buckets)
+        _consume_keys(candidates, walk.taken, known_keys)
+        await rate_buckets.spend(
+            session,
+            queue.ns,
+            {b: n for b, n in walk.spent.items() if math.isfinite(buckets[b].tokens)},
+        )
+        await rate_buckets.throttle(session, walk.throttled)
         kind_of.update((c.id, c.kind) for c in candidates)
-        taken.extend(chosen)
+        taken.extend(walk.taken)
     if visited:
         await session.execute(_TOUCH_SERVED, {"cls": request.cls.value, "ns": visited})
     if not taken:

@@ -17,7 +17,9 @@ from pydantic import BaseModel, JsonValue
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from app.core.infrastructure.work.db import side_connection
 from app.core.infrastructure.work.limits import WorkLimitPort, current_work_limit_port
+from app.core.infrastructure.work.rates import rates_json
 from app.core.infrastructure.work.registry import (
     WorkRegistry,
     registry as default_registry,
@@ -27,9 +29,10 @@ from app.core.infrastructure.work.types import WorkClass, validate_namespace
 _INSERT_ITEM = text(
     """
     INSERT INTO work_items (id, ns, class, kind, payload, dedup_key,
-                            concurrency_key, concurrency_limit, run_at, priority)
+                            concurrency_key, concurrency_limit, rate_key,
+                            run_at, priority)
     VALUES (:id, :ns, :cls, :kind, CAST(:payload AS jsonb), :dedup_key,
-            :concurrency_key, :concurrency_limit,
+            :concurrency_key, :concurrency_limit, :rate_key,
             COALESCE(CAST(:run_at AS timestamptz), now())
               + make_interval(secs => :delay_seconds),
             :priority)
@@ -48,7 +51,8 @@ _QUEUE_EXISTS = text("SELECT 1 FROM work_queues WHERE class = :cls AND ns = :ns"
 # the caller then rolls back, an empty queue row is left for retention.
 _ENSURE_QUEUE = text(
     """
-    INSERT INTO work_queues (class, ns, max_running) VALUES (:cls, :ns, :cap)
+    INSERT INTO work_queues (class, ns, max_running, rates)
+    VALUES (:cls, :ns, :cap, CAST(:rates AS jsonb))
     ON CONFLICT (class, ns) DO NOTHING
     """
 )
@@ -100,6 +104,7 @@ class WorkWriter:
         run_at: datetime | None = None,
         delay: timedelta | None = None,
         concurrency_key: str | None = None,
+        rate_key: str | None = None,
     ) -> UUID | None:
         """Enqueue ``kind`` for namespace ``ns``.
 
@@ -107,11 +112,20 @@ class WorkWriter:
         into an item already queued. The payload is validated against the
         kind's model here, so a malformed item fails its writer rather than
         dying later in a worker.
+
+        ``rate_key`` picks the bucket for the kind's per-key rates (a schedule
+        id); without one they fall back to ``concurrency_key``.
         """
         spec = self._registry.get(kind)
         validate_namespace(ns)
         if concurrency_key is not None and spec.concurrency is None:
             raise ValueError(f"work kind {kind!r} declares no concurrency limit")
+        if rate_key is not None and not spec.rate_per_key:
+            raise ValueError(f"work kind {kind!r} declares no per-key rate")
+        if spec.rate_per_key and rate_key is None and concurrency_key is None:
+            raise ValueError(
+                f"work kind {kind!r} has a per-key rate: pass rate_key or concurrency_key"
+            )
         body = _payload_json(spec.payload_type, payload)
         item_id = await self._session.scalar(
             _INSERT_ITEM,
@@ -124,6 +138,7 @@ class WorkWriter:
                 "dedup_key": dedup_key,
                 "concurrency_key": concurrency_key,
                 "concurrency_limit": spec.concurrency if concurrency_key else None,
+                "rate_key": rate_key,
                 "run_at": run_at,
                 "delay_seconds": (delay or timedelta(0)).total_seconds(),
                 "priority": spec.priority,
@@ -145,7 +160,9 @@ class WorkWriter:
         key = {"cls": cls.value, "ns": ns}
         if await self._session.scalar(_QUEUE_EXISTS, key) is None:
             limits = await (self._limits or current_work_limit_port()).limits_for(ns)
-            await self._create_queue({**key, "cap": limits.cap(cls)})
+            await self._create_queue(
+                {**key, "cap": limits.cap(cls), "rates": rates_json(limits.rates)}
+            )
         self._queues_ensured.add((cls, ns))
 
     async def _create_queue(self, params: dict[str, object]) -> None:
@@ -154,7 +171,7 @@ class WorkWriter:
             # A session bound to a single connection has no second one to use.
             await self._session.execute(_ENSURE_QUEUE, params)
             return
-        async with bind.connect() as connection:
+        async with side_connection(bind) as connection:
             await connection.execute(_ENSURE_QUEUE, params)
             await connection.commit()
 

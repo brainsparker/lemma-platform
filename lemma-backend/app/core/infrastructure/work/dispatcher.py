@@ -18,6 +18,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work.claim import ClaimRequest, claim
 from app.core.infrastructure.work.execute import ExecEnv, capture, run_fast
 from app.core.infrastructure.work.job import run_job
+from app.core.infrastructure.work.rates import RateUse
 from app.core.infrastructure.work.lifecycle import (
     apply_decision,
     expired_ids,
@@ -38,15 +39,24 @@ from app.core.request_context import create_background_task
 
 logger = get_logger(__name__)
 meter = metrics.get_meter(__name__)
+#: Seconds, from a fast handler's milliseconds to an agent turn's hours: the
+#: SDK's default buckets are sized for milliseconds and would put every job in
+#: one bucket.
+_SECONDS_BUCKETS = (
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300,
+    600, 1800, 3600, 7200, 14400,
+)  # fmt: skip
 claim_latency = meter.create_histogram(
     "lemma.work.claim_latency",
     unit="s",
     description="From an item becoming due (run_at) to its claim.",
+    explicit_bucket_boundaries_advisory=_SECONDS_BUCKETS,
 )
 handler_duration = meter.create_histogram(
     "lemma.work.handler.duration",
     unit="s",
     description="Handler run time, by class, kind and outcome.",
+    explicit_bucket_boundaries_advisory=_SECONDS_BUCKETS,
 )
 lease_reaped = meter.create_counter(
     "lemma.work.lease_reaped",
@@ -90,6 +100,11 @@ class Dispatcher:
         registry = self.env.registry
         return {k: registry.get(k).lease for k in registry.kinds_for(self.cls)}
 
+    def _rates(self) -> dict[str, tuple[RateUse, ...]]:
+        registry = self.env.registry
+        specs = (registry.get(k) for k in registry.kinds_for(self.cls))
+        return {spec.kind: spec.rates for spec in specs if spec.rates}
+
     async def run(self) -> None:
         """Claim and start work until the environment says stop."""
         while not self.env.stopping.is_set():
@@ -128,14 +143,15 @@ class Dispatcher:
             free=free,
             quantum=self.quantum,
             leases=leases,
+            rates=self._rates(),
         )
-        async with self.env.session_maker() as session:
+        async with self.env.db.dispatch(self.cls) as session:
             claimed = await claim(session, request)
             await session.commit()
         now = self.env.clock()
         for item in claimed:
             latency = max(0.0, (now - item.run_at).total_seconds())
-            claim_latency.record(latency, {"class": self.cls.value})
+            claim_latency.record(latency, {"work_class": self.cls.value})
         return claimed
 
     def _start(self, item: ClaimedItem) -> None:
@@ -171,7 +187,7 @@ class Dispatcher:
         finally:
             handler_duration.record(
                 time.monotonic() - started,
-                {"class": self.cls.value, "kind": item.kind, "outcome": outcome},
+                {"work_class": self.cls.value, "work_kind": item.kind, "outcome": outcome},
             )
         return outcome
 
@@ -184,7 +200,7 @@ class Dispatcher:
 
     async def reap(self) -> int:
         """Return expired leases of this class to the queue, charging a lease loss each."""
-        async with self.env.session_maker() as session:
+        async with self.env.db.dispatch(self.cls) as session:
             ids = await expired_ids(session, self.cls.value, _REAP_BATCH)
         reaped = 0
         for item_id in ids:
@@ -192,7 +208,7 @@ class Dispatcher:
         return reaped
 
     async def _reap_one(self, item_id: object) -> int:
-        async with self.env.session_maker() as session:
+        async with self.env.db.dispatch(self.cls) as session:
             uow = SqlAlchemyUnitOfWork(session)
             item = await lock_expired(session, item_id)
             if item is None:
@@ -217,7 +233,7 @@ class Dispatcher:
                 await uow.rollback()
                 return 0
             await uow.commit()
-        lease_reaped.add(1, {"class": self.cls.value, "kind": item.kind})
+        lease_reaped.add(1, {"work_class": self.cls.value, "work_kind": item.kind})
         logger.warning(
             "work.lease.reaped",
             item_id=str(item.id),
@@ -245,11 +261,11 @@ class Dispatcher:
         return await self.release_owned()
 
     async def release_owned(self) -> int:
-        async with self.env.session_maker() as session:
+        async with self.env.db.dispatch(self.cls) as session:
             ids = await owned_ids(session, self.env.owner)
         released = 0
         for item_id in ids:
-            async with self.env.session_maker() as session:
+            async with self.env.db.dispatch(self.cls) as session:
                 released += await release(
                     session, item_id, self.env.owner, now=self.env.clock()
                 )

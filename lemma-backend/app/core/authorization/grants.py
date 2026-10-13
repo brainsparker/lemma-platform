@@ -10,6 +10,7 @@ from uuid import UUID
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.authorization.authz_epoch import bump_after_commit
 from app.core.authorization.context import ResourceType
 from app.core.domain.errors import BadRequestError
 from app.core.authorization.models import ResourcePermissionGrantModel
@@ -210,6 +211,7 @@ async def replace_grantee_resource_grants(
             )
         )
     await session.flush()
+    await bump_after_commit(session, pod_id)
 
 
 async def replace_resource_grantee_grant(
@@ -245,6 +247,7 @@ async def replace_resource_grantee_grant(
             )
         )
     await session.flush()
+    await bump_after_commit(session, pod_id)
 
 
 async def delete_resource_grantee_grant(
@@ -266,6 +269,7 @@ async def delete_resource_grantee_grant(
         )
     )
     await session.flush()
+    await bump_after_commit(session, pod_id)
 
 
 async def delete_resource_grants(
@@ -286,6 +290,7 @@ async def delete_resource_grants(
         )
     )
     await session.flush()
+    await bump_after_commit(session, pod_id)
 
 
 async def delete_resource_sharing_grants(
@@ -311,6 +316,7 @@ async def delete_resource_sharing_grants(
         )
     )
     await session.flush()
+    await bump_after_commit(session, pod_id)
 
 
 async def delete_grantee_grants(
@@ -329,6 +335,7 @@ async def delete_grantee_grants(
         )
     )
     await session.flush()
+    await bump_after_commit(session, pod_id)
 
 
 async def list_resource_grants(

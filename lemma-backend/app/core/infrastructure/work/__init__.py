@@ -6,6 +6,7 @@ Public surface -- import from here, not from the submodules:
 * ``WorkWriter`` -- enqueue on an open unit of work.
 * ``facts`` / ``Fact`` -- typed cross-module reactions, fanned out at write time.
 * ``periodic`` -- recurring work, armed at worker boot.
+* ``Rate`` / ``RateUse`` -- named token buckets a kind's items draw from at claim.
 * ``Unavailable`` / ``ItemFailure`` / ``PermanentFailure`` / ``Defer`` /
   ``Released`` / ``LeaseLost`` -- how a handler reports what happened.
 * ``FastContext`` / ``JobContext`` / ``DeadContext`` -- what handlers receive.
@@ -17,11 +18,13 @@ from app.core.infrastructure.work.facts import Fact, FactBus, facts
 from app.core.infrastructure.work.job import JobContext
 from app.core.infrastructure.work.limits import (
     ConfiguredWorkLimitPort,
+    NamespaceDirectory,
     WorkLimitPort,
     WorkLimits,
     install_work_limit_port,
     reset_work_limit_port,
 )
+from app.core.infrastructure.work.rates import Rate, RateUse
 from app.core.infrastructure.work.registry import (
     HandlerSpec,
     UnknownWorkKind,
@@ -63,7 +66,10 @@ __all__ = [
     "ItemFailure",
     "JobContext",
     "LeaseLost",
+    "NamespaceDirectory",
     "PermanentFailure",
+    "Rate",
+    "RateUse",
     "Released",
     "RetryPolicy",
     "Unavailable",

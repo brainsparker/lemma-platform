@@ -5,9 +5,13 @@ transaction that completes it -- plus ``dead`` items kept for inspection and
 retry. Every claim is an index probe on one of the partial indexes below, so
 the table's cost tracks pending work, not history.
 
-``work_queues`` has one row per (class, namespace) that has had work: its cap
-and its place in the round robin. It stores no readiness flag; whether a
-namespace has claimable work is derived from ``work_items`` at claim time.
+``work_queues`` has one row per (class, namespace) that has had work: its cap,
+its named rates and its place in the round robin. It stores no readiness
+flag; whether a namespace has claimable work is derived from ``work_items`` at
+claim time.
+
+``work_rate_buckets`` holds the token buckets rate-limited kinds draw from at
+claim time; a missing row is a full bucket.
 
 Both tables are new and empty, so nothing is locked beyond the creating
 transaction, and the previous release never reads them.
@@ -42,6 +46,7 @@ def upgrade() -> None:
         sa.Column("dedup_key", sa.Text()),
         sa.Column("concurrency_key", sa.Text()),
         sa.Column("concurrency_limit", sa.Integer()),
+        sa.Column("rate_key", sa.Text()),
         sa.Column(
             "state", sa.Text(), nullable=False, server_default=sa.text("'queued'")
         ),
@@ -124,11 +129,32 @@ def upgrade() -> None:
         sa.Column(
             "paused", sa.Boolean(), nullable=False, server_default=sa.text("false")
         ),
+        sa.Column(
+            "rates",
+            postgresql.JSONB(),
+            nullable=False,
+            server_default=sa.text("'{}'::jsonb"),
+        ),
         sa.PrimaryKeyConstraint("class", "ns"),
     )
     op.create_index("work_queues_served", "work_queues", ["class", "last_served"])
 
+    op.create_table(
+        "work_rate_buckets",
+        sa.Column("ns", sa.Text(), nullable=False),
+        sa.Column("name", sa.Text(), nullable=False),
+        sa.Column("key", sa.Text(), nullable=False),
+        sa.Column("cap", sa.Double(), nullable=False),
+        sa.Column("per_second", sa.Double(), nullable=False),
+        sa.Column("tokens", sa.Double(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("full_at", sa.DateTime(timezone=True), nullable=False),
+        sa.PrimaryKeyConstraint("ns", "name", "key"),
+    )
+    op.create_index("work_rate_buckets_full", "work_rate_buckets", ["full_at"])
+
 
 def downgrade() -> None:
+    op.drop_table("work_rate_buckets")
     op.drop_table("work_queues")
     op.drop_table("work_items")

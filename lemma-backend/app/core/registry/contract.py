@@ -34,6 +34,7 @@ if TYPE_CHECKING:  # type-only — never imported at runtime, so no cycles / cos
     from app.core.authorization.pod_liveness import PodLivenessReader
     from app.core.authorization.resource_names import ResourceNameTable
     from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext
+    from app.core.infrastructure.work.limits import NamespaceDirectory
     from app.core.ports.plan_limits import PlanLimitsFactory
 
 
@@ -67,6 +68,10 @@ type PodLivenessProvider = Callable[[], PodLivenessReader]
 type PlanLimitsProvider = Callable[[], PlanLimitsFactory]
 """Returns what builds the answerer for how many pods, members and how much
 compute a plan allows. At most one module in a list may declare it."""
+
+type NamespaceDirectoryProvider = Callable[[], NamespaceDirectory]
+"""Returns what tells the work runtime which organization owns a namespace,
+so per-org and per-slug limit overrides can apply to a pod's work."""
 
 type StreaqRegistrar = Callable[[], None]
 """Imports the module's ``@streaq_task``/``@streaq_cron`` modules for side effects."""
@@ -106,3 +111,7 @@ class LemmaModule:
     # What a plan allows. Declared by a deployment that sells plans; the
     # open-source list declares none, and nothing is limited.
     plan_limits: PlanLimitsProvider | None = None
+
+    # Which organization owns a work namespace. Core's work runtime keys
+    # limit overrides by org and slug and cannot read either; `mod:pod` can.
+    namespace_directory: NamespaceDirectoryProvider | None = None

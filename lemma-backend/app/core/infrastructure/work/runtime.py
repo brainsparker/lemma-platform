@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.work import maintenance
@@ -24,8 +25,14 @@ from app.core.infrastructure.work.config import (
     enabled_classes,
     work_settings,
 )
+from app.core.infrastructure.work.db import (
+    DbBudget,
+    SessionMaker,
+    WorkDb,
+    check_fits,
+)
 from app.core.infrastructure.work.dispatcher import Dispatcher
-from app.core.infrastructure.work.execute import ExecEnv, SessionMaker
+from app.core.infrastructure.work.execute import ExecEnv
 from app.core.infrastructure.work.gauges import gauge_loop
 from app.core.infrastructure.work.limits import WorkLimitPort, current_work_limit_port
 from app.core.infrastructure.work.listener import WorkWakeListener
@@ -45,6 +52,11 @@ def process_owner() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
 
 
+def _engine_of(session_maker: SessionMaker) -> AsyncEngine | None:
+    bind = getattr(session_maker, "kw", {}).get("bind")
+    return bind if isinstance(bind, AsyncEngine) else None
+
+
 class WorkRuntime:
     def __init__(
         self,
@@ -55,18 +67,24 @@ class WorkRuntime:
         database_url: str | None = None,
         limits: WorkLimitPort | None = None,
         owner: str | None = None,
+        budget: DbBudget | None = None,
     ) -> None:
-        self._session_maker = session_maker
         self._registry = registry or default_registry
         self._database_url = database_url
         self._limits = limits
+        self.budget = budget or DbBudget.from_settings(classes)
+        # Refuse to start rather than discover under load that the pool cannot
+        # hold what the slots may take: that surfaces as pool timeouts in
+        # handlers, charged to whatever item happened to be waiting.
+        check_fits(self.budget, _engine_of(session_maker))
+        self.db = WorkDb(session_maker, self.budget)
         self.stopping = asyncio.Event()
         base = owner or process_owner()
         self.dispatchers = {
             cls: Dispatcher(
                 cls,
                 ExecEnv(
-                    session_maker=session_maker,
+                    db=self.db,
                     registry=self._registry,
                     owner=f"{base}:{cls.value}",
                     statement_timeout_ms=work_settings.work_fast_statement_timeout_ms,
@@ -80,6 +98,8 @@ class WorkRuntime:
         }
         self._tasks: list[asyncio.Task[None]] = []
         self._loops: list[asyncio.Task[None]] = []
+        self._stop_task: asyncio.Task[None] | None = None
+        self._grace = work_settings.work_shutdown_grace_seconds
 
     @property
     def classes(self) -> list[WorkClass]:
@@ -88,7 +108,7 @@ class WorkRuntime:
     async def start(self) -> None:
         if not self.dispatchers:
             return
-        async with self._session_maker() as session:
+        async with self.db.control() as session:
             armed = await maintenance.arm_periodics(
                 session, self._registry, self.classes
             )
@@ -104,6 +124,7 @@ class WorkRuntime:
             "work.runtime.started",
             classes=",".join(c.value for c in self.classes),
             periodics_armed=armed,
+            db_connections=self.budget.total,
         )
 
     def _start_loops(self) -> None:
@@ -117,9 +138,7 @@ class WorkRuntime:
             )
         self._loops.append(
             create_background_task(
-                gauge_loop(
-                    self._session_maker, work_settings.work_gauge_interval_seconds
-                ),
+                gauge_loop(self.db.control, work_settings.work_gauge_interval_seconds),
                 name="work-gauges",
             )
         )
@@ -133,7 +152,7 @@ class WorkRuntime:
             await asyncio.sleep(work_settings.work_cap_refresh_seconds)
             for cls in self.classes:
                 try:
-                    async with self._session_maker() as session:
+                    async with self.db.control() as session:
                         await maintenance.refresh_queues(session, cls, limits)
                         await session.commit()
                 except SQLAlchemyError, OSError:
@@ -143,21 +162,35 @@ class WorkRuntime:
                         exc_info=True,
                     )
 
-    async def stop(self, grace_seconds: float | None = None) -> None:
-        if not self.dispatchers:
+    def begin_stop(self, grace_seconds: float | None = None) -> None:
+        """Start draining now, without waiting for anyone: the SIGTERM path.
+
+        Synchronous so a signal handler can call it from a cancelled scope:
+        claiming stops at once, jobs see ``stopping`` at their next safe point,
+        and the drain itself runs as a task of its own. ``stop`` awaits it.
+        """
+        if self._stop_task is not None or not self.dispatchers:
             return
-        grace = (
-            work_settings.work_shutdown_grace_seconds
-            if grace_seconds is None
-            else grace_seconds
-        )
+        if grace_seconds is not None:
+            self._grace = grace_seconds
         self.stopping.set()
         for dispatcher in self.dispatchers.values():
             dispatcher.wake()
+        logger.info("work.runtime.stopping", grace_seconds=self._grace)
+        self._stop_task = create_background_task(self._drain(), name="work-drain")
+
+    async def stop(self, grace_seconds: float | None = None) -> None:
+        if not self.dispatchers:
+            return
+        self.begin_stop(grace_seconds)
+        if self._stop_task is not None:
+            await asyncio.wait({self._stop_task})
+
+    async def _drain(self) -> None:
         if self._tasks:
             await asyncio.wait(self._tasks)
         released = await asyncio.gather(
-            *(d.drain(grace) for d in self.dispatchers.values())
+            *(d.drain(self._grace) for d in self.dispatchers.values())
         )
         for task in self._loops:
             task.cancel()
@@ -166,22 +199,46 @@ class WorkRuntime:
         logger.info("work.runtime.stopped", released=sum(released))
 
 
+def _dedicated_sessions(database_url: str, budget: DbBudget) -> tuple[AsyncEngine, SessionMaker]:
+    from app.core.infrastructure.db.session import create_dedicated_engine
+
+    engine = create_dedicated_engine(
+        database_url, pool_size=budget.total, logging_name="work"
+    )
+    return engine, async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+
+
 @asynccontextmanager
 async def work_runtime_lifespan(
-    session_maker: SessionMaker,
+    session_maker: SessionMaker | None = None,
     *,
     database_url: str | None,
     classes: list[WorkClass] | None = None,
     registry: WorkRegistry | None = None,
 ) -> AsyncIterator[WorkRuntime]:
+    """Run the runtime for the duration of the block.
+
+    Without a ``session_maker`` it opens a pool of its own on ``database_url``,
+    sized to exactly what its slots may hold, and closes it on the way out.
+    """
+    selected = enabled_classes() if classes is None else classes
+    budget = DbBudget.from_settings(selected)
+    engine: AsyncEngine | None = None
+    if session_maker is None:
+        if database_url is None:
+            raise ValueError("work_runtime_lifespan needs a session_maker or a database_url")
+        engine, session_maker = _dedicated_sessions(database_url, budget)
     runtime = WorkRuntime(
         session_maker,
-        classes=enabled_classes() if classes is None else classes,
+        classes=selected,
         registry=registry,
         database_url=database_url,
+        budget=budget,
     )
-    await runtime.start()
     try:
+        await runtime.start()
         yield runtime
     finally:
         await runtime.stop()
+        if engine is not None:
+            await engine.dispose()

@@ -12,6 +12,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.sql import ColumnElement
 
+from app.core.authorization.authz_epoch import bump_after_commit
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
 from app.core.authorization.sql_actions import allowed_actions_expr
@@ -22,7 +23,14 @@ from app.modules.datastore.domain.errors import (
 from app.core.infrastructure.db.transaction_locks import (
     mark_transaction_scoped_lock,
 )
-from app.modules.datastore.domain.file_entities import DatastoreFileEntity
+from app.modules.datastore.domain.file_entities import (
+    DatastoreFileEntity,
+    ProcessingRequest,
+)
+from app.modules.datastore.events.file_work import (
+    content_update_delay,
+    enqueue_file_processing,
+)
 from app.modules.datastore.domain.search_scope import (
     SearchablePartition,
     SearchScopeTimedOut,
@@ -54,8 +62,8 @@ from app.modules.datastore.infrastructure.repositories.file_listing_sql import (
     repoint_descendants,
     stragglers_under,
 )
-from app.modules.datastore.infrastructure.repositories.file_recovery_queries import (
-    DatastoreFileRecoveryQueriesMixin,
+from app.modules.datastore.infrastructure.repositories.file_status_counts import (
+    DatastoreFileStatusCountsMixin,
 )
 
 
@@ -86,7 +94,7 @@ def _file_payload(entity: DatastoreFileEntity) -> dict:
 class DatastoreFileRepository(
     DatastoreFileListingMixin,
     DatastoreFileProcessingStateMixin,
-    DatastoreFileRecoveryQueriesMixin,
+    DatastoreFileStatusCountsMixin,
     DatastoreRepositoryBase,
     DatastoreFileRepositoryPort,
 ):
@@ -112,7 +120,27 @@ class DatastoreFileRepository(
         self.session.add(instance)
         await self.session.flush()
         self._collect_events(entity)
+        await self._enqueue_requested_processing(entity, instance)
+        await bump_after_commit(self.session, instance.pod_id)
         return instance.to_entity()
+
+    async def _enqueue_requested_processing(
+        self, entity: DatastoreFileEntity, instance: DatastoreFile
+    ) -> None:
+        """Write the work item a transition asked for, in this transaction."""
+        request = entity.processing_request
+        if request is None:
+            return
+        entity.clear_processing_request()
+        await enqueue_file_processing(
+            self.session,
+            pod_id=instance.pod_id,
+            file_id=instance.id,
+            sha256=instance.content_sha256,
+            delay=(
+                content_update_delay() if request is ProcessingRequest.CONTENT else None
+            ),
+        )
 
     async def get(self, id: UUID) -> Optional[DatastoreFileEntity]:
         result = await self.session.execute(
@@ -152,14 +180,22 @@ class DatastoreFileRepository(
                 resource_id=entity.id,
             )
 
+        # Who may read what changes with where a file is and who it is shown
+        # to; anything cached from the old answer is retired after commit.
+        reach_changed = (
+            instance.visibility != entity.visibility or instance.path != entity.path
+        )
         for key, value in _file_payload_unset(entity).items():
             if key in {"id", "created_at", "updated_at"}:
                 continue
             if hasattr(instance, key):
                 setattr(instance, key, value)
+        if reach_changed:
+            await bump_after_commit(self.session, instance.pod_id)
 
         await self.session.flush()
         self._collect_events(entity)
+        await self._enqueue_requested_processing(entity, instance)
         return instance.to_entity()
 
     async def delete(self, id: UUID) -> bool:
@@ -177,6 +213,7 @@ class DatastoreFileRepository(
             return False
         self._collect_events(entity)
         await self.session.delete(instance)
+        await bump_after_commit(self.session, instance.pod_id)
         return True
 
     async def delete_entities(self, entities: Sequence[DatastoreFileEntity]) -> int:
@@ -199,6 +236,7 @@ class DatastoreFileRepository(
         result = await self.session.execute(
             delete(DatastoreFile).where(DatastoreFile.id.in_(ids))
         )
+        await bump_after_commit(self.session, entities[0].pod_id)
         return int(result.rowcount or 0)
 
     async def get_by_datastore(

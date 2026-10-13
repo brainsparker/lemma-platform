@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.infrastructure.work.models import WorkItem, WorkQueue
+from app.core.infrastructure.work.models import WorkItem, WorkQueue, WorkRateBucket
 from app.core.infrastructure.work.registry import WorkRegistry
 from app.core.tests.e2e.work_support import WorkDb
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
@@ -27,7 +27,11 @@ async def work_db(postgres_only_database_url: str) -> AsyncIterator[WorkDb]:
     async with engine.begin() as connection:
         await connection.run_sync(
             WorkItem.metadata.create_all,
-            tables=[WorkItem.__table__, WorkQueue.__table__],
+            tables=[
+                WorkItem.__table__,
+                WorkQueue.__table__,
+                WorkRateBucket.__table__,
+            ],
             checkfirst=True,
         )
         await connection.execute(
@@ -37,7 +41,9 @@ async def work_db(postgres_only_database_url: str) -> AsyncIterator[WorkDb]:
             )
         )
         await connection.execute(
-            text("TRUNCATE work_items, work_queues, work_e2e_effects")
+            text(
+                "TRUNCATE work_items, work_queues, work_rate_buckets, work_e2e_effects"
+            )
         )
     yield WorkDb(
         engine, async_sessionmaker(engine, expire_on_commit=False, autoflush=False)

@@ -12,7 +12,8 @@ import asyncio
 from sqlalchemy import text
 
 from app.core.infrastructure.work.dispatcher import Dispatcher
-from app.core.infrastructure.work.execute import ExecEnv, SessionMaker
+from app.core.infrastructure.work.db import SessionMaker, WorkDb
+from app.core.infrastructure.work.execute import ExecEnv
 from app.core.infrastructure.work.registry import (
     WorkRegistry,
     registry as default_registry,
@@ -31,7 +32,7 @@ def dispatcher_for(
     statement_timeout_ms: int = 2000,
 ) -> Dispatcher:
     env = ExecEnv(
-        session_maker=session_maker,
+        db=WorkDb(session_maker, None),
         registry=registry or default_registry,
         owner=f"{owner}:{cls.value}",
         statement_timeout_ms=statement_timeout_ms,

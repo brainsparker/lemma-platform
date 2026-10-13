@@ -73,7 +73,7 @@ class JobContext:
 
     @asynccontextmanager
     async def checkpoint(self) -> AsyncIterator[SqlAlchemyUnitOfWork]:
-        async with self._env.session_maker() as session:
+        async with self._env.db.handler(self.item.cls) as session:
             unit = SqlAlchemyUnitOfWork(session)
             yield unit
             await unit.commit()
@@ -84,7 +84,7 @@ class JobContext:
         # heartbeat waiting on it would find the row gone and cancel a job that
         # has in fact finished.
         await self.stop_heartbeat()
-        async with self._env.session_maker() as session:
+        async with self._env.db.handler(self.item.cls) as session:
             unit = SqlAlchemyUnitOfWork(session)
             if await lock_owned(session, self.item.id, self._env.owner) is None:
                 raise LeaseLost(str(self.item.id))
@@ -123,7 +123,7 @@ class JobContext:
     async def _extend(self, lease: timedelta) -> bool:
         """``False`` only when the lease is provably gone; a DB blip is not proof."""
         try:
-            async with self._env.session_maker() as session:
+            async with self._env.db.control() as session:
                 extended = await extend_lease(
                     session, self.item.id, self._env.owner, lease
                 )

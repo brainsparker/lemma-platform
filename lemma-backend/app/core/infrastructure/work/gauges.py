@@ -5,6 +5,11 @@ doing it. ``ready_oldest_age`` can, which is why it is the alerting signal per
 class. Sampled by one query pair every interval rather than in an observable
 callback, because the callbacks are synchronous and the reading is I/O. The
 table holds only live work, so the scan is over what is actually pending.
+
+Labels are the class and the state, never the namespace: a pod id as a metric
+label is a series per tenant, which the export boundary strips anyway. Which
+namespaces are busiest is logged instead (``work.namespaces.busiest``), at a
+slower cadence and only while something is waiting.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from opentelemetry.metrics import CallbackOptions, Observation
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.infrastructure.work.execute import SessionMaker
+from app.core.infrastructure.work.db import AbstractSessionContext
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
 
@@ -26,6 +31,10 @@ logger = get_logger(__name__)
 meter = metrics.get_meter(__name__)
 
 _TOP_NAMESPACES = 20
+#: Busiest-namespace log every this many samples (with the default interval,
+#: every five minutes).
+_BUSIEST_EVERY = 20
+_STATES = ("queued", "running", "dead")
 
 _BY_CLASS = text(
     """
@@ -33,6 +42,8 @@ _BY_CLASS = text(
            count(*) FILTER (WHERE state = 'queued') AS queued,
            count(*) FILTER (WHERE state = 'running') AS running,
            count(*) FILTER (WHERE state = 'dead') AS dead,
+           count(DISTINCT ns) FILTER (WHERE state = 'queued') AS queued_ns,
+           count(DISTINCT ns) FILTER (WHERE state = 'running') AS running_ns,
            EXTRACT(EPOCH FROM now() - min(run_at)
                    FILTER (WHERE state = 'queued' AND run_at <= now())) AS oldest
       FROM work_items
@@ -41,14 +52,18 @@ _BY_CLASS = text(
 )
 _TOP_NS = text(
     """
-    SELECT class, ns, state, count(*) AS n
-      FROM work_items
-     WHERE state IN ('queued', 'running')
-     GROUP BY class, ns, state
-     ORDER BY n DESC
-     LIMIT :limit
+    SELECT class, ns, state, n FROM (
+        SELECT class, ns, state, count(*) AS n,
+               row_number() OVER (PARTITION BY class, state ORDER BY count(*) DESC) AS rank
+          FROM work_items
+         WHERE state IN ('queued', 'running')
+         GROUP BY class, ns, state) ranked
+     WHERE rank <= :limit
+     ORDER BY class, state, n DESC
     """
 )
+
+type SessionOpener = Callable[[], AbstractSessionContext]
 
 
 @dataclass
@@ -56,11 +71,12 @@ class _Snapshot:
     """Last successful reading. Empty means "not measured", never zero."""
 
     oldest: dict[str, float] = field(default_factory=dict)
-    by_class: dict[tuple[str, str], int] = field(default_factory=dict)
-    by_ns: dict[tuple[str, str, str], int] = field(default_factory=dict)
+    items: dict[tuple[str, str], int] = field(default_factory=dict)
+    namespaces: dict[tuple[str, str], int] = field(default_factory=dict)
+    samples: int = 0
 
     def forget(self) -> None:
-        self.oldest, self.by_class, self.by_ns = {}, {}, {}
+        self.oldest, self.items, self.namespaces = {}, {}, {}
 
 
 _snapshot = _Snapshot()
@@ -69,29 +85,22 @@ _incident = DependencyIncident("work.gauges", logger=logger)
 
 def _observe_oldest(options: CallbackOptions) -> Iterable[Observation]:
     del options
-    return [Observation(age, {"class": cls}) for cls, age in _snapshot.oldest.items()]
+    return [
+        Observation(age, {"work_class": cls}) for cls, age in _snapshot.oldest.items()
+    ]
 
 
-def _observe_state(
-    state: str,
+def _observe(
+    reading: Callable[[], dict[tuple[str, str], int]],
 ) -> Callable[[CallbackOptions], Iterable[Observation]]:
     def observe(options: CallbackOptions) -> Iterable[Observation]:
         del options
         return [
-            Observation(n, {"class": cls})
-            for (cls, s), n in _snapshot.by_class.items()
-            if s == state
+            Observation(n, {"work_class": cls, "state": state})
+            for (cls, state), n in reading().items()
         ]
 
     return observe
-
-
-def _observe_by_ns(options: CallbackOptions) -> Iterable[Observation]:
-    del options
-    return [
-        Observation(n, {"class": cls, "ns": ns, "state": state})
-        for (cls, ns, state), n in _snapshot.by_ns.items()
-    ]
 
 
 meter.create_observable_gauge(
@@ -100,41 +109,65 @@ meter.create_observable_gauge(
     unit="s",
     description="Age of the oldest due, unclaimed item per class.",
 )
-for _state in ("queued", "running", "dead"):
-    meter.create_observable_gauge(
-        f"lemma.work.{_state}",
-        callbacks=[_observe_state(_state)],
-        description=f"Work items in state {_state}, per class.",
-    )
 meter.create_observable_gauge(
-    "lemma.work.by_namespace",
-    callbacks=[_observe_by_ns],
-    description="Queued and running items for the busiest namespaces.",
+    "lemma.work.items",
+    callbacks=[_observe(lambda: _snapshot.items)],
+    description="Work items per class and state (queued, running, dead).",
+)
+meter.create_observable_gauge(
+    "lemma.work.namespaces",
+    callbacks=[_observe(lambda: _snapshot.namespaces)],
+    description="Namespaces (pods) with queued or running work, per class.",
 )
 
 
-async def sample(session_maker: SessionMaker) -> None:
-    async with session_maker() as session:
+async def sample(open_session: SessionOpener) -> None:
+    busiest = _snapshot.samples % _BUSIEST_EVERY == 0
+    async with open_session() as session:
         by_class = (await session.execute(_BY_CLASS)).all()
-        top = (await session.execute(_TOP_NS, {"limit": _TOP_NAMESPACES * 2})).all()
+        top = (
+            (await session.execute(_TOP_NS, {"limit": _TOP_NAMESPACES})).all()
+            if busiest
+            else []
+        )
+    _snapshot.samples += 1
     _snapshot.oldest = {
         row._mapping["class"]: float(row.oldest)
         for row in by_class
         if row.oldest is not None
     }
-    counts: dict[tuple[str, str], int] = {}
+    items: dict[tuple[str, str], int] = {}
+    namespaces: dict[tuple[str, str], int] = {}
     for row in by_class:
-        cls = row._mapping["class"]
-        for state in ("queued", "running", "dead"):
-            counts[(cls, state)] = int(row._mapping[state])
-    _snapshot.by_class = counts
-    _snapshot.by_ns = {(r._mapping["class"], r.ns, r.state): int(r.n) for r in top}
+        values = row._mapping
+        for state in _STATES:
+            items[(values["class"], state)] = int(values[state])
+        namespaces[(values["class"], "queued")] = int(values["queued_ns"])
+        namespaces[(values["class"], "running")] = int(values["running_ns"])
+    _snapshot.items, _snapshot.namespaces = items, namespaces
+    if top:
+        _log_busiest(top)
 
 
-async def gauge_loop(session_maker: SessionMaker, interval_seconds: float) -> None:
+def _log_busiest(rows: Iterable[object]) -> None:
+    by_class: dict[str, dict[str, dict[str, int]]] = {}
+    for row in rows:
+        values = row._mapping  # type: ignore[attr-defined]
+        states = by_class.setdefault(values["class"], {})
+        states.setdefault(values["state"], {})[values["ns"]] = int(values["n"])
+    for cls, states in by_class.items():
+        logger.info(
+            "work.namespaces.busiest",
+            work_class=cls,
+            queued=states.get("queued", {}),
+            running=states.get("running", {}),
+        )
+
+
+async def gauge_loop(open_session: SessionOpener, interval_seconds: float) -> None:
     while True:
         try:
-            await sample(session_maker)
+            await sample(open_session)
             _incident.record_success()
         except (SQLAlchemyError, OSError) as exc:
             _snapshot.forget()

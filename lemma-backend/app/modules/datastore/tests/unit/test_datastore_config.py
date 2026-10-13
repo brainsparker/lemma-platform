@@ -54,15 +54,36 @@ EXPECTED = [
         "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS",
         300,
     ),
-    ("recovery_enqueue_batch_size", "RECOVERY_ENQUEUE_BATCH_SIZE", 10),
     (
         "document_processing_extractor_max_threads",
         "DOCUMENT_PROCESSING_EXTRACTOR_MAX_THREADS",
         4,
     ),
-    ("datastore_per_pod_max_inflight", "DATASTORE_PER_POD_MAX_INFLIGHT", 4),
-    ("datastore_dispatch_global_batch", "DATASTORE_DISPATCH_GLOBAL_BATCH", 50),
-    ("datastore_recovery_max_attempts", "DATASTORE_RECOVERY_MAX_ATTEMPTS", 3),
+    ("document_processing_max_attempts", "DOCUMENT_PROCESSING_MAX_ATTEMPTS", 3),
+    (
+        "document_processing_unavailable_budget_seconds",
+        "DOCUMENT_PROCESSING_UNAVAILABLE_BUDGET_SECONDS",
+        86_400,
+    ),
+    ("document_processing_max_pages", "DOCUMENT_PROCESSING_MAX_PAGES", 2_000),
+    ("document_processing_max_ocr_pages", "DOCUMENT_PROCESSING_MAX_OCR_PAGES", 500),
+    ("document_processing_max_chunks", "DOCUMENT_PROCESSING_MAX_CHUNKS", 20_000),
+    (
+        "document_processing_retry_cooldown_seconds",
+        "DOCUMENT_PROCESSING_RETRY_COOLDOWN_SECONDS",
+        60,
+    ),
+    (
+        "datastore_search_scope_cache_ttl_seconds",
+        "DATASTORE_SEARCH_SCOPE_CACHE_TTL_SECONDS",
+        120,
+    ),
+    (
+        "datastore_search_scope_cache_max_ids",
+        "DATASTORE_SEARCH_SCOPE_CACHE_MAX_IDS",
+        20_000,
+    ),
+    ("kreuzberg_health_timeout_seconds", "KREUZBERG_HEALTH_TIMEOUT_SECONDS", 5.0),
     (
         "document_processing_max_file_bytes",
         "DOCUMENT_PROCESSING_MAX_FILE_BYTES",
@@ -149,6 +170,11 @@ EXTRA_FIELDS = [
         "auto",
     ),
     ("document_processing_table_model", "DOCUMENT_PROCESSING_TABLE_MODEL", "tatr"),
+    (
+        "datastore_object_storage_layout",
+        "DATASTORE_OBJECT_STORAGE_LAYOUT",
+        False,
+    ),
 ]
 
 

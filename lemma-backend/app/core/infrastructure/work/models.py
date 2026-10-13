@@ -15,6 +15,7 @@ from pydantic import JsonValue
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Double,
     Index,
     Integer,
     SmallInteger,
@@ -40,6 +41,8 @@ class WorkItem(Base):
     dedup_key: Mapped[str | None] = mapped_column(Text)
     concurrency_key: Mapped[str | None] = mapped_column(Text)
     concurrency_limit: Mapped[int | None] = mapped_column(Integer)
+    #: Which per-key rate bucket the item draws from (e.g. a schedule id).
+    rate_key: Mapped[str | None] = mapped_column(Text)
     state: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'queued'")
     )
@@ -125,6 +128,12 @@ class WorkQueue(Base):
     paused: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    #: The namespace's named rates (``{"name": {"limit", "per_seconds"}}``),
+    #: written with ``max_running`` from the limit port so the claim reads them
+    #: with the row instead of asking the port per round.
+    rates: Mapped[dict[str, JsonValue]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
     __table_args__ = (
         # The claim walks a class's queues least-recently-served first and
@@ -132,3 +141,24 @@ class WorkQueue(Base):
         # every round.
         Index("work_queues_served", "class", "last_served"),
     )
+
+
+class WorkRateBucket(Base):
+    """One token bucket: a named rate for a namespace, optionally per key.
+
+    No row means a full bucket, so rows exist only for buckets in use, and
+    retention drops a row once ``full_at`` has passed.
+    """
+
+    __tablename__ = "work_rate_buckets"
+
+    ns: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    cap: Mapped[float] = mapped_column(Double, nullable=False)
+    per_second: Mapped[float] = mapped_column(Double, nullable=False)
+    tokens: Mapped[float] = mapped_column(Double, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    full_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("work_rate_buckets_full", "full_at"),)

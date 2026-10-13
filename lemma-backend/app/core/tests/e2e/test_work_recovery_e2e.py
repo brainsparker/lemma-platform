@@ -57,7 +57,13 @@ def _poison(
     backoff: Exponential = NO_WAIT,
     **retry: object,
 ) -> None:
-    @registry.handler(  # type: ignore[call-overload]
+    async def fast(ctx: FastContext, payload: Demo) -> None:
+        raise ItemFailure("this item is broken")
+
+    async def job(ctx: JobContext, payload: Demo) -> None:
+        raise ItemFailure("this item is broken")
+
+    registry.handler(  # type: ignore[call-overload]
         kind="demo.poison",
         cls=WorkClass.AUTOMATION,
         mode=mode,
@@ -65,9 +71,7 @@ def _poison(
         retry=RetryPolicy(backoff=backoff, **retry),  # type: ignore[arg-type]
         on_dead=_on_dead,
         lease=timedelta(seconds=30),
-    )
-    async def handle(ctx: object, payload: Demo) -> None:
-        raise ItemFailure("this item is broken")
+    )(fast if mode is WorkMode.FAST else job)
 
 
 async def test_failure_backs_off_charges_attempts_then_dies_with_its_terminal_state(

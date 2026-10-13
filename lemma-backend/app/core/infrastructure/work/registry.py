@@ -9,7 +9,7 @@ so an old worker in a rolling deploy never claims a kind it cannot run.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Literal, overload
@@ -17,6 +17,11 @@ from typing import TYPE_CHECKING, Literal, overload
 from pydantic import BaseModel
 
 from app.core.infrastructure.work.config import CLASS_DEFAULTS
+from app.core.infrastructure.work.fast_guard import (
+    check_fast_module_namespace,
+    check_handler_signature,
+)
+from app.core.infrastructure.work.rates import RateUse, is_known_rate
 from app.core.infrastructure.work.retry import DEFAULT_RETRY, RetryPolicy
 from app.core.infrastructure.work.types import JsonObject, WorkClass, WorkMode
 
@@ -49,6 +54,12 @@ class HandlerSpec:
     concurrency: int | None
     on_dead: DeadHook | None
     priority: int
+    #: Buckets each item draws one token from at claim. Empty = unlimited.
+    rates: tuple[RateUse, ...] = ()
+
+    @property
+    def rate_per_key(self) -> bool:
+        return any(use.per_key for use in self.rates)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +85,12 @@ class WorkRegistry:
             raise ValueError(f"work kind {spec.kind!r} is already registered")
         if spec.concurrency is not None and spec.concurrency < 1:
             raise ValueError(f"work kind {spec.kind!r}: concurrency must be >= 1")
+        _check_rates(spec)
+        if spec.mode is WorkMode.FAST:
+            check_handler_signature(spec.kind, spec.handler, "FastContext")
+            check_fast_module_namespace(spec.kind, spec.handler)
+        else:
+            check_handler_signature(spec.kind, spec.handler, "JobContext")
         self._handlers[spec.kind] = spec
 
     @overload
@@ -89,6 +106,7 @@ class WorkRegistry:
         concurrency: int | None = ...,
         on_dead: DeadHook | None = ...,
         priority: int = ...,
+        rates: Sequence[RateUse | str] = ...,
     ) -> Callable[[FastHandler[P]], FastHandler[P]]: ...
 
     @overload
@@ -104,6 +122,7 @@ class WorkRegistry:
         concurrency: int | None = ...,
         on_dead: DeadHook | None = ...,
         priority: int = ...,
+        rates: Sequence[RateUse | str] = ...,
     ) -> Callable[[JobHandler[P]], JobHandler[P]]: ...
 
     def handler[P: BaseModel](
@@ -118,8 +137,15 @@ class WorkRegistry:
         concurrency: int | None = None,
         on_dead: DeadHook | None = None,
         priority: int = 0,
+        rates: Sequence[RateUse | str] = (),
     ) -> Callable[[Callable[..., Awaitable[None]]], Callable[..., Awaitable[None]]]:
-        """Register the decorated coroutine as the handler for ``kind``."""
+        """Register the decorated coroutine as the handler for ``kind``.
+
+        ``rates`` names the buckets each item draws a token from when claimed
+        (a bare string is a per-namespace bucket); an item over a rate waits
+        for its token, it is never charged or dropped.
+        """
+        uses = tuple(RateUse(use) if isinstance(use, str) else use for use in rates)
 
         def decorate(
             fn: Callable[..., Awaitable[None]],
@@ -136,6 +162,7 @@ class WorkRegistry:
                     concurrency=concurrency,
                     on_dead=on_dead,
                     priority=priority,
+                    rates=uses,
                 )
             )
             return fn
@@ -183,6 +210,20 @@ class WorkRegistry:
         if dedup_key is None or not dedup_key.startswith(PERIODIC_PREFIX):
             return None
         return self._periodics.get(dedup_key.removeprefix(PERIODIC_PREFIX))
+
+
+def _check_rates(spec: HandlerSpec) -> None:
+    names = [use.name for use in spec.rates]
+    if len(set(names)) != len(names):
+        raise ValueError(f"work kind {spec.kind!r} names a rate twice")
+    for name in names:
+        if not is_known_rate(name):
+            # A rate with no default would be unlimited until some override
+            # happened to name it -- a limit that silently does not apply.
+            raise ValueError(
+                f"work kind {spec.kind!r}: no default for rate {name!r}; add it "
+                "to DEFAULT_RATES or WORK_RATES_JSON"
+            )
 
 
 #: The process's registry, filled by ``@work_handler`` at import time.

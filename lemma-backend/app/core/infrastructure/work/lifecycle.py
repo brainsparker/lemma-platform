@@ -189,7 +189,12 @@ async def mark_dead(
             )
         )
     dead_counter.add(
-        1, {"class": item.cls.value, "kind": item.kind, "error_class": decision.reason}
+        1,
+        {
+            "work_class": item.cls.value,
+            "work_kind": item.kind,
+            "error_class": decision.reason,
+        },
     )
     logger.warning(
         "work.item.dead",

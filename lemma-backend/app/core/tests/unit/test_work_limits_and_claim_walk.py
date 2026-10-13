@@ -25,6 +25,7 @@ from app.core.infrastructure.work.limits import (
     parse_overrides,
     select_override,
 )
+from app.core.infrastructure.work.rates import DEFAULT_RATES
 from app.core.infrastructure.work.types import WorkClass, validate_namespace
 
 POD = UUID("11111111-1111-1111-1111-111111111111")
@@ -131,8 +132,9 @@ async def test_rates_are_carried_from_overrides() -> None:
         }
     )
     limits = await ConfiguredWorkLimitPort(raw_overrides=raw).limits_for("system")
-    assert set(limits.rates) == {"email_out"}
+    assert set(limits.rates) == set(DEFAULT_RATES)
     assert limits.rates["email_out"].limit == 200
+    assert limits.rates["llm_filter"] == DEFAULT_RATES["llm_filter"]
 
 
 # --- class settings ---------------------------------------------------------
@@ -181,24 +183,27 @@ def _c(key: str | None = None, limit: int | None = None) -> Candidate:
 
 def test_take_stops_at_the_budget() -> None:
     candidates = [_c() for _ in range(5)]
-    assert take(candidates, 2, {}) == [c.id for c in candidates[:2]]
+    assert take(candidates, 2, {}).taken == [c.id for c in candidates[:2]]
 
 
 def test_a_busy_key_is_skipped_without_blocking_what_follows() -> None:
     busy, free_a, free_b = _c("conv:1", 1), _c(), _c()
-    assert take([busy, free_a, free_b], 2, {"conv:1": 0}) == [free_a.id, free_b.id]
+    assert take([busy, free_a, free_b], 2, {"conv:1": 0}).taken == [
+        free_a.id,
+        free_b.id,
+    ]
 
 
 def test_a_key_is_taken_only_as_far_as_its_room() -> None:
     first, second, third = _c("k", 2), _c("k", 2), _c("k", 2)
     unkeyed = _c()
-    taken = take([first, second, third, unkeyed], 10, {"k": 2})
+    taken = take([first, second, third, unkeyed], 10, {"k": 2}).taken
     assert taken == [first.id, second.id, unkeyed.id]
 
 
 def test_priority_order_is_preserved() -> None:
     candidates = [_c(), _c("a", 1), _c(), _c("a", 1)]
-    taken = take(candidates, 3, {"a": 1})
+    taken = take(candidates, 3, {"a": 1}).taken
     assert taken == [candidates[0].id, candidates[1].id, candidates[2].id]
 
 

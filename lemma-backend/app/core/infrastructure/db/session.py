@@ -160,6 +160,35 @@ def get_engine():
     return engine
 
 
+def create_dedicated_engine(url: str, *, pool_size: int, logging_name: str):
+    """A pooled engine of its own on the main database, for a component whose
+    connections must not compete with the rest of the process.
+
+    The work runtime bounds every connection it takes and sizes this pool to
+    that bound, which is a guarantee only while nothing else draws from the
+    same pool. Same serializer, server-side timeouts and instrumentation as the
+    primary engine; always pooled (one long-lived event loop owns it) and never
+    overflowing.
+    """
+    dedicated = create_async_engine(
+        url,
+        json_serializer=lambda obj: json.dumps(obj, default=json_serial),
+        pool_pre_ping=True,
+        connect_args=_build_connect_args(),
+        pool_logging_name=logging_name,
+        pool_size=pool_size,
+        max_overflow=0,
+        pool_timeout=settings.db_pool_timeout_seconds,
+        pool_recycle=settings.db_pool_recycle_seconds,
+        pool_use_lifo=True,
+    )
+    pool = dedicated.sync_engine.pool
+    event.listen(pool, "checkout", _pool_utilization_listener(pool))
+    attach_connection_scope_monitor(dedicated)
+    watch_compiled_cache(logging_name, dedicated)
+    return dedicated
+
+
 def get_session_maker():
     global _async_session_maker
     if _async_session_maker is None:

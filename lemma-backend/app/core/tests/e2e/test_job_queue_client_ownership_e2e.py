@@ -34,7 +34,7 @@ test_redis_url = e2e_fixtures.test_redis_url
 
 #: A task that really is on the bulk lane, so the lane client under test is the
 #: one production opened lazily.
-_BULK_TASK = "process_datastore_file_task"
+_BULK_TASK = "export_pod_bundle"
 #: Enough concurrent commands that the pool must open connections beyond the
 #: first -- which is the moment a poisoned pool fails.
 _CONCURRENT_COMMANDS = 40

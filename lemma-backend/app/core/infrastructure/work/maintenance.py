@@ -10,6 +10,7 @@ repaired on a timer, for namespaces that have queued work.
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 from pydantic import BaseModel
@@ -19,6 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.work.config import default_max_running, work_settings
 from app.core.infrastructure.work.context import FastContext
 from app.core.infrastructure.work.limits import WorkLimitPort
+from app.core.infrastructure.work.rates import (
+    DELETE_FULL_BUCKETS,
+    default_rates,
+    rates_json,
+)
 from app.core.infrastructure.work.registry import WorkRegistry, registry
 from app.core.infrastructure.work.types import SYSTEM_NAMESPACE, WorkClass, WorkMode
 from app.core.infrastructure.work.writer import WorkWriter
@@ -28,8 +34,9 @@ logger = get_logger(__name__)
 
 _REPAIR_QUEUES = text(
     """
-    INSERT INTO work_queues (class, ns, max_running)
-    SELECT DISTINCT w.class, w.ns, CAST(:cap AS integer) FROM work_items w
+    INSERT INTO work_queues (class, ns, max_running, rates)
+    SELECT DISTINCT w.class, w.ns, CAST(:cap AS integer), CAST(:rates AS jsonb)
+      FROM work_items w
      WHERE w.state = 'queued' AND w.class = :cls
        AND NOT EXISTS (SELECT 1 FROM work_queues q
                         WHERE q.class = w.class AND q.ns = w.ns)
@@ -38,14 +45,17 @@ _REPAIR_QUEUES = text(
 )
 _QUEUES_WITH_WORK = text(
     """
-    SELECT q.ns, q.max_running FROM work_queues q
+    SELECT q.ns, q.max_running, q.rates FROM work_queues q
      WHERE q.class = :cls
        AND EXISTS (SELECT 1 FROM work_items w
                     WHERE w.class = q.class AND w.ns = q.ns AND w.state = 'queued')
     """
 )
-_SET_CAP = text(
-    "UPDATE work_queues SET max_running = :cap WHERE class = :cls AND ns = :ns"
+_SET_LIMITS = text(
+    """
+    UPDATE work_queues SET max_running = :cap, rates = CAST(:rates AS jsonb)
+     WHERE class = :cls AND ns = :ns
+    """
 )
 # Only when nothing for this name is live: a periodic already queued or running
 # re-arms itself on completion, and a second chain would double its rate.
@@ -63,17 +73,25 @@ _DEAD_PERIODIC = text(
 async def refresh_queues(
     session: AsyncSession, cls: WorkClass, limits: WorkLimitPort
 ) -> int:
-    """Recreate missing queue rows and bring caps in line; returns caps changed."""
+    """Recreate missing queue rows and bring caps and rates in line; returns rows changed."""
     await session.execute(
-        _REPAIR_QUEUES, {"cls": cls.value, "cap": default_max_running(cls)}
+        _REPAIR_QUEUES,
+        {
+            "cls": cls.value,
+            "cap": default_max_running(cls),
+            "rates": rates_json(default_rates()),
+        },
     )
     rows = (await session.execute(_QUEUES_WITH_WORK, {"cls": cls.value})).all()
     changed = 0
     for row in rows:
-        cap = (await limits.limits_for(row.ns)).cap(cls)
-        if cap != row.max_running:
+        limits_now = await limits.limits_for(row.ns)
+        cap = limits_now.cap(cls)
+        rates = rates_json(limits_now.rates)
+        if cap != row.max_running or json.loads(rates) != row.rates:
             await session.execute(
-                _SET_CAP, {"cap": cap, "cls": cls.value, "ns": row.ns}
+                _SET_LIMITS,
+                {"cap": cap, "rates": rates, "cls": cls.value, "ns": row.ns},
             )
             changed += 1
     return changed
@@ -131,7 +149,7 @@ _RETENTION_BATCH = 10_000
     payload=RetentionPayload,
 )
 async def work_retention(ctx: FastContext, payload: RetentionPayload) -> None:
-    """Drop dead items past retention and queue rows idle for a week."""
+    """Drop dead items past retention, queue rows idle for a week, and full buckets."""
     del payload
     session = ctx.uow.session
     dead = await session.execute(
@@ -139,10 +157,12 @@ async def work_retention(ctx: FastContext, payload: RetentionPayload) -> None:
         {"days": work_settings.work_dead_retention_days, "batch": _RETENTION_BATCH},
     )
     queues = await session.execute(_DELETE_IDLE_QUEUES)
+    buckets = await session.execute(DELETE_FULL_BUCKETS)
     logger.info(
         "work.retention.pruned",
         dead_items=dead.rowcount,  # type: ignore[attr-defined]
         idle_queues=queues.rowcount,  # type: ignore[attr-defined]
+        full_buckets=buckets.rowcount,  # type: ignore[attr-defined]
     )
 
 

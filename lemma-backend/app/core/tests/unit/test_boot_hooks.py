@@ -44,7 +44,6 @@ ALLOWED_BOOT_HOOKS: dict[str, str] = {
     "worker:datastore._datastore_outbox_dispatcher": (
         "CREATE TABLE IF NOT EXISTS for one table, then a background dispatcher"
     ),
-    "worker:datastore._close_reindex_queue": "shutdown only; closes the queue",
     "worker:schedule._reconcile_failure_breakers": (
         "reads only schedules already past the failure threshold, which the "
         "breaker keeps near empty"

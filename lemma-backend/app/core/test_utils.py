@@ -37,6 +37,9 @@ class LemmaDockerContainer:
         self._env: dict[str, str] = {}
         self._extra_run_args: list[str] = []
         self._command: list[str] = []
+        #: The session sweep deletes everything labelled DOCKER_LABEL; a
+        #: container meant to outlive the session carries REUSE_LABEL instead.
+        self.label = DOCKER_LABEL
 
     def with_env(self, name: str, value: str) -> "LemmaDockerContainer":
         self._env[name] = value
@@ -58,7 +61,7 @@ class LemmaDockerContainer:
             "run",
             "-d",
             "--label",
-            DOCKER_LABEL,
+            self.label,
             "-p",
             f"127.0.0.1::{self.internal_port}",
         ]
@@ -379,6 +382,7 @@ def get_redis_container() -> Generator[LemmaDockerContainer, None, None]:
 def get_supertokens_container(
     postgres_connection_uri: Optional[str] = None,
     network: Optional[str] = None,
+    reuse_name: Optional[str] = None,
 ) -> Generator[LemmaDockerContainer, None, None]:
     """
     Starts a SuperTokens container.
@@ -413,55 +417,68 @@ def get_supertokens_container(
         )
     if network:
         container = container.with_run_args("--network", network)
+    if reuse_name is not None:
+        if not container_running(reuse_name):
+            remove_named_container(reuse_name)
+            container.label = REUSE_LABEL
+            container.with_run_args("--name", reuse_name)
+            container.__enter__()
+        container.container_id = reuse_name
+        _wait_for_supertokens(container)
+        yield container
+        return
 
     with container as st:
-        # Wait for SuperTokens to be ready by polling the health endpoint
-        import time
-        import urllib.request
-        import urllib.error
-
-        host = st.get_container_host_ip()
-        port = st.get_exposed_port(3567)
-        health_url = f"http://{host}:{port}/hello"
-
-        startup_timeout_seconds = _env_int("SUPERTOKENS_STARTUP_TIMEOUT_SECONDS", 120)
-        # Fine-grained: every local e2e run waits on this before its first
-        # test, and a whole-second poll spent up to a second past readiness.
-        poll_interval_seconds = max(
-            0.05, float(os.getenv("SUPERTOKENS_STARTUP_POLL_SECONDS", "0.2"))
-        )
-        max_retries = max(1, int(startup_timeout_seconds / poll_interval_seconds))
-        for i in range(max_retries):
-            try:
-                with urllib.request.urlopen(health_url, timeout=2) as response:
-                    if response.status == 200:
-                        break
-            except urllib.error.HTTPError as exc:
-                # ``HTTPError`` is also a file-like response. Close it even
-                # though ``urlopen`` raised before the context manager entered.
-                exc.close()
-            except (
-                urllib.error.URLError,
-                ConnectionRefusedError,
-                TimeoutError,
-                ConnectionResetError,
-            ):
-                pass
-            time.sleep(poll_interval_seconds)
-        else:
-            logs = st.get_logs()
-            if isinstance(logs, tuple):
-                stdout = logs[0].decode("utf-8", errors="replace")
-                stderr = logs[1].decode("utf-8", errors="replace")
-                log_output = f"stdout:\n{stdout}\nstderr:\n{stderr}"
-            else:
-                log_output = logs.decode("utf-8", errors="replace")
-            raise RuntimeError(
-                "SuperTokens did not become ready "
-                f"after {startup_timeout_seconds} seconds.\n{log_output}"
-            )
-
+        _wait_for_supertokens(st)
         yield st
+
+
+def _wait_for_supertokens(st: LemmaDockerContainer) -> None:
+    """Poll SuperTokens' health endpoint until it answers."""
+    import time
+    import urllib.request
+    import urllib.error
+
+    host = st.get_container_host_ip()
+    port = st.get_exposed_port(3567)
+    health_url = f"http://{host}:{port}/hello"
+
+    startup_timeout_seconds = _env_int("SUPERTOKENS_STARTUP_TIMEOUT_SECONDS", 120)
+    # Fine-grained: every local e2e run waits on this before its first
+    # test, and a whole-second poll spent up to a second past readiness.
+    poll_interval_seconds = max(
+        0.05, float(os.getenv("SUPERTOKENS_STARTUP_POLL_SECONDS", "0.2"))
+    )
+    max_retries = max(1, int(startup_timeout_seconds / poll_interval_seconds))
+    for i in range(max_retries):
+        try:
+            with urllib.request.urlopen(health_url, timeout=2) as response:
+                if response.status == 200:
+                    break
+        except urllib.error.HTTPError as exc:
+            # ``HTTPError`` is also a file-like response. Close it even
+            # though ``urlopen`` raised before the context manager entered.
+            exc.close()
+        except (
+            urllib.error.URLError,
+            ConnectionRefusedError,
+            TimeoutError,
+            ConnectionResetError,
+        ):
+            pass
+        time.sleep(poll_interval_seconds)
+    else:
+        logs = st.get_logs()
+        if isinstance(logs, tuple):
+            stdout = logs[0].decode("utf-8", errors="replace")
+            stderr = logs[1].decode("utf-8", errors="replace")
+            log_output = f"stdout:\n{stdout}\nstderr:\n{stderr}"
+        else:
+            log_output = logs.decode("utf-8", errors="replace")
+        raise RuntimeError(
+            "SuperTokens did not become ready "
+            f"after {startup_timeout_seconds} seconds.\n{log_output}"
+        )
 
 
 @contextmanager
@@ -659,7 +676,136 @@ def shared_kreuzberg(basetemp_parent, worker_id: str) -> Generator[str, None, No
                 refs_file.unlink(missing_ok=True)
 
 
-def start_shared_postgres(name: str) -> LemmaPostgresContainer:
+#: Opt-in, local only: keep Postgres, Redis and SuperTokens running between
+#: pytest sessions instead of starting them for every run. Each session still
+#: gets fresh databases (cloned from a schema template), so tests see exactly
+#: what a cold run gives them. CI never sets it.
+E2E_REUSE_ENV = "LEMMA_E2E_REUSE"
+REUSE_LABEL = "lemma.e2e.reuse=true"
+
+
+def e2e_reuse_requested() -> bool:
+    return os.environ.get(E2E_REUSE_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def reused_container_name(role: str) -> str:
+    """A stable name per checkout, so two worktrees never share containers."""
+    checkout = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    digest = hashlib.sha256(checkout.encode()).hexdigest()[:8]
+    return f"lemma-e2e-reuse-{digest}-{role}"
+
+
+def container_running(name: str) -> bool:
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def reused_postgres() -> LemmaPostgresContainer:
+    """The checkout's long-lived Postgres, started if it is not already running."""
+    name = reused_container_name("postgres")
+    if not container_running(name):
+        start_shared_postgres(name, reuse=True)
+    container = LemmaPostgresContainer()
+    container.container_id = name
+    _wait_for_postgres(container)
+    return container
+
+
+def reused_redis() -> LemmaDockerContainer:
+    name = reused_container_name("redis")
+    if not container_running(name):
+        start_shared_redis(name, reuse=True)
+    container = LemmaDockerContainer(REDIS_IMAGE, 6379)
+    container.container_id = name
+    _wait_for_tcp(container, 6379, _env_int("REDIS_STARTUP_TIMEOUT_SECONDS", 120))
+    return container
+
+
+def remove_reused_containers() -> list[str]:
+    """Stop and remove every reused container of this checkout (``make e2e-reuse-down``)."""
+    result = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "-aq",
+            "--filter",
+            f"label={REUSE_LABEL}",
+            "--filter",
+            f"name={reused_container_name('')}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ids = result.stdout.split()
+    for container_id in ids:
+        remove_named_container(container_id)
+    return ids
+
+
+def recreate_postgres_database(
+    container: LemmaPostgresContainer,
+    database_name: str,
+    *,
+    template: str | None = None,
+) -> None:
+    """Give ``database_name`` a fresh database (cloned from ``template``).
+
+    The old one is renamed aside rather than dropped: DROP DATABASE forces a
+    checkpoint, which is most of a reused session's setup time on a laptop.
+    ``drop_set_aside_databases`` removes them off the critical path.
+    """
+    with psycopg.connect(_admin_dsn(container), autocommit=True) as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM pg_database WHERE datname = %s", (database_name,)
+        ).fetchone()
+        if exists is not None:
+            conn.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (database_name,),
+            )
+            aside = f"{_ASIDE_PREFIX}{hashlib.sha256(os.urandom(8)).hexdigest()[:12]}"
+            conn.execute(f'ALTER DATABASE "{database_name}" RENAME TO "{aside}"')
+        clause = f' TEMPLATE "{template}"' if template else ""
+        conn.execute(f'CREATE DATABASE "{database_name}"{clause}')
+
+
+_ASIDE_PREFIX = "lemma_e2e_aside_"
+
+
+def drop_set_aside_databases(container: LemmaPostgresContainer) -> None:
+    """Drop every database ``recreate_postgres_database`` moved aside (best effort)."""
+    with psycopg.connect(_admin_dsn(container), autocommit=True) as conn:
+        names = [
+            row[0]
+            for row in conn.execute(
+                "SELECT datname FROM pg_database WHERE starts_with(datname, %s)",
+                (_ASIDE_PREFIX,),
+            ).fetchall()
+        ]
+        for name in names:
+            conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+
+
+def _admin_dsn(container: LemmaPostgresContainer) -> str:
+    return (
+        f"host={container.get_container_host_ip()} "
+        f"port={container.get_exposed_port(5432)} "
+        f"user={container.username} "
+        f"password={container.password} "
+        f"dbname={container.dbname}"
+    )
+
+
+def start_shared_postgres(name: str, *, reuse: bool = False) -> LemmaPostgresContainer:
     """Start ONE named Postgres container and return a reference to it.
 
     Mirrors ``start_shared_kreuzberg``: one Postgres *server process* shared
@@ -679,7 +825,10 @@ def start_shared_postgres(name: str) -> LemmaPostgresContainer:
         .with_env("POSTGRES_DB", POSTGRES_DB)
         .with_run_args("--name", name, "--network", SHARED_E2E_NETWORK_NAME)
     )
+    if reuse:
+        container.label = REUSE_LABEL
     container.__enter__()  # start detached; intentionally no matching __exit__
+    container.container_id = name
     _wait_for_postgres(container)
     return container
 
@@ -703,6 +852,10 @@ def shared_postgres(
     (``worker_id == 'master'``) it falls back to a plain per-session
     container.
     """
+    if e2e_reuse_requested():
+        # The checkout's long-lived container (LEMMA_E2E_REUSE); never removed here.
+        yield reused_postgres()
+        return
     if worker_id == "master":
         with get_postgres_container() as postgres:
             yield postgres
@@ -740,7 +893,7 @@ def shared_postgres(
                 # machine, not owned by this one -- see its own comment.
 
 
-def start_shared_redis(name: str) -> LemmaDockerContainer:
+def start_shared_redis(name: str, *, reuse: bool = False) -> LemmaDockerContainer:
     """Start ONE named Redis container and return a reference to it.
 
     Mirrors ``start_shared_postgres``: one Redis *server process* shared
@@ -755,6 +908,8 @@ def start_shared_redis(name: str) -> LemmaDockerContainer:
     # Clear any straggler with this name from a previously crashed run.
     subprocess.run(["docker", "rm", "-f", "-v", name], check=False, capture_output=True)
     container = LemmaDockerContainer(REDIS_IMAGE, 6379).with_run_args("--name", name)
+    if reuse:
+        container.label = REUSE_LABEL
     container.__enter__()  # start detached; intentionally no matching __exit__
     _wait_for_tcp(container, 6379, _env_int("REDIS_STARTUP_TIMEOUT_SECONDS", 120))
     return container
@@ -779,6 +934,9 @@ def shared_redis(
     it. Without xdist (``worker_id == 'master'``) it falls back to a plain
     per-session container.
     """
+    if e2e_reuse_requested():
+        yield reused_redis()
+        return
     if worker_id == "master":
         with get_redis_container() as redis:
             yield redis

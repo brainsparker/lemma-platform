@@ -115,49 +115,87 @@ class DatastoreSettings(BaseSettings):
         default=300,
         description="Debounce window for datastore file content updates before enqueueing document processing.",
     )
-    datastore_per_pod_max_inflight: int = Field(
-        default=4,
-        description=(
-            "Maximum files one pod may have queued or mid-flight (PENDING or "
-            "PROCESSING) before uploads stop being enqueued immediately. Beyond "
-            "this the row is simply left PENDING and the fair dispatcher picks "
-            "it up on its next tick, so a tenant bulk-uploading a thousand "
-            "documents cannot monopolise ingestion or push every other tenant "
-            "behind them. Nothing is dropped — the PENDING row is the durable "
-            "backlog. 0 disables the gate (immediate enqueue for everything, "
-            "the pre-fairness behaviour). Env: "
-            "``DATASTORE_PER_POD_MAX_INFLIGHT``."
-        ),
-    )
-    datastore_dispatch_global_batch: int = Field(
-        default=50,
-        description=(
-            "Maximum files the fair dispatcher enqueues per tick across all "
-            "pods. Bounds how much of the backlog is resident in Redis at once; "
-            "the rest stays PENDING in Postgres and is dispatched on later "
-            "ticks. Env: ``DATASTORE_DISPATCH_GLOBAL_BATCH``."
-        ),
-    )
-    recovery_enqueue_batch_size: int = Field(
-        default=10,
-        description=(
-            "The recovery cron re-drives stale files in batches of this size, "
-            "yielding to the event loop between batches, so a large backlog is "
-            "spread out instead of dispatched as one burst (which would spike "
-            "worker task pickup and DB connection demand). Env: "
-            "``RECOVERY_ENQUEUE_BATCH_SIZE``."
-        ),
-    )
-    datastore_recovery_max_attempts: int = Field(
+    document_processing_max_attempts: int = Field(
         default=3,
         description=(
-            "Maximum times the recovery cron will (re)drive a file through "
-            "processing before terminally failing it (status -> FAILED_PERMANENT). "
-            "processing_attempts is incremented on each claim; once it reaches this "
-            "cap the file is no longer re-driven, which stops a permanently-failing "
-            "file (e.g. a down extractor, an unprocessable document) from looping "
-            "forever and pinning worker memory/slots. A fresh upload / content "
-            "update resets the counter. Env: ``DATASTORE_RECOVERY_MAX_ATTEMPTS``."
+            "Attempts a document gets for failures caused by the document itself "
+            "-- including an extractor 5xx, timeout or 413 on it while the "
+            "extractor's health check passes -- before it is FAILED_PERMANENT. "
+            "An extractor that is down is not charged; see "
+            "``document_processing_unavailable_budget_seconds``. Env: "
+            "``DOCUMENT_PROCESSING_MAX_ATTEMPTS``."
+        ),
+    )
+    document_processing_unavailable_budget_seconds: int = Field(
+        default=86_400,
+        description=(
+            "How long a document may wait on an extractor or embedding provider "
+            "that is down (connection refused, health check failing, circuit "
+            "open because of other files) before it is FAILED_PERMANENT. Waiting "
+            "is not charged as an attempt and backs off up to an hour. Env: "
+            "``DOCUMENT_PROCESSING_UNAVAILABLE_BUDGET_SECONDS``."
+        ),
+    )
+    document_processing_max_pages: int = Field(
+        default=2_000,
+        description=(
+            "PDFs with more pages than this are FAILED_PERMANENT (too_large) "
+            "before the extractor is asked. The page count comes from a pypdfium "
+            "probe of the stored original. 0 disables. Env: "
+            "``DOCUMENT_PROCESSING_MAX_PAGES``."
+        ),
+    )
+    document_processing_max_ocr_pages: int = Field(
+        default=500,
+        description=(
+            "Scanned PDFs (those the OCR probe would force through OCR) with more "
+            "pages than this are FAILED_PERMANENT (too_large): OCR is the "
+            "extractor's most expensive path. Only applies with OCR enabled. 0 "
+            "disables. Env: ``DOCUMENT_PROCESSING_MAX_OCR_PAGES``."
+        ),
+    )
+    document_processing_max_chunks: int = Field(
+        default=20_000,
+        description=(
+            "Documents expected to produce, or producing, more search chunks "
+            "than this are FAILED_PERMANENT (too_large) before they are embedded. "
+            "The estimate is checked before extraction from the size and page "
+            "count, the actual count after. 0 disables. Env: "
+            "``DOCUMENT_PROCESSING_MAX_CHUNKS``."
+        ),
+    )
+    document_processing_retry_cooldown_seconds: int = Field(
+        default=60,
+        description=(
+            "A person may ask for one failed document to be processed again at "
+            "most once per this many seconds. Env: "
+            "``DOCUMENT_PROCESSING_RETRY_COOLDOWN_SECONDS``."
+        ),
+    )
+    datastore_object_storage_layout: bool = Field(
+        default=False,
+        description=(
+            "Write file bytes under ``pods/<pod>/objects/<file id>/<sha256>/`` "
+            "instead of under their path, and copy existing files across in the "
+            "background. A file stored this way is renamed or moved without "
+            "touching its bytes. Reads look in both places while the copy runs. "
+            "Env: ``DATASTORE_OBJECT_STORAGE_LAYOUT``."
+        ),
+    )
+    datastore_search_scope_cache_ttl_seconds: int = Field(
+        default=120,
+        description=(
+            "How long a caller's searchable-file split is reused from Redis. Any "
+            "grant, visibility, membership, create, delete, move or completed "
+            "indexing in the pod invalidates it sooner. 0 disables the cache. "
+            "Env: ``DATASTORE_SEARCH_SCOPE_CACHE_TTL_SECONDS``."
+        ),
+    )
+    datastore_search_scope_cache_max_ids: int = Field(
+        default=20_000,
+        description=(
+            "A searchable split with more file ids than this is not cached. Env: "
+            "``DATASTORE_SEARCH_SCOPE_CACHE_MAX_IDS``."
         ),
     )
     document_processing_max_file_bytes: int = Field(
@@ -361,12 +399,21 @@ class DatastoreSettings(BaseSettings):
     kreuzberg_circuit_failure_threshold: int = Field(
         default=5,
         description=(
-            "Consecutive connection failures before the in-process Kreuzberg "
-            "circuit breaker opens. While open, extractions short-circuit "
-            "immediately (the file is marked FAILED and retried later by the "
-            "recovery cron) instead of each one burning the full retry budget "
-            "against a known-down extractor. Env: "
+            "Failures, each from a different document, before the in-process "
+            "Kreuzberg circuit breaker opens. A document counts once however "
+            "often it fails, so one poison file cannot hold the circuit open. "
+            "While open, extractions wait (not charged) instead of each one "
+            "burning the full retry budget against a known-down extractor. Env: "
             "``KREUZBERG_CIRCUIT_FAILURE_THRESHOLD``."
+        ),
+    )
+    kreuzberg_health_timeout_seconds: float = Field(
+        default=5.0,
+        description=(
+            "Timeout for the Kreuzberg health check asked after a 5xx or timeout "
+            "on one document: healthy means the document is at fault (an "
+            "attempt is charged), unhealthy means the extractor is down (it is "
+            "not). Env: ``KREUZBERG_HEALTH_TIMEOUT_SECONDS``."
         ),
     )
     kreuzberg_circuit_reset_seconds: float = Field(
@@ -581,9 +628,9 @@ class DatastoreSettings(BaseSettings):
     e2e_disable_worker_file_autoindex: bool = Field(
         default=False,
         description=(
-            "TEST HOOK ONLY. When true, the worker does NOT auto-index uploaded "
-            "datastore files (the upload->event->process_datastore_file_task path "
-            "is skipped). e2e indexes explicitly in-process via the index_file "
+            "TEST HOOK ONLY. When true, writes do NOT enqueue file.process work "
+            "items and deletes purge storage in-process instead of enqueueing "
+            "file.cleanup. e2e indexes explicitly in-process via the index_file "
             "helper; auto-indexing every upload would otherwise overwhelm the "
             "single shared Kreuzberg under parallel load. Production leaves False."
         ),

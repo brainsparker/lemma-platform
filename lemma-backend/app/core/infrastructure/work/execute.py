@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work.context import FastContext
+from app.core.infrastructure.work.db import SessionMaker, WorkDb
 from app.core.infrastructure.work.lifecycle import (
     apply_decision,
     finish_item,
@@ -49,7 +50,7 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-type SessionMaker = Callable[[], AsyncSession]
+__all__ = ["ExecEnv", "SessionMaker", "capture", "run_fast", "settle"]
 
 
 def utcnow() -> datetime:
@@ -60,7 +61,8 @@ def utcnow() -> datetime:
 class ExecEnv:
     """What every handler run in one dispatcher shares."""
 
-    session_maker: SessionMaker
+    #: Every session the runtime opens comes from here, counted per kind.
+    db: WorkDb
     registry: WorkRegistry
     owner: str
     statement_timeout_ms: int
@@ -115,7 +117,7 @@ async def settle(
     env: ExecEnv, spec: HandlerSpec, item: ClaimedItem, exc: Exception
 ) -> str:
     """Record a failed run, fenced: requeue with backoff, or dead with its hook."""
-    async with env.session_maker() as session:
+    async with env.db.handler(item.cls) as session:
         uow = SqlAlchemyUnitOfWork(session)
         state = await lock_owned(session, item.id, env.owner)
         if state is None:
@@ -158,7 +160,7 @@ async def _dead_without_hook(
         ns=item.ns,
         exc_info=hook_error,
     )
-    async with env.session_maker() as session:
+    async with env.db.handler(item.cls) as session:
         uow = SqlAlchemyUnitOfWork(session)
         if await lock_owned(session, item.id, env.owner) is None:
             return
@@ -173,7 +175,7 @@ async def _dead_without_hook(
 
 
 async def release_item(env: ExecEnv, item: ClaimedItem) -> str:
-    async with env.session_maker() as session:
+    async with env.db.handler(item.cls) as session:
         released = await release(session, item.id, env.owner, now=env.clock())
         await session.commit()
     return "released" if released else "lease_lost"
@@ -209,7 +211,7 @@ async def run_fast(env: ExecEnv, spec: HandlerSpec, item: ClaimedItem) -> str:
     exactly-once without an inbox.
     """
     error: Exception | None
-    async with env.session_maker() as session:
+    async with env.db.handler(item.cls) as session:
         uow = SqlAlchemyUnitOfWork(session)
         await _set_statement_timeout(session, env.statement_timeout_ms)
         if await lock_owned(session, item.id, env.owner) is None:

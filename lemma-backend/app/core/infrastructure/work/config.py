@@ -22,20 +22,26 @@ class ClassDefaults:
     lease: timedelta
     slots: int
     max_running: int
+    #: Connections this class's handlers may hold at once: a fast handler's
+    #: whole transaction, a job's checkpoints, completion and settling. Fewer
+    #: than ``slots`` on purpose -- a job holds none while it does its I/O, and
+    #: a fast handler is bounded by its statement timeout.
+    db_slots: int
 
 
-#: Lease, slots per process and per-namespace cap for each class. A job's lease
-#: is a heartbeat interval times three, not a bound on how long it may run.
+#: Lease, slots per process, per-namespace cap and DB connections for each
+#: class. A job's lease is a heartbeat interval times three, not a bound on how
+#: long it may run.
 CLASS_DEFAULTS: dict[WorkClass, ClassDefaults] = {
-    WorkClass.EVENTS: ClassDefaults(timedelta(seconds=30), 32, 16),
-    WorkClass.INTERACTIVE: ClassDefaults(timedelta(seconds=60), 64, 32),
-    WorkClass.AUTOMATION: ClassDefaults(timedelta(seconds=60), 64, 32),
-    WorkClass.DELIVERY: ClassDefaults(timedelta(seconds=30), 32, 8),
-    WorkClass.INGESTION: ClassDefaults(timedelta(seconds=120), 4, 2),
-    WorkClass.ADMIN: ClassDefaults(timedelta(seconds=60), 4, 1),
+    WorkClass.EVENTS: ClassDefaults(timedelta(seconds=30), 32, 16, 6),
+    WorkClass.INTERACTIVE: ClassDefaults(timedelta(seconds=60), 64, 32, 3),
+    WorkClass.AUTOMATION: ClassDefaults(timedelta(seconds=60), 64, 32, 3),
+    WorkClass.DELIVERY: ClassDefaults(timedelta(seconds=30), 32, 8, 2),
+    WorkClass.INGESTION: ClassDefaults(timedelta(seconds=120), 4, 2, 2),
+    WorkClass.ADMIN: ClassDefaults(timedelta(seconds=60), 4, 1, 1),
     # Perpetual pollers, one per credential, serialised by a concurrency key
     # rather than a namespace cap.
-    WorkClass.RECEIVERS: ClassDefaults(timedelta(seconds=60), 16, 64),
+    WorkClass.RECEIVERS: ClassDefaults(timedelta(seconds=60), 16, 64, 1),
 }
 
 
@@ -77,11 +83,41 @@ class WorkSettings(BaseSettings):
         description=(
             "JSON list of per-namespace limit overrides. Each entry names one of "
             "'ns', 'pod_id', 'org_id', 'slug' or 'slug_prefix' and carries "
-            '"max_running": {"<class>": n}, e.g. [{"pod_id": "<uuid>", '
+            '"max_running": {"<class>": n} and/or "rates": {"<name>": '
+            '{"limit": n, "per_seconds": s}}, e.g. [{"pod_id": "<uuid>", '
             '"max_running": {"interactive": 4}}]. The most specific match '
             "wins: ns/pod_id, then org_id, then slug, then the longest "
-            "slug_prefix. Slug rules apply only when a namespace directory is "
-            "installed."
+            "slug_prefix. A pod's organization and slug come from the pod "
+            "module, cached in Redis."
+        ),
+    )
+    work_rates_json: str = Field(
+        default="",
+        description=(
+            "Deployment-wide rate limits by name, overriding the built-in "
+            'defaults, e.g. {"llm_filter": {"limit": 30, "per_seconds": 3600}}. '
+            "A handler declares which named rates its items draw from; an item "
+            "over a rate waits, it is never charged or dropped. Per-pod and "
+            "per-org exceptions go in WORK_LIMIT_OVERRIDES_JSON under \"rates\"."
+        ),
+    )
+    work_db_slots_json: str = Field(
+        default="",
+        description=(
+            "Per-class cap on database connections the class's handlers hold "
+            'at once, overriding the built-in defaults, e.g. {"events": 8}. '
+            "The work runtime opens its own connection pool sized to the sum "
+            "of these for the classes this process runs, plus one per class "
+            "for claiming and WORK_DB_CONTROL_SLOTS, so it can never wait on a "
+            "connection something else holds."
+        ),
+    )
+    work_db_control_slots: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Connections reserved for lease heartbeats, gauges, cap refresh and "
+            "shutdown release, so none of them queues behind handlers."
         ),
     )
     work_quantum: int = Field(
@@ -178,6 +214,13 @@ def class_slots(cls: WorkClass) -> int:
         _class_int_overrides(work_settings.work_slots_json, "WORK_SLOTS_JSON")
     )
     return overrides.get(cls, CLASS_DEFAULTS[cls].slots)
+
+
+def class_db_slots(cls: WorkClass) -> int:
+    overrides = dict(
+        _class_int_overrides(work_settings.work_db_slots_json, "WORK_DB_SLOTS_JSON")
+    )
+    return overrides.get(cls, CLASS_DEFAULTS[cls].db_slots)
 
 
 def default_max_running(cls: WorkClass) -> int:

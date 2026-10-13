@@ -1,7 +1,7 @@
 """Agent-run lookups used by the conversation repository.
 
 Split out of ``repositories.py`` to keep that module under the architecture
-ratchet's size limit, the same way ``file_recovery_queries`` was split out of
+ratchet's size limit, the same way ``file_status_counts`` was split out of
 the datastore file repository.
 
 These are the reads that answer questions *about* runs — which one is active,

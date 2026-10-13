@@ -25,6 +25,14 @@ class FakeDocumentProcessorServer:
         self._docling_tasks: dict[str, str] = {}
         self._docling_polls: Counter[str] = Counter()
         self._runner: web.AppRunner | None = None
+        #: What ``/health`` answers. False is "Kreuzberg is down" as its
+        #: health check reports it, while ``/extract`` still accepts requests.
+        self.healthy = True
+        #: While set, ``hang-*`` documents never get an answer: an extraction
+        #: running when its worker is killed.
+        self.hang = False
+        #: While set, every extraction returns a chunk Postgres cannot store.
+        self.nul_chunks = False
 
     def forget_traffic(self) -> None:
         """Drop what this server has been asked, keeping it running.
@@ -39,9 +47,13 @@ class FakeDocumentProcessorServer:
         self.requests.clear()
         self._docling_tasks.clear()
         self._docling_polls.clear()
+        self.healthy = True
+        self.hang = False
+        self.nul_chunks = False
 
     async def start(self) -> None:
         app = web.Application()
+        app.router.add_get("/health", self._kreuzberg_health)
         app.router.add_post("/extract", self._kreuzberg_extract)
         app.router.add_post("/chunk", self._kreuzberg_chunk)
         app.router.add_post("/v1/convert/file/async", self._docling_submit)
@@ -68,10 +80,30 @@ class FakeDocumentProcessorServer:
             await part.read(decode=False)
         return filename
 
+    async def _kreuzberg_health(self, request: web.Request) -> web.Response:
+        del request
+        self.requests["kreuzberg:health"] += 1
+        if self.healthy:
+            return web.json_response({"status": "healthy"})
+        return web.json_response({"status": "unhealthy"}, status=503)
+
     async def _kreuzberg_extract(self, request: web.Request) -> web.StreamResponse:
         filename = await self._multipart_filename(request)
         self.requests[f"kreuzberg:{filename}"] += 1
         attempt = self.requests[f"kreuzberg:{filename}"]
+
+        if filename.startswith("poison"):
+            # What a deterministic extractor panic on one document looks like:
+            # a 500 in milliseconds, every time, while everything else works.
+            return web.Response(
+                status=500,
+                text=(
+                    "thread 'tokio-rt-worker' panicked: assertion failed: "
+                    "Invalid buffer length"
+                ),
+            )
+        if filename.startswith("hang") and self.hang:
+            await asyncio.sleep(3600)
 
         if filename.startswith("connection-retry") and attempt == 1:
             transport = request.transport
@@ -93,6 +125,10 @@ class FakeDocumentProcessorServer:
             await asyncio.sleep(0.4)
 
         needle = f"Deterministic extracted content for {filename}"
+        if self.nul_chunks:
+            # Postgres refuses a NUL in text, so indexing this fails inside the
+            # transaction that replaces the file's chunks.
+            needle = f"{needle} \u0000"
         content = (
             ""
             if filename.startswith("pages-only")

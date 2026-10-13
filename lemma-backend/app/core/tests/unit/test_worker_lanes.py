@@ -109,7 +109,6 @@ bulk = (
     "import_pod_url",
     "import_pod_github",
     "publish_pod_github",
-    "process_datastore_file_task",
 )
 wrong = [name for name in bulk if lane_for_task(name) is not Lane.BULK]
 print("MISROUTED:" + ",".join(wrong))

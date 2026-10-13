@@ -616,6 +616,18 @@ guarantee:
   (`harnesses/agent_host/stream_resume.py`). The stream is trimmed only below
   that cursor, never by length, and each event's payload is capped at 8 MiB
   at intake.
+- **Locks on the host row.** One host runs many runs at once, so a run start,
+  a credential refresh and the host's `control` frame all lock its
+  `agent_hosts` row together. Every command insert takes `FOR KEY SHARE` on it
+  through the foreign key, often while holding a run's lease, and the
+  `control` frame locks leases after its heartbeat write. So nothing that can
+  hold or wait for a lease locks the host row with `FOR UPDATE`: admission
+  takes `FOR SHARE`, which still holds a revoke off until the run is queued,
+  and the heartbeat and revoke take `FOR NO KEY UPDATE` (`HostRowLock`).
+  `test_agent_host_concurrent_admission_e2e.py` starts twenty runs on one host
+  alongside its traffic. A run start or a `control` frame that Postgres still
+  picks as a deadlock victim is retried once, and a failure that escapes is
+  reported as the database being busy, not as the teammate's model settings.
 - **Control updates** are idempotent and stale ones are ignored.
   `control_ok.refused` names any update Lemma could not parse, and it is the
   only way one is refused. Lemma applies each update separately, so one bad

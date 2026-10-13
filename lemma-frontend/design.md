@@ -104,14 +104,21 @@ you talk to, the space is what you share. The app has two altitudes.
   waiting on you, or its latest conversation) and the people in its space.
   Those that need you come first; there are never more than two groups.
 - About opens on an overview that fits one screen: the face, name and job,
-  then nine tiles in three rows (Default model, Agents, Skills / Memory,
-  Standing work, Channels / People, Teammates, MCP). Tiles are named with
-  plain nouns — "Agents", not "Hands work to". Each tile
-  carries one live line of what is true there and a dot when it waits on a
-  person. A tile opens its part as a page of its own,
-  `/t/{pod}/about/{part}`, so Back steps out and a link can name it. The
-  organization's connectors, models and usage are not parts of About; a
-  line under the tiles links to them in Settings.
+  then ten tiles in two columns (Default model, Skills / Memory, Agents /
+  Connectors, Standing work / Channels, MCP / People, Teammates), named with
+  plain nouns — "Agents", not "Hands work to". Each tile carries one live
+  line of what is true there and a dot when it waits on a person. A tile
+  opens its part as a page of its own, `/t/{pod}/about/{part}`, so Back
+  steps out and a link can name it.
+- A part's page uses the room it has. Nothing on it is a compact widget
+  carried over from a long page: the default model is the full list of the
+  organization's models, one row each, with a link to Settings → Models;
+  skills wrap in a grid rather than travelling in a carousel; channels are
+  the whole channel manager, not a strip of chips with a sheet behind it.
+  Connectors is a part of About although the accounts are the
+  organization's — what a teammate can reach is the first thing people look
+  for on its page. The organization's models and usage stay in Settings,
+  linked under the tiles.
 - Zoomed in, `/t/{pod}/…`: one teammate's space. Its face and job head the
   sidebar and open About (`/t/{pod}/about`), which holds everything about how
   it works — people, channels, skills, standing work, the agents it hands work

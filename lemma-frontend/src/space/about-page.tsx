@@ -7,14 +7,15 @@ import { capabilityList, grantedToolsets } from "@/stage/colleagues";
 import { isForbidden } from "@/session/auth-state";
 import { SkillsView } from "@/skills/skills-view";
 import { StandingWork } from "@/schedule/standing-work";
-import { Surfaces } from "@/shell/surfaces";
-import { RunsOn } from "@/shell/runs-on";
+import { ModelChoice } from "@/shell/runs-on";
+import { ReachPanel } from "@/shell/reach";
+import { ConnectorsSection } from "@/org/connectors";
 import { WhoCanJoin } from "@/shell/who-can-join";
 import { AtTheDoor } from "@/shell/at-the-door";
 import { AddPeople } from "@/shell/add-people";
 import type { SettingsSection } from "@/settings/settings-modal";
 import {
-    AgentIcon, AskIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, EditIcon, LockIcon, MemoryIcon, ModelIcon,
+    AgentIcon, AskIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, ConnectorIcon, EditIcon, LockIcon, MemoryIcon, ModelIcon,
     PeopleIcon, PlugIcon, PlusIcon, ReachIcon, TaughtIcon,
 } from "@/ui/icons";
 import { AgentAccess } from "./agent-access";
@@ -29,9 +30,10 @@ import type { AboutSection } from "./about-sections";
 
 export { isAboutSection, type AboutSection } from "./about-sections";
 
-/** The parts of About, in the order the overview lays them out: three rows
- *  of three — what it thinks with, what it knows and does, who and what
- *  reaches it. Named with plain nouns, the words people already use for
+/** The parts of About, in the order the overview lays them out: five rows
+ *  of two — what it thinks with, what it knows and hands on, what it can
+ *  reach and does unasked, where it is reached, and who it works with.
+ *  Named with plain nouns, the words people already use for
  *  these things elsewhere: "Agents", "Default model", "Skills". `label` is
  *  the tile's word, the breadcrumb's, and the part's own heading unless
  *  `title` says more. `blurb` stands in for the tile's live line when that
@@ -48,23 +50,26 @@ interface Part {
 const PARTS: readonly Part[] = [
     { id: "model", label: "Default model", icon: ModelIcon,
         note: (name) => "What " + name + " thinks with, unless an agent names its own.", blurb: "The model it thinks with" },
-    { id: "agents", label: "Agents", icon: AgentIcon,
-        note: (name) => "Agents that take a piece of the job from " + name + " or from a workflow.", blurb: "Agents it hands work to" },
     { id: "skills", label: "Skills", icon: TaughtIcon,
         note: (name) => "Instructions " + name + " follows when a task matches. People write these.", blurb: "Instructions people wrote" },
     { id: "memory", label: "Memory", icon: MemoryIcon,
         note: (name) => "Notes " + name + " writes as it works. Open one to read or fix it.", blurb: "Notes it wrote itself" },
+    { id: "agents", label: "Agents", icon: AgentIcon,
+        note: (name) => "Agents that take a piece of the job from " + name + " or from a workflow.", blurb: "Agents it hands work to" },
+    { id: "connectors", label: "Connectors", icon: ConnectorIcon,
+        note: (name) => "Accounts " + name + " can use — Gmail, Slack, GitHub and the rest. They belong to the organization, so every teammate in it shares them.",
+        blurb: "Accounts it can use" },
     { id: "schedules", label: "Standing work", icon: ClockIcon,
         note: () => "What it does without being asked, on a time or an event.", blurb: "What it does unasked" },
     { id: "channels", label: "Channels", icon: ReachIcon, title: (name) => "Where to reach " + name,
-        note: () => "Channels outside the app it answers in.", blurb: "Where it answers" },
+        note: (name) => "Pick a channel and " + name + " answers there, under its own name.", blurb: "Where it answers" },
+    { id: "ai-tools", label: "MCP", icon: PlugIcon, title: () => "Connect ChatGPT, Claude and others",
+        note: (name) => "Add " + name + " to any AI app that speaks MCP, and use it from there.", blurb: "Use it from other AI apps" },
     { id: "people", label: "People", icon: PeopleIcon,
         note: (name) => "Everyone here can open what is in " + name + "’s space.", blurb: "Who can open its space" },
     { id: "works-with", label: "Teammates", icon: AskIcon, title: (name) => "Teammates " + name + " works with",
         note: (name) => "As you: " + name + " asks with your access there, and checks with you first. Allowed: that teammate lets " + name + " ask it with nobody present, reading only what it shared.",
         blurb: "Other teammates it can ask" },
-    { id: "ai-tools", label: "MCP", icon: PlugIcon, title: () => "Connect ChatGPT, Claude and others",
-        note: (name) => "Add " + name + " to any AI app that speaks MCP, and use it from there.", blurb: "Use it from other AI apps" },
 ];
 
 /** A part's heading on its own page. */
@@ -141,7 +146,6 @@ export function AboutPage({ pod, orgId, orgName, section, onSection, onOpenSetti
                         and somebody will come looking. */}
                     <p className="aboutpage__elsewhere">
                         <span>Shared by everyone in {orgName}, in Settings:</span>
-                        <button className="linkish" onClick={() => onOpenSettings("connectors")}>Connectors</button>
                         <button className="linkish" onClick={() => onOpenSettings("models")}>Models</button>
                         <button className="linkish" onClick={() => onOpenSettings("usage")}>Usage</button>
                     </p>
@@ -170,6 +174,7 @@ function Parts({ pod, onOpen }: { pod: Pod; onOpen: (section: AboutSection) => v
                             {line.needs && <span className="aboutparts__dot" role="img" aria-label="Needs you" />}
                             <span>{line.text ?? part.blurb}</span>
                         </span>
+                        <ChevronRightIcon size={16} className="aboutparts__go" aria-hidden="true" />
                     </button>
                 );
             })}
@@ -208,7 +213,12 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
             </>;
             break;
         case "channels":
-            body = <Surfaces pod={pod} expanded />;
+            body = <ReachPanel pod={pod} inline />;
+            break;
+        case "connectors":
+            body = orgId
+                ? <ConnectorsSection orgId={orgId} />
+                : <p className="aboutpage__quiet">No organization to read connectors from.</p>;
             break;
         case "works-with":
             action = manageLinks ? (
@@ -227,6 +237,7 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
                 <SkillsView
                     podId={pod.id}
                     teammate={pod.name}
+                    layout="grid"
                     onFile={onFile}
                     onCreate={() => onAskFor(
                         "Write me a new skill. Use the lemma-skill-creator skill: decide its triggers, "
@@ -250,7 +261,7 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
             body = <AgentList pod={pod} onOpen={onOpenAgent} />;
             break;
         case "model":
-            body = <RunsOn podId={pod.id} orgId={pod.orgId} />;
+            body = <ModelChoice podId={pod.id} orgId={pod.orgId} orgName={orgName} />;
             break;
         case "ai-tools":
             body = <AgentAccess pod={pod} />;

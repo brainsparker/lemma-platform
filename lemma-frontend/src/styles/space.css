@@ -7260,22 +7260,25 @@ samp,
     font-size: 13px;
     color: var(--bad);
 }
-/* The overview's parts: three rows of three tiles, each a mark, a name and
-   one line of what is true there now. Quiet surfaces on the page's own
-   paper — identity colour stays on the face above them. */
+/* The overview's parts: two columns of wide tiles, each a mark, a name, one
+   line of what is true there now, and the way in. Quiet surfaces on the
+   page's own paper — identity colour stays on the face above them. */
 .aboutparts {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(216px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
     margin-top: 36px;
 }
 .aboutparts__tile {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) 16px;
+    grid-template-rows: auto auto;
+    align-items: center;
+    column-gap: 14px;
+    row-gap: 1px;
     min-width: 0;
-    padding: 16px 16px 15px;
+    min-height: 72px;
+    padding: 14px 16px 14px 14px;
     border: 0;
     border-radius: var(--r-lg);
     background: transparent;
@@ -7295,11 +7298,11 @@ samp,
     outline-offset: 2px;
 }
 .aboutparts__mark {
+    grid-row: span 2;
     display: grid;
     place-items: center;
-    width: 36px;
-    height: 36px;
-    margin-bottom: 12px;
+    width: 40px;
+    height: 40px;
     border-radius: var(--r-md);
     background: var(--wash-b);
     color: var(--ink-2);
@@ -7309,14 +7312,17 @@ samp,
     color: var(--ink);
 }
 .aboutparts__label {
+    align-self: end;
     font-size: 15px;
     font-weight: 500;
 }
 .aboutparts__line {
+    grid-column: 2;
+    align-self: start;
     display: flex;
     align-items: center;
     gap: 6px;
-    max-width: 100%;
+    min-width: 0;
     font-size: 13px;
     line-height: 1.4;
     color: var(--ink-3);
@@ -7326,6 +7332,14 @@ samp,
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+.aboutparts__go {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    color: var(--ink-3);
+}
+.aboutparts__tile:hover .aboutparts__go {
+    color: var(--ink);
 }
 /* Something here is waiting on a person: the dot the sidebar uses for it. */
 .aboutparts__dot {
@@ -7340,24 +7354,16 @@ samp,
         transition: none;
     }
 }
-/* One column on a phone: a tile a row, its mark beside the words rather
-   than over them, so the nine fit in about two screens instead of five. */
-@media (max-width: 640px) {
+/* One column on a phone, and in a pane too narrow for two readable tiles. */
+@media (max-width: 720px) {
     .aboutparts {
+        grid-template-columns: minmax(0, 1fr);
         gap: 8px;
         margin-top: 28px;
     }
     .aboutparts__tile {
-        display: grid;
-        grid-template-columns: 36px minmax(0, 1fr);
-        column-gap: 14px;
-        row-gap: 1px;
         min-height: 64px;
-        padding: 12px 14px;
-    }
-    .aboutparts__mark {
-        grid-row: span 2;
-        margin-bottom: 0;
+        padding: 12px 14px 12px 12px;
     }
 }
 /* What About no longer carries, and where it went: one quiet line. */
@@ -7955,4 +7961,127 @@ samp,
 .msg--guest .message-actions {
     right: auto;
     left: calc(100% + 6px);
+}
+
+/* The default model on a page of its own: every model the organization has,
+   grouped by where it comes from, one row each and the chosen one marked. */
+.modelchoice {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.modelchoice__list {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+.modelchoice__group {
+    display: flex;
+    flex-direction: column;
+    border-radius: var(--r-lg);
+    box-shadow: inset 0 0 0 1px var(--line);
+    overflow: hidden;
+}
+.modelchoice__label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--wash-b);
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.modelchoice__label em {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    font-style: normal;
+    color: var(--wait);
+}
+.modelchoice__row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 52px;
+    padding: 10px 16px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.modelchoice__row + .modelchoice__row {
+    border-top: 1px solid var(--line);
+}
+.modelchoice__row:hover:not(:disabled) {
+    background: var(--wash-b);
+}
+.modelchoice__row:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: -2px;
+}
+.modelchoice__row:disabled {
+    cursor: default;
+}
+/* The default stands on its own, above the groups it chooses among. */
+.modelchoice__row--default {
+    border-radius: var(--r-lg);
+    box-shadow: inset 0 0 0 1px var(--line);
+}
+.modelchoice__row[aria-checked="true"] {
+    background: var(--wash-b);
+}
+.modelchoice__row--default[aria-checked="true"] {
+    box-shadow: inset 0 0 0 1.5px var(--ink-2);
+}
+.modelchoice__radio {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1.5px var(--line-2);
+}
+.modelchoice__row[aria-checked="true"] .modelchoice__radio {
+    box-shadow: inset 0 0 0 5px var(--ink);
+}
+.modelchoice__mark {
+    display: grid;
+    place-items: center;
+    color: var(--ink-3);
+}
+.modelchoice__body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 14.5px;
+}
+.modelchoice__body small {
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+.modelchoice__id {
+    font-family: var(--mono);
+}
+.modelchoice__saving {
+    flex: none;
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+.modelchoice__foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin: 4px 2px 0;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.modelchoice__foot .linkish {
+    font-size: 13px;
 }

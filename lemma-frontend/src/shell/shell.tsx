@@ -242,8 +242,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        is the one that has to be open. */
     const [settings, setSettings] = useState<SettingsSection | null>(() =>
         settingsFromQuery(incoming.get("settings")) ?? (incoming.get("connect") ? "connectors" : null)
-        /* About carried the organization's connectors, models and usage for
-           a while; an old `?section=` naming one opens it where it lives. */
+        /* About carried the organization's models and usage for a while; an
+           old `?section=` naming one opens it where it lives. */
         ?? settingsSectionOf(incoming.get("section")));
     /* The desktop menu and tray open Settings at a section by raising
        `lemma:open-settings` in this page. Keyed by request, so asking for a

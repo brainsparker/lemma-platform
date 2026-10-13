@@ -53,6 +53,8 @@ export function useAboutLines(pod: Pod): Record<AboutSection, AboutLine> {
     const schedules = useSchedules(pod.id);
     const agents = useQuery({ queryKey: ["agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 60_000 });
     const runsOn = useRunsOn(pod.id, pod.orgId);
+    const connectors = useQuery({ queryKey: ["connectors"], queryFn: () => source.listConnectors() });
+    const accounts = useQuery({ queryKey: ["accounts", pod.orgId], queryFn: () => source.listAccounts(pod.orgId) });
 
     const asking = knocking.data?.length ?? 0;
     const people: AboutLine = {
@@ -107,8 +109,23 @@ export function useAboutLines(pod: Pod): Record<AboutSection, AboutLine> {
         needs: Boolean(runsOn.setup),
     };
 
+    const titles = new Map((connectors.data ?? []).map((one) => [one.id, one.title]));
+    const reaches = [...new Set((accounts.data ?? []).map((one) => titles.get(one.connectorId) ?? one.connectorId))];
+    /* An account that cannot be used — not installed, or signed out — is
+       one somebody has to fix, the same count Connectors leads with. */
+    const ailing = (accounts.data ?? []).filter((one) => !one.usable).length;
+    const connected: AboutLine = {
+        text: accounts.isSuccess
+            ? reaches.length
+                ? ailing ? count(ailing, "account needs", "accounts need") + " attention" : firstFew(reaches, 3)
+                : "Nothing connected yet"
+            : null,
+        needs: ailing > 0,
+    };
+
     return {
         people,
+        connectors: connected,
         channels,
         "works-with": worksWith,
         skills: taught,

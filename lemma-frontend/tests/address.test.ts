@@ -69,7 +69,7 @@ test("a part of About is a page under it, and Back steps out to the overview", (
     assert.equal(isNewPlace(people, at("space:about", { section: "memory" })), true);
     // A section that moved to Settings, or one this build has never heard of,
     // still opens About rather than nothing.
-    assert.deepEqual(readAddress("/t/" + POD + "/about/connectors"), overview);
+    assert.deepEqual(readAddress("/t/" + POD + "/about/org-usage"), overview);
     assert.deepEqual(readAddress("/t/" + POD + "/about/people/more"), at(null));
     // The overview's address carries no section at all.
     assert.equal("section" in readAddress("/t/" + POD + "/about"), false);

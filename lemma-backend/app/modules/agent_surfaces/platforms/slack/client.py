@@ -5,6 +5,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from slack_sdk.errors import SlackApiError
+
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SlackCredentials,
+)
 from slack_sdk.web.async_client import AsyncWebClient
 
 from app.modules.agent_surfaces.platforms.common import (
@@ -17,24 +23,14 @@ from app.modules.agent_surfaces.platforms.delivery import (
 )
 
 
-def slack_access_token(credentials: dict[str, Any]) -> str | None:
-    if credentials.get("access_token"):
-        return str(credentials["access_token"])
-    if credentials.get("bot_token"):
-        return str(credentials["bot_token"])
-    raw_response = credentials.get("raw_response") or {}
-    token = raw_response.get("access_token")
-    return str(token) if token else None
+def slack_access_token(credentials: CredentialsLike) -> str | None:
+    """The Web API token, revealed for the call about to carry it."""
+    return reveal_secret(SlackCredentials.of(credentials).token) or None
 
 
-def slack_base_url(credentials: dict[str, Any]) -> str | None:
-    if credentials.get("api_base_url"):
-        return _refuse_a_private_literal(
-            _normalize_base_url(str(credentials["api_base_url"]))
-        )
-    raw_response = credentials.get("raw_response") or {}
-    value = raw_response.get("api_base_url")
-    return _refuse_a_private_literal(_normalize_base_url(str(value))) if value else None
+def slack_base_url(credentials: CredentialsLike) -> str | None:
+    value = SlackCredentials.of(credentials).api_base_url
+    return _refuse_a_private_literal(_normalize_base_url(value)) if value else None
 
 
 def _refuse_a_private_literal(base_url: str | None) -> str | None:
@@ -80,7 +76,7 @@ def _refuse_a_private_literal(base_url: str | None) -> str | None:
     return base_url
 
 
-async def build_slack_client(credentials: dict[str, Any]) -> AsyncWebClient:
+async def build_slack_client(credentials: CredentialsLike) -> AsyncWebClient:
     """A Slack client for these credentials, with its base URL vetted first.
 
     Async because vetting resolves DNS. `api_base_url` arrives from stored
@@ -100,27 +96,16 @@ async def build_slack_client(credentials: dict[str, Any]) -> AsyncWebClient:
     return AsyncWebClient(**kwargs)
 
 
-def slack_scopes(credentials: dict[str, Any]) -> set[str]:
-    raw_values: list[str] = []
-    for candidate in (
-        credentials.get("scope"),
-        credentials.get("scopes"),
-        (credentials.get("raw_response") or {}).get("scope"),
-        (credentials.get("raw_response") or {}).get("scopes"),
-    ):
-        if isinstance(candidate, str):
-            raw_values.extend(candidate.split(","))
-        elif isinstance(candidate, list):
-            raw_values.extend(str(item) for item in candidate)
-    return {value.strip() for value in raw_values if value and value.strip()}
+def slack_scopes(credentials: CredentialsLike) -> frozenset[str]:
+    return SlackCredentials.of(credentials).scopes
 
 
-def slack_supports_customized_messages(credentials: dict[str, Any]) -> bool:
+def slack_supports_customized_messages(credentials: CredentialsLike) -> bool:
     return "chat:write.customize" in slack_scopes(credentials)
 
 
 def slack_customized_message_kwargs(
-    credentials: dict[str, Any],
+    credentials: CredentialsLike,
     agent_display_name: str | None,
     agent_icon_url: str | None = None,
 ) -> dict[str, Any]:

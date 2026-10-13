@@ -16,6 +16,7 @@ from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import AgentHostStatus
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCatalogEntry,
+    RuntimeProfileAvailability,
     RuntimeProfileKind,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
@@ -45,7 +46,7 @@ class AgentRuntimeProfileResponse(BaseModel):
     metadata: JsonObject = Field(default_factory=dict)
     has_credentials: bool = False
     derived_harness_kind: HarnessKind
-    availability_status: str | None = None
+    availability_status: RuntimeProfileAvailability | None = None
 
 
 class AgentRuntimeProfileListResponse(BaseModel):

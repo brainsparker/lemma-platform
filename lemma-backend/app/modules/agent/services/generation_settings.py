@@ -32,9 +32,11 @@ from app.core.domain.generation import (
     ReasoningEffort,
     lighter_effort,
 )
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeProfileProtocol,
+    describe_invalid,
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, JsonObject
 from app.modules.agent.services.run_input_settings import (
@@ -89,11 +91,13 @@ def validated_stored_settings(stored: Mapping[str, object] | None) -> JsonObject
         provider_model_settings,
     )
 
-    layer = split_stored_settings(stored)
     try:
-        provider_model_settings(layer.wire)
+        provider_model_settings(split_stored_settings(stored).wire)
     except ValidationError as exc:
-        raise ValueError(f"model_settings is not valid: {exc}") from exc
+        # Described, not quoted: pydantic's own text repeats the input.
+        raise RuntimeProfileValidationError(
+            describe_invalid(exc, prefix="model_settings")
+        ) from None
     return dict(stored or {})
 
 

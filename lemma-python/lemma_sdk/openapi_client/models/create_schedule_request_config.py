@@ -11,7 +11,12 @@ T = TypeVar("T", bound="CreateScheduleRequestConfig")
 
 @_attrs_define
 class CreateScheduleRequestConfig:
-    """ """
+    """Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK,
+    `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the
+    schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not
+    queued.
+
+    """
 
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 

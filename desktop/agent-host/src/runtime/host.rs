@@ -303,7 +303,10 @@ impl HostRuntime {
                             Arc::clone(&self.driver),
                             self.mcp_bridge_executable.clone(),
                             Arc::clone(&global_capacity),
-                            current.max_runs,
+                            // The size the slots were made with, not the
+                            // file's latest: a limit changed while serving
+                            // would report capacity the slots do not have.
+                            self.config.max_runs,
                             shutdown_rx,
                             agents_changed_rx.clone(),
                         )?;

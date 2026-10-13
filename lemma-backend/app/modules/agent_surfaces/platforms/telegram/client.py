@@ -20,11 +20,18 @@ functional gain, so the raw client is retained intentionally.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+
 import json
 from typing import Any
 
 import httpx
 
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    TelegramCredentials,
+)
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
 from app.modules.agent_surfaces.platforms.delivery import (
     DeliveryClassification,
@@ -47,13 +54,9 @@ TELEGRAM_MESSAGE_LIMIT = 4096
 ALLOWED_UPDATES = ["message", "edited_message", "callback_query", "my_chat_member"]
 
 
-def resolve_api_base(credentials: dict[str, Any] | None) -> str:
+def resolve_api_base(credentials: CredentialsLike | None) -> str:
     """Resolve the Telegram API base, honoring a credential override."""
-    if credentials:
-        candidate = str(credentials.get("api_base_url") or "").strip()
-        if candidate:
-            return candidate
-    return _TELEGRAM_API_BASE
+    return TelegramCredentials.of(credentials).api_base_url or _TELEGRAM_API_BASE
 
 
 def normalize_bot_base_url(api_base: str | None, bot_token: str) -> str:
@@ -152,11 +155,17 @@ class TelegramClient:
 
     @classmethod
     def from_credentials(
-        cls, credentials: dict[str, Any], *, timeout: float = 10.0
+        cls,
+        credentials: CredentialsLike,
+        *,
+        timeout: float = 10.0,
     ) -> "TelegramClient":
+        """A client for this bot. The token is revealed here, into a client
+        built for the call at hand."""
+        telegram = TelegramCredentials.of(credentials)
         return cls(
-            bot_token=str(credentials.get("bot_token") or ""),
-            api_base=resolve_api_base(credentials),
+            bot_token=reveal_secret(telegram.bot_token) or "",
+            api_base=telegram.api_base_url or _TELEGRAM_API_BASE,
             timeout=timeout,
         )
 
@@ -185,7 +194,7 @@ class TelegramClient:
         if client is not None:
             response = await client.post(url, json=payload)
         else:
-            async with httpx.AsyncClient(timeout=self._timeout) as own_client:
+            async with outbound_http(self._timeout) as own_client:
                 response = await own_client.post(url, json=payload)
         return self._parse(method, response)
 
@@ -210,7 +219,7 @@ class TelegramClient:
             for key, value in fields.items()
         }
         await assert_safe_api_base(self.base_url, platform="Telegram")
-        async with httpx.AsyncClient(timeout=timeout or self._timeout) as client:
+        async with outbound_http(timeout or self._timeout) as client:
             response = await client.post(
                 f"{self.base_url}/{method}",
                 data=data,

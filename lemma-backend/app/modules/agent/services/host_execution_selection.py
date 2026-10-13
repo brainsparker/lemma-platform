@@ -58,6 +58,10 @@ before each command.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import (
+    ConversationMetadataFields,
+    source_of,
+)
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
@@ -79,7 +83,7 @@ from app.modules.agent.infrastructure.run_execution_record import (
     read_run_execution,
     record_run_execution,
 )
-from app.modules.agent.services.workspace_location import resolve_workspace_location
+from app.modules.agent.domain.workspace_location import resolve_workspace_location
 from app.modules.identity.contracts.installation import is_desktop_installation
 from app.modules.workspace.contracts.host_execution import (
     HostFolder,
@@ -115,24 +119,18 @@ def opened_in_app(conversation: Conversation) -> bool:
     ``surface_platform`` and a sub-agent ``is_sub_agent``. The app stamps none.
     """
     metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
+    origin = ConversationMetadataFields.of(metadata)
+    if origin.source or origin.workflow_run_id:
+        return False
     return not any(
-        metadata.get(key)
-        for key in (
-            "source",
-            "workflow_run_id",
-            "started_by",
-            "surface_platform",
-            "is_sub_agent",
-        )
+        metadata.get(key) for key in ("started_by", "surface_platform", "is_sub_agent")
     )
 
 
 def run_source(agent_run: AgentRun) -> str | None:
     # Read as `brief_lines.run_source_of` does; not imported, to keep the
     # prompt-brief machinery out of this module's import graph.
-    run_metadata = agent_run.metadata if isinstance(agent_run.metadata, dict) else {}
-    source = run_metadata.get("source")
-    return source if isinstance(source, str) else None
+    return source_of(agent_run.metadata)
 
 
 def origin_source(earlier_sources: list[str | None]) -> str | None:

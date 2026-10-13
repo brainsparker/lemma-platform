@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import (
+    ProgressHandle,
+    ProgressHandleKind,
+)
+
 import pytest
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
@@ -99,7 +104,14 @@ async def test_finish_progress_declines_without_a_live_stream(monkeypatch):
     stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
 
     assert await stream.finish_progress(_event(), None, "answer") is False
-    assert await stream.finish_progress(_event(), {"ts": "1"}, "   ") is False
+    assert (
+        await stream.finish_progress(
+            _event(),
+            ProgressHandle(kind=ProgressHandleKind.STREAM, message_id="1"),
+            "   ",
+        )
+        is False
+    )
     assert calls["stop"] == []
 
 
@@ -239,7 +251,7 @@ async def test_streamed_text_is_a_chunk_not_top_level_markdown(monkeypatch):
     ]
     assert first.appended is True
     assert second.appended is True
-    assert second.handle["streamed_text"] is True
+    assert second.handle.streamed_text is True
 
 
 async def test_failed_stream_append_is_reported_and_can_be_retried(monkeypatch):
@@ -256,11 +268,9 @@ async def test_failed_stream_append_is_reported_and_can_be_retried(monkeypatch):
 
     monkeypatch.setattr(AsyncWebClient, "chat_appendStream", flaky_append)
     stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
-    handle = {
-        "ts": "200.5",
-        "channel": "C1",
-        "stream": True,
-    }
+    handle = ProgressHandle(
+        kind=ProgressHandleKind.STREAM, message_id="200.5", channel_id="C1"
+    )
 
     failed = await stream.append_stream_text(_event(), handle, "kept")
     retried = await stream.append_stream_text(_event(), failed.handle, "kept")

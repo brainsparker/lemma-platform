@@ -28,11 +28,13 @@ from app.modules.agent.domain.agent_host_readiness import (
     harness_refusal,
     host_refusal,
 )
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_selections,
 )
 from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
+    HostRowLock,
 )
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_COMMAND_TTL_SECONDS,
@@ -62,6 +64,14 @@ async def enqueue_run(
     The lease is keyed by ``run_id``, so a redispatch of the same run finds the
     existing lease and returns its command rather than creating a second one:
     double-dispatch is structurally impossible, not merely guarded.
+
+    Lock order. The lease read below locks a row only when the run was already
+    dispatched, and that path returns without touching the host. A new run
+    locks nothing until the host row, taken ``FOR SHARE``
+    (``HostRowLock.SHARE``), and then only inserts. So admission never holds a
+    lease while it waits for the host, and the host lock it takes waits only
+    for a revoke or a heartbeat write, never for another admission or a
+    command insert.
     """
     session = uow.session
     timestamp = now or utcnow()
@@ -162,7 +172,12 @@ async def _require_admissible_harness(
     now: datetime,
 ) -> None:
     host_repository = AgentHostRepository(uow)
-    host = await host_repository.require(host_id, for_update=True)
+    # SHARE, not UPDATE: it is held until commit only so a revoke or a status
+    # change cannot land between this check and the enqueue, and SHARE already
+    # blocks both. UPDATE would also queue every concurrent admission behind
+    # this one and block every command insert's foreign key on this host --
+    # which is how twenty runs started together on one host deadlocked.
+    host = await host_repository.require(host_id, lock=HostRowLock.SHARE)
     if host.revoked_at is not None:
         raise AgentHostRunConflict(
             f"{host.display_name} was removed from Lemma, so it cannot run agents."
@@ -197,5 +212,5 @@ async def _require_admissible_harness(
             config_options=harness.config_options or [],
             selections=run_spec.config_selections,
         )
-    except ValueError as exc:
+    except RuntimeProfileValidationError as exc:
         raise AgentHostRunConflict(str(exc)) from exc

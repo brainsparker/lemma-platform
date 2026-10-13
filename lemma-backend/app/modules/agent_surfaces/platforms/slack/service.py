@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    SlackReplyTarget,
+    reply_target_as,
+)
+
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SlackCredentials,
+)
+
 from typing import Any
 from uuid import uuid4
 
@@ -53,7 +63,15 @@ from app.modules.agent_surfaces.platforms.slack.client import (
     slack_retry_after,
     slack_scopes,
 )
+from app.modules.agent_surfaces.platforms.slack.decision_cards import (
+    remember_slack_card,
+    retire_slack_card,
+)
 from app.modules.agent_surfaces.platforms.slack.files import SlackFilesMixin
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -75,21 +93,23 @@ def _ephemeral_target(metadata: dict[str, object] | None) -> str:
 
 
 class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
-    def __init__(self, *, credentials: dict[str, Any], parser=None) -> None:
+    def __init__(self, *, credentials: CredentialsLike, parser=None) -> None:
         if parser is None:
             from app.modules.agent_surfaces.platforms.slack.parser import (
                 SlackMessageParser,
             )
 
             parser = SlackMessageParser()
-        self.credentials = credentials
+        self.credentials = SlackCredentials.of(credentials)
         self.parser = parser
         self._retry_policy = RetryPolicy()
 
     async def _post_message(
         self, client: AsyncWebClient, payload: SlackMessagePayload
-    ) -> None:
+    ) -> str | None:
         """Post one message, retrying the failures Slack expects us to retry.
+
+        Returns the posted message's ``ts``, or None for an ephemeral.
 
         Slack limits ``chat.postMessage`` per channel and answers a throttled
         call with 429 and a ``Retry-After`` header. Without this the throttle
@@ -116,12 +136,18 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
             if user
             else (lambda: client.chat_postMessage(**payload))
         )
-        await with_retry(
+        response = await with_retry(
             send,
             policy=self._retry_policy,
             classify=classify_slack_error,
             retry_after=slack_retry_after,
         )
+        # The message's `ts` is how it is edited later (a card's buttons taken
+        # away with `chat.update`). An ephemeral has none worth keeping.
+        if user:
+            return None
+        ts = response.get("ts") if response is not None else None
+        return str(ts) if ts else None
 
     async def fetch_sender_profile(
         self,
@@ -188,7 +214,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
             if (metadata or {}).get("private_onboarding"):
                 raise RuntimeError(
@@ -200,7 +226,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
             raise unsendable("Slack", access_token=token, channel=channel)
 
         client = await build_slack_client(self.credentials)
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         identity_kwargs = slack_customized_message_kwargs(
             self.credentials,
             (metadata or {}).get("agent_display_name"),
@@ -291,7 +317,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
     ) -> bool:
         """Post a resource as a Block Kit card. Always a card, so always True."""
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
             raise unsendable("Slack", access_token=token, channel=channel)
 
@@ -304,7 +330,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                 "text": render_plan.to_caption(),
                 "blocks": _display_resource_blocks(render_plan),
             }
-            thread_ts = event.reply_target.get("thread_ts")
+            thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
             if thread_ts:
                 payload["thread_ts"] = thread_ts
             payload.update(
@@ -332,7 +358,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
     ) -> bool:
         """Render ask_user questions as Block Kit selects + a Submit button."""
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel or not question_blocks_fit(question_plan):
             return False
         client = await build_slack_client(self.credentials)
@@ -341,7 +367,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
             "text": question_plan.title,
             "blocks": _question_blocks(question_plan),
         }
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         if thread_ts:
             payload["thread_ts"] = thread_ts
         payload.update(
@@ -351,7 +377,8 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                 (metadata or {}).get("agent_icon_url"),
             )
         )
-        await self._post_message(client, payload)
+        ts = await self._post_message(client, payload)
+        await remember_slack_card(question_plan.callback_id, ts, payload)
         return True
 
     async def _render_decision(
@@ -363,7 +390,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
     ) -> bool:
         """Render a request_approval prompt as Block Kit Approve/Deny buttons."""
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
             return False
         client = await build_slack_client(self.credentials)
@@ -372,7 +399,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
             "text": f"Approval needed: {approval_plan.title}",
             "blocks": _approval_blocks(approval_plan),
         }
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         if thread_ts:
             payload["thread_ts"] = thread_ts
         payload.update(
@@ -382,8 +409,17 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                 (metadata or {}).get("agent_icon_url"),
             )
         )
-        await self._post_message(client, payload)
+        ts = await self._post_message(client, payload)
+        await remember_slack_card(approval_plan.callback_id, ts, payload)
         return True
+
+    async def retire_decision_card(
+        self, handle: DecisionCardHandle, reason: CardRetirement
+    ) -> None:
+        """Rewrite a finished pause's card without its controls."""
+        await retire_slack_card(
+            await build_slack_client(self.credentials), handle, reason
+        )
 
     async def add_processing_indicator(
         self,
@@ -393,9 +429,9 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
     ) -> None:
         del metadata  # Part of the adapter interface; the bubble text is fixed.
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         timestamp = event.external_message_id
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         if not token or not channel or not timestamp:
             logger.debug(
                 "agent_surfaces.service.slack_add_processing_indicator_skipped.diagnostic"

@@ -13,12 +13,20 @@ from pydantic_ai.exceptions import ModelHTTPError
 from app.core.domain.errors import DomainError
 
 MAX_PROVIDER_ATTEMPTS = 3
+
+# Every check names both HTTP stacks. The provider SDKs run on `httpx2`, other
+# callers still raise `httpx`, and neither hierarchy subclasses the other, so a
+# check that names one silently misses the other's failures.
+_TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
+    httpx.TransportError,
+    httpx2.TransportError,
+)
+_STATUS_ERRORS = (httpx.HTTPStatusError, httpx2.HTTPStatusError)
+
 PROVIDER_ERRORS = (
     ModelHTTPError,
-    httpx.TransportError,
-    httpx.HTTPStatusError,
-    httpx2.TransportError,
-    httpx2.HTTPStatusError,
+    *_TRANSPORT_ERRORS,
+    *_STATUS_ERRORS,
     OpenAIConnectionError,
     AnthropicConnectionError,
     TimeoutError,
@@ -40,8 +48,7 @@ _RETRYABLE_STATUSES = frozenset({408, 409, 429})
 #: partial stream to reset, and retrying it here is what buys the ``Retry-After``
 #: handling above.
 _HARNESS_OWNED_DROPS = (
-    httpx.TransportError,
-    httpx2.TransportError,
+    *_TRANSPORT_ERRORS,
     OpenAIConnectionError,
     AnthropicConnectionError,
     TimeoutError,
@@ -80,16 +87,14 @@ def retry_delay(exc: Exception, attempt: int) -> float | None:
             if seconds is not None and math.isfinite(seconds):
                 return min(60.0, max(0.0, seconds))
             return min(30.0, 2.0**attempt)
-        if isinstance(current, (httpx.HTTPStatusError, httpx2.HTTPStatusError)):
+        if isinstance(current, _STATUS_ERRORS):
             if (
                 current.response.status_code not in _RETRYABLE_STATUSES
                 and current.response.status_code < 500
             ):
                 return None
             return _header_delay(current.response.headers.get("retry-after"), attempt)
-        if isinstance(
-            current, (httpx.TransportError, httpx2.TransportError, TimeoutError)
-        ):
+        if isinstance(current, (*_TRANSPORT_ERRORS, TimeoutError)):
             return min(30.0, 2.0**attempt)
         current = current.__cause__
     return None
@@ -115,7 +120,7 @@ def confirmed_rejection(exc: Exception) -> bool:
     """A validation/authentication/rate-limit response rejected this dispatch."""
     if isinstance(exc, ModelHTTPError):
         status = exc.status_code
-    elif isinstance(exc, (httpx.HTTPStatusError, httpx2.HTTPStatusError)):
+    elif isinstance(exc, _STATUS_ERRORS):
         status = exc.response.status_code
     else:
         return False

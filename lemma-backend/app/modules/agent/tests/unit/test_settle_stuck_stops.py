@@ -15,7 +15,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
+from app.modules.agent.infrastructure.repositories.stuck_stops import (
     settle_stuck_stops,
 )
 

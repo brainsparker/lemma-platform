@@ -12,9 +12,9 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
-    AzureOpenAIRuntimeConfig,
     OpenAICompatibleRuntimeConfig,
     RuntimeModelCatalogEntry,
     RuntimeProfileKind,
@@ -54,18 +54,13 @@ def test_the_internal_runtime_snapshot_keeps_secrets_out_of_its_repr() -> None:
     assert "SECRET::" not in repr(resolved)
 
 
-def _profile(config: OpenAICompatibleRuntimeConfig | AzureOpenAIRuntimeConfig):
-    protocol = (
-        RuntimeProfileProtocol.AZURE_OPENAI
-        if isinstance(config, AzureOpenAIRuntimeConfig)
-        else RuntimeProfileProtocol.OPENAI_COMPATIBLE
-    )
+def _profile(config: OpenAICompatibleRuntimeConfig):
     return AgentRuntimeProfile(
         id=str(uuid4()),
         organization_id=uuid4(),
         scope=RuntimeProfileScope.ORGANIZATION,
         kind=RuntimeProfileKind.MODEL_PROVIDER,
-        protocol=protocol,
+        protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE,
         name="Gateway",
         default_model_name="model-a",
         model_catalog=[
@@ -86,21 +81,6 @@ def test_the_listing_strips_userinfo_and_query_from_the_base_url() -> None:
 
     assert config["base_url"] == "https://proxy.example.com:8443/v1"
     assert "pw" not in str(config) and "abc" not in str(config)
-
-
-def test_the_listing_strips_secrets_from_an_azure_endpoint() -> None:
-    profile = _profile(
-        AzureOpenAIRuntimeConfig(
-            azure_endpoint="https://admin:hunter2@res.example.com/?sig=xyz",
-            azure_version="2024-10-21",
-            deployment_id="prod",
-        )
-    )
-
-    config = profile.public_dict()["config"]
-
-    assert config["azure_endpoint"] == "https://res.example.com/"
-    assert (config["azure_version"], config["deployment_id"]) == ("2024-10-21", "prod")
 
 
 def test_the_listing_keeps_numeric_tuning_rather_than_masking_it() -> None:
@@ -162,7 +142,7 @@ def test_an_edit_carrying_the_old_mask_is_refused(
         field: value,
     }
 
-    with pytest.raises(ValueError, match="<redacted>"):
+    with pytest.raises(RuntimeProfileValidationError, match="<redacted>"):
         resolve_provider_patch(
             profile,
             profile.config,

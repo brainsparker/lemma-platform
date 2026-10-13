@@ -172,7 +172,11 @@ async def test_a_second_agent_in_one_pod_may_also_have_a_mailbox():
 
     repository = _Repository(first)
 
-    await ensure_unique_org_credential_binding(second, surface_repository=repository)
+    allowed = await ensure_unique_org_credential_binding(
+        second, surface_repository=repository
+    )
+
+    assert allowed is None
 
 
 async def test_a_custom_credential_surface_is_not_subject_to_the_system_rule():

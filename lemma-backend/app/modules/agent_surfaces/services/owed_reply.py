@@ -13,6 +13,14 @@ platform asked for. Each attempt claims the reply in Redis first, and a
 delivered reply is marked sent there, so a redelivered job never posts it
 twice.
 
+A queued job alone does not survive the worker that holds it: a deferred job
+lost with its worker took the answer with it. So the debt is also written into
+the conversation's metadata (``surface_owed_reply``) *before* the job is
+queued -- the text, the attempt, and when it falls due -- and cleared once the
+reply lands or is given up. A sweep (``owed_reply_sweep``) re-queues any that
+fell due long ago and was never paid; the claim above keeps that from ever
+posting it twice.
+
 What is not covered, on purpose: a reply that was partly delivered (sending it
 again repeats the part the person has), a permanent refusal (it will be refused
 again), and a worker that dies between the run ending and the observer's send
@@ -28,9 +36,15 @@ from uuid import UUID
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.config import settings
 from app.core.domain.job_queue import JobQueuePort
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
+from app.modules.agent.contracts import (
+    conversation_metadata_records as metadata_records,
+)
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import OWED_REPLY_CLAIMS, surface_caches
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -70,32 +84,36 @@ _ATTEMPT_ERRORS: tuple[type[BaseException], ...] = (
     *PLATFORM_TRANSPORT_ERRORS,
 )
 
-_claims_cache: RedisJsonCache | None = None
-
 
 def _claims() -> RedisJsonCache:
-    global _claims_cache
-    if _claims_cache is None or _claims_cache._redis_url != settings.redis_url:
-        _claims_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:owed-reply",
-            ttl_seconds=_SENT_TTL_SECONDS,
-        )
-    return _claims_cache
+    return surface_caches.get(OWED_REPLY_CLAIMS)
+
+
+#: The conversation metadata key the debt is written under.
+OWED_REPLY_KEY = "surface_owed_reply"
 
 
 class OwedReply(BaseModel):
-    """One final answer still to be delivered."""
+    """One final answer still to be delivered.
+
+    The job's payload, and also what is written under ``OWED_REPLY_KEY``.
+    """
 
     conversation_id: UUID
     agent_run_id: UUID | None
     message: str
     #: Deferred attempts already made; the inline send is not counted.
     attempt: int = 0
+    #: When the attempt it is queued for falls due. What the sweep reads.
+    next_at: datetime | None = None
 
     @property
     def key(self) -> str:
         return f"{self.conversation_id}:{self.agent_run_id or 'no-run'}"
+
+    def identity(self) -> dict[str, str | None]:
+        """What tells this reply from a later one owed in the same conversation."""
+        return {"agent_run_id": str(self.agent_run_id) if self.agent_run_id else None}
 
 
 def owes_a_retry(outcome: SendOutcome) -> bool:
@@ -103,28 +121,33 @@ def owes_a_retry(outcome: SendOutcome) -> bool:
     return outcome.gave_up_transient and not outcome.partial
 
 
+def _default_queue() -> JobQueuePort:
+    from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
+
+    return get_streaq_job_queue()
+
+
 async def owe_reply(
     owed: OwedReply,
     *,
     retry_after: float | None,
+    uow_factory: UnitOfWorkFactory,
     job_queue: JobQueuePort | None = None,
 ) -> bool:
-    """Schedule the next attempt at an owed reply. False when none is left."""
+    """Schedule the next attempt at an owed reply. False when none is left.
+
+    Written down first and queued second: a job that is then lost leaves a
+    record the sweep finds, where the other order could leave a queued job
+    and no record -- or, had the queue failed, neither.
+    """
     if owed.attempt >= len(_RETRY_DELAYS_SECONDS):
         return False
     delay = max(_RETRY_DELAYS_SECONDS[owed.attempt], retry_after or 0.0)
-    if job_queue is None:
-        from app.core.infrastructure.jobs.streaq_job_queue import (
-            get_streaq_job_queue,
-        )
-
-        job_queue = get_streaq_job_queue()
-    await job_queue.enqueue(
-        DELIVER_OWED_REPLY_JOB,
-        payload=owed.model_dump(mode="json"),
-        _job_id=f"owed-reply:{owed.key}:{owed.attempt}",
-        _defer_until=datetime.now(UTC) + timedelta(seconds=delay),
+    scheduled = owed.model_copy(
+        update={"next_at": datetime.now(UTC) + timedelta(seconds=delay)}
     )
+    await record_owed_reply(scheduled, uow_factory=uow_factory)
+    await enqueue_owed_reply(scheduled, job_queue=job_queue)
     logger.info(
         "agent_surfaces.owed_reply.scheduled",
         conversation_id=str(owed.conversation_id),
@@ -132,6 +155,54 @@ async def owe_reply(
         delay_seconds=delay,
     )
     return True
+
+
+async def enqueue_owed_reply(
+    owed: OwedReply, *, job_queue: JobQueuePort | None = None, job_suffix: str = ""
+) -> None:
+    """Queue the attempt ``owed`` names, for when it falls due.
+
+    ``job_suffix`` gives a re-queue its own job id, so the queue does not take
+    it for the lost attempt whose id it may still remember.
+    """
+    await (job_queue or _default_queue()).enqueue(
+        DELIVER_OWED_REPLY_JOB,
+        payload=owed.model_dump(mode="json"),
+        _job_id=f"owed-reply:{owed.key}:{owed.attempt}{job_suffix}",
+        _defer_until=owed.next_at or datetime.now(UTC),
+    )
+
+
+async def record_owed_reply(owed: OwedReply, *, uow_factory: UnitOfWorkFactory) -> None:
+    """Write the debt into the conversation. Never raises: the queued job
+    still delivers it, only without a record to outlive the worker by."""
+    try:
+        async with uow_factory() as uow:
+            await agent_conversations.set_conversation_metadata_value(
+                uow, owed.conversation_id, OWED_REPLY_KEY, owed
+            )
+    except SQLAlchemyError:
+        logger.warning(
+            "agent_surfaces.owed_reply.not_recorded.degraded",
+            conversation_id=str(owed.conversation_id),
+            exc_info=True,
+        )
+
+
+async def forget_owed_reply(owed: OwedReply, *, uow_factory: UnitOfWorkFactory) -> None:
+    """Clear the debt once paid or given up. Never raises: a record left
+    behind is re-queued by the sweep, whose attempt then finds it sent."""
+    try:
+        async with uow_factory() as uow:
+            await metadata_records.forget_conversation_metadata_record(
+                uow, owed.conversation_id, OWED_REPLY_KEY, matching=owed.identity()
+            )
+    except SQLAlchemyError:
+        logger.warning(
+            "agent_surfaces.owed_reply.not_forgotten.degraded",
+            conversation_id=str(owed.conversation_id),
+            exc_info=True,
+        )
 
 
 async def deliver_owed_reply(
@@ -144,6 +215,9 @@ async def deliver_owed_reply(
     """One deferred attempt: send the reply once, or owe it again."""
     claims = _claims()
     if await claims.get_raw(owed.key) == _SENT:
+        # Sent by an earlier attempt whose record outlived it -- a clear that
+        # failed, or a re-queue from the sweep. The record is all that is left.
+        await forget_owed_reply(owed, uow_factory=uow_factory)
         return
     if not await claims.set_raw_if_absent(
         owed.key, _SENDING, ttl_seconds=_SENDING_TTL_SECONDS
@@ -172,6 +246,7 @@ async def deliver_owed_reply(
             delivered = False
     if delivered:
         await claims.set_raw(owed.key, _SENT, ttl_seconds=_SENT_TTL_SECONDS)
+        await forget_owed_reply(owed, uow_factory=uow_factory)
         await discard_display_paths(owed.conversation_id, run)
         logger.info(
             "agent_surfaces.owed_reply.delivered",
@@ -183,6 +258,7 @@ async def deliver_owed_reply(
     retried = owes_a_retry(outcome) and await owe_reply(
         owed.model_copy(update={"attempt": owed.attempt + 1}),
         retry_after=outcome.retry_after,
+        uow_factory=uow_factory,
         job_queue=job_queue,
     )
     if not retried:
@@ -193,4 +269,5 @@ async def deliver_owed_reply(
             attempts=owed.attempt + 1,
             partial=outcome.partial,
         )
+        await forget_owed_reply(owed, uow_factory=uow_factory)
         await discard_display_paths(owed.conversation_id, run)

@@ -22,12 +22,10 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     JsonValue,
 )
+from app.modules.agent.domain.conversation_lifecycle import conversation_status_for
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
 from app.modules.agent.infrastructure.repositories.conversation_activity import (
     touch_activity as _touch_activity,
-)
-from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
-    reconcile_conversation_to_terminal,
 )
 
 
@@ -75,7 +73,6 @@ async def finish_agent_run(
                 session,
                 conversation_id=row.conversation_id,
                 current_status=current_status,
-                conversation_status=conversation_status,
             )
 
         next_status = status
@@ -111,8 +108,8 @@ async def finish_agent_run(
         )
         if moved.scalar_one_or_none() is None:
             continue
-        resolved_conversation_status = conversation_status or ConversationStatus(
-            next_status.value
+        resolved_conversation_status = conversation_status or conversation_status_for(
+            next_status
         )
         await update_conversation_status(
             session,
@@ -134,27 +131,24 @@ async def _already_finished(
     *,
     conversation_id: UUID,
     current_status: AgentRunStatus,
-    conversation_status: ConversationStatus | None,
 ) -> AgentRunFinishResult:
-    """Nothing to end — but bring a conversation left out of step into line.
+    """Nothing to end: report the conversation as it stands, and write nothing.
 
-    This used to report a `conversation_status` it had only *inferred* from
-    the run row and never written, so a conversation out of step stayed
-    that way. Nothing else recovers one: the orphan sweep keys on
-    `agent_runs.status`, so a terminal run is invisible to it. This is the
-    only place seeing both rows.
+    The status the run's own finish wrote, in the same transaction as the run.
+    That is what keeps the two in step, so a second finalize reading it back
+    has nothing to repair.
     """
-    resolved = conversation_status or ConversationStatus(current_status.value)
-    repaired = await reconcile_conversation_to_terminal(
-        session,
-        conversation_id=conversation_id,
-        status=resolved,
+    stored = await session.scalar(
+        select(ConversationModel.status).where(ConversationModel.id == conversation_id)
     )
     return AgentRunFinishResult(
         status=current_status,
-        conversation_status=resolved,
+        conversation_status=(
+            ConversationStatus(stored)
+            if stored is not None
+            else conversation_status_for(current_status)
+        ),
         updated=False,
-        conversation_repaired=repaired,
     )
 
 

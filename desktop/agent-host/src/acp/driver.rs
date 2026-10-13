@@ -12,7 +12,7 @@ use super::{
     plan_configuration, prompt_blocks, prompt_turn, scoped_mcp_tool_names, session_to_resume,
     steering_advertised, tool_call_id,
 };
-use super::{lemma_cli_bin, session_options};
+use super::{PreApprovals, session_options};
 use crate::normalize::{Dialect, Normalizer, RunContext};
 use crate::protocol::RunSpec;
 
@@ -95,7 +95,7 @@ impl AgentDriver for AcpDriver {
             &request.adapter.environment(),
             &request.run_spec,
             request.own_settings,
-            lemma_cli_bin(&request.run_spec).as_deref(),
+            request.lemma_cli_bin.as_deref(),
         );
         let agent = build_agent(
             &request.adapter,
@@ -152,6 +152,7 @@ impl AgentDriver for AcpDriver {
                 .then(|| Arc::new(scoped_mcp_tool_names(&run_spec.mcp))),
             callbacks: Arc::clone(&callbacks),
             normalizer: Arc::clone(&normalizer),
+            pre_approvals: PreApprovals::of(&run_spec),
         };
         let turn_updates = updates.clone();
         let owed_callbacks = Arc::clone(&callbacks);
@@ -341,6 +342,8 @@ struct PermissionHandler {
     scoped_mcp_tools: Option<Arc<std::collections::HashSet<String>>>,
     callbacks: Arc<dyn AcpCallbacks>,
     normalizer: SharedNormalizer,
+    /// Approvals the person gave after an earlier turn that asked had ended.
+    pre_approvals: PreApprovals,
 }
 
 enum Triage {
@@ -413,6 +416,19 @@ impl PermissionHandler {
                     self.sequence.fetch_add(1, Ordering::Relaxed)
                 )
             });
+        // The person already said yes to exactly this, after the turn that
+        // asked had ended. It goes on the record as approved earlier -- so the
+        // transcript says why nobody was asked -- and is allowed this once.
+        if let Some(approval) = self.pre_approvals.take(&payload, &request.options) {
+            payload.insert(
+                "pre_approved".to_owned(),
+                serde_json::json!({ "approval_id": approval.approval_id }),
+            );
+            self.callbacks
+                .event(EventType::PermissionRequest, Some(request_id), payload)
+                .map_err(internal)?;
+            return Ok(Triage::Answer(allow_once(&request.options)));
+        }
         self.callbacks
             .event(
                 EventType::PermissionRequest,

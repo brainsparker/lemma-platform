@@ -7,6 +7,9 @@
  */
 export type UpdateScheduleRequest = {
     agent_name?: (string | null);
+    /**
+     * Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued.
+     */
     config?: (Record<string, any> | null);
     filter_instruction?: (string | null);
     filter_output_schema?: (Record<string, any> | null);

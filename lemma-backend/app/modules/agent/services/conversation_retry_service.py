@@ -1,7 +1,14 @@
-"""Retry orchestration for failed conversation runs."""
+"""Retrying a conversation's failed run.
+
+A collaborator of ``ConversationService`` like ``TurnCoordinator``, not a
+subclass of it: it needs the repositories and the turn's runtime and usage
+checks, and nothing else the service carries.
+"""
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import source_of
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.authorization.permissions import Permissions
@@ -16,12 +23,31 @@ from app.modules.agent.services.conversation_access import (
     authorized_conversation,
     resolve_agent,
 )
-from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.runtime_availability import turn_runtime
 
+if TYPE_CHECKING:
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent.domain.ports import (
+        AgentRepository,
+        ConversationRepository,
+    )
+    from app.modules.agent.services.conversation_turns import TurnCoordinator
 
-class ConversationRetryService(ConversationService):
-    """Conversation service extension for explicit failed-run retries."""
+
+class RetryCoordinator:
+    """Starts a fresh run in place of a conversation's failed latest one."""
+
+    def __init__(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        conversation_repository: ConversationRepository,
+        agent_repository: AgentRepository,
+        turns: TurnCoordinator,
+    ) -> None:
+        self.uow = uow
+        self.conversation_repository = conversation_repository
+        self.agent_repository = agent_repository
+        self.turns = turns
 
     async def retry_failed_run(
         self,
@@ -45,8 +71,7 @@ class ConversationRetryService(ConversationService):
             conversation.id
         )
         if active_run is not None:
-            active_metadata = active_run.metadata or {}
-            if active_metadata.get("source") == "manual_retry":
+            if source_of(active_run.metadata) == "manual_retry":
                 return AgentRunStartResult(
                     conversation_id=conversation.id,
                     agent_run_id=active_run.id,

@@ -82,7 +82,6 @@ async def start_followup_run_for_queued_messages(
                     uow=uow,
                     conversation_repository=conversation_repository,
                     agent_repository=AgentRepository(uow),
-                    authorization_service=create_authorization_data_service(uow),
                     usage_service=build_usage_service(uow),
                 )
                 started = await service.turns.start_queued_followup(

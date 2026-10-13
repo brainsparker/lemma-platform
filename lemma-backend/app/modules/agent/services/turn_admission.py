@@ -25,7 +25,10 @@ from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
-from app.modules.agent.domain.ports import ConversationRepository
+from app.modules.agent.domain.conversation_ports import (
+    ConversationStatusWrite,
+    PausesHoldingATurn,
+)
 from app.modules.agent.domain.private_notes import (
     NOTE_IN_DM_KEY,
     WRITTEN_IN_LEMMA_KEY,
@@ -105,7 +108,7 @@ class HeldTurn:
 
 
 async def pause_holding_the_turn(
-    repository: ConversationRepository,
+    repository: PausesHoldingATurn,
     conversation_id: UUID,
     *,
     include_undecided: bool,
@@ -138,7 +141,7 @@ async def pause_holding_the_turn(
 
 async def hold_behind(
     uow: SqlAlchemyUnitOfWork,
-    repository: ConversationRepository,
+    repository: ConversationStatusWrite,
     conversation: Conversation,
     held: HeldTurn,
 ) -> None:

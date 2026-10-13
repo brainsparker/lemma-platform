@@ -26,6 +26,8 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.models import (
+    ProgressHandle,
+    ProgressHandleKind,
     SurfaceApprovalButton,
     SurfaceApprovalRenderPlan,
     SurfaceDisplayAction,
@@ -46,9 +48,7 @@ from app.modules.agent_surfaces.platforms.slack.streaming import (
 )
 from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
 from app.modules.agent_surfaces.platforms.telegram import outbound
-from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
-    _CALLBACK_TOKEN_TTL_SECONDS,
-)
+from app.modules.agent_surfaces.caches import TELEGRAM_CALLBACK_TOKENS
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TelegramApiError,
     TelegramClient,
@@ -500,16 +500,17 @@ def callback_tokens():
 
     from app.core.config import settings
     from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
-    from app.modules.agent_surfaces.platforms.telegram import callback_token_store
+    from app.modules.agent_surfaces.caches import (
+        TELEGRAM_CALLBACK_TOKENS,
+        surface_caches,
+    )
 
     cache = RedisJsonCache(
         redis_url=settings.redis_url, key_prefix="test:cb", ttl_seconds=60
     )
     cache._redis = fakeredis.FakeAsyncRedis(decode_responses=True)
-    previous = callback_token_store._token_store
-    callback_token_store._token_store = cache
-    yield cache
-    callback_token_store._token_store = previous
+    with surface_caches.substituted(TELEGRAM_CALLBACK_TOKENS, cache):
+        yield cache
 
 
 async def test_a_telegram_second_question_that_fails_does_not_resend_the_first(
@@ -622,7 +623,7 @@ async def test_a_dead_telegram_api_lets_the_typing_indicator_say_so():
 
 
 async def test_telegram_buttons_outlive_the_hour_a_pause_can_last():
-    assert _CALLBACK_TOKEN_TTL_SECONDS >= 24 * 60 * 60
+    assert TELEGRAM_CALLBACK_TOKENS.ttl_seconds >= 24 * 60 * 60
 
 
 async def test_a_telegram_resource_is_a_card_only_when_it_has_a_link():
@@ -749,7 +750,11 @@ async def test_a_timeout_closing_a_slack_stream_is_a_warning_and_a_fallback(
     surface = SlackStreamSurface(credentials={"access_token": "xoxb-1"})
 
     finished = await surface.finish_progress(
-        _slack_event(), {"ts": "2.0", "channel": "C1", "stream": True}, "The answer."
+        _slack_event(),
+        ProgressHandle(
+            kind=ProgressHandleKind.STREAM, message_id="2.0", channel_id="C1"
+        ),
+        "The answer.",
     )
 
     assert finished is False

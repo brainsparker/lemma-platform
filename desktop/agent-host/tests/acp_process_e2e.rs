@@ -119,6 +119,7 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
                 adapter,
                 agent_environment: std::collections::BTreeMap::default(),
                 own_settings: false,
+                lemma_cli_bin: None,
                 run_spec: RunSpec {
                     agent_run_id: Uuid::new_v4(),
                     conversation_id: Uuid::new_v4(),
@@ -134,6 +135,7 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
                     mcp: Value::Null,
                     run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),
                     system_prompt_delivery: None,
+                    pre_approvals: Vec::new(),
                 },
                 scratch_directory: directory.path().join("run"),
                 mcp_server: None,
@@ -182,6 +184,7 @@ async fn every_harness_opens_and_resumes_in_the_same_saved_directory() {
             adapter,
             agent_environment: std::collections::BTreeMap::default(),
             own_settings: false,
+            lemma_cli_bin: None,
             run_spec: RunSpec {
                 agent_run_id: Uuid::new_v4(),
                 conversation_id: Uuid::new_v4(),
@@ -197,6 +200,7 @@ async fn every_harness_opens_and_resumes_in_the_same_saved_directory() {
                 mcp: Value::Null,
                 run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),
                 system_prompt_delivery: None,
+                pre_approvals: Vec::new(),
             },
             scratch_directory: cwd.clone(),
             mcp_server: None,
@@ -273,6 +277,7 @@ async fn a_forgotten_session_is_answered_and_reported_rather_than_silently_lost(
                 adapter,
                 agent_environment: std::collections::BTreeMap::default(),
                 own_settings: false,
+                lemma_cli_bin: None,
                 run_spec: RunSpec {
                     agent_run_id: Uuid::new_v4(),
                     conversation_id: Uuid::new_v4(),
@@ -292,6 +297,7 @@ async fn a_forgotten_session_is_answered_and_reported_rather_than_silently_lost(
                     system_prompt_delivery: Some(
                         lemma_agent_host::protocol::NEW_SESSION_ONLY.to_owned(),
                     ),
+                    pre_approvals: Vec::new(),
                 },
                 scratch_directory: cwd,
                 mcp_server: None,

@@ -16,16 +16,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from typing import Any
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote_plus
 
-import sqlglot
 from asyncpg.exceptions import PostgresError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-from sqlglot import exp
-from sqlglot.errors import SqlglotError
 
 from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
@@ -36,31 +34,47 @@ from app.modules.connectors.domain.errors import (
     OperationExecutionValidationError,
 )
 
+if TYPE_CHECKING:
+    from sqlglot import exp
+
 logger = get_logger(__name__)
 
+
 # Reuse the datastore read-only policy (mutation/DDL nodes forbidden anywhere).
-_FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = (
-    exp.Insert,
-    exp.Update,
-    exp.Delete,
-    exp.Merge,
-    exp.Create,
-    exp.Drop,
-    exp.Alter,
-    exp.TruncateTable,
-    exp.Grant,
-    exp.Revoke,
-    exp.Copy,
-    exp.Command,
-)
-_ALLOWED_ROOTS: tuple[type[exp.Expression], ...] = (
-    exp.Select,
-    exp.Union,
-    exp.Intersect,
-    exp.Except,
-    exp.Subquery,
-    exp.With,
-)
+# sqlglot loads on the first query, not at import: the connector registry puts
+# this module on app.app's import path, and the parser costs ~40 modules and
+# ~170 ms that starting the API does not need.
+@lru_cache(maxsize=1)
+def _forbidden_nodes() -> tuple[type[exp.Expression], ...]:
+    from sqlglot import exp
+
+    return (
+        exp.Into,
+        exp.Insert,
+        exp.Update,
+        exp.Delete,
+        exp.Merge,
+        exp.Create,
+        exp.Drop,
+        exp.Alter,
+        exp.TruncateTable,
+        exp.Grant,
+        exp.Revoke,
+        exp.Copy,
+        exp.Command,
+    )
+
+
+@lru_cache(maxsize=1)
+def _allowed_roots() -> tuple[type[exp.Expression], ...]:
+    from sqlglot import exp
+
+    return (exp.Select, exp.Union, exp.Intersect, exp.Except, exp.Subquery, exp.With)
+
+
+# Session-setting functions ride inside an otherwise read-only SELECT; the
+# datastore refuses the same one for the same reason.
+_FORBIDDEN_FUNCTIONS = frozenset({"set_config"})
 
 _DIALECT_DRIVERS = {
     "postgresql": "postgresql+asyncpg",
@@ -82,6 +96,9 @@ def _ensure_read_only(sql: str) -> None:
             f"SQL query exceeds the {_MAX_SQL_CHARS} character limit.",
             details={"reason": "query_too_long"},
         )
+    import sqlglot
+    from sqlglot.errors import SqlglotError
+
     try:
         statements = [
             s for s in sqlglot.parse(sql, dialect="postgres") if s is not None
@@ -97,10 +114,25 @@ def _ensure_read_only(sql: str) -> None:
             "Only a single SQL statement is allowed."
         )
     statement = statements[0]
-    if not isinstance(statement, _ALLOWED_ROOTS) or statement.find(*_FORBIDDEN_NODES):
+    if not isinstance(statement, _allowed_roots()) or statement.find(
+        *_forbidden_nodes()
+    ):
         raise OperationExecutionValidationError(
             "Only read-only SELECT queries are allowed."
         )
+    from sqlglot import exp
+
+    for function in statement.find_all(exp.Func):
+        # Unmodelled functions parse as Anonymous and carry their own name.
+        name = (
+            function.name
+            if isinstance(function, exp.Anonymous)
+            else function.sql_name()
+        )
+        if name.lower() in _FORBIDDEN_FUNCTIONS:
+            raise OperationExecutionValidationError(
+                f"{name}() is not allowed in connector queries."
+            )
 
 
 def _resolve_row_cap(connection_config: dict[str, Any]) -> int:

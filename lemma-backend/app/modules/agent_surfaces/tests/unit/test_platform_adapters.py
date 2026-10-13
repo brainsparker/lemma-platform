@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import (
+    ProgressHandle,
+    ProgressHandleKind,
+)
+
 from unittest.mock import AsyncMock
 
 import pytest
@@ -254,6 +259,9 @@ async def test_teams_send_message_declares_markdown_text_format(monkeypatch):
         def raise_for_status(self):
             return None
 
+        async def json(self):
+            return {"id": "activity-1"}
+
     class _Session:
         async def __aenter__(self):
             return self
@@ -320,6 +328,9 @@ async def test_teams_send_display_resource_posts_adaptive_card(monkeypatch):
 
         def raise_for_status(self):
             return None
+
+        async def json(self):
+            return {"id": "activity-1"}
 
     class _Session:
         async def __aenter__(self):
@@ -401,6 +412,9 @@ async def test_teams_end_progress_deletes_activity(monkeypatch):
         def raise_for_status(self):
             return None
 
+        async def json(self):
+            return {"id": "activity-1"}
+
     class _Session:
         async def __aenter__(self):
             return self
@@ -439,7 +453,9 @@ async def test_teams_end_progress_deletes_activity(monkeypatch):
     await adapter.end_progress(
         credentials={},
         event=event,
-        progress_handle={"activity_id": "act-99"},
+        progress_handle=ProgressHandle(
+            kind=ProgressHandleKind.MESSAGE, message_id="act-99"
+        ),
     )
 
     assert deleted["url"].endswith("/activities/act-99")

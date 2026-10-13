@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 from pydantic import HttpUrl, SecretStr
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
@@ -124,7 +125,7 @@ def resolve_provider_patch(
     )
 
 
-class KeyMustBeReenteredError(ValueError):
+class KeyMustBeReenteredError(RuntimeProfileValidationError):
     """A new provider address with the old key: refused, the key never moves.
 
     The stored key is write-only -- nobody who can edit a profile can read it
@@ -196,7 +197,9 @@ def _next_base_url(base_url, stored, *, is_anthropic: bool):
         return stored.base_url
     if base_url is None:
         if not is_anthropic:
-            raise ValueError("An OpenAI-compatible profile requires a base URL")
+            raise RuntimeProfileValidationError(
+                "An OpenAI-compatible profile requires a base URL"
+            )
         return None
     return base_url
 
@@ -212,7 +215,9 @@ def _next_credentials(*, api_key, stored_credentials, is_anthropic: bool):
         return stored_credentials
     if api_key is None or not str(api_key).strip():
         if is_anthropic:
-            raise ValueError("An Anthropic-compatible profile requires an API key")
+            raise RuntimeProfileValidationError(
+                "An Anthropic-compatible profile requires an API key"
+            )
         return None
     return ApiKeyRuntimeCredentials(api_key=SecretStr(str(api_key).strip()))
 

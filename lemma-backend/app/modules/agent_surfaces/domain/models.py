@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -308,7 +309,40 @@ class ColdEmailSendResult(BaseModel):
     reply_target: dict[str, Any] = Field(default_factory=dict)
 
 
+class ProgressHandleKind(StrEnum):
+    """What kind of thing a live progress line is, which decides how it ends."""
+
+    #: An ordinary message, edited in place and deleted at the end (Telegram,
+    #: Teams).
+    MESSAGE = "message"
+    #: Telegram's rich draft: shown while the run works, replaced by the answer,
+    #: so there is nothing to delete.
+    DRAFT = "draft"
+    #: A Slack chat stream, closed *with* the answer as one message.
+    STREAM = "stream"
+
+
+@dataclass(frozen=True, slots=True)
+class ProgressHandle:
+    """Where a live progress message is, so the next update edits it.
+
+    Each platform used to hand back a mapping of its own -- ``message_id``,
+    ``activity_id``, ``ts`` with a ``channel`` and a ``stream`` flag -- that only
+    it could read, and nothing said which keys a caller might find there.
+    """
+
+    kind: ProgressHandleKind
+    #: The platform's id for it: a Telegram message or draft id, a Teams
+    #: activity id, a Slack message ``ts``.
+    message_id: str
+    #: Where it lives, where the platform needs telling (a Slack channel).
+    channel_id: str | None = None
+    #: A stream that already carries answer text: closing it with an empty
+    #: answer still delivers.
+    streamed_text: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class StreamAppendResult:
-    handle: dict[str, Any] | None
+    handle: ProgressHandle | None
     appended: bool

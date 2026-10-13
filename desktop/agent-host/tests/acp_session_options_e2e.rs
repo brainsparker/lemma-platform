@@ -94,6 +94,7 @@ fn request(
         adapter,
         agent_environment: BTreeMap::default(),
         own_settings,
+        lemma_cli_bin: None,
         steer: lemma_agent_host::acp::SteerInbox::default(),
         run_spec: RunSpec {
             agent_run_id: Uuid::new_v4(),
@@ -110,6 +111,7 @@ fn request(
             mcp,
             run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),
             system_prompt_delivery: None,
+            pre_approvals: Vec::new(),
         },
         scratch_directory: cwd,
         mcp_server: None,
@@ -290,81 +292,161 @@ async fn opencode_keeps_the_persons_own_setup_either_way() {
     }
 }
 
+/// A folder holding an executable `bin/lemma`, as a CLI root is.
+#[cfg(unix)]
+fn cli_folder(at: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::create_dir_all(at.join("bin")).unwrap();
+    std::fs::write(at.join("bin/lemma"), "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(at.join("bin/lemma"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::canonicalize(at).unwrap()
+}
+
+/// A Mac with the CLI a server names (a host pack's) and the one shipped in
+/// the app, and a home folder holding neither.
+#[cfg(unix)]
+struct Clis {
+    directory: TempDir,
+    home: PathBuf,
+    named: PathBuf,
+    bundled: PathBuf,
+}
+
+#[cfg(unix)]
+fn clis() -> Clis {
+    let directory = TempDir::new().unwrap();
+    let home = directory.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    Clis {
+        home: std::fs::canonicalize(&home).unwrap(),
+        named: cli_folder(&directory.path().join("pack/backend")),
+        bundled: cli_folder(
+            &directory
+                .path()
+                .join("Lemma.app/Contents/Resources/lemma-cli"),
+        ),
+        directory,
+    }
+}
+
+/// The run as the runtime starts it: the server's word on the CLI in `mcp`,
+/// and the `bin/` the host chose for this pairing from it and the app.
+#[cfg(unix)]
+fn run_choosing(key: &str, log: &Path, clis: &Clis, local: bool, bundled: &Path) -> AcpRunRequest {
+    let mut run = request(
+        adapter(key, log, BTreeMap::new()),
+        clis.directory.path().join(format!("cwd-{key}-{local}")),
+        false,
+        json!({ "lemma_cli": clis.named }),
+    );
+    run.lemma_cli_bin = lemma_agent_host::lemma_cli::cli_root(
+        local,
+        run.run_spec.mcp["lemma_cli"].as_str(),
+        &[bundled.to_path_buf()],
+        &clis.home,
+    )
+    .map(|root| root.join("bin"));
+    run
+}
+
+#[cfg(unix)]
+fn allowed_tools(traffic: &[Value]) -> Value {
+    sessions(traffic)[0]["params"]["_meta"]["claudeCode"]["options"]
+        .get("allowedTools")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[cfg(unix)]
+fn first_on_path(traffic: &[Value]) -> PathBuf {
+    let path = recorded_environment(traffic)["PATH"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Behind it, the adapter's own wiring, which is how the agent is found.
+    assert!(std::env::split_paths(&path).count() > 1, "{path}");
+    std::env::split_paths(&path).next().unwrap()
+}
+
 /// Lemma's own `lemma`, when the run names one this Mac accepts, is the one
 /// the agent's shell finds first.
 #[cfg(unix)]
 #[tokio::test]
 async fn lemmas_cli_goes_first_on_the_agents_path() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let directory = TempDir::new().unwrap();
-    let cli = directory.path().join("pack/backend");
-    std::fs::create_dir_all(cli.join("bin")).unwrap();
-    std::fs::write(cli.join("bin/lemma"), "#!/bin/sh\n").unwrap();
-    std::fs::set_permissions(
-        cli.join("bin/lemma"),
-        std::fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
-    let log = directory.path().join("cursor.jsonl");
-    let run = request(
-        adapter("cursor", &log, BTreeMap::new()),
-        directory.path().join("cwd"),
-        false,
-        json!({ "lemma_cli": cli }),
-    );
+    let clis = clis();
+    let log = clis.directory.path().join("cursor.jsonl");
+    let run = run_choosing("cursor", &log, &clis, true, &clis.bundled);
     AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
 
-    let traffic = read_traffic(&log);
-    let path = recorded_environment(&traffic)["PATH"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let first = std::env::split_paths(&path).next().unwrap();
-    assert_eq!(first, std::fs::canonicalize(&cli).unwrap().join("bin"));
-    // Behind it, the adapter's own wiring, which is how the agent is found.
-    assert!(std::env::split_paths(&path).count() > 1, "{path}");
+    assert_eq!(first_on_path(&read_traffic(&log)), clis.named.join("bin"));
 }
 
 /// The run's own `lemma` raises no permission request: Claude Code is given
-/// the binary by its full path and by the name its `PATH` resolves to it.
+/// the binary by its full path and by the name its `PATH` resolves to it. On
+/// the local install's pairing that is the CLI its server names.
 #[cfg(unix)]
 #[tokio::test]
 async fn claude_code_may_run_lemmas_cli_without_asking() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let directory = TempDir::new().unwrap();
-    let cli = directory.path().join("pack/backend");
-    std::fs::create_dir_all(cli.join("bin")).unwrap();
-    std::fs::write(cli.join("bin/lemma"), "#!/bin/sh\n").unwrap();
-    std::fs::set_permissions(
-        cli.join("bin/lemma"),
-        std::fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
-    let log = directory.path().join("claude.jsonl");
-    let run = request(
-        adapter("claude-code", &log, BTreeMap::new()),
-        directory.path().join("cwd"),
-        false,
-        json!({ "lemma_cli": cli }),
-    );
+    let clis = clis();
+    let log = clis.directory.path().join("claude.jsonl");
+    let run = run_choosing("claude-code", &log, &clis, true, &clis.bundled);
     AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
 
     let traffic = read_traffic(&log);
-    let options = &sessions(&traffic)[0]["params"]["_meta"]["claudeCode"]["options"];
-    let binary = std::fs::canonicalize(&cli).unwrap().join("bin/lemma");
+    let binary = clis.named.join("bin/lemma");
     assert_eq!(
-        options["allowedTools"],
+        allowed_tools(&traffic),
         json!([format!("Bash({}:*)", binary.display()), "Bash(lemma:*)"])
     );
-    let path = recorded_environment(&traffic)["PATH"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    assert_eq!(first_on_path(&traffic).join("lemma"), binary);
+}
+
+/// A hosted workspace's run gets the CLI shipped in the app, never one its
+/// server names: that is a path on the server's machine, and which binary on
+/// this Mac runs unasked is not a remote server's to choose.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_hosted_run_may_run_the_cli_bundled_with_the_app() {
+    let clis = clis();
+    let log = clis.directory.path().join("claude-hosted.jsonl");
+    let run = run_choosing("claude-code", &log, &clis, false, &clis.bundled);
+    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+
+    let traffic = read_traffic(&log);
+    let binary = clis.bundled.join("bin/lemma");
     assert_eq!(
-        std::env::split_paths(&path).next().unwrap().join("lemma"),
-        binary
+        allowed_tools(&traffic),
+        json!([format!("Bash({}:*)", binary.display()), "Bash(lemma:*)"])
+    );
+    assert_eq!(first_on_path(&traffic).join("lemma"), binary);
+}
+
+/// An app with no CLI in it gives a hosted run no allow rule at all, rather
+/// than one naming whatever its server said.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_hosted_run_without_a_bundled_cli_is_allowed_none() {
+    let clis = clis();
+    let log = clis.directory.path().join("claude-unbundled.jsonl");
+    let missing = clis
+        .directory
+        .path()
+        .join("Other.app/Contents/Resources/lemma-cli");
+    let run = run_choosing("claude-code", &log, &clis, false, &missing);
+    assert!(run.lemma_cli_bin.is_none());
+    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+
+    let traffic = read_traffic(&log);
+    assert_eq!(allowed_tools(&traffic), Value::Null);
+    let path = recorded_environment(&traffic)
+        .get("PATH")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        !std::env::split_paths(&path).any(|entry| entry == clis.named.join("bin")),
+        "{path}"
     );
 }
 

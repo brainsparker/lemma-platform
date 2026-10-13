@@ -3009,8 +3009,43 @@
           "type": "object"
         },
         "ToolReturnContent": {
-          "oneOf": [
-            {},
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "discriminator": {
+                "mapping": {
+                  "audio-url": "#/$defs/AudioUrl",
+                  "binary": "#/$defs/BinaryContent",
+                  "document-url": "#/$defs/DocumentUrl",
+                  "image-url": "#/$defs/ImageUrl",
+                  "uploaded-file": "#/$defs/UploadedFile",
+                  "video-url": "#/$defs/VideoUrl"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ImageUrl"
+                },
+                {
+                  "$ref": "#/$defs/AudioUrl"
+                },
+                {
+                  "$ref": "#/$defs/DocumentUrl"
+                },
+                {
+                  "$ref": "#/$defs/VideoUrl"
+                },
+                {
+                  "$ref": "#/$defs/BinaryContent"
+                },
+                {
+                  "$ref": "#/$defs/UploadedFile"
+                }
+              ]
+            },
             {
               "additionalProperties": {
                 "$ref": "#/$defs/ToolReturnContent"
@@ -3022,7 +3057,8 @@
                 "$ref": "#/$defs/ToolReturnContent"
               },
               "type": "array"
-            }
+            },
+            {}
           ]
         },
         "UploadedFile": {
@@ -3773,7 +3809,7 @@
   {
     "tool_name": "spawn_subagent",
     "toolset": "SUBAGENTS",
-    "description": "Start a pod agent as a linked child conversation; returns a handle.\n\nOmit agent_name to spawn another instance of yourself for a targeted subtask.\nNon-blocking: returns {conversation_id, run_id, status}. Use interact_subagent\n(action='await') to wait, or query_subagents (mode='messages') to poll.",
+    "description": "Start a pod agent as a linked child conversation; returns a handle.\n\nOmit agent_name to spawn another instance of yourself for a targeted subtask.\nNon-blocking: returns {conversation_id, run_id, status}. Use interact_subagent\n(action='await') to wait, or query_subagents (mode='messages') to poll. If\nyou end your turn without collecting it, its result arrives later as a new\nmessage.",
     "input_schema": {
       "properties": {
         "agent_name": {

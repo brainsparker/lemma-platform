@@ -37,7 +37,12 @@ async def test_the_bridge_reads_the_runs_decision_back(db_session, scenario, dec
     db_session.add(run)
     await db_session.commit()
 
-    _agent, _conversation, ctx = await ConversationMCPService()._load_agent_context(
+    (
+        _agent,
+        _conversation,
+        ctx,
+        _grants,
+    ) = await ConversationMCPService()._load_agent_context(
         conversation_id=run.conversation_id, agent_run_id=run.id
     )
 

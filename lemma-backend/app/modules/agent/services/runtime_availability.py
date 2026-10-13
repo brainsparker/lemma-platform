@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
-from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
@@ -30,14 +29,12 @@ from app.modules.agent.infrastructure.unavailable_models import (
     UnavailableModels,
     unavailable_models,
 )
-from app.modules.agent.infrastructure.repositories import (
-    AgentRuntimeProfileRepository,
-)
 from app.modules.agent.services.pod_runtime_defaults import (
     default_agent_runtime_for_pod,
 )
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
+    runtime_profile_service_for,
     runtime_profile_unavailable_error,
 )
 from app.modules.agent.services.runtime_resolution import selected_model
@@ -119,9 +116,7 @@ async def refuse_a_model_the_provider_refused(
 
 
 def profile_service(uow: SqlAlchemyUnitOfWork) -> AgentRuntimeProfileService:
-    return AgentRuntimeProfileService(
-        AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
-    )
+    return runtime_profile_service_for(uow)
 
 
 class SaveRuntimeCheck(Protocol):

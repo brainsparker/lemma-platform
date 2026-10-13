@@ -16,7 +16,7 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
     AgentToolset,
 )
-from app.modules.agent.api.schemas import AgentResponse
+from app.modules.agent.contracts.agent_response import AgentResponse
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.user_interaction.models import (
     AskUserRequest,

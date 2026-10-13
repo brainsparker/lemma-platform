@@ -43,6 +43,15 @@ from app.modules.function.infrastructure.models import FunctionModel, FunctionRu
 from app.modules.function.infrastructure.pod_run_gate import PodRunGate
 from app.modules.function.infrastructure.repositories import FunctionRunRepository
 from app.modules.function.tests.fakes import InMemoryPodRunSlots
+from app.modules.workspace.domain.sandbox import (
+    SandboxInstanceState,
+    SandboxKind,
+    SandboxOwnerKind,
+)
+from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
+from app.modules.workspace.providers import naming
+from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
+from app.modules.workspace.services.sandbox_service import SandboxService
 
 
 pytestmark = pytest.mark.e2e
@@ -157,19 +166,62 @@ async def test_execution_deadline_starts_when_the_run_starts_not_when_it_was_que
 
 
 class _Provider:
-    """The sandbox provider seam: records destroys, owns no sandboxes."""
+    """The provider seam under the real sandbox service: records destroys.
 
-    destroyed: list[UUID]
+    Below the service rather than in place of the client, so the epoch fence
+    that decides whether anything is destroyed is the shipping one.
+    """
+
+    name = "fanout-test"
+    destroyed: list[str]
 
     def __init__(self) -> None:
         self.destroyed = []
 
-    async def destroy_sandbox(self, workload_kind, logical_id, **_kwargs) -> None:
-        del workload_kind
-        self.destroyed.append(logical_id)
+    async def destroy(self, name: str, *, deadline_at: datetime) -> None:
+        del deadline_at
+        self.destroyed.append(name)
 
     async def close(self) -> None:
         return None
+
+
+def _routes(db_manager, provider: _Provider) -> FunctionRuntimeRouteResolver:
+    service = SandboxService(
+        provider=provider,
+        uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
+    )
+    return FunctionRuntimeRouteResolver(
+        sandbox_client_factory=lambda: LocalSandboxClient(service),
+        endpoint_cache=FunctionRuntimeEndpointCache(),
+    )
+
+
+async def _seed_function_sandbox(db_manager, pod_id: UUID, *, epochs: int) -> list[str]:
+    """The pod's function sandbox, provisioned ``epochs`` times; its names."""
+    names: list[str] = []
+    async with SessionUnitOfWorkFactory(db_manager.session_factory)() as uow:
+        repository = SandboxRepository(uow)
+        await repository.ensure_row(
+            sandbox_id=pod_id,
+            kind=SandboxKind.FUNCTION,
+            owner_kind=SandboxOwnerKind.POD,
+            owner_id=pod_id,
+        )
+        for epoch in range(1, epochs + 1):
+            if epoch > 1:
+                await repository.bump_epoch(pod_id)
+            name = naming.container_name(pod_id, SandboxKind.FUNCTION, epoch)
+            instance = await repository.begin_instance(
+                sandbox_id=pod_id,
+                provider=_Provider.name,
+                provider_id=name,
+                provider_volume_id=None,
+                epoch=epoch,
+            )
+            await repository.mark_instance_ready(instance.id)
+            names.append(name)
+    return names
 
 
 def _runtime_answering_probe(status_code: int) -> httpx.AsyncClient:
@@ -180,12 +232,12 @@ def _runtime_answering_probe(status_code: int) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-def _endpoint() -> FunctionRuntimeEndpoint:
+def _endpoint(*, epoch: int = 1) -> FunctionRuntimeEndpoint:
     return FunctionRuntimeEndpoint(
         url="https://sandbox.example.test/runtime/",
         request_headers=(),
         allocation_id=uuid4(),
-        allocation_epoch=1,
+        allocation_epoch=epoch,
         profile_digest=f"sha256:{'2' * 64}",
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
     )
@@ -239,10 +291,7 @@ async def test_a_5xx_on_a_live_runtime_leaves_the_sandbox_and_its_runs_alone(
     )
     provider = _Provider()
     quarantine = FunctionRuntimeQuarantine(
-        routes=FunctionRuntimeRouteResolver(
-            sandbox_client_factory=lambda: provider,
-            endpoint_cache=FunctionRuntimeEndpointCache(),
-        ),
+        routes=_routes(db_manager, provider),
         uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
         runtime_http_client_factory=lambda: probe,
         pod_runs=InMemoryPodRunSlots(),
@@ -268,13 +317,11 @@ async def test_a_dead_runtime_is_replaced_and_its_job_runs_fail_at_once(
     jobs, synchronous = await _seed_in_flight(
         db_manager, pod_id=pod_id, user_id=UUID(fixed_test_user["id"])
     )
+    (sandbox,) = await _seed_function_sandbox(db_manager, pod_id, epochs=1)
     provider = _Provider()
     slots = InMemoryPodRunSlots()
     quarantine = FunctionRuntimeQuarantine(
-        routes=FunctionRuntimeRouteResolver(
-            sandbox_client_factory=lambda: provider,
-            endpoint_cache=FunctionRuntimeEndpointCache(),
-        ),
+        routes=_routes(db_manager, provider),
         uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
         runtime_http_client_factory=lambda: probe,
         pod_runs=slots,
@@ -284,7 +331,7 @@ async def test_a_dead_runtime_is_replaced_and_its_job_runs_fail_at_once(
         quarantined = await quarantine.after_failure(pod_id, _endpoint())
 
     assert quarantined is True
-    assert provider.destroyed == [pod_id]
+    assert provider.destroyed == [sandbox]
     rows = await _status_of(db_manager, [*jobs, synchronous])
     for run_id in jobs:
         assert rows[run_id].status == FunctionRunStatus.FAILED
@@ -292,6 +339,46 @@ async def test_a_dead_runtime_is_replaced_and_its_job_runs_fail_at_once(
     # A synchronous run holds its own connection and fails through it.
     assert rows[synchronous].status == FunctionRunStatus.RUNNING
     assert set(jobs) <= set(slots.released)
+
+
+async def test_a_late_quarantine_of_a_replaced_sandbox_destroys_nothing(
+    db_manager,
+    test_pod,
+    fixed_test_user,
+) -> None:
+    """Two runs fail on one dead runtime; the first replaces it.
+
+    The second still holds the endpoint leased from the dead sandbox. Its
+    quarantine must not destroy the replacement, nor fail the runs now in
+    flight on it -- they are healthy, and nothing is wrong with their sandbox.
+    """
+    pod_id = UUID(test_pod["id"])
+    jobs, _ = await _seed_in_flight(
+        db_manager, pod_id=pod_id, user_id=UUID(fixed_test_user["id"])
+    )
+    dead, replacement = await _seed_function_sandbox(db_manager, pod_id, epochs=2)
+    provider = _Provider()
+    slots = InMemoryPodRunSlots()
+    quarantine = FunctionRuntimeQuarantine(
+        routes=_routes(db_manager, provider),
+        uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
+        runtime_http_client_factory=lambda: probe,
+        pod_runs=slots,
+    )
+
+    async with _runtime_answering_probe(502) as probe:
+        await quarantine.after_failure(pod_id, _endpoint(epoch=1))
+
+    assert provider.destroyed == []
+    rows = await _status_of(db_manager, jobs)
+    assert {row.status for row in rows.values()} == {FunctionRunStatus.RUNNING}
+    assert slots.released == []
+    async with SessionUnitOfWorkFactory(db_manager.session_factory)() as uow:
+        current = await SandboxRepository(uow).current_instance(pod_id)
+    assert current is not None
+    assert current.provider_id == replacement
+    assert current.state is not SandboxInstanceState.DESTROYED
+    assert dead != replacement
 
 
 async def test_pod_gate_queues_the_run_past_the_limit_until_a_slot_frees(

@@ -265,22 +265,6 @@ fn opencode(lemma_tools: &LemmaTools) -> SessionOptions {
     }
 }
 
-/// The `bin/` of the `lemma` CLI Lemma named for this run, if this Mac takes
-/// it: the same folder, and the same rule, host execution uses
-/// (`host_exec::seatbelt::lemma_cli_root`).
-pub(crate) fn lemma_cli_bin(spec: &RunSpec) -> Option<std::path::PathBuf> {
-    let raw = spec.mcp.get("lemma_cli").and_then(Value::as_str)?;
-    let home = home_directory()?;
-    let home = std::fs::canonicalize(&home).unwrap_or(home);
-    crate::host_exec::seatbelt::lemma_cli_root(raw, &home).map(|root| root.join("bin"))
-}
-
-fn home_directory() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from)
-}
-
 /// `bin` ahead of `path`.
 fn path_with(bin: &Path, path: Option<&String>) -> Option<String> {
     let mut entries = vec![bin.to_path_buf()];

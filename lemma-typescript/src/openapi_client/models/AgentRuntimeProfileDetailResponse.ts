@@ -6,6 +6,7 @@ import type { AgentHostHarnessResponse } from './AgentHostHarnessResponse.js';
 import type { AgentHostStatus } from './AgentHostStatus.js';
 import type { HarnessKind } from './HarnessKind.js';
 import type { RuntimeModelCatalogEntry } from './RuntimeModelCatalogEntry.js';
+import type { RuntimeProfileAvailability } from './RuntimeProfileAvailability.js';
 import type { RuntimeProfileKind } from './RuntimeProfileKind.js';
 import type { RuntimeProfileProtocol } from './RuntimeProfileProtocol.js';
 import type { RuntimeProfileScope } from './RuntimeProfileScope.js';
@@ -18,7 +19,7 @@ import type { RuntimeProfileStatus } from './RuntimeProfileStatus.js';
  * and re-pinned to.
  */
 export type AgentRuntimeProfileDetailResponse = {
-    availability_status?: (string | null);
+    availability_status?: (RuntimeProfileAvailability | null);
     config?: Record<string, any>;
     default_model_name?: (string | null);
     derived_harness_kind: HarnessKind;

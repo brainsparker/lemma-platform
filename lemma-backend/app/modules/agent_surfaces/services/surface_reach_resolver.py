@@ -19,7 +19,10 @@ the first.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from contextlib import suppress
+from functools import partial
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
@@ -32,7 +35,7 @@ from app.modules.agent_surfaces.platforms.common import (
     PLATFORM_TRANSPORT_ERRORS,
 )
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.api.schemas import SurfaceReach
+from app.modules.agent_surfaces.domain.surface_representation import SurfaceReach
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -175,7 +178,7 @@ class SurfaceReachResolver:
         self,
         surface: AgentSurfaceEntity,
         credential_resolver: "SurfaceCredentialResolver | None",
-    ) -> dict[str, object] | None:
+    ) -> SurfaceCredentials | None:
         """The database half of a live handle lookup, on its own.
 
         Separated so it can run in series while the calls it feeds run
@@ -215,29 +218,34 @@ class SurfaceReachResolver:
     async def _live_handle(
         self,
         surface: AgentSurfaceEntity,
-        credentials: dict[str, object] | None,
+        credentials: SurfaceCredentials | None,
     ) -> str | None:
         """Per-platform live handle lookup (best-effort → None on any failure).
 
         Bounded by ``_LIVE_HANDLE_TIMEOUT_SECONDS`` so a hung provider can't stall
         the caller; a timeout is treated like any other failure (→ fallback)."""
-        if surface.surface_type is SurfacePlatform.SLACK:
-            user_id = surface.surface_identity_id
-            if credentials is None or not user_id:
-                return None
-            coro = self._slack_handle(user_id, credentials)
-        elif surface.surface_type is SurfacePlatform.TEAMS:
-            coro = self._teams_handle(surface)
-        elif surface.surface_type is SurfacePlatform.TELEGRAM:
-            if credentials is None:
-                return None
-            coro = self._telegram_handle(credentials)
-        elif surface.surface_type is SurfacePlatform.WHATSAPP:
-            if credentials is None:
-                return None
-            coro = self._whatsapp_handle(credentials)
-        else:
+        readers: dict[SurfacePlatform, Callable[[], Awaitable[str | None]] | None] = {
+            SurfacePlatform.SLACK: (
+                partial(self._slack_handle, surface.surface_identity_id, credentials)
+                if credentials is not None and surface.surface_identity_id
+                else None
+            ),
+            SurfacePlatform.TEAMS: partial(self._teams_handle, surface),
+            SurfacePlatform.TELEGRAM: (
+                partial(self._telegram_handle, credentials)
+                if credentials is not None
+                else None
+            ),
+            SurfacePlatform.WHATSAPP: (
+                partial(self._whatsapp_handle, credentials)
+                if credentials is not None
+                else None
+            ),
+        }
+        read = readers.get(surface.surface_type)
+        if read is None:
             return None
+        coro = read()
         try:
             return await asyncio.wait_for(coro, timeout=_LIVE_HANDLE_TIMEOUT_SECONDS)
         except Exception:  # timeout / API failure — never break the request
@@ -248,7 +256,7 @@ class SurfaceReachResolver:
         return None
 
     async def _slack_handle(
-        self, user_id: str, credentials: dict[str, object]
+        self, user_id: str, credentials: SurfaceCredentials
     ) -> str | None:
         from app.modules.agent_surfaces.platforms.slack.service import (
             SlackPlatformService,
@@ -258,7 +266,7 @@ class SurfaceReachResolver:
             credentials=credentials
         ).get_user_display_name(user_id)
 
-    async def _telegram_handle(self, credentials: dict[str, object]) -> str | None:
+    async def _telegram_handle(self, credentials: SurfaceCredentials) -> str | None:
         from app.modules.agent_surfaces.platforms.telegram.service import (
             TelegramPlatformService,
         )
@@ -266,7 +274,7 @@ class SurfaceReachResolver:
         username = await TelegramPlatformService(credentials).get_bot_username()
         return f"@{username}" if username else None
 
-    async def _whatsapp_handle(self, credentials: dict[str, object]) -> str | None:
+    async def _whatsapp_handle(self, credentials: SurfaceCredentials) -> str | None:
         from app.modules.agent_surfaces.platforms.whatsapp.service import (
             WhatsAppPlatformService,
         )

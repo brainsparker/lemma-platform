@@ -144,7 +144,7 @@ const AGENTS: Record<string, { label: string; logo: string; signIn: string; upda
     "claude-code": {
         label: "Claude Code",
         logo: "/agent-logos/claudecode.png",
-        signIn: "claude login",
+        signIn: "claude auth login",
         update: "claude update",
     },
     codex: {

@@ -13,6 +13,7 @@ caller read a key off it without the type checker asking.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import origin_metadata
 import json
 from uuid import UUID
 
@@ -135,10 +136,8 @@ class AgentControlAdapter(AgentPort):
     ) -> UUID:
         metadata: dict[str, object] = {
             **(conversation_metadata or {}),
-            "source": source,
+            **origin_metadata(source=source, workflow_run_id=workflow_run_id),
         }
-        if workflow_run_id is not None:
-            metadata["workflow_run_id"] = str(workflow_run_id)
         started_by_schedule = source == SCHEDULE_SOURCE
         entity_values: dict[str, object] = {
             "user_id": user_id,

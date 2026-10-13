@@ -41,7 +41,8 @@ import { settingsSectionOf } from "@/space/about-sections";
 import { TeammateRail } from "@/space/teammate-rail";
 import { TeammatesPage } from "@/space/teammates-page";
 import { owedFrom } from "@/space/teammates";
-import { byAge, gatherAsked } from "@/thread/waiting-on-you";
+import { byAge } from "@/thread/waiting-on-you";
+import { useConversationAsks } from "@/thread/use-conversation-asks";
 import type { SpaceView } from "@/data";
 import { FloatingChat, moveDocThread, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
 import type { ConversationRef, FileContent, LibraryItem, Org, Pod, Tab } from "@/data";
@@ -438,12 +439,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     });
     /* And the conversations paused on you: a question or an approval a run
        stopped on, scheduled ones included. Same key Home reads. */
-    const asked = useQuery({
-        queryKey: ["conversation-asks", (pods.data ?? []).map((one) => one.id).join(",")],
-        queryFn: () => gatherAsked(pods.data ?? [], source.label === "sample"),
-        enabled: !preview && (pods.data?.length ?? 0) > 0,
-        staleTime: 60_000,
-    });
+    const asked = useConversationAsks(pods.data ?? [], { enabled: !preview });
     const owed = useMemo(() => owedFrom(waiting.data?.rows ?? [], byAge(asked.data ?? []).fresh), [waiting.data, asked.data]);
 
     /* Changing teammate drops the conversation you were reading — unless the

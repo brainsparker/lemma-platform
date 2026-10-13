@@ -29,6 +29,11 @@ from pydantic_ai.profiles import DEFAULT_THINKING_TAGS
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from app.modules.agent.domain.runtime_profiles import (
+    RuntimeProfileProtocol,
+    RuntimeProfileScope,
+)
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -545,12 +550,22 @@ def test_a_model_that_asks_for_earlier_reasoning_gets_it():
     assert _reasoning_sent(payload) == ["thinking in run one"]
 
 
+def _snapshot_with(model_metadata: dict[str, object]) -> RuntimeSnapshot:
+    return RuntimeSnapshot(
+        profile_id="p",
+        profile_name="p",
+        scope=RuntimeProfileScope.ORGANIZATION,
+        protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+        model_metadata=model_metadata,
+    )
+
+
 def test_the_choice_is_read_from_the_models_catalog_entry():
     assert replays_prior_run_reasoning(
-        {"model_metadata": {"replay_prior_run_reasoning": True}}
+        _snapshot_with({"replay_prior_run_reasoning": True})
     )
-    assert not replays_prior_run_reasoning({"model_metadata": {}})
+    assert not replays_prior_run_reasoning(_snapshot_with({}))
     assert not replays_prior_run_reasoning(
-        {"model_metadata": {"replay_prior_run_reasoning": "yes"}}
+        _snapshot_with({"replay_prior_run_reasoning": "yes"})
     )
     assert not replays_prior_run_reasoning(None)

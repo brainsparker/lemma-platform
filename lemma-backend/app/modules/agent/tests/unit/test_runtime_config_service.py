@@ -2,6 +2,8 @@ import pytest
 from uuid import UUID, uuid4
 from types import SimpleNamespace
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.config import agent_settings
 from app.modules.agent.defaults import default_agent_runtime_profile_id
 from app.modules.agent.domain.runtime_profiles import (
@@ -16,7 +18,10 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileStatus,
     reveal_credentials,
 )
-from app.modules.agent.domain.errors import RuntimeUnavailableError
+from app.modules.agent.domain.errors import (
+    RuntimeProfileNotFoundError,
+    RuntimeUnavailableError,
+)
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -584,10 +589,13 @@ def test_system_openai_catalog_declares_vision_per_model(monkeypatch):
         "model-text-a": False,
         "model-text-b": False,
     }
-    # Structured output is not tracked per-model (universal), so the catalog only
-    # ever carries TEXT/TOOLS plus VISION where supported.
+    # The catalog only ever carries TEXT/TOOLS plus VISION where supported.
     for model in profile.model_catalog:
-        assert RuntimeModelCapability.STRUCTURED_OUTPUT not in model.capabilities
+        assert set(model.capabilities) <= {
+            RuntimeModelCapability.TEXT,
+            RuntimeModelCapability.TOOLS,
+            RuntimeModelCapability.VISION,
+        }
 
 
 def test_system_anthropic_catalog_declares_vision_for_all_models(monkeypatch):
@@ -702,7 +710,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
     )
     options = HarnessOptions(
         model_name=resolved.model_name_for_harness,
-        extra={"runtime_profile": resolved.runtime_snapshot().as_payload()},
+        runtime_profile=resolved.runtime_snapshot(),
     )
 
     run_config = agent_host_run_config(options)
@@ -723,9 +731,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
         agent_host_run_config(
             HarnessOptions(
                 model_name=resolved_unpinned.model_name_for_harness,
-                extra={
-                    "runtime_profile": resolved_unpinned.runtime_snapshot().as_payload()
-                },
+                runtime_profile=resolved_unpinned.runtime_snapshot(),
             )
         ).model_name
         is None
@@ -864,7 +870,7 @@ async def test_create_agent_host_profile_rejects_unknown_harness():
         host_repository=_HostRepository({}, {}),
     )
 
-    with pytest.raises(ValueError, match="not available"):
+    with pytest.raises(RuntimeProfileValidationError, match="not available"):
         await service.create_agent_host_profile(
             organization_id=uuid4(),
             user_id=user_id,
@@ -886,7 +892,7 @@ async def test_create_agent_host_profile_rejects_offline_host():
         _ProfileRepository([]), host_repository=host_repo
     )
 
-    with pytest.raises(ValueError, match="offline"):
+    with pytest.raises(RuntimeProfileValidationError, match="offline"):
         await service.create_agent_host_profile(
             organization_id=org_id,
             user_id=user_id,
@@ -905,7 +911,7 @@ async def test_create_agent_host_profile_rejects_unhealthy_harness():
         _ProfileRepository([]), host_repository=host_repo
     )
 
-    with pytest.raises(ValueError, match="not ready"):
+    with pytest.raises(RuntimeProfileValidationError, match="not ready"):
         await service.create_agent_host_profile(
             organization_id=org_id,
             user_id=user_id,
@@ -934,7 +940,9 @@ async def test_create_agent_host_profile_rejects_model_the_harness_does_not_offe
         _ProfileRepository([]), host_repository=host_repo
     )
 
-    with pytest.raises(ValueError, match="not offered by this harness"):
+    with pytest.raises(
+        RuntimeProfileValidationError, match="not offered by this harness"
+    ):
         await service.create_agent_host_profile(
             organization_id=org_id,
             user_id=user_id,
@@ -952,7 +960,9 @@ async def test_create_agent_host_profile_rejects_a_harness_owned_by_someone_else
         _ProfileRepository([]), host_repository=host_repo
     )
 
-    with pytest.raises(ValueError, match="not owned by the current user"):
+    with pytest.raises(
+        RuntimeProfileValidationError, match="not owned by the current user"
+    ):
         await service.create_agent_host_profile(
             organization_id=org_id,
             user_id=uuid4(),
@@ -1065,7 +1075,7 @@ async def test_create_provider_profile_requires_discovery_or_model_names(monkeyp
     )
     service = AgentRuntimeProfileService(_ProfileRepository([]))
 
-    with pytest.raises(ValueError, match="type a model name below"):
+    with pytest.raises(RuntimeProfileValidationError, match="type a model name below"):
         await service.create_openai_compatible_profile(
             organization_id=uuid4(),
             name="Unknown provider",
@@ -1086,7 +1096,7 @@ async def test_create_openai_compatible_profile_rejects_ssrf_base_url(base_url):
     """A caller-supplied base_url that targets a private/link-local/non-http(s)
     address must be rejected before any server-side request is issued."""
     service = AgentRuntimeProfileService(_ProfileRepository([]))
-    with pytest.raises(ValueError, match="public http"):
+    with pytest.raises(RuntimeProfileValidationError, match="public http"):
         await service.create_openai_compatible_profile(
             organization_id=uuid4(),
             name="evil",
@@ -1128,20 +1138,30 @@ async def test_create_anthropic_compatible_profile_discovers_provider_models(
     )
 
 
+def _provider_snapshot(
+    protocol: RuntimeProfileProtocol, config: dict[str, object]
+) -> RuntimeSnapshot:
+    return RuntimeSnapshot(
+        profile_id="p",
+        profile_name="Vendor",
+        scope=RuntimeProfileScope.ORGANIZATION,
+        protocol=protocol,
+        config=config,
+    )
+
+
 def test_lemma_harness_builds_dynamic_openai_compatible_model():
     model = _runtime_profile_model(
         HarnessOptions(
             model_name="vendor/model-pro",
-            extra={
-                "runtime_profile": {
-                    "protocol": "OPENAI_COMPATIBLE",
-                    "config": {
-                        "base_url": "https://api.vendor.test/v1",
-                        "headers": {"X-Test": "yes"},
-                    },
+            runtime_profile=_provider_snapshot(
+                RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+                {
+                    "base_url": "https://api.vendor.test/v1",
+                    "headers": {"X-Test": "yes"},
                 },
-                "runtime_credentials": {"api_key": "secret"},
-            },
+            ),
+            extra={"runtime_credentials": {"api_key": "secret"}},
         )
     )
 
@@ -1161,13 +1181,11 @@ def test_lemma_harness_builds_dynamic_anthropic_compatible_model():
     model = _runtime_profile_model(
         HarnessOptions(
             model_name="claude-sonnet-4-5-20250929",
-            extra={
-                "runtime_profile": {
-                    "protocol": "ANTHROPIC_COMPATIBLE",
-                    "config": {"base_url": "https://api.anthropic.com"},
-                },
-                "runtime_credentials": {"api_key": "secret"},
-            },
+            runtime_profile=_provider_snapshot(
+                RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
+                {"base_url": "https://api.anthropic.com"},
+            ),
+            extra={"runtime_credentials": {"api_key": "secret"}},
         )
     )
 
@@ -1517,7 +1535,7 @@ async def test_a_harness_config_edit_rejects_an_unknown_selection():
         organization_id=organization_id, user_id=user_id, config_options=[]
     )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeProfileValidationError):
         await AgentRuntimeProfileEditor(service).update_agent_host_profile(
             profile_id=profile.id,
             organization_id=organization_id,
@@ -1606,7 +1624,8 @@ async def test_the_built_in_profile_cannot_be_edited_or_archived():
     user_id = uuid4()
     service = AgentRuntimeProfileService(repository=_ProfileRepository([]))
 
-    with pytest.raises(ValueError):
+    # Not stored, so not found: a 404 rather than the 400 of a bad edit.
+    with pytest.raises(RuntimeProfileNotFoundError):
         await AgentRuntimeProfileEditor(service).archive_profile(
             profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
             organization_id=organization_id,
@@ -1803,7 +1822,7 @@ async def test_a_config_edit_still_needs_the_computer_awake():
     host.status = "OFFLINE"
     host.last_seen_at = None
 
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeProfileValidationError):
         await AgentRuntimeProfileEditor(service).update_agent_host_profile(
             profile_id=profile.id,
             organization_id=organization_id,

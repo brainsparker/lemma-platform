@@ -13,6 +13,7 @@ from app.modules.agent.services.conversation_approvals import (
 from app.modules.agent.services.conversation_queries import ConversationQueries
 from app.modules.agent.services.conversation_pauses import ConversationPauses
 from app.modules.agent.services.conversation_turns import TurnCoordinator
+from app.modules.agent.services.conversation_retry_service import RetryCoordinator
 from app.modules.agent.services.send_window import SendWindow, window_key
 from app.modules.agent.domain.queued_messages import CLIENT_MESSAGE_ID
 from app.modules.agent.services.conversation_resume_return import (
@@ -48,7 +49,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     ConversationType,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     apply_location_metadata,
 )
 from app.modules.pod.contracts.agent_access import pod_organization_id
@@ -69,16 +70,12 @@ class ConversationService(ConversationPauses):
         uow: SqlAlchemyUnitOfWork,
         conversation_repository: ConversationRepository,
         agent_repository: AgentRepository,
-        authorization_service: object,
-        fallback_model_name: str | None = None,
         usage_service: UsageService | None = None,
         turn_runtime_check: TurnRuntimeCheck = ensure_turn_runtime_available,
     ):
         self.uow = uow
         self.conversation_repository = conversation_repository
         self.agent_repository = agent_repository
-        self.authorization_service = authorization_service
-        self.fallback_model_name = fallback_model_name
         self.usage_service = usage_service
         self.send_window = SendWindow(getattr(uow, "session", None))
         self.resume_returns = ResumeToolReturnBuilder(uow, agent_repository)
@@ -99,6 +96,9 @@ class ConversationService(ConversationPauses):
             self.pauses,
             usage_service,
             runtime_check=turn_runtime_check,
+        )
+        self.retries = RetryCoordinator(
+            uow, conversation_repository, agent_repository, self.turns
         )
 
     async def create_conversation(
@@ -438,6 +438,22 @@ class ConversationService(ConversationPauses):
             message_id=message_id,
             user_id=user_id,
             pod_id=pod_id,
+        )
+
+    async def retry_failed_run(
+        self,
+        *,
+        conversation_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+        agent_name: str | None = None,
+    ) -> AgentRunStartResult:
+        """Run the failed latest turn again; see `RetryCoordinator`."""
+        return await self.retries.retry_failed_run(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_name=agent_name,
         )
 
 

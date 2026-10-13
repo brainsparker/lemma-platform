@@ -104,13 +104,21 @@ class BuildingSteps:
     # --- workflows -------------------------------------------------------
 
     async def creates_a_workflow(
-        self, *, in_pod: JSON, named: str | None = None, mode: str = "GLOBAL"
+        self,
+        *,
+        in_pod: JSON,
+        named: str | None = None,
+        mode: str = "GLOBAL",
+        at_most_at_once: int | None = None,
     ) -> JSON:
         name = named or a_name_for("workflow")
+        body: JSON = {"name": name, "mode": mode}
+        if at_most_at_once is not None:
+            body["max_concurrent_runs"] = at_most_at_once
         return await self.api.post(
             f"/pods/{in_pod['id']}/workflows",
             what=f"{self.label} creating workflow {name!r}",
-            json={"name": name, "mode": mode},
+            json=body,
         )
 
     async def opens_workflow(self, name: str, *, in_pod: JSON) -> JSON:
@@ -185,6 +193,28 @@ class BuildingSteps:
                 params=params,
             )
         )
+
+    async def changes_schedule(
+        self, schedule: JSON, *, in_pod: JSON, **changes: Any
+    ) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/schedules/{schedule['id']}",
+            what=f"{self.label} changing a schedule",
+            json=changes,
+        )
+
+    async def is_refused_changing_schedule(
+        self, schedule: JSON, *, in_pod: JSON, **changes: Any
+    ) -> str:
+        response = await self.api.call(
+            "PATCH", f"/pods/{in_pod['id']}/schedules/{schedule['id']}", json=changes
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused changing a schedule "
+                f"with {changes}, but it was accepted ({response.status_code})"
+            )
+        return response.text
 
     async def is_refused_creating_a_schedule(
         self,
@@ -426,6 +456,64 @@ class BuildingSteps:
             describe=f"workflow run {started['id']} to settle",
             timeout=timeout,
         )
+
+    async def starts_workflow(self, name: str, *, in_pod: JSON) -> JSON:
+        """Start a run and hand it back as it is now, without waiting on it.
+
+        For a run that is not expected to settle on its own -- one held back
+        behind a workflow's limit is neither finished nor waiting on a person.
+        """
+        started = await self.api.post(
+            f"/pods/{in_pod['id']}/workflows/{name}/runs",
+            status=(200, 201, 202),
+            what=f"{self.label} starting workflow {name!r}",
+            json={},
+        )
+        return await self.opens_run(started, in_pod=in_pod)
+
+    async def opens_run(self, run: JSON, *, in_pod: JSON) -> JSON:
+        return await self.api.get(f"/pods/{in_pod['id']}/workflow-runs/{run['id']}")
+
+    async def retries_run(
+        self, run: JSON, *, in_pod: JSON, timeout: float = UNTIL_BACKGROUND_WORK_LANDS
+    ) -> JSON:
+        """Retry a failed run from the step it failed at, and wait for it to settle."""
+        await self.api.post(
+            f"/pods/{in_pod['id']}/workflow-runs/{run['id']}/retry",
+            status=(200, 201, 202),
+            what=f"{self.label} retrying workflow run {run['id']}",
+        )
+        return await eventually(
+            lambda: self.opens_run(run, in_pod=in_pod),
+            lambda state: str(state.get("status")) in TERMINAL_WORKFLOW,
+            describe=f"retried workflow run {run['id']} to settle",
+            timeout=timeout,
+        )
+
+    async def is_refused_retrying_run(self, run: JSON, *, in_pod: JSON) -> str:
+        response = await self.api.call(
+            "POST", f"/pods/{in_pod['id']}/workflow-runs/{run['id']}/retry"
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused retrying run "
+                f"{run['id']}, but it was accepted ({response.status_code})"
+            )
+        return response.text
+
+    async def is_refused_changing_workflow(
+        self, name: str, *, in_pod: JSON, **changes: Any
+    ) -> int:
+        response = await self.api.call(
+            "PATCH", f"/pods/{in_pod['id']}/workflows/{name}", json=changes
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused changing workflow "
+                f"{name!r} with {changes}, but it was accepted "
+                f"({response.status_code})"
+            )
+        return response.status_code
 
     async def workflow_runs_in(self, pod: JSON) -> list[JSON]:
         return items_of(await self.api.get(f"/pods/{pod['id']}/workflow-runs"))

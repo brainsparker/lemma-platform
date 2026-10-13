@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TeamsReplyTarget,
+    reply_target_as,
+)
+
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SurfaceCredentials,
+)
+
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -38,7 +48,7 @@ class PrivateDeliveryUnavailable(RuntimeError):
 
 
 #: Builds the Slack web client for a set of credentials.
-SlackClientFactory = Callable[[dict[str, JsonValue]], Awaitable[Any]]
+SlackClientFactory = Callable[[CredentialsLike], Awaitable[Any]]
 #: The shared outbound HTTP client.
 HttpClientFactory = Callable[[], Any]
 #: Fetches a Bot Framework token for this deployment's Teams app.
@@ -52,7 +62,7 @@ class _ConversationCreated(BaseModel):
 async def _slack_private_destination(
     event: ParsedInboundSurfaceEvent,
     actor: str,
-    credentials: dict[str, JsonValue],
+    credentials: SurfaceCredentials,
     open_slack: SlackClientFactory,
 ) -> tuple[str, dict[str, JsonValue]]:
     """The DM channel Slack opens with this person, and where to reply in it."""
@@ -93,7 +103,9 @@ async def _teams_private_destination(
         raise PrivateDeliveryUnavailable(
             "The Teams bot installation cannot send privately"
         )
-    service_url = teams_client.bf_service_url(event.reply_target.get("service_url"))
+    service_url = teams_client.bf_service_url(
+        reply_target_as(event, TeamsReplyTarget).service_url
+    )
     response = await open_http().post(
         f"{service_url}/v3/conversations",
         headers=teams_client.auth_headers(token),
@@ -125,7 +137,7 @@ async def _teams_private_destination(
 async def private_onboarding_destination(
     event: ParsedInboundSurfaceEvent,
     *,
-    credentials: dict[str, JsonValue],
+    credentials: SurfaceCredentials,
     slack_client: SlackClientFactory | None = None,
     http_client: HttpClientFactory | None = None,
     bot_token: BotTokenFactory | None = None,
@@ -161,18 +173,22 @@ async def private_onboarding_destination(
         raise PrivateDeliveryUnavailable(
             "The installation has no private sender context"
         )
-    if event.platform == SurfacePlatform.SLACK:
-        destination_id, reply_target = await _slack_private_destination(
+    openers: dict[
+        SurfacePlatform, Callable[[], Awaitable[tuple[str, dict[str, JsonValue]]]]
+    ] = {
+        SurfacePlatform.SLACK: lambda: _slack_private_destination(
             event, actor, credentials, open_slack
-        )
-    elif event.platform == SurfacePlatform.TEAMS:
-        destination_id, reply_target = await _teams_private_destination(
+        ),
+        SurfacePlatform.TEAMS: lambda: _teams_private_destination(
             event, open_http, fetch_token
-        )
-    else:
+        ),
+    }
+    open_private = openers.get(event.platform)
+    if open_private is None:
         raise PrivateDeliveryUnavailable(
             "Open a private conversation with the Lemma bot"
         )
+    destination_id, reply_target = await open_private()
     return event.model_copy(
         update={
             "is_dm": True,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
 from app.core.log.log import get_logger
 from app.modules.agent.domain.runtime_profiles import (
@@ -18,7 +18,10 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCatalogEntry,
 )
 from app.modules.agent.domain.errors import RuntimeUnavailableError
-from app.modules.agent.domain.value_objects import HarnessKind, JsonObject
+from app.modules.agent.domain.runtime_snapshot import (
+    RuntimeSnapshot as RuntimeSnapshot,
+)
+from app.modules.agent.domain.value_objects import HarnessKind
 
 logger = get_logger(__name__)
 
@@ -64,8 +67,8 @@ class ResolvedAgentRuntime:
             harness_id=str(self.profile.harness_id)
             if self.profile.harness_id
             else None,
-            scope=self.profile.scope.value,
-            protocol=self.profile.protocol.value,
+            scope=self.profile.scope,
+            protocol=self.profile.protocol,
             model_name=self.model.name if self.model else None,
             provider_model_name=self.provider_model_name,
             model_metadata=dict(self.model.metadata) if self.model else {},
@@ -81,34 +84,6 @@ class ResolvedAgentRuntime:
             model_capabilities=[capability.value for capability in self.capabilities],
             config=_config_dict(self.profile.config),
         )
-
-
-class RuntimeSnapshot(BaseModel):
-    """What a run needs to rebuild its model client, unredacted. Internal.
-
-    It carries the provider's full config, custom headers included, so it is
-    never returned from an API or logged; the listing's projection is
-    ``AgentRuntimeProfile.public_dict``. Named for what it is: it used to be
-    ``public_snapshot``, an invitation to do exactly that.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    profile_id: str
-    profile_name: str
-    user_id: str | None = None
-    harness_id: str | None = None
-    scope: str
-    protocol: str
-    model_name: str | None = None
-    provider_model_name: str | None = None
-    model_metadata: JsonObject = Field(default_factory=dict)
-    model_capabilities: list[str] = Field(default_factory=list)
-    config: JsonObject = Field(default_factory=dict, repr=False)
-
-    def as_payload(self) -> dict[str, object | None]:
-        """The dict form the harness options and usage metering still take."""
-        return self.model_dump(mode="json")
 
 
 def selected_model(

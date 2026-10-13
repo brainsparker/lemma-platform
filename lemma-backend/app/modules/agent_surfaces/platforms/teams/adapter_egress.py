@@ -11,6 +11,15 @@ wins without the reader having to work out an MRO.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TeamsReplyTarget,
+    reply_target_as,
+)
+
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 from urllib.parse import quote
 
@@ -23,6 +32,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.domain.models import (
+    ProgressHandleKind,
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
@@ -37,6 +47,16 @@ from app.modules.agent_surfaces.platforms.delivery import (
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.teams import client
+from app.modules.agent_surfaces.platforms.teams.decision_cards import (
+    activity_url,
+    remember_teams_card,
+    retired_activity,
+)
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
+from app.modules.agent_surfaces.domain.errors import AgentSurfacePlatformError
 from app.modules.agent_surfaces.platforms.teams.cards import (
     _teams_approval_card,
     _teams_display_resource_card,
@@ -65,7 +85,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
 
     async def _post_activity(
         self, url: str, *, token: str, body: BotFrameworkActivity
-    ) -> None:
+    ) -> str | None:
         """Post one Bot Framework activity, retrying what is worth retrying.
 
         The Connector throttles, and a throttled reply used to raise straight
@@ -74,7 +94,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         use, so one policy covers every platform.
         """
 
-        async def send() -> None:
+        async def send() -> str | None:
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as session:
@@ -84,8 +104,17 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                     json=body,
                 ) as response:
                     response.raise_for_status()
+                    # The activity id is how it is edited later (a card's
+                    # buttons taken away with a PUT). Best-effort: a body
+                    # that is not the documented JSON leaves it unknown.
+                    try:
+                        sent = await response.json()
+                    except aiohttp.ContentTypeError, ValueError:
+                        return None
+                    activity_id = sent.get("id") if isinstance(sent, dict) else None
+                    return str(activity_id) if activity_id else None
 
-        await with_retry(
+        return await with_retry(
             send,
             policy=self._retry_policy,
             classify=client.classify_teams_error,
@@ -95,7 +124,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def send_message(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
@@ -109,7 +138,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         """
         del credentials
         url, token = await self._activities_endpoint(event, metadata)
-        reply_to_id = event.reply_target.get("reply_to_id")
+        reply_to_id = reply_target_as(event, TeamsReplyTarget).reply_to_id
         card = (metadata or {}).get("onboarding_card")
         chunks = chunk_text(message, limit=_TEAMS_TEXT_LIMIT) or [message]
         for index, chunk in enumerate(chunks):
@@ -160,10 +189,10 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         """
         tenant_id = event.tenant_id
         token = await self._get_bot_token(tenant_id) if tenant_id else None
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if tenant_id and token and conversation_id:
             url = (
-                f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+                f"{client.bf_service_url(reply_target_as(event, TeamsReplyTarget).service_url)}"
                 f"/v3/conversations/{quote(str(conversation_id))}/activities"
             )
             return url, token
@@ -185,7 +214,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def _render_resource(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -198,7 +227,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         """
         del credentials, metadata
         url, token = await self._activities_endpoint(event, None)
-        reply_to_id = event.reply_target.get("reply_to_id")
+        reply_to_id = reply_target_as(event, TeamsReplyTarget).reply_to_id
         # The adaptive card carries the title/summary and the "Open file" button,
         # so no inline ``text`` (which would dump the raw URL next to the card).
         # ``summary`` is the Bot Framework notification field — shown in toasts,
@@ -222,14 +251,14 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def _render_choices(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
         del credentials, metadata
         tenant_id = event.tenant_id
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if not tenant_id or not conversation_id:
             return False
         token = await self._get_bot_token(tenant_id)
@@ -237,29 +266,31 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             return False
 
         url = (
-            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+            f"{client.bf_service_url(reply_target_as(event, TeamsReplyTarget).service_url)}"
             f"/v3/conversations/{quote(str(conversation_id))}/activities"
         )
+        card = _teams_question_card(question_plan)
         body: dict[str, Any] = {
             "type": "message",
             "attachments": [
                 {
                     "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": _teams_question_card(question_plan),
+                    "content": card,
                 }
             ],
         }
-        reply_to_id = event.reply_target.get("reply_to_id")
+        reply_to_id = reply_target_as(event, TeamsReplyTarget).reply_to_id
         if reply_to_id:
             body["replyToId"] = reply_to_id
 
-        await self._post_activity(url, token=token, body=body)
+        activity_id = await self._post_activity(url, token=token, body=body)
+        await remember_teams_card(question_plan.callback_id, activity_id, event, card)
         return True
 
     async def _render_decision(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -268,7 +299,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         Approve/Deny Action.Submit buttons carrying the decision."""
         del credentials, metadata
         tenant_id = event.tenant_id
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if not tenant_id or not conversation_id:
             return False
         token = await self._get_bot_token(tenant_id)
@@ -276,29 +307,53 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             return False
 
         url = (
-            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+            f"{client.bf_service_url(reply_target_as(event, TeamsReplyTarget).service_url)}"
             f"/v3/conversations/{quote(str(conversation_id))}/activities"
         )
+        card = _teams_approval_card(approval_plan)
         body: dict[str, Any] = {
             "type": "message",
             "attachments": [
                 {
                     "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": _teams_approval_card(approval_plan),
+                    "content": card,
                 }
             ],
         }
-        reply_to_id = event.reply_target.get("reply_to_id")
+        reply_to_id = reply_target_as(event, TeamsReplyTarget).reply_to_id
         if reply_to_id:
             body["replyToId"] = reply_to_id
 
-        await self._post_activity(url, token=token, body=body)
+        activity_id = await self._post_activity(url, token=token, body=body)
+        await remember_teams_card(approval_plan.callback_id, activity_id, event, card)
         return True
+
+    async def retire_decision_card(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        handle: DecisionCardHandle,
+        reason: CardRetirement = CardRetirement.SUPERSEDED,
+    ) -> None:
+        """Replace a finished pause's card with its words and no actions."""
+        del credentials
+        token = await self._get_bot_token(handle.extra.get("tenant_id") or "")
+        if not token:
+            raise AgentSurfacePlatformError("TEAMS", "bot token unavailable")
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
+            async with session.put(
+                activity_url(handle),
+                headers=client.auth_headers(token),
+                json=retired_activity(handle, reason),
+            ) as response:
+                response.raise_for_status()
 
     async def add_processing_indicator(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         metadata: dict[str, Any] | None = None,
     ) -> None:
@@ -318,12 +373,12 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         if not bot_token:
             return
 
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if not conversation_id:
             return
 
         url = (
-            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+            f"{client.bf_service_url(reply_target_as(event, TeamsReplyTarget).service_url)}"
             f"/v3/conversations/{quote(str(conversation_id))}/activities"
         )
         try:
@@ -342,7 +397,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def acknowledge_interaction(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         interaction: ParsedSurfaceInteraction,
         text: str | None = None,
         show_alert: bool = False,
@@ -397,25 +452,27 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def stream_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> ProgressHandle | None:
         # Accepted and unused: the PUT edits an activity this bot already owns,
         # so there is no author to set. Declared because the shared caller
         # passes it to whichever adapter answers.
         del credentials, metadata
         tenant_id = event.tenant_id
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if not tenant_id or not conversation_id:
             return progress_handle
         bot_token = await self._get_bot_token(tenant_id)
         if not bot_token:
             return progress_handle
-        base = client.bf_service_url(event.reply_target.get("service_url"))
-        activity_id = (progress_handle or {}).get("activity_id")
+        base = client.bf_service_url(
+            reply_target_as(event, TeamsReplyTarget).service_url
+        )
+        activity_id = progress_handle.message_id if progress_handle else None
         body = {"type": "message", "text": progress_text}
         timeout = aiohttp.ClientTimeout(total=30)
         try:
@@ -438,30 +495,36 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                     response.raise_for_status()
                     data = await response.json()
             new_id = (data or {}).get("id")
-            return {"activity_id": new_id} if new_id else progress_handle
+            return (
+                ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id=str(new_id))
+                if new_id
+                else progress_handle
+            )
         except Exception:
             return progress_handle
 
     async def end_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
     ) -> None:
         """Delete the streamed progress ("thinking") activity at run end so it
         does not linger next to the final answer (the final answer is delivered
         separately). Mirrors Slack/Telegram end_progress. Best-effort."""
         del credentials
-        activity_id = (progress_handle or {}).get("activity_id")
+        activity_id = progress_handle.message_id if progress_handle else None
         tenant_id = event.tenant_id
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if not activity_id or not tenant_id or not conversation_id:
             return
         bot_token = await self._get_bot_token(tenant_id)
         if not bot_token:
             return
-        base = client.bf_service_url(event.reply_target.get("service_url"))
+        base = client.bf_service_url(
+            reply_target_as(event, TeamsReplyTarget).service_url
+        )
         url = (
             f"{base}/v3/conversations/{quote(str(conversation_id))}"
             f"/activities/{quote(str(activity_id))}"

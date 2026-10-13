@@ -8,7 +8,16 @@ it, and the Home tab.
 
 from __future__ import annotations
 
-from typing import Any
+from app.modules.agent_surfaces.domain.reply_targets import (
+    SlackReplyTarget,
+    reply_target_as,
+)
+
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SlackCredentials,
+)
+
 
 from slack_sdk.errors import SlackApiError
 
@@ -36,8 +45,8 @@ logger = get_logger(__name__)
 class SlackHomeSurface:
     """Everything a person interacts with to configure Lemma inside Slack."""
 
-    def __init__(self, *, credentials: dict[str, Any]) -> None:
-        self.credentials = credentials
+    def __init__(self, *, credentials: CredentialsLike) -> None:
+        self.credentials = SlackCredentials.of(credentials)
 
     async def send_channel_setup_prompt(
         self,
@@ -230,8 +239,8 @@ class SlackHomeSurface:
         and simply keeps Slack's default thread naming.
         """
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
-        thread_ts = event.reply_target.get("thread_ts")
+        channel = reply_target_as(event, SlackReplyTarget).channel
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         clean_title = _truncate_slack_text(str(title or "").strip(), 250)
         if not token or not channel or not thread_ts or not clean_title:
             return False

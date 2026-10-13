@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -27,7 +28,7 @@ logger = get_logger(__name__)
 async def _reply(
     *,
     adapter: SurfacePlatformAdapterPort,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
     context: SurfaceChatContext,
     message: str,
 ) -> None:
@@ -56,7 +57,7 @@ async def handle_telegram_command(
     *,
     context: SurfaceChatContext,
     adapter: SurfacePlatformAdapterPort,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
     uow_factory: UnitOfWorkFactory,
 ) -> bool:
     if context.platform is not SurfacePlatform.TELEGRAM:
@@ -113,7 +114,7 @@ async def handle_typed_retry(
     *,
     context: SurfaceChatContext,
     adapter: SurfacePlatformAdapterPort,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
     uow_factory: UnitOfWorkFactory,
 ) -> bool:
     """A typed "retry" re-runs the conversation's failed request, on any platform.

@@ -76,6 +76,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     credential_refresh_due,
     expiry_message,
     failure_events,
+    RunLease,
     lease_terminal_detail,
     terminal_checkpoint_state,
 )
@@ -493,7 +494,7 @@ class RemoteHarness:
         async with self.uow_factory() as uow:
             repository = AgentHostDispatchRepository(uow)
             await repository.reconcile_expired_run(run_id=agent_run_id)
-            lease = await repository.get_run_lease(run_id=agent_run_id)
+            lease = RunLease.of(await repository.get_run_lease(run_id=agent_run_id))
             await uow.commit()
 
         seen_at, terminal_state = terminal_checkpoint_state(
@@ -548,16 +549,12 @@ class RemoteHarness:
     async def _expire_if_unaccepted(
         self,
         *,
-        lease: object | None,
+        lease: RunLease | None,
         now: float,
         accept_deadline: float,
         agent_run_id: UUID,
     ) -> AgentHostRunState | None:
-        if (
-            lease is None
-            or getattr(lease, "accepted_at", None) is not None
-            or now < accept_deadline
-        ):
+        if lease is None or lease.accepted_at is not None or now < accept_deadline:
             return None
         async with self.uow_factory() as uow:
             state = await AgentHostDispatchRepository(uow).expire_unaccepted_run(

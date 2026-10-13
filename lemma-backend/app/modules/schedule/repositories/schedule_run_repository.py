@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 
+from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.schedule.config import BREAKER_STREAK_SCAN_LIMIT
 from app.modules.schedule.domain.schedule import (
@@ -140,6 +142,53 @@ class ScheduleRunRepository:
         )
         return found is not None
 
+    async def lock_admission(self, schedule_id: UUID) -> None:
+        """Serialize admission to one schedule until this transaction ends.
+
+        Counting runs in flight and then claiming one is a race between two
+        fires of the same schedule: both count below the cap and both claim.
+        The transaction-scoped advisory lock closes it -- the second fire's
+        count waits until the first's claim is committed -- and, unlike a lock
+        on the schedule row, it does not hold up the outcome and breaker
+        writes that lock that row.
+        """
+        digest = hashlib.blake2b(
+            schedule_id.bytes, digest_size=8, person=b"lemma-sched-cap"
+        ).digest()
+        await self.session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": int.from_bytes(digest, "big", signed=True)},
+        )
+        mark_transaction_scoped_lock(self.session)
+
+    async def count_in_flight(
+        self, schedule_id: UUID, *, excluding_source_event_id: str, limit: int
+    ) -> int:
+        """Runs started and not yet finished, counted up to ``limit``.
+
+        In flight is claimed (PROCESSING) or handed to its target (DISPATCHED)
+        with no outcome back yet. The caller only compares against ``limit``,
+        so counting further would read more history for nothing.
+        """
+        in_flight = (
+            select(ScheduleRun.id)
+            .where(
+                ScheduleRun.schedule_id == schedule_id,
+                ScheduleRun.target_outcome.is_(None),
+                ScheduleRun.status.in_(
+                    (
+                        ScheduleRunStatus.PROCESSING.value,
+                        ScheduleRunStatus.DISPATCHED.value,
+                    )
+                ),
+                ScheduleRun.source_event_id != excluding_source_event_id,
+            )
+            .limit(limit)
+            .subquery()
+        )
+        counted = await self.session.scalar(select(func.count()).select_from(in_flight))
+        return int(counted or 0)
+
     async def insert_filtered(
         self,
         *,
@@ -262,13 +311,21 @@ class ScheduleRunRepository:
         completed_at: datetime | None,
         error_type: str | None = None,
     ) -> ScheduleRunEntity | None:
-        """Apply one target outcome, using the state transition as its idempotency gate."""
+        """Apply one target outcome, using the state transition as its idempotency gate.
+
+        Once recorded, an outcome is final -- with one exception. A workflow run
+        that failed can be retried from its failed step under the same run id,
+        and when it then finishes it reports again, later. That second report
+        replaces the failure: left as TARGET_FAILED, the schedule shows a run
+        that in fact succeeded, and its breaker counts it toward deactivation.
+        """
         if status not in {
             ScheduleRunStatus.COMPLETED,
             ScheduleRunStatus.TARGET_FAILED,
             ScheduleRunStatus.CANCELLED,
         }:
             raise ValueError(f"Invalid target outcome status: {status.value}")
+        completed_at = _as_utc(completed_at)
 
         model = await self.session.scalar(
             select(ScheduleRun)
@@ -278,8 +335,18 @@ class ScheduleRunRepository:
             )
             .with_for_update()
         )
-        if model is None or model.target_outcome is not None:
+        if model is None:
             return None
+        if model.target_outcome is not None:
+            if not _is_retried_workflow_outcome(
+                model, target_kind=target_kind, status=status, completed_at=completed_at
+            ):
+                return None
+            model.target_outcome = status.value
+            model.error_type = error_type
+            model.completed_at = completed_at
+            await self.session.flush()
+            return model.to_entity()
 
         if model.status in {
             ScheduleRunStatus.COMPLETED.value,
@@ -449,3 +516,40 @@ class ScheduleRunRepository:
             )
         )
         return [row.to_entity() for row in rows.all()]
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """A target's finish time, aware.
+
+    A workflow run keeps its times in a column without a zone, so the time on
+    its terminal event is naive -- UTC wall time. Left naive, comparing it with
+    the recorded one raised, and storing it let the database read it in the
+    server's local zone.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
+
+
+def _is_retried_workflow_outcome(
+    model: ScheduleRun,
+    *,
+    target_kind: str,
+    status: ScheduleRunStatus,
+    completed_at: datetime | None,
+) -> bool:
+    """A failed workflow run's later, different outcome, after a retry.
+
+    Workflow only: an agent conversation is not retried under the same id.
+    Strictly later, so a redelivered copy of the original failure -- or an
+    out-of-order one -- cannot flip a recorded outcome back and forth. A failed
+    retry leaves the failure as it was.
+    """
+    return (
+        target_kind == "WORKFLOW"
+        and model.target_outcome == ScheduleRunStatus.TARGET_FAILED.value
+        and status is not ScheduleRunStatus.TARGET_FAILED
+        and completed_at is not None
+        and model.completed_at is not None
+        and completed_at > model.completed_at
+    )

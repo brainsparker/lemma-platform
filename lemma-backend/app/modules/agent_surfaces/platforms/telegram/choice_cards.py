@@ -8,6 +8,11 @@ the keyboard rides on a message rendered and chunked the ordinary way.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TelegramReplyTarget,
+    reply_target_as,
+)
+
 from collections.abc import Awaitable, Callable
 
 from app.core.log.log import get_logger
@@ -50,7 +55,9 @@ async def render_choices(
     formatted text) when there is no chat target or any question is
     multi-select (not expressible as a single-tap keyboard).
     """
-    chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+    chat_id = (
+        reply_target_as(event, TelegramReplyTarget).chat_id or event.external_channel_id
+    )
     if not chat_id:
         return False
     if any(q.multi_select for q in question_plan.questions):
@@ -76,7 +83,7 @@ async def render_choices(
         )
         rows.append([{"text": "✏️ Other (type a reply)", "callback_data": other_token}])
         try:
-            await send_message(
+            message_id = await send_message(
                 event,
                 outbound.question_with_option_notes(question),
                 metadata={"reply_markup": {"inline_keyboard": rows}},
@@ -105,7 +112,21 @@ async def render_choices(
             # every question is tappable, and nothing then accepts a typed
             # answer to the ones that arrived as words.
             return PartDelivery.DEGRADED
+        await _remember_choice_card(question_plan.callback_id, chat_id, message_id)
     return True
+
+
+async def _remember_choice_card(
+    callback_id: str, chat_id: object, message_id: str | None
+) -> None:
+    """Remember a keyboard so it can be taken away once its pause is over."""
+    if message_id is not None:
+        await remember_decision_card(
+            callback_id,
+            DecisionCardHandle(
+                platform="TELEGRAM", channel=str(chat_id), message_id=message_id
+            ),
+        )
 
 
 async def render_decision(
@@ -119,7 +140,9 @@ async def render_decision(
     buttons; each button's ``callback_data`` is a short token resolving to
     ``{callback_id, decision}`` (Telegram caps callback_data at 64 bytes).
     """
-    chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+    chat_id = (
+        reply_target_as(event, TelegramReplyTarget).chat_id or event.external_channel_id
+    )
     if not chat_id:
         return False
     rows: list[list[dict[str, str]]] = []
@@ -150,11 +173,5 @@ async def render_decision(
         "\n\n".join(body_lines),
         metadata={"reply_markup": {"inline_keyboard": rows}},
     )
-    if message_id is not None:
-        await remember_decision_card(
-            approval_plan.callback_id,
-            DecisionCardHandle(
-                platform="TELEGRAM", channel=str(chat_id), message_id=message_id
-            ),
-        )
+    await _remember_choice_card(approval_plan.callback_id, chat_id, message_id)
     return True

@@ -9,13 +9,8 @@ collaborator *off* the service (`conversation_repository`, `agent_repository`,
 `services/interaction_helpers.py` assembled a second service out of six of them.
 
 Twelve operations replace it. Two of the six collaborators turned out to be
-dead weight: `ConversationService` stores `authorization_service` and
-`fallback_model_name` and neither it nor any of the five coordinators it builds
-ever reads them -- `agent/api/dependencies.py` has never even passed a
-`fallback_model_name`, so every surface was threading `None` across a module
-boundary. They are still on the constructor -- taking a parameter off it is a
-change to every place in `agent` that builds one, and not this change -- but
-nothing crosses a module boundary for them any more.
+dead weight -- nothing ever read `authorization_service` or
+`fallback_model_name` -- and are gone from `ConversationService` altogether.
 
 Every operation takes the unit of work rather than being handed a bound service,
 which is also what makes the worker's two modes disappear from the caller: the
@@ -40,12 +35,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.api.dependencies import get_conversation_service
+from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
@@ -53,7 +49,10 @@ from app.modules.agent.domain.outsiders import (
     OUTSIDE_ANSWER_TOOL,
     Audience,
 )
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pausing_tools import (
+    USER_PAUSING_TOOL_NAMES,
+    PendingPause,
+)
 from app.modules.agent.domain.private_notes import answers_lemma_message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -64,9 +63,7 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
 )
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
-)
+from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.usage.contracts.execution import build_usage_service
 
 #: The pausing kind a surface renders as a decision rather than as a question.
@@ -143,19 +140,17 @@ def _service(uow: SqlAlchemyUnitOfWork):
     A plain factory despite its FastAPI ``Depends`` annotation -- calling it
     directly is how the other non-request callers build the same service.
     """
-    return get_conversation_service(uow)
+    return build_conversation_service(uow)
 
 
-def _pending(raw: dict[str, object] | None) -> PendingInteraction | None:
-    if raw is None:
+def _pending(pause: PendingPause | None) -> PendingInteraction | None:
+    if pause is None:
         return None
-    tool_args = raw.get("tool_args")
-    agent_run_id = raw.get("agent_run_id")
     return PendingInteraction(
-        tool_call_id=str(raw.get("tool_call_id") or ""),
-        kind=str(raw.get("kind") or ""),
-        tool_args=tool_args if isinstance(tool_args, dict) else {},
-        agent_run_id=agent_run_id if isinstance(agent_run_id, UUID) else None,
+        tool_call_id=pause.tool_call_id,
+        kind=pause.kind.value,
+        tool_args=pause.tool_args,
+        agent_run_id=pause.agent_run_id,
     )
 
 
@@ -448,11 +443,10 @@ async def retry_failed_run(
     )
     token = set_current_context(auth_ctx)
     try:
-        await ConversationRetryService(
+        await ConversationService(
             uow=uow,
             conversation_repository=ConversationRepository(uow),
             agent_repository=AgentRepository(uow),
-            authorization_service=create_authorization_data_service(uow),
             usage_service=build_usage_service(uow),
         ).retry_failed_run(
             conversation_id=conversation_id,
@@ -511,7 +505,10 @@ async def conversation_metadata_value(
 
 
 async def set_conversation_metadata_value(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, key: str, value: str | None
+    uow: SqlAlchemyUnitOfWork,
+    conversation_id: UUID,
+    key: str,
+    value: str | BaseModel | None,
 ) -> None:
     """Write one metadata key, leaving every sibling key alone.
 
@@ -519,9 +516,14 @@ async def set_conversation_metadata_value(
     writes it back, so a concurrent writer touching another key loses. This
     goes through `jsonb_set`, which is what a flag written from an inbound
     webhook while a run is stamping its own metadata needs.
+
+    A model is stored as its JSON object, so its fields can be queried
+    (`conversation_metadata_records`).
     """
     await ConversationRepository(uow).set_conversation_metadata_key(
-        conversation_id, key, value
+        conversation_id,
+        key,
+        value.model_dump(mode="json") if isinstance(value, BaseModel) else value,
     )
 
 

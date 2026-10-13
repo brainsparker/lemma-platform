@@ -463,9 +463,8 @@
             "type": "string"
           },
           "visibility": {
-            "default": "POD",
-            "title": "Visibility",
-            "type": "string"
+            "$ref": "#/components/schemas/ResourceVisibility",
+            "default": "POD"
           }
         },
         "required": [
@@ -605,9 +604,8 @@
             "type": "string"
           },
           "visibility": {
-            "default": "POD",
-            "title": "Visibility",
-            "type": "string"
+            "$ref": "#/components/schemas/ResourceVisibility",
+            "default": "POD"
           }
         },
         "required": [
@@ -1325,13 +1323,12 @@
           "availability_status": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/RuntimeProfileAvailability"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Availability Status"
+            ]
           },
           "config": {
             "additionalProperties": true,
@@ -1504,13 +1501,12 @@
           "availability_status": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/RuntimeProfileAvailability"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Availability Status"
+            ]
           },
           "config": {
             "additionalProperties": true,
@@ -1769,9 +1765,8 @@
             "type": "string"
           },
           "visibility": {
-            "default": "POD",
-            "title": "Visibility",
-            "type": "string"
+            "$ref": "#/components/schemas/ResourceVisibility",
+            "default": "POD"
           }
         },
         "required": [
@@ -5340,6 +5335,7 @@
           },
           "config": {
             "additionalProperties": true,
+            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued.",
             "title": "Config",
             "type": "object"
           },
@@ -15260,8 +15256,6 @@
           "TEXT",
           "TOOLS",
           "VISION",
-          "AUDIO",
-          "STRUCTURED_OUTPUT",
           "REASONING"
         ],
         "title": "RuntimeModelCapability",
@@ -15315,6 +15309,17 @@
         "title": "RuntimeModelCatalogEntry",
         "type": "object"
       },
+      "RuntimeProfileAvailability": {
+        "description": "Whether a profile can take work right now.\n\nDerived from the harness and its host at read time, never persisted: the\nsame profile is READY or OFFLINE depending only on whether someone's laptop\nis awake. Model-provider profiles have no availability - they are reachable\nwhenever their endpoint is.",
+        "enum": [
+          "READY",
+          "OFFLINE",
+          "NOT_INSTALLED",
+          "UNAVAILABLE"
+        ],
+        "title": "RuntimeProfileAvailability",
+        "type": "string"
+      },
       "RuntimeProfileKind": {
         "enum": [
           "MODEL_PROVIDER",
@@ -15328,8 +15333,6 @@
         "enum": [
           "OPENAI_COMPATIBLE",
           "ANTHROPIC_COMPATIBLE",
-          "AZURE_OPENAI",
-          "GOOGLE_VERTEX",
           "AGENT_HOST"
         ],
         "title": "RuntimeProfileProtocol",
@@ -15347,8 +15350,7 @@
       "RuntimeProfileStatus": {
         "enum": [
           "ACTIVE",
-          "DISABLED",
-          "REAUTH_REQUIRED"
+          "DISABLED"
         ],
         "title": "RuntimeProfileStatus",
         "type": "string"
@@ -16616,6 +16618,9 @@
           },
           "telegram": {
             "$ref": "#/components/schemas/SurfaceTelegramConfigInput"
+          },
+          "whatsapp": {
+            "$ref": "#/components/schemas/SurfaceWhatsAppConfigInput"
           }
         },
         "title": "SurfaceBehaviorConfigInput",
@@ -16706,6 +16711,9 @@
           },
           "telegram": {
             "$ref": "#/components/schemas/SurfaceTelegramConfigInput"
+          },
+          "whatsapp": {
+            "$ref": "#/components/schemas/SurfaceWhatsAppConfigInput"
           }
         },
         "title": "SurfaceConfigResponse",
@@ -17592,6 +17600,32 @@
           }
         },
         "title": "SurfaceUpdateRequest",
+        "type": "object"
+      },
+      "SurfaceWhatsAppConfigInput": {
+        "additionalProperties": false,
+        "description": "WhatsApp settings. Mirrored across request and response.",
+        "properties": {
+          "language": {
+            "default": "en_US",
+            "description": "The template's language code.",
+            "title": "Language",
+            "type": "string"
+          },
+          "reengage_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "An approved message template on this number's business account. Sent to a member whose 24-hour window has closed, holding the message itself until they reply. Unset, such a message is refused.",
+            "title": "Reengage Template"
+          }
+        },
+        "title": "SurfaceWhatsAppConfigInput",
         "type": "object"
       },
       "TableColumn": {
@@ -18746,6 +18780,7 @@
                 "type": "null"
               }
             ],
+            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued.",
             "title": "Config"
           },
           "filter_instruction": {

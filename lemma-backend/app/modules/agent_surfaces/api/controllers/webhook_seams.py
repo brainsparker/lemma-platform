@@ -13,6 +13,8 @@ line ceiling and these are the part of it that is not a route.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.services.pooled_numbers import pooled_number
+
 from collections.abc import Awaitable, Callable
 
 from fastapi import Depends
@@ -23,9 +25,6 @@ from app.core.authorization.scope import uow_scope
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.domain.whatsapp_numbers import WhatsAppNumberEntity
-from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (  # noqa: E501
-    WhatsAppNumberRepository,
-)
 
 #: Reads one pool row by the phone number id a callback path names.
 #:
@@ -57,9 +56,7 @@ def get_pooled_number_lookup(
 
     async def lookup(phone_number_id: str) -> WhatsAppNumberEntity | None:
         async with uow_scope(uow_factory) as uow:
-            return await WhatsAppNumberRepository(uow).get_by_phone_number_id(
-                phone_number_id
-            )
+            return await pooled_number(uow, phone_number_id)
 
     return lookup
 

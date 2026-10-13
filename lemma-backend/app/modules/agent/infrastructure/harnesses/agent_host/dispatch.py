@@ -10,15 +10,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from uuid import UUID
 
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
+
 from app.core.crypto import get_secret_cipher
+from app.core.infrastructure.db.transient_errors import (
+    is_deadlock,
+    is_transient_database_error,
+)
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
-from app.modules.agent.domain.agent_host import NEW_SESSION_ONLY, AgentHostRunSpec
+from app.modules.agent.domain.agent_host import (
+    NEW_SESSION_ONLY,
+    AgentHostPreApproval,
+    AgentHostRunSpec,
+)
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
@@ -36,6 +46,10 @@ from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.agent_host import run_resume, session_memory
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostRepositoryError,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host.pre_approvals import (
+    pre_approvals_for,
+    supports_pre_approval,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
     AgentHostRunConfig,
@@ -59,7 +73,7 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_TOOL_NAME,
     final_answer_expected,
 )
-from app.modules.agent.services.workspace_location import resolve_workspace_location
+from app.modules.agent.domain.workspace_location import resolve_workspace_location
 
 logger = get_logger(__name__)
 
@@ -75,6 +89,7 @@ def run_spec_from(
     system_prompt_delivery: str | None,
     resume_session_id: str | None,
     run_deadline: datetime,
+    pre_approvals: Sequence[AgentHostPreApproval] = (),
 ) -> AgentHostRunSpec:
     """The START_RUN spec for one run, out of its ``run_start_payload``.
 
@@ -97,6 +112,7 @@ def run_spec_from(
         resume_session_id=resume_session_id,
         workspace_cwd=resolve_workspace_location(conversation).cwd,
         run_deadline=run_deadline,
+        pre_approvals=list(pre_approvals),
     )
 
 
@@ -145,7 +161,19 @@ async def refresh_credential[DepsT: AgentContext](
                     uow, run_id=agent_run_id, expires_at=token_expires_at(mcp)
                 )
             await uow.commit()
-    except (AgentHostRepositoryError, RuntimeError, ValueError, KeyError) as exc:
+    except (
+        AgentHostRepositoryError,
+        RuntimeError,
+        ValueError,
+        KeyError,
+        SQLAlchemyError,
+    ) as exc:
+        # A database that was only busy -- a deadlock, a pool with no free
+        # connection -- is a refresh that did not land, like the rest of
+        # these: the next cycle tries again, well inside the margin. Any
+        # other database error is a bug and fails the run.
+        if isinstance(exc, SQLAlchemyError) and not is_transient_database_error(exc):
+            raise
         logger.warning(
             "agent.harnesses.agent_host.credential_refresh_failed.degraded",
             agent_run_id=str(agent_run_id),
@@ -204,6 +232,7 @@ async def enqueue_run[DepsT: AgentContext](
         harness_id = harness.id
         host_id = harness.host_id
         steerable = supports_steering(harness.capabilities)
+        pre_approving = supports_pre_approval(harness.capabilities)
         harness_key = harness.harness_key
         config_revision = harness.config_revision
         # Set only on a run started to answer a pausing tool call. Read from
@@ -231,6 +260,7 @@ async def enqueue_run[DepsT: AgentContext](
             for message in messages
             if message.agent_run_id == agent_run_id and is_queued(message.metadata)
         )
+    resumed_tool_call_id = _resumed_tool_call_id(run)
     admission = _Admission(
         resume_session_id=resume_session_id,
         harness_id=harness_id,
@@ -238,7 +268,14 @@ async def enqueue_run[DepsT: AgentContext](
         steerable=steerable,
         harness_key=harness_key,
         config_revision=config_revision,
-        resumed_tool_call_id=_resumed_tool_call_id(run),
+        resumed_tool_call_id=resumed_tool_call_id,
+        # Only to a host that says it honours them; any other would ignore the
+        # field and ask the person again, which is what it does without one.
+        pre_approvals=tuple(
+            pre_approvals_for(messages, resumed_tool_call_id=resumed_tool_call_id)
+            if pre_approving
+            else ()
+        ),
     )
     # The prompt is built with no transaction open, so the person can withdraw
     # a carried message while it is being built. The admission then finds it
@@ -349,6 +386,91 @@ class _Admission:
     harness_key: str
     config_revision: str
     resumed_tool_call_id: str | None
+    pre_approvals: tuple[AgentHostPreApproval, ...]
+
+
+#: One retry of the admitting transaction on a deadlock, as
+#: ``AgentHostLinkStore.apply_control`` does for the host's frames. The lock
+#: order (``HostRowLock``) removes the cycles we know about; this catches one we
+#: do not, which would otherwise fail a run that did nothing wrong.
+_DEADLOCK_ATTEMPTS = 2
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmittedRun:
+    """Everything the admitting transaction writes, settled before it opens."""
+
+    run_spec: AgentHostRunSpec
+    host_id: UUID
+    run_config: AgentHostRunConfig
+    encrypted_mcp: JsonObject
+    carried: frozenset[UUID]
+    instructions_digest: str
+    credential_expires_at: datetime | None
+
+
+async def _admission_transaction(
+    uow_factory: UnitOfWorkFactory, admitted: _AdmittedRun
+) -> None:
+    """Claim the carried messages, admit the run and commit, all or nothing."""
+    run_id = admitted.run_spec.agent_run_id
+    async with uow_factory() as uow:
+        # First, so a claim that comes back short rolls back before anything
+        # else is written; see `claim_exactly`.
+        await claim_exactly(uow, agent_run_id=run_id, carried=admitted.carried)
+        await AgentHostDispatchRepository(uow).enqueue_run(
+            host_id=admitted.host_id,
+            harness_id=admitted.run_config.harness_id,
+            runtime_profile_id=admitted.run_config.runtime_profile_id,
+            run_spec=admitted.run_spec,
+            encrypted_mcp_payload=admitted.encrypted_mcp,
+            command_ttl_seconds=admitted.run_config.wait_timeout_seconds,
+        )
+        # A promise, committed with the command it belongs to. It becomes a
+        # record only when the host reports that it prompted, so a run that
+        # dies on the way out does not leave these instructions marked
+        # delivered and skipped for the rest of the conversation.
+        await session_memory.record_pending_instructions(
+            uow,
+            conversation_id=admitted.run_spec.conversation_id,
+            run_id=run_id,
+            digest=admitted.instructions_digest,
+        )
+        await run_resume.record_credential_expiry(
+            uow, run_id=run_id, expires_at=admitted.credential_expires_at
+        )
+        await uow.commit()
+
+
+async def _commit_admission(
+    uow_factory: UnitOfWorkFactory,
+    admitted: _AdmittedRun,
+    *,
+    transaction: Callable[
+        [UnitOfWorkFactory, _AdmittedRun], Awaitable[None]
+    ] = _admission_transaction,
+) -> None:
+    """Run the admitting transaction, once more if Postgres broke a deadlock.
+
+    Safe to run again: a deadlock aborts the whole transaction, so nothing is
+    claimed and no lease or command exists when the retry starts, and it
+    re-checks the host and harness from scratch. Anything that is not a
+    deadlock propagates. ``transaction`` is a parameter only so a test can
+    script the database's answers.
+    """
+    for attempt in range(_DEADLOCK_ATTEMPTS):
+        try:
+            await transaction(uow_factory, admitted)
+            return
+        except DBAPIError as exc:
+            if attempt + 1 == _DEADLOCK_ATTEMPTS or not is_deadlock(exc):
+                raise
+            logger.warning(
+                "agent.harnesses.agent_host.dispatch_deadlock_retried.degraded",
+                agent_run_id=str(admitted.run_spec.agent_run_id),
+                host_id=str(admitted.host_id),
+                exc_info=True,
+            )
 
 
 async def _admit[DepsT: AgentContext](
@@ -429,43 +551,28 @@ async def _admit[DepsT: AgentContext](
         now=dispatched_at,
         agent_run_id=agent_run_id,
     )
-    async with uow_factory() as uow:
-        # First, so a claim that comes back short rolls back before anything
-        # else is written; see `claim_exactly`.
-        await claim_exactly(uow, agent_run_id=agent_run_id, carried=carried)
-        run_spec = run_spec_from(
-            payload,
-            conversation=conversation,
-            harness_id=harness_id,
-            profile_revision=admission.config_revision,
-            run_config=run_config,
-            system_prompt=system_prompt,
-            system_prompt_delivery=system_prompt_delivery,
-            resume_session_id=resume_session_id,
-            run_deadline=dispatched_at + timedelta(seconds=timeout_seconds),
-        )
-        await AgentHostDispatchRepository(uow).enqueue_run(
-            host_id=host_id,
-            harness_id=run_config.harness_id,
-            runtime_profile_id=run_config.runtime_profile_id,
-            run_spec=run_spec,
-            encrypted_mcp_payload=encrypted_mcp,
-            command_ttl_seconds=run_config.wait_timeout_seconds,
-        )
-        # A promise, committed with the command it belongs to. It becomes a
-        # record only when the host reports that it prompted, so a run that
-        # dies on the way out does not leave these instructions marked
-        # delivered and skipped for the rest of the conversation.
-        await session_memory.record_pending_instructions(
-            uow,
-            conversation_id=conversation.id,
-            run_id=agent_run_id,
-            digest=digest,
-        )
-        await run_resume.record_credential_expiry(
-            uow, run_id=agent_run_id, expires_at=token_expires_at(mcp)
-        )
-        await uow.commit()
+    run_spec = run_spec_from(
+        payload,
+        conversation=conversation,
+        harness_id=harness_id,
+        profile_revision=admission.config_revision,
+        run_config=run_config,
+        system_prompt=system_prompt,
+        system_prompt_delivery=system_prompt_delivery,
+        resume_session_id=resume_session_id,
+        run_deadline=dispatched_at + timedelta(seconds=timeout_seconds),
+        pre_approvals=admission.pre_approvals,
+    )
+    admitted = _AdmittedRun(
+        run_spec=run_spec,
+        host_id=host_id,
+        run_config=run_config,
+        encrypted_mcp=encrypted_mcp,
+        carried=carried,
+        instructions_digest=digest,
+        credential_expires_at=token_expires_at(mcp),
+    )
+    await _commit_admission(uow_factory, admitted)
     await poke_host(host_id)
     return DispatchedRun(
         harness_key=admission.harness_key,

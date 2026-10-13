@@ -7,6 +7,8 @@ one, an email domain counted as a mention.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.telegram.adapter import TelegramSurfaceAdapter
+
 from copy import deepcopy
 
 import pytest
@@ -28,10 +30,7 @@ from app.modules.agent_surfaces.platforms.telegram.parser import (
 from app.modules.agent_surfaces.platforms.whatsapp.parser import (
     WhatsAppMessageParser,
 )
-from app.modules.agent_surfaces.services.surface_candidates import (
-    needs_mention_verification,
-)
-from app.modules.agent_surfaces.services.telegram_addressing import (
+from app.modules.agent_surfaces.platforms.telegram.addressing import (
     addressed_to_this_bot,
 )
 
@@ -156,7 +155,7 @@ def test_a_reply_to_another_bot_is_not_put_to_this_one():
     )
     assert parsed is not None
     # Settled only once getMe says who we are, so ingress must ask.
-    assert needs_mention_verification("TELEGRAM", parsed, [object()])  # type: ignore[list-item]
+    assert TelegramSurfaceAdapter().mention_is_provisional(parsed)
 
     settled = addressed_to_this_bot(parsed, bot_username="lemmabot", bot_user_id="42")
 

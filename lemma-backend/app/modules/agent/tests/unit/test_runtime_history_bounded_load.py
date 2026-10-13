@@ -25,7 +25,6 @@ from app.modules.agent.domain.entities import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.runtime_history import ELISION_BLOCK_RUNS
 from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
 from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
@@ -110,10 +109,6 @@ def _as_bounded(runs: list[AgentRun]) -> list[AgentRun]:
     return bounded
 
 
-def _runner() -> AgentRunnerService:
-    return AgentRunnerService(uow_factory=object(), harness_registry=object())
-
-
 def _fingerprint(messages: list[Message]) -> list[tuple]:
     return [
         (
@@ -150,10 +145,9 @@ def _shapes() -> list[list[AgentRun]]:
 
 
 def test_bounded_history_selects_what_the_full_load_selected() -> None:
-    runner = _runner()
     for index, runs in enumerate(_shapes()):
-        full = _fingerprint(runner._select_runtime_history(runs))
-        bounded = _fingerprint(runner._select_runtime_history(_as_bounded(runs)))
+        full = _fingerprint(select_runtime_history(runs))
+        bounded = _fingerprint(select_runtime_history(_as_bounded(runs)))
         assert bounded == full, f"shape {index} diverged"
 
 
@@ -167,7 +161,7 @@ def test_the_elision_notice_counts_messages_that_were_never_loaded() -> None:
     runs = [_run(conversation_id, i, 9) for i in range(_ELIDES_ONE_BLOCK)]
     bounded = _as_bounded(runs)
 
-    selected = _runner()._select_runtime_history(bounded)
+    selected = select_runtime_history(bounded)
 
     notices = [
         message

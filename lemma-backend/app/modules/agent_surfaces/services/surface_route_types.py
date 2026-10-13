@@ -12,8 +12,9 @@ private by spelling.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from dataclasses import dataclass, replace
-from typing import Any
 from uuid import UUID
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -58,7 +59,7 @@ class SurfaceEgressTarget:
     pod_id: UUID
     adapter: SurfacePlatformAdapterPort
     event: ParsedInboundSurfaceEvent
-    credentials: dict[str, Any]
+    credentials: SurfaceCredentials
     #: Whose conversation this is: the member a group answer was made for.
     conversation_user_id: UUID | None = None
 

@@ -18,8 +18,9 @@ from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.channel_history import (
     TeamsChannelHistoryMixin,
 )
-from app.modules.agent_surfaces.platforms.teams.credentials import (
-    tenant_id_from_credentials,
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    TeamsCredentials,
 )
 from app.modules.agent_surfaces.platforms.teams.attachment_urls import (
     encode_share_url,
@@ -44,16 +45,16 @@ _MAX_DOWNLOAD_REDIRECTS = 5
 
 
 class TeamsPlatformService(TeamsChannelHistoryMixin):
-    def __init__(self, *, credentials: dict[str, Any]) -> None:
-        self.credentials = credentials
-        self._graph_base = str(
-            credentials.get("graph_api_base_url") or GRAPH_BASE
-        ).rstrip("/")
+    def __init__(self, *, credentials: CredentialsLike) -> None:
+        self.credentials = TeamsCredentials.of(credentials)
+        self._graph_base = (self.credentials.graph_api_base_url or GRAPH_BASE).rstrip(
+            "/"
+        )
         # Deployments that reach Bot Framework through a non-public host (the
         # test doubles, an on-prem gateway) declare it here. It joins the hosts
         # allowed to receive the bot token; it does not replace them.
         self._bot_service_host = hostname_of(
-            str(credentials.get("bot_service_base_url") or "")
+            self.credentials.bot_service_base_url or ""
         )
 
     async def download_attachment_bytes(
@@ -67,7 +68,7 @@ class TeamsPlatformService(TeamsChannelHistoryMixin):
         if not download_url:
             return None
         content_type = str(attachment.get("content_type") or "").strip()
-        tenant_id = tenant_id_from_credentials(self.credentials)
+        tenant_id = self.credentials.tenant_id
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=60)
         ) as session:

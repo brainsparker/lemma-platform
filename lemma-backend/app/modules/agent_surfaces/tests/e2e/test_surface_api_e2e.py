@@ -301,6 +301,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
         "contacts",
     }
@@ -370,6 +371,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
         "contacts",
     }
@@ -380,6 +382,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
         "contacts",
     }

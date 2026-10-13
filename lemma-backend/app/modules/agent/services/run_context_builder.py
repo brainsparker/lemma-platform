@@ -43,7 +43,7 @@ from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.services.surface_context import (
     surface_context_from_conversation,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     has_recorded_cwd,
     pod_cwd_from_workspace_cwd,
     resolve_workspace_location,

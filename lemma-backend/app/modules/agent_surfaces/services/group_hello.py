@@ -12,7 +12,8 @@ was added, and as the description of a WhatsApp group the bot creates.
 
 from __future__ import annotations
 
-from typing import Any
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -51,7 +52,7 @@ async def say_hello_in_group(
     *,
     surface: AgentSurfaceEntity,
     adapter: SurfacePlatformAdapterPort,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
     channel_id: str,
 ) -> None:
     """Post the hello into a group the bot was just added to. Best-effort."""

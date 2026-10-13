@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
+
+from collections.abc import Callable
 from enum import StrEnum
 from datetime import datetime, timezone
 from typing import Any
@@ -138,7 +141,7 @@ def is_slack_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
     """A Slack conversation between several people and the bot (an ``mpim``)."""
     return (
         event.platform is SurfacePlatform.SLACK
-        and event.metadata.get("channel_type") == "mpim"
+        and InboundRoutingFacts.of(event).channel_type == "mpim"
     )
 
 
@@ -446,12 +449,10 @@ class AgentSurfaceEntity(AggregateRoot):
         row accept every tenant's events, and an event with no tenant reach
         every surface.
         """
-        if self.surface_type is SurfacePlatform.TEAMS:
-            expected = self.external_tenant_id
-        elif self.surface_type is SurfacePlatform.SLACK:
-            expected = self.external_workspace_id
-        else:
+        tenant_key = _TENANT_KEY.get(self.surface_type)
+        if tenant_key is None:
             return True
+        expected = tenant_key(self)
         return bool(expected) and bool(tenant_id) and expected == tenant_id
 
     def should_ignore_sender(self, sender_external_user_id: str | None) -> bool:
@@ -535,26 +536,21 @@ class AgentSurfaceEntity(AggregateRoot):
         # its own it admitted every threaded reply in a connected channel,
         # whoever it was to. The caller resolves the rest; see
         # `SurfaceInboundMixin._admit`.
-        if event.metadata.get("is_thread_reply") and thread_is_ours:
+        if InboundRoutingFacts.of(event).is_thread_reply and thread_is_ours:
             return True
-        if not event.mentioned_agent:
-            return False
-        if self.surface_type is SurfacePlatform.SLACK:
-            # Slack delivers `app_mention` only to the app that was mentioned,
-            # so the event type is itself the answer.
-            if event.metadata.get("event_type") == "app_mention":
-                return True
-            # A plain `message` reaches here whenever *anyone* was @-mentioned,
-            # because that is all the parser can tell. So it needs this
-            # surface's own bot id among them — and fails closed when there is
-            # no bot id to compare, which a surface created through the
-            # bundle/CLI path has not recorded. That case used to be read as
-            # "allow": the agent then answered every channel message in which
-            # two colleagues mentioned each other.
-            bot_user_id = self.surface_identity_id
-            mentioned_user_ids = set(event.metadata.get("mentioned_user_ids") or [])
-            return bool(bot_user_id) and bot_user_id in mentioned_user_ids
-        return True
+        # `mentioned_agent` means *this* bot by now: where the parser could
+        # not tell (a Slack `message` mentioning anyone, a Telegram @name),
+        # the platform's adapter settled it before admission
+        # (`InboundReader.settle_mention`).
+        return event.mentioned_agent
+
+
+#: Where a surface records the tenant its installation is scoped to, on the
+#: platforms that scope one. A platform absent here is not tenant-scoped.
+_TENANT_KEY: dict[SurfacePlatform, Callable[[AgentSurfaceEntity], str | None]] = {
+    SurfacePlatform.TEAMS: lambda surface: surface.external_tenant_id,
+    SurfacePlatform.SLACK: lambda surface: surface.external_workspace_id,
+}
 
 
 class AgentSurfaceConversationLink(Entity):

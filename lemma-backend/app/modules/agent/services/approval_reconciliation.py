@@ -222,6 +222,11 @@ async def agent_host_permission_tool_return(
     # Read only once the enqueue has had the lease lock: a turn being ended for
     # its parked window commits its mark under that same lock.
     suspended = host_id is None and await _turn_ended_while_parked(uow, agent_run_id)
+    carried = (
+        suspended
+        and decision != AgentRunApprovalDecision.DENY
+        and await _resume_carries_the_approval(uow, agent_run_id)
+    )
 
     content = RequestApprovalResponse(
         success=True,
@@ -230,6 +235,7 @@ async def agent_host_permission_tool_return(
             decision=decision,
             delivered=host_id is not None,
             suspended=suspended,
+            carried=carried,
         ),
         decision=decision,
         executed=False,
@@ -256,23 +262,44 @@ async def _turn_ended_while_parked(
     return run is not None and parked_suspension_of(run.metadata) is not None
 
 
+async def _resume_carries_the_approval(
+    uow: SqlAlchemyUnitOfWork, agent_run_id: UUID
+) -> bool:
+    """Whether the run resuming this decision will carry it to its host."""
+    # Lazy for the same reason as the dispatch repository above.
+    from app.modules.agent.infrastructure.harnesses.agent_host.pre_approvals import (
+        host_pre_approves,
+    )
+
+    return await host_pre_approves(uow, agent_run_id=agent_run_id)
+
+
 def _permission_decision_message(
     request: AgentHostPermissionRequest,
     *,
     decision: AgentRunApprovalDecision,
     delivered: bool,
     suspended: bool = False,
+    carried: bool = False,
 ) -> str:
     """What the agent reads about a decision on its permission request."""
     if suspended:
         # Read by a resumed run, in a new turn. The ACP request it answers
-        # was dropped with the turn that asked it, and nothing carries an
-        # approval into the next one: the agent asks again, and is answered
-        # again, if it does the thing at all.
+        # was dropped with the turn that asked it. A host that honours
+        # pre-approvals is handed this one with the resume, and allows the
+        # same action once without asking (`harnesses/agent_host/
+        # pre_approvals.py`); an older one asks the person again.
         if decision == AgentRunApprovalDecision.DENY:
             return (
                 "Denied. Your earlier turn was paused while this waited for the "
                 "person, so the request lapsed and nothing ran. Do not do it."
+            )
+        if carried:
+            return (
+                "Approved. Your earlier turn was paused while this waited for "
+                "the person, so the request lapsed and nothing ran. If it is "
+                "still needed, do it again now, exactly as before: that action "
+                "will be allowed once without asking the person again."
             )
         return (
             "Approved. Your earlier turn was paused while this waited for the "

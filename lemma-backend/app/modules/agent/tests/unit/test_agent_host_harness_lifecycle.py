@@ -16,6 +16,11 @@ from uuid import uuid7
 
 import pytest
 
+from app.modules.agent.domain.runtime_profiles import (
+    RuntimeProfileProtocol,
+    RuntimeProfileScope,
+)
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
 from app.modules.agent.infrastructure.agent_host.event_stream import (
@@ -54,13 +59,15 @@ def _options():
     return SimpleNamespace(
         model_name=None,
         should_stop=None,
-        extra={
-            "runtime_profile": {
-                "harness_id": str(uuid7()),
-                "profile_id": str(uuid7()),
-                "config": {"harness_snapshot_revision": "1"},
-            }
-        },
+        runtime_profile=RuntimeSnapshot(
+            profile_id=str(uuid7()),
+            profile_name="Laptop",
+            harness_id=str(uuid7()),
+            scope=RuntimeProfileScope.PERSONAL,
+            protocol=RuntimeProfileProtocol.AGENT_HOST,
+            config={"harness_snapshot_revision": "1"},
+        ),
+        extra={},
     )
 
 
@@ -271,6 +278,7 @@ class TestARunRefusedBeforeItStarted:
                 del run_id
                 return SimpleNamespace(
                     state=AgentHostRunState.FAILED.value,
+                    accepted_at=None,
                     error_code="CONFIG_REVISION_STALE",
                     error_detail=detail,
                 )

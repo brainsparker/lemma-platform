@@ -21,6 +21,8 @@ question put to the bot.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from dataclasses import dataclass
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -113,7 +115,7 @@ def _telegram_adapter(
 @dataclass(frozen=True, slots=True)
 class _Adopted:
     surface: AgentSurfaceEntity
-    credentials: dict[str, object]
+    credentials: SurfaceCredentials
     hello: str
     created: bool
 

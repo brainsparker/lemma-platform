@@ -2,6 +2,17 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.telegram.addressing import (
+    addressed_to_this_bot,
+    mention_is_provisional,
+)
+
+from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -12,7 +23,10 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.telegram.membership import (
     joined_group_event,
 )
-from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
@@ -118,6 +132,36 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
     ) -> ParsedInboundSurfaceEvent | None:
         return self._parser.parse(payload, headers)
 
+    def mention_is_provisional(self, event: ParsedInboundSurfaceEvent) -> bool:
+        return mention_is_provisional(event)
+
+    async def settle_mention(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        bot_user_id: str | None,
+    ) -> ParsedInboundSurfaceEvent:
+        """Settle it against the bot's own @username and id, from getMe.
+
+        ``bot_user_id`` is not trusted for this: a surface records its bot's
+        id once, and getMe is what Telegram says now. Best-effort: the event
+        is returned unchanged when getMe cannot be asked.
+        """
+        del bot_user_id
+        service = TelegramPlatformService(credentials)
+        try:
+            return addressed_to_this_bot(
+                event,
+                bot_username=await service.get_bot_username() or "",
+                bot_user_id=await service.get_bot_user_id(),
+            )
+        except PLATFORM_TRANSPORT_ERRORS:
+            logger.warning(
+                "agent_surfaces.telegram.mention_unsettled.degraded", exc_info=True
+            )
+            return event
+
     async def parse_inbound_lifecycle(
         self, payload: dict[str, object], headers: dict[str, str] | None = None
     ) -> ParsedSurfaceLifecycleEvent | None:
@@ -131,14 +175,14 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         return joined_group_event(payload)
 
     async def fetch_sender_profile(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
     ) -> SurfaceSenderProfile | None:
         return await TelegramPlatformService(credentials).fetch_sender_profile(event)
 
     async def send_message(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
@@ -150,7 +194,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
     async def _render_resource(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -164,7 +208,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
     async def _render_choices(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -176,7 +220,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
     async def _render_decision(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -217,7 +261,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
     async def acknowledge_interaction(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         interaction: ParsedSurfaceInteraction,
         text: str | None = None,
         show_alert: bool = False,
@@ -231,14 +275,21 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         )
 
     async def retire_decision_card(
-        self, *, credentials: dict[str, object], handle: DecisionCardHandle
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        handle: DecisionCardHandle,
+        reason: CardRetirement = CardRetirement.SUPERSEDED,
     ) -> None:
+        # The card's words stay as written and its keyboard goes, whatever
+        # ended the pause: there is no message to rewrite a note into.
+        del reason
         await retire_telegram_card(TelegramClient.from_credentials(credentials), handle)
 
     async def add_processing_indicator(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         metadata: dict[str, Any] | None = None,
     ) -> None:
@@ -249,12 +300,12 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
     async def stream_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> ProgressHandle | None:
         # Accepted and unused: Slack authors its stream under the agent's name,
         # Telegram edits a message the bot already owns. Declared because the
         # shared caller passes it to whichever adapter answers.
@@ -266,16 +317,16 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
     async def end_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
     ) -> None:
         await TelegramPlatformService(credentials).end_progress(event, progress_handle)
 
     async def download_attachment(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         attachment: dict[str, Any],
     ) -> tuple[bytes, str, str] | None:
@@ -286,7 +337,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
     async def fetch_thread_context(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         limit: int = 15,
     ) -> list[SurfaceContextMessage]:
@@ -313,7 +364,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
     async def _render_file(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         file_name: str,
         file_bytes: bytes,
@@ -331,7 +382,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
     async def _render_voice(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         file_name: str,
         audio_bytes: bytes,

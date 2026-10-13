@@ -18,6 +18,10 @@ import pytest
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import (
+    PENDING_DISPLAY_PATHS,
+    surface_caches,
+)
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -25,7 +29,7 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceConversationLink
 from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
-from app.modules.agent_surfaces.services import one_reply_attachments, pending_envelope
+from app.modules.agent_surfaces.services import one_reply_attachments
 from app.modules.agent_surfaces.services.display_resource_content import (
     PodFileDelivery,
     PodFileParts,
@@ -85,10 +89,8 @@ def held_store():
         redis_url=settings.redis_url, key_prefix="test:held-journey", ttl_seconds=60
     )
     cache._redis = _YieldingRedis(fakeredis.FakeAsyncRedis(decode_responses=True))
-    previous = pending_envelope._cache
-    pending_envelope._cache = cache
-    yield cache
-    pending_envelope._cache = previous
+    with surface_caches.substituted(PENDING_DISPLAY_PATHS, cache):
+        yield cache
 
 
 # --- concurrent writers ------------------------------------------------------

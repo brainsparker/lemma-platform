@@ -103,6 +103,13 @@ class AgentHostPermissionRequest:
         )
 
 
+_PERMISSION_APPROVAL_PREFIX = "agent-host-permission:"
+
+#: On a permission payload from the host: the request was answered by an
+#: approval the person gave on an earlier turn, named by its ``approval_id``.
+PRE_APPROVED_KEY = "pre_approved"
+
+
 def permission_approval_tool_call_id(request_id: str) -> str:
     """Namespace the approval's call id away from the native tool call's own.
 
@@ -111,7 +118,12 @@ def permission_approval_tool_call_id(request_id: str) -> str:
     ``tool_call_id`` address two different calls, so the approval gets a
     prefixed id and carries the raw request id in its arguments.
     """
-    return f"agent-host-permission:{request_id}"
+    return f"{_PERMISSION_APPROVAL_PREFIX}{request_id}"
+
+
+def is_permission_approval_tool_call_id(tool_call_id: str) -> bool:
+    """Whether this call id is an Agent Host permission request's approval."""
+    return tool_call_id.startswith(_PERMISSION_APPROVAL_PREFIX)
 
 
 def permission_approval_tool_args(
@@ -209,6 +221,73 @@ def permission_approval_events(
                 "detail": payload,
                 **metadata,
             },
+            agent_run_id=agent_run_id,
+            sequence=sequence,
+        ),
+    ]
+
+
+def pre_approved_by(payload: JsonObject) -> str | None:
+    """The earlier approval the host answered this request with, if it did."""
+    marker = payload.get(PRE_APPROVED_KEY)
+    approval_id = marker.get("approval_id") if isinstance(marker, dict) else None
+    return approval_id if isinstance(approval_id, str) and approval_id else None
+
+
+def pre_approved_events(
+    *,
+    agent_run_id: UUID,
+    request_id: str,
+    approval_id: str,
+    sequence: int,
+    payload: JsonObject,
+    metadata: JsonObject,
+    tool_name: str | None = None,
+) -> list[AgentEvent]:
+    """A permission request the host answered itself, from an earlier approval.
+
+    Recorded as an approval that is already resolved -- the call and its
+    return together -- so the transcript says why the agent was allowed
+    without anybody being asked. No STATUS event: that is what makes a surface
+    post buttons, and there is nothing left to decide.
+    """
+    tool_call_id = permission_approval_tool_call_id(request_id)
+    tool_args = permission_approval_tool_args(
+        payload, request_id=request_id, tool_name=tool_name
+    )
+    marker = tool_args[AGENT_HOST_PERMISSION_KEY]
+    if isinstance(marker, dict):
+        marker[PRE_APPROVED_KEY] = {"approval_id": approval_id}
+    return [
+        AgentEvent(
+            type=AgentEventType.MESSAGE,
+            data=MessageDraft.of_tool_call(
+                tool_name="request_approval",
+                tool_call_id=tool_call_id,
+                tool_args=tool_args,
+                metadata=metadata,
+            ),
+            agent_run_id=agent_run_id,
+            sequence=sequence,
+        ),
+        AgentEvent(
+            type=AgentEventType.MESSAGE,
+            data=MessageDraft.of_tool_return(
+                tool_call_id=tool_call_id,
+                tool_name="request_approval",
+                tool_result={
+                    "success": True,
+                    "message": (
+                        "Allowed without asking again: the person approved "
+                        "this exact action earlier, after the turn that asked "
+                        "for it had ended."
+                    ),
+                    "decision": AgentRunApprovalDecision.APPROVE_ONCE.value,
+                    "executed": False,
+                    "response": {"approved_earlier": approval_id},
+                },
+                metadata=metadata,
+            ),
             agent_run_id=agent_run_id,
             sequence=sequence,
         ),

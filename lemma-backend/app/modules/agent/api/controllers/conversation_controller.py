@@ -27,7 +27,6 @@ from app.modules.agent.api.controllers.conversation_streaming import (
 )
 from app.modules.agent.api.controllers.shared import (
     ChannelServiceDep,
-    _build_conversation_retry_service,
     _build_conversation_service,
     _parse_message_page_token,
     _parse_metadata_filters,
@@ -480,7 +479,7 @@ async def retry_failed_run(
         uow_factory, request=request, user_id=user.id, pod_id=pod_id
     ) as scope:
         assert_pod_membership(scope.ctx, "use conversations in this pod")
-        service = _build_conversation_retry_service(scope.uow)
+        service = _build_conversation_service(scope.uow)
         result = await service.retry_failed_run(
             conversation_id=conversation_id,
             user_id=user.id,

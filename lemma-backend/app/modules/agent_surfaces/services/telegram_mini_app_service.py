@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import (
+    TelegramCredentials,
+)
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
@@ -75,7 +79,7 @@ async def resolve_telegram_mini_app(
 class TelegramMiniAppSync:
     """What the two Telegram calls need, resolved while the session is open."""
 
-    credentials: dict[str, object]
+    credentials: TelegramCredentials
     menu_button: dict[str, object]
 
 
@@ -96,8 +100,8 @@ async def prepare_telegram_mini_app_sync(
         or credential_resolver is None
     ):
         return None
-    credentials = await credential_resolver.for_surface(surface)
-    if not str(credentials.get("bot_token") or "").strip():
+    credentials = TelegramCredentials.of(await credential_resolver.for_surface(surface))
+    if credentials.bot_token is None:
         raise AgentSurfaceValidationError("Telegram bot credentials are unavailable")
     mini_app = await resolve_telegram_mini_app(
         uow=uow,

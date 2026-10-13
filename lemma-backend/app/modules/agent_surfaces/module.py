@@ -163,6 +163,7 @@ async def _surface_event_receiver(context):
 
 
 def _register_streaq() -> None:
+    import app.modules.agent_surfaces.events.owed_reply_sweep  # noqa: F401
     import app.modules.agent_surfaces.events.visitor_retention  # noqa: F401
 
 

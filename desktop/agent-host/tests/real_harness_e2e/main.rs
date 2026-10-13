@@ -155,6 +155,7 @@ pub(crate) async fn one_turn(
             adapter: manifest.resolve(agent).unwrap(),
             agent_environment: std::collections::BTreeMap::default(),
             own_settings: false,
+            lemma_cli_bin: None,
             run_spec: RunSpec {
                 agent_run_id: run_id,
                 conversation_id,
@@ -170,6 +171,7 @@ pub(crate) async fn one_turn(
                 mcp: Value::Null,
                 run_deadline: Utc::now() + chrono::Duration::minutes(5),
                 system_prompt_delivery: None,
+                pre_approvals: Vec::new(),
             },
             // The caller's directory, not one invented here. A provider
             // is entitled to refuse to load a session into a different cwd

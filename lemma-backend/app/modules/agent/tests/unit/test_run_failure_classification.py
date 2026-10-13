@@ -14,7 +14,10 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import httpx
+import httpx2
 import pytest
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from pydantic_ai.exceptions import (
     IncompleteToolCall,
     ModelHTTPError,
@@ -37,23 +40,49 @@ from app.modules.agent.infrastructure.harnesses.provider_error_log import (
     user_facing_error_message,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
+from app.modules.agent.infrastructure.harnesses.run_failure_classification import (
+    TRANSIENT_DATABASE_ERROR,
+    classify_run_failure,
+)
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
     HarnessDriverCancelled,
 )
 from app.modules.agent.infrastructure.transport_errors import (
     ModelResponseBudgetExceeded,
 )
-from app.modules.agent.services.run_finalizer import run_failure_message
+from app.modules.agent.services.run_finalizer import (
+    run_failure_code,
+    run_failure_message,
+)
 from app.modules.usage.contracts import UsageLimitExceededError
 
 pytestmark = pytest.mark.unit
 
-_REQUEST = httpx.Request("POST", "https://provider.example/v1/chat")
+_REQUEST = httpx2.Request("POST", "https://provider.example/v1/chat")
 _OUTPUT_ROOM = "ran out of room to answer"
 
 
 def _http(status: int, body: object = None) -> ModelHTTPError:
     return ModelHTTPError(status, "private-model", body=body)
+
+
+class _DriverError(Exception):
+    """The asyncpg error inside a ``DBAPIError``, reduced to its SQLSTATE."""
+
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__(f"sqlstate {sqlstate}")
+        self.sqlstate = sqlstate
+
+
+def _database(sqlstate: str) -> DBAPIError:
+    return DBAPIError("SELECT ... FOR UPDATE", {}, _DriverError(sqlstate))
+
+
+def _wrapped(cause: BaseException) -> RuntimeError:
+    try:
+        raise RuntimeError("dispatch failed") from cause
+    except RuntimeError as wrapped:
+        return wrapped
 
 
 _FAILURES: list[tuple[str, Exception]] = [
@@ -67,7 +96,8 @@ _FAILURES: list[tuple[str, Exception]] = [
         _http(400, {"error": {"code": "context_length_exceeded"}}),
     ),
     ("other 4xx", _http(418)),
-    ("dropped connection", httpx.ReadError("connection reset")),
+    ("dropped connection", httpx2.ReadError("connection reset")),
+    ("dropped connection, httpx stack", httpx.ReadError("connection reset")),
     (
         "over the time budget",
         ModelResponseBudgetExceeded(
@@ -86,6 +116,7 @@ _FAILURES: list[tuple[str, Exception]] = [
     ("driver cancelled", HarnessDriverCancelled("cancelled")),
     ("workspace allowance", UsageLimitExceededError()),
     ("domain error", DomainError("A sentence written for the reader.", code="X")),
+    ("deadlock", _database("40P01")),
     ("anything else", ValueError("private detail")),
 ]
 
@@ -167,3 +198,40 @@ async def test_a_model_that_only_thought_until_the_cap_says_it_ran_out_of_room()
     (error,) = [e for e in events if e.type is AgentEventType.ERROR]
     assert _OUTPUT_ROOM in str(error.data)
     assert "tool" not in str(error.data).lower()
+
+
+_DATABASE_BUSY = [
+    pytest.param(_database("40P01"), id="deadlock"),
+    pytest.param(_database("40001"), id="serialization failure"),
+    pytest.param(PoolTimeoutError("QueuePool limit reached"), id="pool exhausted"),
+    pytest.param(_wrapped(_database("40P01")), id="deadlock as a cause"),
+]
+
+
+@pytest.mark.parametrize("exc", _DATABASE_BUSY)
+def test_a_busy_database_is_not_blamed_on_the_model_settings(
+    exc: BaseException,
+) -> None:
+    """Twenty runs started at once; the ones Postgres aborted read "check the model".
+
+    Nothing about the teammate was wrong, so nothing should send the reader to
+    Settings -> Models, which is also the phrase the web app keys its "set up a
+    model" prompt on.
+    """
+    failure = classify_run_failure(exc)
+
+    assert failure.code == TRANSIENT_DATABASE_ERROR == run_failure_code(exc)
+    assert "Settings → Models" not in failure.message
+    assert "model" not in failure.message.lower()
+    assert "send your message again" in failure.message
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        pytest.param(_database("23505"), id="unique violation"),
+        pytest.param(_database("42P01"), id="missing table"),
+    ],
+)
+def test_a_real_database_error_is_not_called_transient(exc: BaseException) -> None:
+    assert classify_run_failure(exc).code != TRANSIENT_DATABASE_ERROR

@@ -78,7 +78,7 @@ from app.modules.agent_surfaces.services.whatsapp_delivery_status import (
 from app.modules.agent_surfaces.services.telegram_group_join import (
     claim_telegram_group_join,
 )
-from app.modules.agent_surfaces.services.surface_inbound import (
+from app.modules.agent_surfaces.services.delivery_claims import (
     release_ingress_claim,
 )
 from app.modules.pod.domain.events import (

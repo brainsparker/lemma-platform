@@ -463,6 +463,7 @@ _NAME_TO_MODULE = {
     'RuntimeModelCatalogEntry': 'runtime_model_catalog_entry',
     'RuntimeModelCatalogEntryDefaultModelSettings': 'runtime_model_catalog_entry_default_model_settings',
     'RuntimeModelCatalogEntryMetadata': 'runtime_model_catalog_entry_metadata',
+    'RuntimeProfileAvailability': 'runtime_profile_availability',
     'RuntimeProfileKind': 'runtime_profile_kind',
     'RuntimeProfileProtocol': 'runtime_profile_protocol',
     'RuntimeProfileScope': 'runtime_profile_scope',
@@ -540,6 +541,7 @@ _NAME_TO_MODULE = {
     'SurfaceTelegramConfigInput': 'surface_telegram_config_input',
     'SurfaceUnavailableReason': 'surface_unavailable_reason',
     'SurfaceUpdateRequest': 'surface_update_request',
+    'SurfaceWhatsAppConfigInput': 'surface_whats_app_config_input',
     'TableColumn': 'table_column',
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
@@ -1100,6 +1102,7 @@ if TYPE_CHECKING:
     from .runtime_model_catalog_entry import RuntimeModelCatalogEntry
     from .runtime_model_catalog_entry_default_model_settings import RuntimeModelCatalogEntryDefaultModelSettings
     from .runtime_model_catalog_entry_metadata import RuntimeModelCatalogEntryMetadata
+    from .runtime_profile_availability import RuntimeProfileAvailability
     from .runtime_profile_kind import RuntimeProfileKind
     from .runtime_profile_protocol import RuntimeProfileProtocol
     from .runtime_profile_scope import RuntimeProfileScope
@@ -1177,6 +1180,7 @@ if TYPE_CHECKING:
     from .surface_telegram_config_input import SurfaceTelegramConfigInput
     from .surface_unavailable_reason import SurfaceUnavailableReason
     from .surface_update_request import SurfaceUpdateRequest
+    from .surface_whats_app_config_input import SurfaceWhatsAppConfigInput
     from .table_column import TableColumn
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
@@ -1750,6 +1754,7 @@ __all__ = [
     'RuntimeModelCatalogEntry',
     'RuntimeModelCatalogEntryDefaultModelSettings',
     'RuntimeModelCatalogEntryMetadata',
+    'RuntimeProfileAvailability',
     'RuntimeProfileKind',
     'RuntimeProfileProtocol',
     'RuntimeProfileScope',
@@ -1827,6 +1832,7 @@ __all__ = [
     'SurfaceTelegramConfigInput',
     'SurfaceUnavailableReason',
     'SurfaceUpdateRequest',
+    'SurfaceWhatsAppConfigInput',
     'TableColumn',
     'TableDetailResponse',
     'TableDetailResponseConfigType0',

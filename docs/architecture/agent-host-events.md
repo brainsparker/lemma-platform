@@ -320,6 +320,18 @@ offering buttons. Lemma ends a turn parked on a request well before that, at
 its parked window (see [the link](agent-host.md#delivery)); that card stays
 open, and its decision resumes a new run instead of reaching the host.
 
+An approval given that late is carried into the resume run, so the person is
+not asked twice. The run's `START_RUN` spec lists it under `pre_approvals`
+(`approval_id`, the card's `tool_name` and `input`, and the `decision`), sent
+only to a harness that publishes the capability `pre_approval`. The first
+request in that run for exactly the same tool and input -- compared whole,
+never by prefix -- is answered on the host with the agent's own "allow once",
+and the approval is spent; a request that offers no "allow once" spends
+nothing and is asked. Denials are never carried. The host still emits the
+request, with `"pre_approved": { "approval_id": "…" }`, and the backend records
+it as a `request_approval` call already answered ("Allowed without asking
+again"), with no STATUS event, so no surface posts buttons for it.
+
 A request that gates one of Lemma's own MCP tools never reaches Lemma. The host
 answers it itself, because Lemma already authorizes those tools on every
 call. Request ids and call ids are shortened the same way (see

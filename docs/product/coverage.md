@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 172 |
+| `covered` | 175 |
 | `gap` | 3 |
 | `manual` | 24 |
 | `planned` | 23 |
 | `withdrawn` | 0 |
-| **total** | **222** |
+| **total** | **225** |
 
-Scenario tests declaring a promise: 440.
+Scenario tests declaring a promise: 449.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 248 | 314 |
+| OpenAPI operations | 249 | 314 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -76,7 +76,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-AGENT-022` Every action is attributable | `covered` | `test_agent_actions_are_attributable`, `test_decisions_are_a_durable_record` |
 | `PS-AGENT-023` A run can wait for something without occupying a turn | `covered` | `test_a_waiting_agent_ends_its_turn_and_returns`, `test_stopping_a_waiting_conversation_ends_the_wait` |
 | `PS-AGENT-030` An agent can delegate to a subagent | `covered` | `test_an_agent_delegates_to_a_subagent`, `test_an_image_is_understood` |
-| `PS-AGENT-031` An agent can show a person something interactive | `covered` | `test_an_embed_token_needs_a_real_result` |
+| `PS-AGENT-031` An agent can show a person something interactive | `covered` | `test_a_widget_opens_only_through_the_link_its_owner_was_given`, `test_an_embed_token_needs_a_real_result` |
 | `PS-AGENT-040` A person pairs a local agent host with their account | `covered` | `test_an_agent_host_can_be_paired_and_revoked`, `test_an_unpaired_host_cannot_claim_anything`, `test_harnesses_of_an_unknown_host_are_refused` |
 | `PS-AGENT-041` Work dispatched to a host runs exactly once | `covered` | `test_dispatched_work_is_claimed_exactly_once`, `test_an_unpaired_host_is_refused` |
 | `PS-AGENT-042` A pod's assistant asks another pod as the person it works for | `planned` | `test_an_assistant_asks_another_pod_as_the_person` |
@@ -103,6 +103,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-FLOW-013` A person can stop a run | `covered` | `test_cancelling_a_live_run_stops_it`, `test_cancelling_a_finished_run_is_refused` |
 | `PS-FLOW-014` A workflow run carries the authority of whoever started it | `covered` | `test_a_step_beyond_the_runs_authority_is_refused_readably` |
 | `PS-FLOW-015` A workflow can branch on a judgement | `covered` | `test_a_run_takes_the_branch_its_answer_names`, `test_an_unrouted_answer_is_refused_at_save` |
+| `PS-FLOW-016` A failed run can be retried from the step that failed | `covered` | `test_a_retry_starts_at_the_failed_step`, `test_only_a_failed_run_can_be_retried`, `test_a_retry_after_a_fix_finishes_the_run` |
+| `PS-FLOW-017` A workflow can be held to a number of runs at once | `covered` | `test_a_run_past_the_limit_is_queued_not_refused`, `test_a_limit_below_one_is_refused` |
 | `PS-FLOW-020` A person follows a run as it goes | `covered` | `test_a_run_can_be_watched` |
 | `PS-FUNC-020` A closed question about some evidence gets one allowed answer per question | `covered` | `test_every_question_gets_an_allowed_answer`, `test_an_open_question_is_refused`, `test_an_outsider_is_refused` |
 
@@ -230,6 +232,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable`, `test_a_record_change_fires_a_schedule`, `test_an_outsider_cannot_read_history` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `covered` | `test_retrying_an_unknown_firing_is_refused` |
 | `PS-SCHED-023` A schedule that keeps failing is turned off and reported | `covered` | `test_repeated_failure_stops_a_schedule`, `test_a_stopped_schedule_explains_itself`, `test_a_stopped_schedule_can_be_restarted` |
+| `PS-SCHED-024` A schedule can be held to a number of runs at once | `covered` | `test_a_full_schedule_skips_the_firing`, `test_a_finished_run_makes_room`, `test_an_unusable_limit_is_refused` |
 | `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `gap` | `test_a_schedule_can_target_a_workflow`, `test_the_schedule_outlives_its_deleted_target`, `test_a_firing_starts_a_conversation_with_the_assistant` |
 | `PS-SCHED-031` A schedule says what the work is, not just when it happens | `covered` | `test_a_schedule_keeps_its_instruction`, `test_the_instruction_and_the_condition_are_both_kept`, `test_the_instruction_can_be_edited` |
 | `PS-SCHED-032` The pod's own assistant can be put on a schedule | `covered` | `test_the_default_assistant_is_a_schedulable_target`, `test_the_assistant_needs_an_instruction`, `test_retargeting_to_the_assistant_replaces_the_agent`, `test_a_firing_starts_a_conversation_with_the_assistant` |

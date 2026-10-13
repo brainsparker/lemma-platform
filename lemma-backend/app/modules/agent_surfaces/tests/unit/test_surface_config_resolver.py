@@ -7,8 +7,8 @@ import pytest
 
 from fastapi import HTTPException
 
-from app.modules.agent_surfaces.api.surface_config_resolver import (
-    require_own_account,
+from app.modules.agent_surfaces.api.surface_config_resolver import require_own_account
+from app.modules.agent_surfaces.services.surface_config_input import (
     resolve_slack_config,
     resolve_telegram_config,
 )
@@ -34,7 +34,7 @@ async def test_resolve_telegram_config_keeps_pod_scoped_app_name(monkeypatch):
         )
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.api.surface_config_resolver."
+        "app.modules.agent_surfaces.services.surface_config_input."
         "get_ready_pod_app_by_name",
         resolver,
     )
@@ -59,7 +59,7 @@ async def test_resolve_telegram_config_keeps_pod_scoped_app_name(monkeypatch):
 
 async def test_resolve_telegram_config_rejects_missing_or_undeployed_app(monkeypatch):
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.api.surface_config_resolver."
+        "app.modules.agent_surfaces.services.surface_config_input."
         "get_ready_pod_app_by_name",
         AsyncMock(return_value=None),
     )
@@ -157,7 +157,9 @@ def test_every_caller_builds_a_surface_config_the_way_it_is_declared():
     import inspect
     from pathlib import Path
 
-    from app.modules.agent_surfaces.api.schemas import surface_config_from_input
+    from app.modules.agent_surfaces.domain.surface_representation import (
+        surface_config_from_input,
+    )
 
     signature = inspect.signature(surface_config_from_input)
     # The module that declares it, then the module tree that may call it.

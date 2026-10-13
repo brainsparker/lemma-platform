@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
-import httpx
+import httpx2
 import pytest
 
 from app.modules.agent.infrastructure.transport_errors import (
@@ -34,10 +34,10 @@ from app.modules.agent.services.model_stream_budget import (
     budgeted_stream,
 )
 
-A_REQUEST = httpx.Request("POST", "https://provider.example/v1/chat/completions")
+A_REQUEST = httpx2.Request("POST", "https://provider.example/v1/chat/completions")
 
 
-class _Body(httpx.AsyncByteStream):
+class _Body(httpx2.AsyncByteStream):
     """A response body on a script: wait this long, then send this.
 
     Records whether it was closed, because "the connection is not kept" is half
@@ -88,7 +88,7 @@ async def test_a_provider_that_never_starts_is_given_up_on() -> None:
     """
     body = _Body(chunks=3, gap=0.01, lead_in=5.0)
 
-    with pytest.raises(httpx.ReadTimeout) as raised:
+    with pytest.raises(httpx2.ReadTimeout) as raised:
         await _drain(_budgeted(body, first_chunk=0.05, total=None))
 
     assert "no response body" in str(raised.value)
@@ -120,7 +120,7 @@ async def test_a_provider_that_never_starts_is_retried_as_a_drop() -> None:
     """A stalled first chunk is transient: the run re-asks the request."""
     body = _Body(chunks=3, gap=0.01, lead_in=5.0)
 
-    with pytest.raises(httpx.ReadTimeout) as raised:
+    with pytest.raises(httpx2.ReadTimeout) as raised:
         await _drain(_budgeted(body, first_chunk=0.05, total=10.0))
 
     assert not isinstance(raised.value, ModelResponseBudgetExceeded)
@@ -161,16 +161,16 @@ async def test_the_whole_response_budget_counts_from_when_the_request_was_sent()
     """
     body = _Body(chunks=1000, gap=0.01)
 
-    async def slow_headers(request: httpx.Request) -> httpx.Response:
+    async def slow_headers(request: httpx2.Request) -> httpx2.Response:
         del request
         await asyncio.sleep(0.15)
-        return httpx.Response(200, stream=body)
+        return httpx2.Response(200, stream=body)
 
     transport = ModelStreamBudgetTransport(
-        httpx.MockTransport(slow_headers), first_chunk_seconds=None, total_seconds=0.2
+        httpx2.MockTransport(slow_headers), first_chunk_seconds=None, total_seconds=0.2
     )
 
-    async with httpx.AsyncClient(transport=transport) as client:
+    async with httpx2.AsyncClient(transport=transport) as client:
         with pytest.raises(ModelResponseBudgetExceeded) as raised:
             await client.post("https://provider.example/v1/chat/completions")
 
@@ -188,7 +188,7 @@ async def test_the_connection_is_not_kept_for_a_provider_we_gave_up_on() -> None
     """
     body = _Body(chunks=1000, gap=0.01)
 
-    with pytest.raises(httpx.ReadTimeout):
+    with pytest.raises(httpx2.ReadTimeout):
         await _drain(_budgeted(body, first_chunk=None, total=0.1))
 
     assert body.closed is True
@@ -234,20 +234,20 @@ async def test_a_budget_can_be_switched_off(setting) -> None:
 
 @pytest.mark.asyncio
 async def test_the_transport_bounds_a_real_client_request() -> None:
-    """End to end through httpx, because that is how it is actually wired.
+    """End to end through httpx2, because that is how it is actually wired.
 
     Direct tests of the stream prove the bound; this proves it survives being
-    installed as a transport, where httpx — not the test — drives the body.
+    installed as a transport, where httpx2 — not the test — drives the body.
     """
     body = _Body(chunks=1000, gap=0.01)
     transport = ModelStreamBudgetTransport(
-        httpx.MockTransport(lambda request: httpx.Response(200, stream=body)),
+        httpx2.MockTransport(lambda request: httpx2.Response(200, stream=body)),
         first_chunk_seconds=None,
         total_seconds=0.1,
     )
 
-    async with httpx.AsyncClient(transport=transport) as client:
-        with pytest.raises(httpx.ReadTimeout):
+    async with httpx2.AsyncClient(transport=transport) as client:
+        with pytest.raises(httpx2.ReadTimeout):
             await client.post("https://provider.example/v1/chat/completions")
 
     assert body.closed is True
@@ -257,12 +257,12 @@ async def test_the_transport_bounds_a_real_client_request() -> None:
 async def test_the_transport_leaves_a_healthy_response_alone() -> None:
     body = _Body(chunks=4, gap=0.0)
     transport = ModelStreamBudgetTransport(
-        httpx.MockTransport(lambda request: httpx.Response(200, stream=body)),
+        httpx2.MockTransport(lambda request: httpx2.Response(200, stream=body)),
         first_chunk_seconds=1.0,
         total_seconds=5.0,
     )
 
-    async with httpx.AsyncClient(transport=transport) as client:
+    async with httpx2.AsyncClient(transport=transport) as client:
         response = await client.post("https://provider.example/v1/chat/completions")
 
     assert response.status_code == 200

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from collections.abc import Collection
-from typing import Any, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from app.core.log.log import get_logger
@@ -33,7 +35,7 @@ InteractionDelivery = tuple[
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     SurfacePlatformAdapterPort,
-    dict[str, Any],
+    SurfaceCredentials,
 ]
 
 

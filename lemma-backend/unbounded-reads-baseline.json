@@ -18,7 +18,7 @@
     "app/modules/agent/infrastructure/repositories/conversation_approval_queries.py::ConversationApprovalQueriesMixin._decided_call_ids::unbounded-statement": 1,
     "app/modules/agent/infrastructure/repositories/conversation_approval_queries.py::ConversationApprovalQueriesMixin._returned_call_ids::unbounded-statement": 1,
     "app/modules/agent/infrastructure/repositories/conversation_approval_queries.py::ConversationApprovalQueriesMixin.list_resolved_approval_ids::unbounded-read": 1,
-    "app/modules/agent/infrastructure/repositories/conversation_status_repair.py::list_conversations_stranded_by_a_finished_run::unbounded-read": 1,
+    "app/modules/agent/infrastructure/repositories/conversation_list_page.py::list_statement::unbounded-statement": 1,
     "app/modules/agent/infrastructure/runtime_history_queries.py::RuntimeHistoryQueries.attach_runtime_history_messages::unbounded-read": 1,
     "app/modules/agent/infrastructure/widget_asset_repository.py::WidgetAssetRepository.get_tool_args_for_call::unbounded-read": 1,
     "app/modules/agent/tools/callable_tool_factory.py::AgentCallableToolFactory._load_grant_summary::unbounded-read": 1,

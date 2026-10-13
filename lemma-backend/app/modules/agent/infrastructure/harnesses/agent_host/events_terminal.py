@@ -16,6 +16,8 @@ from app.modules.agent.domain.agent_host import AgentHostRunState
 from app.modules.agent.domain.agent_host_permissions import (
     permission_approval_events,
     permission_approval_tool_call_id,
+    pre_approved_by,
+    pre_approved_events,
 )
 from app.modules.agent.domain.value_objects import AgentEvent, JsonObject
 from app.modules.agent.infrastructure.harnesses.agent_host.event_text import (
@@ -66,6 +68,26 @@ def permission_request_events(
         return []
     gated = payload.get("tool_call_id")
     gated_call = run.tool_calls.calls.get(gated) if isinstance(gated, str) else None
+    approved_earlier = pre_approved_by(payload)
+    if approved_earlier is not None:
+        # Answered by the host already, from an approval carried into this
+        # run: on the record as resolved, and nothing left open to park on.
+        # Known to the ledger and closed, so a replay records it once and an
+        # ending run synthesizes no return over the real one.
+        run.tool_calls.open(approval_id, OpenToolCall(name="request_approval"))
+        run.tool_calls.close(approval_id)
+        return [
+            *run.flush_messages(final=False),
+            *pre_approved_events(
+                agent_run_id=run.agent_run_id,
+                request_id=request_id,
+                approval_id=approved_earlier,
+                sequence=sequence,
+                payload=payload,
+                metadata=metadata,
+                tool_name=gated_call.name if gated_call is not None else None,
+            ),
+        ]
     # Tracked like any other open call, so a run that ends without an answer
     # closes it. An approval card outlives its run otherwise: the host is no
     # longer holding the request — its own timeout denied it — but the card

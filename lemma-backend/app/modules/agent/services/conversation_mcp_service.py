@@ -30,6 +30,7 @@ from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
+from app.modules.agent.services.vision_service import vision_delegate_available
 from app.modules.agent.services.mcp_content import (
     tool_call_error,
     tool_call_result,
@@ -64,7 +65,7 @@ from app.modules.agent.services.mcp_pausing_calls import (
     is_pausing_tool,
     record_pausing_tool_call,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     WorkspaceLocation,
     ensure_recorded_location,
     pod_cwd_from_workspace_cwd,
@@ -75,6 +76,18 @@ from app.modules.agent.services.runtime_profile_service import (
 from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
+from app.modules.agent.tools.tool_assembler import load_agent_grant_summary
+from app.modules.agent.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.services.mcp_tool_inputs import (
+    NO_AGENT_GENERATION,
+    CachedGrantSummary,
+    McpToolInputs,
+    McpToolInputsCache,
+    mcp_tool_inputs_cache,
+    without_provider_config,
+)
+from app.core.authorization.grant_generation import agent_grant_generation
+from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 from app.modules.agent.tools.tool_errors import (
     is_control_flow_exception,
 )
@@ -87,9 +100,16 @@ class AgentRemoved(ValueError):
 
 
 class ConversationMCPService:
-    def __init__(self) -> None:
+    def __init__(self, inputs_cache: McpToolInputsCache | None = None) -> None:
         self.uow_factory = SessionUnitOfWorkFactory(async_session_maker)
         self.dispatcher = AgentToolDispatcher(self.uow_factory)
+        self._explicit_inputs_cache = inputs_cache
+
+    @property
+    def _inputs_cache(self) -> McpToolInputsCache:
+        # Resolved on use, not at construction: the module-level instance
+        # below is built at import, before a test or a process has its settings.
+        return self._explicit_inputs_cache or mcp_tool_inputs_cache()
 
     async def authorize(
         self,
@@ -154,7 +174,7 @@ class ConversationMCPService:
         conversation_id: UUID,
         agent_run_id: UUID | None = None,
     ) -> list[Tool]:
-        agent, conversation, ctx = await self._load_agent_context(
+        agent, conversation, ctx, grants = await self._load_agent_context(
             conversation_id=conversation_id,
             agent_run_id=agent_run_id,
         )
@@ -163,6 +183,7 @@ class ConversationMCPService:
             conversation=conversation,
             ctx=ctx,
             agent_run_id=agent_run_id,
+            grants=grants,
             # This is reached only by the Agent Host MCP bridge, which is
             # the harness that has no other way to return a structured result.
             # The assembler applies the "does this run owe one?" gate.
@@ -207,7 +228,7 @@ class ConversationMCPService:
         arguments: dict[str, Any] | None,
         agent_run_id: UUID | None = None,
     ) -> CallToolResult:
-        agent, conversation, ctx = await self._load_agent_context(
+        agent, conversation, ctx, grants = await self._load_agent_context(
             conversation_id=conversation_id,
             agent_run_id=agent_run_id,
         )
@@ -233,6 +254,7 @@ class ConversationMCPService:
                 name=tool_name,
                 arguments=arguments,
                 agent_run_id=agent_run_id,
+                grants=grants,
                 tool_call_id=tool_call_id,
                 # Must match list_tools, or we advertise a tool we then reject
                 # as unknown.
@@ -293,7 +315,7 @@ class ConversationMCPService:
         *,
         conversation_id: UUID,
         agent_run_id: UUID | None,
-    ) -> tuple[Agent | None, Conversation, BaseAgentContext]:
+    ) -> tuple[Agent | None, Conversation, BaseAgentContext, AgentGrantSummary | None]:
         async with self.uow_factory() as uow:
             conversation_repo = ConversationRepository(uow)
             agent_repo = AgentRepository(uow)
@@ -327,24 +349,79 @@ class ConversationMCPService:
             workspace_location = await ensure_recorded_location(
                 conversation, record=conversation_repo.set_conversation_metadata_key
             )
+            lease = (
+                await uow.session.get(AgentHostRunLeaseModel, run.id)
+                if run is not None
+                else None
+            )
+        # Outside the unit of work: these open their own, or reach Redis, and
+        # holding this one across them would pin a pooled connection for
+        # nothing.
+        inputs = await self._tool_inputs(
+            run=run,
+            lease_epoch=lease.lease_epoch if lease is not None else 0,
+            agent=agent,
+            conversation=conversation,
+        )
+        ctx = _tool_context(
+            conversation=conversation,
+            agent=agent,
+            run=run,
+            agent_run_id=agent_run_id,
+            runtime_profile=inputs.runtime_profile if inputs else None,
+            workspace_location=workspace_location,
+        )
+        ctx.host_runs_native_commands = await _native_commands(conversation, run)
+        return agent, conversation, ctx, inputs.grants.summary() if inputs else None
+
+    async def _tool_inputs(
+        self,
+        *,
+        run: AgentRun | None,
+        lease_epoch: int,
+        agent: Agent | None,
+        conversation: Conversation,
+    ) -> McpToolInputs | None:
+        """The run's resolved runtime and its agent's grants, kept for the lease.
+
+        ``None`` with no run: nothing to resolve, and the assembler reads the
+        grants itself. A grant token that could not be read is neither trusted
+        nor stored: the inputs are derived afresh.
+        """
+        if run is None:
+            return None
+        generation = (
+            await agent_grant_generation(agent.id)
+            if agent is not None and agent.id is not None
+            else NO_AGENT_GENERATION
+        )
+        cache = self._inputs_cache
+        if generation is not None:
+            kept = await cache.get(
+                run_id=run.id, lease_epoch=lease_epoch, grant_generation=generation
+            )
+            if kept is not None:
+                return kept
+        async with self.uow_factory() as uow:
             runtime_profile = await self._resolved_runtime_profile(
                 run=run,
                 uow=uow,
                 organization_id=conversation.organization_id,
                 user_id=conversation.user_id,
             )
-            ctx = _tool_context(
-                conversation=conversation,
-                agent=agent,
-                run=run,
-                agent_run_id=agent_run_id,
-                runtime_profile=runtime_profile,
-                workspace_location=workspace_location,
-            )
-        # Outside the unit of work: it opens its own, and holding this one
-        # across it would pin a pooled connection for nothing.
-        ctx.host_runs_native_commands = await _native_commands(conversation, run)
-        return agent, conversation, ctx
+        grants = (
+            await load_agent_grant_summary(self.uow_factory, agent=agent)
+            if agent is not None
+            else AgentGrantSummary()
+        )
+        derived = McpToolInputs(
+            grant_generation=generation or "",
+            runtime_profile=without_provider_config(runtime_profile),
+            grants=CachedGrantSummary.of(grants),
+        )
+        if generation is not None:
+            await cache.put(run_id=run.id, lease_epoch=lease_epoch, inputs=derived)
+        return derived
 
     async def _resolved_runtime_profile(
         self,
@@ -474,7 +551,9 @@ def _tool_context(
         #
         # `vision_mode`: or a harness that reads images natively is
         # treated as text-only and delegates work it could do itself.
-        vision_mode=vision_mode_from_runtime_profile(runtime_profile),
+        vision_mode=vision_mode_from_runtime_profile(
+            runtime_profile, delegate_model_configured=vision_delegate_available()
+        ),
         # The location fields: without them `get_workspace_cwd()` falls
         # back to `/workspace/conversations/<uuid>`, so tools ran in a
         # directory the agent's own prompt does not name -- the prompt

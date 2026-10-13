@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import (
+    ProgressHandle,
+    ProgressHandleKind,
+)
+
 import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
@@ -50,7 +55,9 @@ class _SurfaceProgress:
 
     async def send_progress_update(self, **kwargs):
         self.egress.updates.append(kwargs)
-        return {"message_id": len(self.egress.updates)}
+        return ProgressHandle(
+            kind=ProgressHandleKind.MESSAGE, message_id=str(len(self.egress.updates))
+        )
 
     async def clear_progress(self, **kwargs):
         self.egress.cleared.append(kwargs)
@@ -58,7 +65,10 @@ class _SurfaceProgress:
 
     async def append_streamed_text(self, **kwargs):
         self.egress.streamed.append(kwargs)
-        return StreamAppendResult(handle={"message_id": 1}, appended=True)
+        return StreamAppendResult(
+            handle=ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id=str(1)),
+            appended=True,
+        )
 
     async def finish_with_answer(self, **kwargs):
         self.egress.finished.append(kwargs)
@@ -917,7 +927,10 @@ async def test_failed_token_append_stays_buffered_until_confirmed():
         nonlocal attempts
         attempts += 1
         service.streamed.append(kwargs)
-        return StreamAppendResult(handle={"message_id": 1}, appended=attempts > 1)
+        return StreamAppendResult(
+            handle=ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id=str(1)),
+            appended=attempts > 1,
+        )
 
     service.progress.append_streamed_text = append
     observer._token_buffer = "must survive"
@@ -942,10 +955,15 @@ async def test_final_answer_sends_unsent_text_after_append_failure():
 
     async def reject_append(**kwargs):
         service.streamed.append(kwargs)
-        return StreamAppendResult(handle={"message_id": 1}, appended=False)
+        return StreamAppendResult(
+            handle=ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id=str(1)),
+            appended=False,
+        )
 
     service.progress.append_streamed_text = reject_append
-    observer._progress_handle = {"message_id": 1}
+    observer._progress_handle = ProgressHandle(
+        kind=ProgressHandleKind.MESSAGE, message_id=str(1)
+    )
     observer._token_buffer = "complete answer"
     observer._final_answer_text = "complete answer"
 
@@ -1264,7 +1282,9 @@ async def test_a_timeout_closing_the_stream_does_not_cost_the_answer(caplog):
     service = _SurfaceService()
     service.finish_error = TimeoutError("slack did not answer")
     observer = _observer(service)
-    observer._progress_handle = {"ts": "1.0", "channel": "C1", "stream": True}
+    observer._progress_handle = ProgressHandle(
+        kind=ProgressHandleKind.STREAM, message_id="1.0", channel_id="C1"
+    )
     conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
     await observer.on_event(
         _assistant(MessageDraft.of_text("The answer is 42.")),
@@ -1290,7 +1310,9 @@ async def test_a_failure_clearing_the_stream_does_not_cost_the_answer(caplog):
 
     service.progress.clear_progress = broken_clear
     observer = _observer(service)
-    observer._progress_handle = {"ts": "1.0", "channel": "C1", "stream": True}
+    observer._progress_handle = ProgressHandle(
+        kind=ProgressHandleKind.STREAM, message_id="1.0", channel_id="C1"
+    )
     service.finish_result = False
     conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
     await observer.on_event(

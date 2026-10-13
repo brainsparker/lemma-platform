@@ -31,6 +31,7 @@ already lives in conversation metadata.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import ConversationMetadataFields
 import re
 import secrets
 import string
@@ -177,7 +178,7 @@ def workspace_location_for(
     # the checkout land where they asked rather than somewhere they didn't.
     cwd = str(
         workspace.get("cwd")
-        or metadata.get("cwd")
+        or ConversationMetadataFields.of(metadata).cwd
         or (repo.cwd if repo else None)
         or default_cwd_for(conversation_id=conversation_id, created_at=created_at)
     )
@@ -227,7 +228,7 @@ async def apply_location_metadata(
         metadata.pop("repo", None)
         metadata.pop("repo_full_name", None)
 
-    if metadata.get("cwd"):
+    if ConversationMetadataFields.of(metadata).cwd:
         return
     if repo is not None:
         metadata["cwd"] = repo.cwd
@@ -263,7 +264,7 @@ def has_recorded_cwd(conversation: Conversation) -> bool:
     metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
     workspace = metadata.get("workspace")
     workspace = workspace if isinstance(workspace, dict) else {}
-    return bool(workspace.get("cwd") or metadata.get("cwd"))
+    return bool(workspace.get("cwd") or ConversationMetadataFields.of(metadata).cwd)
 
 
 async def ensure_recorded_location(

@@ -8,6 +8,13 @@ message is worded or posted.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    SlackReplyTarget,
+    reply_target_as,
+)
+
+from app.modules.agent_surfaces.domain.credentials import SlackCredentials
+
 import mimetypes
 
 import httpx
@@ -29,7 +36,7 @@ from app.modules.agent_surfaces.platforms.slack.client import (
 class SlackFilesMixin:
     """Attachment download and file upload for :class:`SlackPlatformService`."""
 
-    credentials: dict[str, object]
+    credentials: SlackCredentials
 
     async def download_attachment_bytes(
         self,
@@ -114,10 +121,10 @@ class SlackFilesMixin:
         """Upload + share raw file bytes to the inbound channel (egress)."""
         del mime_type  # Slack infers the type from the filename.
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
             return False
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         client = await build_slack_client(self.credentials)
         upload_ticket = await client.files_getUploadURLExternal(
             filename=file_name, length=len(file_bytes)

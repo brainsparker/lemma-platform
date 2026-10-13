@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TelegramReplyTarget,
+    reply_target_as,
+)
+
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
 import hashlib
 import hmac
 
 from typing import Any
 
-import httpx
 from redis.exceptions import RedisError
 from pydantic_ai.tools import RunContext
 
@@ -65,8 +73,12 @@ from app.modules.agent_surfaces.platforms.telegram.message_experience import (
 from app.modules.agent_surfaces.platforms.telegram.models import (
     TelegramFileAttachment,
 )
-from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    TelegramCredentials,
+)
+from app.modules.agent_surfaces.caches import TELEGRAM_BOT_INFO, surface_caches
 from app.core.log.log import get_logger
 from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.platforms.attachment_limits import (
@@ -74,11 +86,6 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
 )
 
 logger = get_logger(__name__)
-
-# Shared Redis cache: bot → getMe result dict (username + id), so mention
-# verification doesn't hit the Telegram API on every message and is shared across
-# replicas. Redis unavailable -> refetch (never fails).
-_bot_info_cache: RedisJsonCache | None = None
 
 
 def _bot_cache_key(bot_token: str) -> str:
@@ -95,24 +102,19 @@ def _bot_cache_key(bot_token: str) -> str:
 
 
 def _get_bot_info_cache() -> RedisJsonCache:
-    global _bot_info_cache
-    if _bot_info_cache is None or _bot_info_cache._redis_url != settings.redis_url:
-        _bot_info_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:telegram-bot",
-            ttl_seconds=3600,
-        )
-    return _bot_info_cache
+    """Bot → getMe result (username and id), shared across replicas so mention
+    checks do not ask Telegram on every message. Redis down -> refetch."""
+    return surface_caches.get(TELEGRAM_BOT_INFO)
 
 
 class TelegramPlatformService:
     def __init__(
         self,
-        credentials: dict[str, Any],
+        credentials: CredentialsLike,
         *,
         bot_info_cache: RedisJsonCache | None = None,
     ):
-        self.credentials = credentials
+        self.credentials = TelegramCredentials.of(credentials)
         self._bot_info_cache = bot_info_cache
         self._client = TelegramClient.from_credentials(credentials)
         self._bot_token = self._client._bot_token
@@ -190,7 +192,10 @@ class TelegramPlatformService:
         Returns the id of the first message sent -- the one any keyboard rides
         on -- when Telegram named it.
         """
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         thread_id = self._message_thread_id(event)
         reply_parameters = telegram_reply_parameters(event)
         reply_markup = (metadata or {}).get("reply_markup")
@@ -289,7 +294,7 @@ class TelegramPlatformService:
 
     @staticmethod
     def _message_thread_id(event: ParsedInboundSurfaceEvent) -> int | None:
-        raw = event.reply_target.get("message_thread_id")
+        raw = reply_target_as(event, TelegramReplyTarget).message_thread_id
         if raw in (None, "", "0", 0):
             raw = event.metadata.get("message_thread_id")
         if raw in (None, "", "0", 0):
@@ -312,7 +317,10 @@ class TelegramPlatformService:
         name it.
         """
         del metadata
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         reply_parameters = telegram_reply_parameters(event)
 
         payload: dict[str, Any] = {
@@ -401,7 +409,10 @@ class TelegramPlatformService:
         self, event: ParsedInboundSurfaceEvent, caption: str | None
     ) -> dict[str, Any] | None:
         """The form fields an upload carries, or ``None`` when there is no chat."""
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         if not chat_id:
             return None
         data: dict[str, Any] = {"chat_id": chat_id}
@@ -418,7 +429,10 @@ class TelegramPlatformService:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         del metadata
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         payload: dict[str, Any] = {"chat_id": chat_id, "action": "typing"}
         thread_id = self._message_thread_id(event)
         if thread_id is not None:
@@ -433,8 +447,8 @@ class TelegramPlatformService:
         self,
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+        progress_handle: ProgressHandle | None = None,
+    ) -> ProgressHandle | None:
         return await stream_telegram_progress(
             self._call_with_retry,
             event,
@@ -446,7 +460,7 @@ class TelegramPlatformService:
     async def end_progress(
         self,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
     ) -> None:
         await end_telegram_progress(self._client, event, progress_handle)
 
@@ -464,7 +478,7 @@ class TelegramPlatformService:
         file_id = str(attachment.get("file_id") or attachment.get("id") or "").strip()
         if not self._bot_token or not file_id:
             return None
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with outbound_http(60.0) as client:
             metadata_response = await client.post(
                 f"{self._client.base_url}/getFile",
                 json={"file_id": file_id},

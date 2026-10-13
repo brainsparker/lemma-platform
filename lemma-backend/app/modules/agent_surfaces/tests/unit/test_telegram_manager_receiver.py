@@ -32,8 +32,11 @@ async def test_api_lifespan_yields_while_webhook_registration_is_pending(
         _pending_registration,
     )
 
+    # Reaching the body at all is the claim: a lifespan that awaited the
+    # registration would never yield while it is pending.
     async with _telegram_manager_webhook_lifespan(None):
         await asyncio.wait_for(started.wait(), timeout=1)
+        assert started.is_set()
 
 
 def _polling_receiver():

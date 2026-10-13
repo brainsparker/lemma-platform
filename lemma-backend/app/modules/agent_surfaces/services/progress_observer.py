@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
 import asyncio
 import time
 from collections.abc import Callable
@@ -21,7 +23,6 @@ from app.modules.agent.contracts import (
     AgentEventType,
 )
 from app.modules.agent.contracts import ConversationContext
-from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
@@ -68,16 +69,11 @@ _DELIVERY_ERRORS: tuple[type[BaseException], ...] = (
     *PLATFORM_TRANSPORT_ERRORS,
 )
 
+# Read from the capability registry once; a mapping so a test can shorten one.
 _TYPING_REFRESH_INTERVAL_SECONDS = {
-    SurfacePlatform.TELEGRAM.value: 4.0,
-    SurfacePlatform.TEAMS.value: 10.0,
-    # WhatsApp couples mark-as-read and the typing bubble into one call, which
-    # the ingress path already makes once when it picks the message up. The
-    # bubble expires after ~25s, so on anything longer than a quick answer it
-    # went dark and stayed dark — dead in exactly the runs where it was the only
-    # sign of life. Refreshed inside that window it costs no conversation
-    # message and no attention, unlike the posted updates that back it up.
-    SurfacePlatform.WHATSAPP.value: 20.0,
+    platform: capabilities.typing_refresh_seconds
+    for platform, capabilities in PLATFORM_CAPABILITIES.items()
+    if capabilities.typing_refresh_seconds is not None
 }
 _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
 
@@ -145,7 +141,7 @@ class SurfaceAgentRunProgressObserver(
         self._error_delivered = False
         # Opaque handle for the live progress message on streaming platforms
         # (Telegram/Teams), threaded across edits and cleared on finish.
-        self._progress_handle: dict[str, Any] | None = None
+        self._progress_handle: ProgressHandle | None = None
         # Live token streaming. ``_streamed_text`` is what the user has already
         # seen in the stream; ``_token_buffer`` is what has arrived but not yet
         # been flushed. Flushing every token would blow Slack's rate limit, so

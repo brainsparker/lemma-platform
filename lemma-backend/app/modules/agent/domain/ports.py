@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection
+from datetime import datetime
 from typing import AsyncIterator, Protocol, Sequence
 from uuid import UUID
 
@@ -19,7 +20,6 @@ from app.modules.agent.domain.entities import (
 from app.modules.agent.domain.run_projections import (
     ConversationOpeningTexts,
     StaleAgentRunRef,
-    StrandedConversationRef,
 )
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.pending_interactions import (
@@ -117,18 +117,12 @@ class ConversationRepository(Protocol):
 
     async def create_conversation(self, conversation: Conversation) -> Conversation: ...
 
-    async def create_conversation_once(
-        self,
-        conversation: Conversation,
-    ) -> tuple[Conversation, bool]: ...
-
     async def update_conversation(self, conversation: Conversation) -> Conversation: ...
 
     async def get_conversation(
         self,
         conversation_id: UUID,
         *,
-        include_messages: bool = False,
         include_runs: bool = False,
     ) -> Conversation | None: ...
 
@@ -144,6 +138,14 @@ class ConversationRepository(Protocol):
         key: str,
         value: JsonValue,
     ) -> None: ...
+
+    async def remove_conversation_metadata_key(
+        self, conversation_id: UUID, key: str, *, matching: JsonObject
+    ) -> None: ...
+
+    async def list_metadata_due(
+        self, *, key: str, due_field: str, due_before: datetime, limit: int
+    ) -> list[tuple[UUID, JsonValue]]: ...
 
     async def lock_conversation(self, conversation_id: UUID) -> None: ...
 
@@ -243,13 +245,6 @@ class ConversationRepository(Protocol):
         cutoff_seconds: int,
         limit: int = 200,
     ) -> list[StaleAgentRunRef]: ...
-
-    async def list_conversations_stranded_by_a_finished_run(
-        self,
-        *,
-        cutoff_seconds: int,
-        limit: int = 200,
-    ) -> list[StrandedConversationRef]: ...
 
     async def run_has_only_user_messages(self, agent_run_id: UUID) -> bool: ...
 

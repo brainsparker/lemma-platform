@@ -13,14 +13,17 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.modules.agent.domain.runtime_profiles import (
+    RuntimeProfileProtocol,
+    RuntimeProfileScope,
+)
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     OpenAICompatibleRuntimeConfig,
     RuntimeModelCatalogEntry,
     RuntimeProfileKind,
-    RuntimeProfileProtocol,
-    RuntimeProfileScope,
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.unavailable_models import (
@@ -231,7 +234,13 @@ async def test_only_a_provider_404_is_remembered(
     cache = _Cache()
 
     await remember_provider_refusal(
-        {"profile_id": "p", "model_name": "m"},
+        RuntimeSnapshot(
+            profile_id="p",
+            profile_name="p",
+            scope=RuntimeProfileScope.ORGANIZATION,
+            protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+            model_name="m",
+        ),
         status_code=status_code,
         store=UnavailableModels(cache),  # type: ignore[arg-type]  # TST-03: in-memory cache
     )

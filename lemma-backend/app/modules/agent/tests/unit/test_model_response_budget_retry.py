@@ -13,7 +13,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
-import httpx
+import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -44,7 +44,7 @@ _BUDGET_SECONDS = 900.0
 def _expired() -> ModelResponseBudgetExceeded:
     return ModelResponseBudgetExceeded(
         "Model stream abandoned after 900.0s: the response ran past its time budget.",
-        request=httpx.Request("POST", "https://provider.example/v1/chat"),
+        request=httpx2.Request("POST", "https://provider.example/v1/chat"),
         elapsed_seconds=_BUDGET_SECONDS,
         budget_seconds=_BUDGET_SECONDS,
     )

@@ -121,7 +121,6 @@ class MessageReplyService:
 
     def _conversation_service(self):
         from app.modules.usage.contracts.execution import build_usage_service
-        from app.core.authorization.factory import create_authorization_data_service
         from app.modules.agent.infrastructure.repositories import AgentRepository
         from app.modules.agent.services.conversation_service import ConversationService
 
@@ -129,6 +128,5 @@ class MessageReplyService:
             uow=self.uow,
             conversation_repository=self.conversations,
             agent_repository=AgentRepository(self.uow),
-            authorization_service=create_authorization_data_service(self.uow),
             usage_service=build_usage_service(self.uow),
         )

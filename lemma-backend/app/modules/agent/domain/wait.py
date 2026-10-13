@@ -154,7 +154,12 @@ class WaitSpec(BaseModel):
     poll_attempt: int = 0
     #: When the target first stopped answering, cleared when it answers again.
     unreadable_since: LenientDatetime = None
-    woke_because: str | None = None
+    #: Why the wait resolved. A reason a later release no longer knows reads
+    #: as unknown rather than making the wait unreadable.
+    woke_because: Annotated[
+        AgentWaitWakeReason | None, _lenient(AgentWaitWakeReason)
+    ] = None
+    #: The error that made the sweep give up on waking it.
     abandoned_because: str | None = None
 
     def to_json(self) -> dict[str, Any]:
@@ -213,17 +218,21 @@ class AgentConversationWaitEntity(AggregateRoot):
             }
         ).to_json()
 
-    def complete(self, reason: AgentWaitWakeReason) -> None:
-        self.status = AgentWaitStatus.COMPLETED
-        self.spec = {**self.spec, "woke_because": reason.value}
-        self.completed_at = datetime.now(timezone.utc)
+    # Each ending below applies only to an ACTIVE wait and says whether it
+    # did. A wait ends once: a second ending -- a stop arriving after the wake
+    # it raced -- would rewrite why it woke and when, and the history already
+    # holds the tool return the first ending wrote.
 
-    def cancel(self) -> None:
-        self.status = AgentWaitStatus.CANCELLED
-        self.spec = {**self.spec, "woke_because": AgentWaitWakeReason.CANCELLED.value}
-        self.completed_at = datetime.now(timezone.utc)
+    def complete(self, reason: AgentWaitWakeReason) -> bool:
+        return self._end(AgentWaitStatus.COMPLETED, woke_because=reason.value)
 
-    def abandon(self, error: str) -> None:
+    def cancel(self) -> bool:
+        return self._end(
+            AgentWaitStatus.CANCELLED,
+            woke_because=AgentWaitWakeReason.CANCELLED.value,
+        )
+
+    def abandon(self, error: str) -> bool:
         """Give up after too many failed wakes. The conversation stays WAITING.
 
         Deliberately not a wake: we could not synthesize a tool return, so there
@@ -231,6 +240,12 @@ class AgentConversationWaitEntity(AggregateRoot):
         log is the operator's signal — a stuck conversation is bad, but a hot
         retry loop that hides it is worse.
         """
-        self.status = AgentWaitStatus.FAILED
-        self.spec = {**self.spec, "abandoned_because": error}
+        return self._end(AgentWaitStatus.FAILED, abandoned_because=error)
+
+    def _end(self, status: AgentWaitStatus, **recorded: str) -> bool:
+        if self.status != AgentWaitStatus.ACTIVE:
+            return False
+        self.status = status
+        self.spec = {**self.spec, **recorded}
         self.completed_at = datetime.now(timezone.utc)
+        return True

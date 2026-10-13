@@ -27,6 +27,11 @@ from pydantic_ai.exceptions import (
 from pydantic_ai.messages import (
     ModelMessage,
 )
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_driver import (
+    STOP_WHILE_BUSY,
+    next_event_or_stop,
+    teardown_driver,
+)
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import NodeLoop
 from app.modules.agent.infrastructure.unavailable_models import (
     remember_provider_refusal,
@@ -43,6 +48,7 @@ from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instruction_parts
 from app.modules.agent.services.run_phase_spans import run_phase
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -86,12 +92,6 @@ logger = get_logger(__name__)
 #: enough that an ordinary consumer never waits, small enough that a stalled one
 #: stops the producer rather than growing without limit.
 _STREAM_QUEUE_ITEMS = 256
-
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_driver import (  # noqa: E402
-    STOP_WHILE_BUSY,
-    next_event_or_stop,
-    teardown_driver,
-)
 
 StopChecker = Callable[[], Awaitable[bool]]
 
@@ -203,8 +203,7 @@ class PydanticAIHarness:
             # A 404 for the model is remembered, so the next turn on it is
             # refused at once rather than paying for the same answer.
             await remember_provider_refusal(
-                (getattr(options, "extra", None) or {}).get("runtime_profile"),
-                status_code=exc.status_code,
+                options.runtime_profile, status_code=exc.status_code
             )
             terminal = AgentEvent(
                 type=AgentEventType.ERROR,
@@ -292,14 +291,15 @@ class PydanticAIHarness:
         agent_run_id: UUID,
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
+        snapshot = options.runtime_profile
         with run_phase("history_convert") as history_span:
             history, user_prompt = self._history_and_prompt(
                 messages,
-                protocol=_runtime_profile_protocol(options),
+                # Whether a stored thought can be replayed depends on the
+                # provider family: each wants different reasoning credentials.
+                protocol=snapshot.protocol if snapshot else None,
                 current_run_id=agent_run_id,
-                replay_prior_run_reasoning=replays_prior_run_reasoning(
-                    options.extra.get("runtime_profile")
-                ),
+                replay_prior_run_reasoning=replays_prior_run_reasoning(snapshot),
             )
             history_span.set_attribute("lemma.history.model_messages", len(history))
         # e2e mock mode swaps only the model — the rest of the harness (tool
@@ -478,7 +478,7 @@ class PydanticAIHarness:
         self,
         messages: Sequence[Message],
         *,
-        protocol: str | None = None,
+        protocol: RuntimeProfileProtocol | None = None,
         current_run_id: UUID | None = None,
         replay_prior_run_reasoning: bool = False,
     ) -> tuple[list[ModelMessage], str | None]:
@@ -541,26 +541,11 @@ class PydanticAIHarness:
         return final_answer_text(data, fallback=fallback)
 
 
-def _runtime_profile_protocol[DepsT](options: HarnessOptions[DepsT]) -> str | None:
-    """Which provider family this run's model belongs to, if it says.
-
-    Read for one reason: whether a stored thought can be replayed to it. See
-    `pydantic_ai_thinking.thinking_part_from_message` -- Anthropic and the
-    OpenAI-compatible providers want different credentials, so "can this be
-    replayed" has no answer until the target is known.
-    """
-    runtime_profile = options.extra.get("runtime_profile")
-    if not isinstance(runtime_profile, Mapping):
-        return None
-    protocol = runtime_profile.get("protocol")
-    return protocol if isinstance(protocol, str) and protocol else None
-
-
 def _runtime_profile_model[DepsT](options: HarnessOptions[DepsT]) -> Model:
-    profile = options.extra.get("runtime_profile")
+    snapshot = options.runtime_profile
     credentials = options.extra.get("runtime_credentials")
     return require_pydantic_ai_model_from_runtime_profile(
-        runtime_profile=profile if isinstance(profile, Mapping) else None,
+        runtime_profile=snapshot.as_payload() if snapshot else None,
         runtime_credentials=credentials if isinstance(credentials, Mapping) else None,
         fallback_model_name=options.model_name,
     )
@@ -572,8 +557,9 @@ def _meter_mock_model[DepsT](
     from app.modules.usage.contracts.metering import meter_model
 
     model = build_mock_model(conversation)
-    profile = options.extra.get("runtime_profile")
-    return meter_model(model, profile) if isinstance(profile, dict) else model
+    snapshot = options.runtime_profile
+    # The usage module takes the snapshot's dict form across its boundary.
+    return meter_model(model, snapshot.as_payload()) if snapshot else model
 
 
 def _meter_compaction_model[DepsT](
@@ -582,10 +568,10 @@ def _meter_compaction_model[DepsT](
     from app.modules.usage.contracts.metering import meter_model
 
     if isinstance(model, Model):
-        profile = options.extra.get("runtime_profile")
+        snapshot = options.runtime_profile
         return meter_model(
             model,
-            profile if isinstance(profile, Mapping) else {},
+            snapshot.as_payload() if snapshot else {},
             source="history_compaction",
         )
     return model

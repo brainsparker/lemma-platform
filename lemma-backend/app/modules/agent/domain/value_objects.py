@@ -179,16 +179,6 @@ class AgentRunStatus(str, Enum):
     FAILED = "FAILED"
     STOPPED = "STOPPED"
 
-    @classmethod
-    def _missing_(cls, value: object) -> "AgentRunStatus | None":
-        if not isinstance(value, str):
-            return None
-        normalized = value.upper()
-        for member in cls:
-            if member.value == normalized:
-                return member
-        return None
-
 
 class ConversationStatus(str, Enum):
     """User-visible lifecycle for a conversation."""
@@ -199,16 +189,6 @@ class ConversationStatus(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     STOPPED = "STOPPED"
-
-    @classmethod
-    def _missing_(cls, value: object) -> "ConversationStatus | None":
-        if not isinstance(value, str):
-            return None
-        normalized = value.upper()
-        for member in cls:
-            if member.value == normalized:
-                return member
-        return None
 
 
 class AgentRunApprovalDecision(str, Enum):
@@ -248,8 +228,6 @@ class AgentRunFinishResult:
     status: AgentRunStatus
     conversation_status: ConversationStatus
     updated: bool
-    #: An already-terminal run whose conversation this call put back in step.
-    conversation_repaired: bool = False
 
 
 ACTIVE_AGENT_RUN_STATUSES = frozenset(
@@ -296,18 +274,6 @@ class MessageKind(str, Enum):
     THINKING = "THINKING"
     TOOL_CALL = "TOOL_CALL"
     TOOL_RETURN = "TOOL_RETURN"
-
-    @classmethod
-    def _missing_(cls, value: object) -> "MessageKind | None":
-        # Case-insensitive so a lowercase kind from a harness payload or a
-        # pre-migration row still resolves to the CAPS member.
-        if not isinstance(value, str):
-            return None
-        normalized = value.strip().upper()
-        for member in cls:
-            if member.value == normalized:
-                return member
-        return None
 
 
 TEXTUAL_MESSAGE_KINDS = frozenset(

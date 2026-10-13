@@ -37,6 +37,7 @@ from app.modules.agent.domain.queued_messages import DURING_ACTIVE_RUN
 from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     timed_user_prompt_text,
 )
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.value_objects import (
     TEXTUAL_MESSAGE_KINDS,
     MessageKind,
@@ -49,7 +50,7 @@ logger = get_logger(__name__)
 def history_and_prompt(
     messages: Sequence[Message],
     *,
-    protocol: str | None = None,
+    protocol: RuntimeProfileProtocol | None = None,
     current_run_id: UUID | None = None,
     replay_prior_run_reasoning: bool = False,
 ) -> tuple[list[ModelMessage], str | None]:

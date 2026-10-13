@@ -4,7 +4,13 @@ from enum import Enum
 from typing import Any, ClassVar
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from app.core.authorization.context import ResourceType
 from app.core.domain.entity import Entity
 from app.modules.schedule.domain.match_conditions import (
@@ -37,7 +43,48 @@ INSTRUCTION_REQUIRED = (
 )
 
 
-class TimeScheduleConfig(BaseModel):
+#: The most runs any one schedule may hold in flight; a workflow's own cap has
+#: the same ceiling.
+MAX_SCHEDULE_CONCURRENT_RUNS = 1000
+
+
+class ScheduleRunCapConfig(BaseModel):
+    """The run cap every schedule type's config may carry.
+
+    In ``config`` rather than a column of its own: it is an author's setting
+    like the rest of the config, and travels with it through export and import.
+    """
+
+    max_concurrent_runs: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_SCHEDULE_CONCURRENT_RUNS,
+        strict=True,
+        description=(
+            "At most this many of the schedule's runs in flight at once. A fire "
+            "that finds the schedule full is skipped and recorded as skipped, "
+            "not queued. Omit for no cap."
+        ),
+    )
+
+
+def schedule_run_cap(config: Mapping[str, object] | None) -> int | None:
+    """The cap a schedule's config sets, or None. Raises ValueError if invalid.
+
+    A plain ValueError rather than pydantic's, so a request validator raising
+    it reports one field-scoped message.
+    """
+    try:
+        parsed = ScheduleRunCapConfig.model_validate(dict(config or {}))
+    except ValidationError as exc:
+        raise ValueError(
+            "config.max_concurrent_runs must be a whole number from 1 to "
+            f"{MAX_SCHEDULE_CONCURRENT_RUNS}, or omitted"
+        ) from exc
+    return parsed.max_concurrent_runs
+
+
+class TimeScheduleConfig(ScheduleRunCapConfig):
     """Configuration for time-based schedules."""
 
     cron: str | None = Field(None, description="Cron expression for scheduling")
@@ -79,7 +126,7 @@ def authored_config(config: Mapping[str, object] | None) -> dict[str, object]:
     }
 
 
-class WebhookScheduleConfig(BaseModel):
+class WebhookScheduleConfig(ScheduleRunCapConfig):
     """Configuration for webhook-based schedules."""
 
     source: str = Field(
@@ -89,7 +136,7 @@ class WebhookScheduleConfig(BaseModel):
     # but source is required.
 
 
-class DatastoreScheduleConfig(BaseModel):
+class DatastoreScheduleConfig(ScheduleRunCapConfig):
     """Configuration for datastore-based schedules."""
 
     table_name: str = Field(..., min_length=1, description="Table name to watch")
@@ -361,6 +408,7 @@ class ScheduleCreateEntity(BaseModel):
 
     @model_validator(mode="after")
     def _require_explicit_datastore_operations(self) -> "ScheduleCreateEntity":
+        schedule_run_cap(self.config)
         if self.schedule_type == ScheduleType.DATASTORE:
             self.config = normalize_datastore_schedule_config(self.config)
         return self
@@ -381,3 +429,9 @@ class ScheduleUpdateEntity(BaseModel):
     include_outside_rows: bool | None = None
     is_active: bool | None = None
     visibility: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_run_cap(self) -> "ScheduleUpdateEntity":
+        if self.config is not None:
+            schedule_run_cap(self.config)
+        return self

@@ -51,7 +51,9 @@ async def spawn_subagent(
 
     Omit agent_name to spawn another instance of yourself for a targeted subtask.
     Non-blocking: returns {conversation_id, run_id, status}. Use interact_subagent
-    (action='await') to wait, or query_subagents (mode='messages') to poll.
+    (action='await') to wait, or query_subagents (mode='messages') to poll. If
+    you end your turn without collecting it, its result arrives later as a new
+    message.
     """
     try:
         handle = await _service().spawn(

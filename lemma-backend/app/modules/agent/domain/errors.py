@@ -56,6 +56,72 @@ class OrganizationDefaultConflictError(AgentModuleError):
         super().__init__(message, code="ORGANIZATION_DEFAULT_CONFLICT", status_code=409)
 
 
+class RuntimeProfileValidationError(AgentModuleError):
+    """A runtime profile create or edit the caller can correct.
+
+    The message is always written for the person: a validator's text is
+    passed through ``invalid_profile``, never a raw pydantic error, which
+    quotes the input it refused. Callers that are not a request -- Agent Host
+    admission, a run carrying selections across a harness republish -- catch
+    this type by name.
+    """
+
+    def __init__(self, message: str, *, code: str = "RUNTIME_PROFILE_INVALID"):
+        super().__init__(message, code=code, status_code=400)
+
+
+class RuntimeProfileNotFoundError(AgentModuleError):
+    """The profile is gone, or is not one this person can see."""
+
+    def __init__(self, message: str = "Runtime profile not found"):
+        super().__init__(message, code="RUNTIME_PROFILE_NOT_FOUND", status_code=404)
+
+
+class RuntimeProfileNameTakenError(AgentModuleError):
+    """Another profile in the same scope already has this name."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            f"Runtime profile named {name!r} already exists",
+            code="RUNTIME_PROFILE_NAME_TAKEN",
+            status_code=409,
+        )
+
+
+class RuntimeProfileConflictError(AgentModuleError):
+    """Someone else changed this profile between this edit's read and its write.
+
+    Writing anyway would put back every field the other edit changed -- a
+    rotated key restored, an archived profile made active -- because an edit
+    writes the whole row it read.
+    """
+
+    def __init__(
+        self,
+        message: str = (
+            "This model was changed by someone else while you were editing it; "
+            "reload and try again"
+        ),
+    ):
+        super().__init__(message, code="RUNTIME_PROFILE_CONFLICT", status_code=409)
+
+
+class RuntimeProfileUnreadableError(AgentModuleError):
+    """A stored profile whose configuration no longer validates.
+
+    Raised instead of re-reading it as some other shape: that is how a harness
+    profile used to lose its selections without anyone noticing.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This model's saved settings can't be read. Add it again in "
+            "Settings → Models.",
+            code="RUNTIME_PROFILE_UNREADABLE",
+            status_code=409,
+        )
+
+
 class AgentValidationError(AgentModuleError):
     """Agent payload failed module-level validation."""
 

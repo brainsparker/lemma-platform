@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import (
+    credentials_for,
+    SurfaceCredentials,
+    WhatsAppCredentials,
+)
+
 import hashlib
 import json
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from pydantic import JsonValue, TypeAdapter
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.domain.entities import (
@@ -49,7 +54,7 @@ class OnboardingTransport:
     event: ParsedInboundSurfaceEvent
     surface: AgentSurfaceEntity | None
     organization_id: UUID | None
-    credentials: dict[str, JsonValue] = field(repr=False)
+    credentials: SurfaceCredentials = field(repr=False)
     binding_key: str
     #: Which surfaces the bot that delivered this event serves, as the request
     #: gave them -- a native receiver (Telegram polling, the Slack socket) names
@@ -217,16 +222,15 @@ async def _shared_transport(
             resolved = await SurfaceCredentialResolver(uow=uow).for_platform(
                 platform, None, surface=None, arrived_on=arrived_on
             )
-        if resolved.get("phone_number_id") != arrived_on:
+        if WhatsAppCredentials.of(resolved).phone_number_id != arrived_on:
             # Neither the settings number nor a pool row. The signature check
             # upstream proves Meta sent it; it does not prove it was meant for us.
             return None
-    credentials = TypeAdapter(dict[str, JsonValue]).validate_python(resolved)
     return OnboardingTransport(
         parsed,
         None,
         None,
-        credentials,
+        resolved,
         platform_binding_key(parsed, None),
         receiver_ids,
     )
@@ -264,9 +268,7 @@ async def _installation_transport(
             )
         installation = min(surfaces, key=lambda surface: str(surface.id))
         organization_id = by_pod[installation.pod_id]
-        credentials = TypeAdapter(dict[str, JsonValue]).validate_python(
-            native_credentials(platform, surface=installation)
-        )
+        credentials = native_credentials(platform, surface=installation)
         if installation.account_id is not None:
             found = await account_with_secrets(uow, installation.account_id)
             if (
@@ -277,7 +279,7 @@ async def _installation_transport(
                 raise PrivateDeliveryUnavailable(
                     "The installation credentials belong to another organization"
                 )
-            credentials = TypeAdapter(dict[str, JsonValue]).validate_python(found[1])
+            credentials = credentials_for(platform, found[1])
     return OnboardingTransport(
         parsed,
         installation,

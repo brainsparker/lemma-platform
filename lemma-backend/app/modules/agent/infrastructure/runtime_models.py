@@ -345,6 +345,12 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
     )
     user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
 
+    # Every UPDATE carries ``WHERE version = <the version this row was read
+    # at>`` and bumps it, so a write built from a read another write has since
+    # overtaken matches no row and raises StaleDataError instead of putting
+    # the older values back.
+    __mapper_args__ = {"version_id_col": version}
+
     def to_entity(self) -> AgentRuntimeProfile:
         return AgentRuntimeProfile(
             id=str(self.id),
@@ -362,4 +368,5 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
             credentials=self.credentials,
             status=RuntimeProfileStatus(self.status),
             metadata=self.profile_metadata or {},
+            version=self.version or 0,
         )

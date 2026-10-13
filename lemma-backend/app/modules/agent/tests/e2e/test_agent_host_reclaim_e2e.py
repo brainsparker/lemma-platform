@@ -22,6 +22,11 @@ from uuid import UUID, uuid7
 import pytest
 from sqlalchemy import select
 
+from app.modules.agent.domain.runtime_profiles import (
+    RuntimeProfileProtocol,
+    RuntimeProfileScope,
+)
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -129,13 +134,14 @@ class _Worker:
             ),
             options=HarnessOptions(
                 model_name="gpt-5-codex",
-                extra={
-                    "runtime_profile": {
-                        "harness_id": str(harness_id),
-                        "profile_id": str(uuid7()),
-                        "config": {"harness_snapshot_revision": "rev-1"},
-                    }
-                },
+                runtime_profile=RuntimeSnapshot(
+                    profile_id=str(uuid7()),
+                    profile_name="Laptop",
+                    harness_id=str(harness_id),
+                    scope=RuntimeProfileScope.PERSONAL,
+                    protocol=RuntimeProfileProtocol.AGENT_HOST,
+                    config={"harness_snapshot_revision": "rev-1"},
+                ),
             ),
             agent_run_id=self.run_id,
         )

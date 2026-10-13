@@ -456,13 +456,20 @@ tells the agent to use Lemma's:
 - **The web.** When the run has `lemma_web_search`, Claude Code's `WebSearch`
   and Codex's web search (`web_search: "disabled"`) are off; when it has
   `lemma_web_fetch`, Claude Code's `WebFetch` and OpenCode's `webfetch`.
-- **`lemma`.** When the backend ships a CLI beside it (`lemma_cli` in the run's
-  MCP configuration, from `WORKSPACE_HOST_CLI_ROOT`; Desktop's host pack sets
-  it), its `bin/` goes first on the agent's `PATH`, so the `lemma` an agent's
-  shell runs is the release its server is, signed in as the run through the
-  `LEMMA_*` environment (with `LEMMA_CONVERSATION_ID`). The host accepts the
-  folder by the rule host execution uses
-  ([§6](desktop-host-execution.md#6-the-seatbelt-profile)). Claude Code is
+- **`lemma`.** A run gets a CLI whose `bin/` goes first on the agent's
+  `PATH`, signed in as the run through the `LEMMA_*` environment (with
+  `LEMMA_CONVERSATION_ID`). Which one depends on the pairing
+  (`src/lemma_cli.rs`). On the local install's pairing it is the one the
+  backend ships beside it (`lemma_cli` in the run's MCP configuration, from
+  `WORKSPACE_HOST_CLI_ROOT`, which Desktop's host pack sets): the same release
+  as its server. Every other pairing is a server elsewhere, and a path it names
+  is one on its own machine, so its runs get the CLI the Desktop app carries in
+  `Contents/Resources/lemma-cli` (staged by
+  `scripts/build_desktop_lemma_cli.py`), or none when the app has none. Either
+  folder is accepted only by the rule host execution uses
+  ([§6](desktop-host-execution.md#6-the-seatbelt-profile)). From source,
+  `LEMMA_AGENT_HOST_CLI_ROOT` names the bundled folder instead; debug builds
+  only. Claude Code is
   also given `allowedTools` `Bash(<bin>/lemma:*)` and `Bash(lemma:*)`, so the
   CLI never raises a permission request: it is signed in as the run and can
   do only what the run's Lemma tools can, which the host already answers
@@ -609,6 +616,18 @@ guarantee:
   (`harnesses/agent_host/stream_resume.py`). The stream is trimmed only below
   that cursor, never by length, and each event's payload is capped at 8 MiB
   at intake.
+- **Locks on the host row.** One host runs many runs at once, so a run start,
+  a credential refresh and the host's `control` frame all lock its
+  `agent_hosts` row together. Every command insert takes `FOR KEY SHARE` on it
+  through the foreign key, often while holding a run's lease, and the
+  `control` frame locks leases after its heartbeat write. So nothing that can
+  hold or wait for a lease locks the host row with `FOR UPDATE`: admission
+  takes `FOR SHARE`, which still holds a revoke off until the run is queued,
+  and the heartbeat and revoke take `FOR NO KEY UPDATE` (`HostRowLock`).
+  `test_agent_host_concurrent_admission_e2e.py` starts twenty runs on one host
+  alongside its traffic. A run start or a `control` frame that Postgres still
+  picks as a deadlock victim is retried once, and a failure that escapes is
+  reported as the database being busy, not as the teammate's model settings.
 - **Control updates** are idempotent and stale ones are ignored.
   `control_ok.refused` names any update Lemma could not parse, and it is the
   only way one is refused. Lemma applies each update separately, so one bad

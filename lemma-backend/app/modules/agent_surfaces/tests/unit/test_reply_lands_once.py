@@ -23,6 +23,11 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import (
+    OWED_REPLY_CLAIMS,
+    PENDING_DISPLAY_PATHS,
+    surface_caches,
+)
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -58,7 +63,17 @@ from app.modules.agent_surfaces.services import (
     pending_envelope,
     progress_reply,
 )
-from app.modules.agent_surfaces.services.owed_reply import OwedReply
+from app.modules.agent_surfaces.services.owed_reply import (
+    OWED_REPLY_KEY,
+    OwedReply,
+)
+from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    conversation_operations,  # noqa: F401  (autouse fixture)
+)
+from app.modules.agent.contracts import (
+    conversation_metadata_records as metadata_records,
+    conversations_for_surfaces as agent_conversations,
+)
 from app.modules.agent_surfaces.services.pending_envelope import RunFiles
 
 
@@ -191,11 +206,13 @@ def _fake_store(prefix: str) -> RedisJsonCache:
 def claims() -> Iterator[RedisJsonCache]:
     """The Redis the owed reply and the held files live in, in memory."""
     store = _fake_store("test:owed-reply")
-    previous = (owed_reply._claims_cache, pending_envelope._cache)
-    owed_reply._claims_cache = store
-    pending_envelope._cache = _fake_store("test:held-files")
-    yield store
-    owed_reply._claims_cache, pending_envelope._cache = previous
+    with (
+        surface_caches.substituted(OWED_REPLY_CLAIMS, store),
+        surface_caches.substituted(
+            PENDING_DISPLAY_PATHS, _fake_store("test:held-files")
+        ),
+    ):
+        yield store
 
 
 async def test_an_answer_the_platform_deferred_is_owed_not_lost(monkeypatch):
@@ -211,6 +228,7 @@ async def test_an_answer_the_platform_deferred_is_owed_not_lost(monkeypatch):
 
     run_id = uuid4()
     state = SimpleNamespace(
+        uow_factory=_UowFactory(),
         _run_files=RunFiles(run_id),
         _final_delivered=False,
         _final_send_failed=False,
@@ -230,6 +248,35 @@ async def test_an_answer_the_platform_deferred_is_owed_not_lost(monkeypatch):
     assert (owed.message, owed.agent_run_id) == ("the answer", run_id)
     assert (job["_defer_until"] - before).total_seconds() >= 300
     assert state._final_send_failed is True
+    # Written into the conversation too, due when the job is, so a worker
+    # that loses the job does not lose the answer.
+    [written] = agent_conversations.set_conversation_metadata_value.await_args_list
+    _uow, conversation_id, key, record = written.args
+    assert (conversation_id, key) == (conversation.id, OWED_REPLY_KEY)
+    assert record.message == "the answer"
+    assert record.next_at == job["_defer_until"]
+
+
+async def test_the_debt_is_written_down_before_the_job_is_queued():
+    """The other order can leave a queued job with no record, or -- when the
+    queue is down -- neither."""
+    order: list[str] = []
+    agent_conversations.set_conversation_metadata_value.side_effect = lambda *_a, **_k: (
+        order.append("recorded")
+    )
+
+    class _Ordered(_Queue):
+        async def enqueue(self, job_name: str, **kwargs: Any) -> None:
+            order.append("queued")
+
+    await owed_reply.owe_reply(
+        OwedReply(conversation_id=uuid4(), agent_run_id=None, message="hi"),
+        retry_after=None,
+        uow_factory=_UowFactory(),
+        job_queue=_Ordered(),
+    )
+
+    assert order == ["recorded", "queued"]
 
 
 async def test_an_owed_reply_is_sent_once_however_often_its_job_runs(claims):
@@ -247,6 +294,13 @@ async def test_an_owed_reply_is_sent_once_however_often_its_job_runs(claims):
 
     assert len(sends) == 1
     assert sends[0]["attach_files_of"] == RunFiles(owed.agent_run_id)
+    # Paid: the record is cleared, and only while it is still this reply's.
+    forgets = metadata_records.forget_conversation_metadata_record.await_args_list
+    assert forgets, "a delivered reply left its record to be swept again"
+    assert all(
+        call.kwargs["matching"] == {"agent_run_id": str(owed.agent_run_id)}
+        for call in forgets
+    )
 
 
 async def test_an_owed_reply_still_refused_waits_as_long_as_asked(claims):
@@ -285,6 +339,8 @@ async def test_an_owed_reply_that_partly_arrived_is_not_sent_again(claims):
     )
 
     assert queue.jobs == []
+    # Given up: nothing is left for the sweep to send again.
+    metadata_records.forget_conversation_metadata_record.assert_awaited_once()
 
 
 # ── a send that may have landed is not sent again ───────────────────────────
@@ -343,6 +399,18 @@ async def test_slack_names_each_message_once_across_its_retries(monkeypatch):
 
     assert len(posts) == 2
     assert posts[0]["client_msg_id"] == posts[1]["client_msg_id"]
+
+
+async def test_a_slack_post_reports_the_ts_it_can_be_edited_by(monkeypatch):
+    async def post(self, **kwargs: Any) -> dict[str, object]:
+        return {"ok": True, "ts": "1700000000.0001"}
+
+    monkeypatch.setattr(AsyncWebClient, "chat_postMessage", post)
+    service = SlackPlatformService(credentials={"access_token": "xoxb-test"})
+
+    ts = await service._post_message(AsyncWebClient(token="x"), {"channel": "C1"})
+
+    assert ts == "1700000000.0001"
 
 
 # ── Telegram counts UTF-16, and "too long" is split, not lost ───────────────

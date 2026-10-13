@@ -25,9 +25,9 @@ import asyncio
 import json
 import re
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Any
+from typing import Any, TypeGuard
 
-import httpx
+import httpx2
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -108,7 +108,7 @@ def _current_run_turn_index(messages: Sequence[ModelMessage]) -> int:
     )
 
 
-def _is_users(part: object) -> bool:
+def _is_users(part: object) -> TypeGuard[UserPromptPart]:
     """A prompt part the person wrote, not the run's context part beside it.
 
     The context part rides at the tail of every request after the first, so
@@ -361,8 +361,9 @@ def _raise_scripted_error(
         # The production failure this exists to reproduce: the provider accepts
         # the request and then drops the connection mid-answer. The harness
         # retries from the messages already recorded, so a journey scripting
-        # this should still complete cleanly.
-        raise httpx.ReadError(message)
+        # this should still complete cleanly. `httpx2`, because that is the
+        # stack the provider SDKs run on and so what a real drop raises.
+        raise httpx2.ReadError(message)
     raise RuntimeError(message)
 
 

@@ -257,7 +257,7 @@ is answered *for the pod*, in a group the pod has opened to them.
 - **A WhatsApp group is one the bot opened.** A business number cannot be added
   to a group, only create one, so a member asks in their own WhatsApp chat and
   the agent calls `whatsapp_open_group` (offered only in a member's private
-  chat; `platforms/whatsapp/tools.py`). Meta answers the creation with a
+  chat; `services/whatsapp_group_tool.py`). Meta answers the creation with a
   `request_id` only, so the row is recorded pending
   (`services/whatsapp_groups.py`) and the member's turn waits a few seconds
   for the `group_lifecycle_update` webhook (`services/group_updates.py`), which

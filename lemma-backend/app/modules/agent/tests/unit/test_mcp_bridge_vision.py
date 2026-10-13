@@ -40,7 +40,10 @@ def test_the_stored_run_config_alone_can_never_report_vision():
         mode="json"
     )
     assert "model_capabilities" not in stored
-    assert vision_mode_from_runtime_profile(stored) is not AgentVisionMode.DIRECT
+    assert (
+        vision_mode_from_runtime_profile(stored, delegate_model_configured=True)
+        is not AgentVisionMode.DIRECT
+    )
 
 
 @pytest.mark.asyncio
@@ -84,7 +87,10 @@ async def test_the_bridge_resolves_the_runtime_so_capabilities_are_present(monke
     )
 
     assert profile["model_capabilities"] == ["TEXT", "TOOLS", "VISION"]
-    assert vision_mode_from_runtime_profile(profile) is AgentVisionMode.DIRECT
+    assert (
+        vision_mode_from_runtime_profile(profile, delegate_model_configured=True)
+        is AgentVisionMode.DIRECT
+    )
 
 
 @pytest.mark.asyncio
@@ -376,6 +382,8 @@ def test_the_snapshot_the_bridge_reads_carries_those_capabilities():
     from app.modules.agent.domain.runtime_profiles import (
         RuntimeModelCapability,
         RuntimeProfileKind,
+        RuntimeProfileProtocol,
+        RuntimeProfileScope,
     )
     from app.modules.agent.services.runtime_profile_service import (
         ResolvedAgentRuntime,
@@ -387,8 +395,8 @@ def test_the_snapshot_the_bridge_reads_carries_those_capabilities():
         name="Claude Code",
         user_id=None,
         harness_id=None,
-        scope=SimpleNamespace(value="PERSONAL"),
-        protocol=SimpleNamespace(value="AGENT_HOST"),
+        scope=RuntimeProfileScope.PERSONAL,
+        protocol=RuntimeProfileProtocol.AGENT_HOST,
         kind=RuntimeProfileKind.HARNESS,
         config=None,
     )
@@ -407,6 +415,9 @@ def test_the_snapshot_the_bridge_reads_carries_those_capabilities():
     snapshot = resolved.runtime_snapshot().as_payload()
 
     assert "VISION" in snapshot["model_capabilities"]
-    assert vision_mode_from_runtime_profile(snapshot) is AgentVisionMode.DIRECT
+    assert (
+        vision_mode_from_runtime_profile(snapshot, delegate_model_configured=True)
+        is AgentVisionMode.DIRECT
+    )
     # Still unpinned: naming a model here would tell the harness what to run.
     assert snapshot["model_name"] is None

@@ -6,14 +6,14 @@ import { source, type ConversationRef, type Pod, type Surface } from "@/data";
 import { AskBox } from "@/chat/ask-box";
 import { lemma } from "@/session/client";
 import {
-    AGENT_EDIT, AGENT_REMOVE, AGENT_RUN, may, runtimeLine, surfacesLost, whyNot,
+    AGENT_EDIT, AGENT_REMOVE, AGENT_RUN, may, surfacesLost, whyNot,
     type AgentDetail,
 } from "@/data/agents";
 import { displayAgentName } from "@/data/agent-names";
 import { surfacesForAgent, surfaceStatus } from "@/data/surface-settings";
 import { groupsSupported } from "@/data/surface-groups";
 import { capabilityList, grantedToolsets } from "@/stage/colleagues";
-import { ConfirmRemove, Editor } from "@/stage/agents-view";
+import { ConfirmRemove, Editor, useRunsOn } from "@/stage/agents-view";
 import { useSchedules } from "@/schedule/queries";
 import { wakeFor, wakeRequest } from "@/docpages/comments/wake";
 import { readWorkflows, sayWhen } from "@/workflow/runs";
@@ -136,7 +136,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
                                 <Instructions detail={detail} />
                                 <Abilities detail={detail} />
                                 <Channels space={pod} detail={detail} surfaces={surfaces.data ?? []} loading={surfaces.isPending} />
-                                <Facts detail={detail} />
+                                <Facts orgId={pod.orgId} detail={detail} />
                                 <CommentReplies pod={pod} detail={detail} />
                                 <UsedBy pod={pod} detail={detail} onOpenSchedules={onOpenSchedules} onOpenWorkflows={onOpenWorkflows} />
                                 <Access pod={pod} detail={detail} />
@@ -365,8 +365,8 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
     );
 }
 
-function Facts({ detail }: { detail: AgentDetail }) {
-    const runtime = runtimeLine(detail);
+function Facts({ orgId, detail }: { orgId: string; detail: AgentDetail }) {
+    const runtime = useRunsOn(orgId, detail);
     return (
         <Rail title="Model">
             <p className="agentpage__fact">{runtime || "The default model here"}</p>

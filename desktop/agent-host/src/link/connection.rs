@@ -35,7 +35,10 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 /// How many of Lemma's `op` requests run at once. More wait for a slot; the
 /// reader never does, so a burst of ops cannot stall the heartbeat's answer.
-pub const MAX_CONCURRENT_OPS: usize = 32;
+/// An op can wait on a command's output for most of its deadline, so this is
+/// a few per run at the default run limit, not one: twenty runs each waiting
+/// on two commands must not leave a third op queued behind them.
+pub const MAX_CONCURRENT_OPS: usize = 64;
 /// How long an op may take when Lemma names no deadline.
 pub const DEFAULT_OP_DEADLINE: Duration = Duration::from_secs(120);
 

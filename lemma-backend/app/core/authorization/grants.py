@@ -12,6 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.authz_epoch import bump_after_commit
 from app.core.authorization.context import ResourceType
+from app.core.authorization.grant_generation import (
+    AGENT_GRANTEE,
+    bump_agent_grant_generations,
+)
 from app.core.domain.errors import BadRequestError
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import PERMISSION_BY_ID
@@ -211,6 +215,7 @@ async def replace_grantee_resource_grants(
             )
         )
     await session.flush()
+    await _bump_if_agent(session, grantee_type, grantee_id)
     await bump_after_commit(session, pod_id)
 
 
@@ -247,6 +252,7 @@ async def replace_resource_grantee_grant(
             )
         )
     await session.flush()
+    await _bump_if_agent(session, grantee_type, grantee_id)
     await bump_after_commit(session, pod_id)
 
 
@@ -269,6 +275,7 @@ async def delete_resource_grantee_grant(
         )
     )
     await session.flush()
+    await _bump_if_agent(session, grantee_type, grantee_id)
     await bump_after_commit(session, pod_id)
 
 
@@ -280,14 +287,28 @@ async def delete_resource_grants(
     resource_id: UUID,
 ) -> None:
     """Delete every grant on a resource (all grantee types). Use on delete."""
-    await session.execute(
-        delete(ResourcePermissionGrantModel).where(
+    deleted = await session.execute(
+        delete(ResourcePermissionGrantModel)
+        .where(
             ResourcePermissionGrantModel.pod_id == pod_id,
             ResourcePermissionGrantModel.resource_type.in_(
                 grant_resource_type_values(resource_type)
             ),
             ResourcePermissionGrantModel.resource_id == resource_id,
         )
+        .returning(
+            ResourcePermissionGrantModel.grantee_type,
+            ResourcePermissionGrantModel.grantee_id,
+        )
+    )
+    # Every agent that held a grant on it has just lost a tool.
+    await bump_agent_grant_generations(
+        session,
+        {
+            grantee_id
+            for grantee_type, grantee_id in deleted.all()
+            if grantee_type == AGENT_GRANTEE
+        },
     )
     await session.flush()
     await bump_after_commit(session, pod_id)
@@ -335,7 +356,16 @@ async def delete_grantee_grants(
         )
     )
     await session.flush()
+    await _bump_if_agent(session, grantee_type, grantee_id)
     await bump_after_commit(session, pod_id)
+
+
+async def _bump_if_agent(
+    session: AsyncSession, grantee_type: str, grantee_id: UUID
+) -> None:
+    """An agent's grants changed: what was derived from them is stale."""
+    if grantee_type == AGENT_GRANTEE:
+        await bump_agent_grant_generations(session, {grantee_id})
 
 
 async def list_resource_grants(

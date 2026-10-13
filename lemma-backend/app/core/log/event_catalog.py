@@ -192,6 +192,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.speech.voice_catalogue_unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
     'agent.speech.voice_note_not_delivered.degraded': EventSpec('warning', frozenset({'platform'})),
     'agent.streaming.subscription_close_failed.degraded': EventSpec('warning', frozenset()),
+    'agent.subagent_result.delivered': EventSpec('info', frozenset({'conversation_id', 'results'})),
+    'agent.subagent_result.delivery_failed.degraded': EventSpec('warning', frozenset({'agent_run_id', 'conversation_id'})),
     'agent.summarization_model.resolution_failed.observed': EventSpec('warning', frozenset({'model_name'})),
     'agent.surface_context.non_text_metadata_dropped.degraded': EventSpec('warning', frozenset({'conversation_id', 'metadata_fields'})),
     'agent.tools.image_payload.downscale_skipped.diagnostic': EventSpec('debug', frozenset({'error_type'})),

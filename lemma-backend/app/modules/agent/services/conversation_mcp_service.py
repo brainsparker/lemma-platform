@@ -30,6 +30,7 @@ from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
+from app.modules.agent.services.vision_service import vision_delegate_available
 from app.modules.agent.services.mcp_content import (
     tool_call_error,
     tool_call_result,
@@ -64,7 +65,7 @@ from app.modules.agent.services.mcp_pausing_calls import (
     is_pausing_tool,
     record_pausing_tool_call,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     WorkspaceLocation,
     ensure_recorded_location,
     pod_cwd_from_workspace_cwd,
@@ -550,7 +551,9 @@ def _tool_context(
         #
         # `vision_mode`: or a harness that reads images natively is
         # treated as text-only and delegates work it could do itself.
-        vision_mode=vision_mode_from_runtime_profile(runtime_profile),
+        vision_mode=vision_mode_from_runtime_profile(
+            runtime_profile, delegate_model_configured=vision_delegate_available()
+        ),
         # The location fields: without them `get_workspace_cwd()` falls
         # back to `/workspace/conversations/<uuid>`, so tools ran in a
         # directory the agent's own prompt does not name -- the prompt

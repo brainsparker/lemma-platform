@@ -83,7 +83,7 @@ from app.modules.agent.infrastructure.run_execution_record import (
     read_run_execution,
     record_run_execution,
 )
-from app.modules.agent.services.workspace_location import resolve_workspace_location
+from app.modules.agent.domain.workspace_location import resolve_workspace_location
 from app.modules.identity.contracts.installation import is_desktop_installation
 from app.modules.workspace.contracts.host_execution import (
     HostFolder,

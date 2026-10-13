@@ -45,7 +45,7 @@ from app.modules.agent.services.conversation_mcp_service import ConversationMCPS
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     resolve_pod_cwd,
     resolve_workspace_location,
 )

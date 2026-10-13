@@ -49,7 +49,7 @@ def agent_host_run_config[DepsT](options: HarnessOptions[DepsT]) -> AgentHostRun
 
 
 def resolve_pod_cwd(conversation: Conversation) -> str:
-    from app.modules.agent.services.workspace_location import resolve_pod_cwd
+    from app.modules.agent.domain.workspace_location import resolve_pod_cwd
 
     return resolve_pod_cwd(conversation)
 

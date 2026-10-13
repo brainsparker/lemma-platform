@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
 from uuid import UUID
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    BeforeValidator,
     computed_field,
     model_validator,
 )
@@ -18,9 +16,10 @@ from pydantic import (
 from app.core.authorization.context import (
     ResourceType,
     ResourceVisibility,
-    normalize_resource_visibility,
 )
 from app.core.authorization.grants import ensure_grant_uses_resource_name
+from app.modules.agent.contracts.agent_response import AgentResponse as AgentResponse
+from app.modules.agent.contracts.agent_response import StoredVisibility
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import (
     MAX_AGENT_INSTRUCTION_CHARACTERS,
@@ -38,7 +37,7 @@ from app.modules.agent.domain.value_objects import (
     JsonValue,
     MessageKind,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     pod_cwd_for,
     workspace_location_for,
 )
@@ -70,42 +69,6 @@ class AgentPermissionsResponse(BaseModel):
     agent_id: UUID
     agent_name: str
     grants: list[AgentResourcePermissionResponse] = Field(default_factory=list)
-
-
-def _stored_visibility(value: object) -> object:
-    # Normalized on every write, but read back through the one function that
-    # knows the older spellings, so a legacy row still answers.
-    if isinstance(value, str):
-        return normalize_resource_visibility(value) or value
-    return value
-
-
-#: The enum in the published schema, where a bare ``str`` told clients nothing.
-StoredVisibility = Annotated[ResourceVisibility, BeforeValidator(_stored_visibility)]
-
-
-class AgentResponse(BaseModel):
-    id: UUID
-    pod_id: UUID
-    user_id: UUID
-    name: str
-    # Which of these the pod came with. A client renders the default
-    # assistant beside the agents somebody made, and has to be able to tell
-    # them apart to withhold edit and delete -- it is the same list.
-    kind: AgentKind = AgentKind.USER
-    description: str | None = None
-    icon_url: str | None = None
-    visibility: StoredVisibility = ResourceVisibility.POD
-    instruction: str
-    agent_runtime: AgentRuntimeConfig | None = None
-    toolsets: list[AgentToolset] = Field(default_factory=list)
-    input_schema: JsonObject | None = None
-    output_schema: JsonObject | None = None
-    metadata: JsonObject | None = None
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class AgentActionResponse(AgentResponse):

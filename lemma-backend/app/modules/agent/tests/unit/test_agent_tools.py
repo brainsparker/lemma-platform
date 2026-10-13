@@ -29,7 +29,7 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
-from app.modules.agent.services.workspace_location import ProjectRepo
+from app.modules.agent.domain.workspace_location import ProjectRepo
 from app.modules.agent.services.conversation_access import resolve_agent
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.runtime_history import (
@@ -1176,7 +1176,7 @@ def test_workspace_directory_falls_back_to_the_resolved_location():
     in place, so the one section whose job is to say where the agent is pointed
     at a directory that does not exist.
     """
-    from app.modules.agent.services.workspace_location import (
+    from app.modules.agent.domain.workspace_location import (
         resolve_workspace_location,
     )
 

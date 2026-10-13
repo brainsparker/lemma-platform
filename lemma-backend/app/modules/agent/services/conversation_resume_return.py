@@ -46,7 +46,7 @@ from app.modules.agent.services.approval_reconciliation import (
     record_session_approvals,
 )
 from app.modules.agent.services.conversation_access import resolve_agent
-from app.modules.agent.services.workspace_location import resolve_workspace_location
+from app.modules.agent.domain.workspace_location import resolve_workspace_location
 
 logger = get_logger(__name__)
 
@@ -361,7 +361,7 @@ class ResumeToolReturnBuilder:
         from app.modules.agent.services.host_execution_selection import (
             recorded_host_workspace,
         )
-        from app.modules.agent.services.workspace_location import resolve_pod_cwd
+        from app.modules.agent.domain.workspace_location import resolve_pod_cwd
 
         uow_factory = SessionUnitOfWorkFactory(async_session_maker)
         agent = await resolve_agent(

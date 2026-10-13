@@ -49,7 +49,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     ConversationType,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     apply_location_metadata,
 )
 from app.modules.pod.contracts.agent_access import pod_organization_id

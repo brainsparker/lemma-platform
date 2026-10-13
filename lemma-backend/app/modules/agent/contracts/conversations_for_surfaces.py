@@ -40,7 +40,7 @@ from sqlalchemy import select
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.api.dependencies import get_conversation_service
+from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
@@ -139,7 +139,7 @@ def _service(uow: SqlAlchemyUnitOfWork):
     A plain factory despite its FastAPI ``Depends`` annotation -- calling it
     directly is how the other non-request callers build the same service.
     """
-    return get_conversation_service(uow)
+    return build_conversation_service(uow)
 
 
 def _pending(pause: PendingPause | None) -> PendingInteraction | None:

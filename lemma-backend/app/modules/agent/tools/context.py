@@ -20,7 +20,7 @@ from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.services.subscription_models_provider import (
     resolve_subscription_models,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     ProjectRepo,
     pod_cwd_from_workspace_cwd,
 )

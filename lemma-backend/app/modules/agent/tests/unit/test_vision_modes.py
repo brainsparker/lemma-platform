@@ -322,11 +322,14 @@ def test_a_vision_capable_run_is_detected_from_its_stored_snapshot() -> None:
     from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
 
     seeing = vision_mode_from_runtime_profile(
-        {"model_capabilities": ["TEXT", "TOOLS", "VISION"]}
+        {"model_capabilities": ["TEXT", "TOOLS", "VISION"]},
+        delegate_model_configured=True,
     )
     assert seeing is AgentVisionMode.DIRECT
 
-    text_only = vision_mode_from_runtime_profile({"model_capabilities": ["TEXT"]})
+    text_only = vision_mode_from_runtime_profile(
+        {"model_capabilities": ["TEXT"]}, delegate_model_configured=True
+    )
     assert text_only is not AgentVisionMode.DIRECT
 
 

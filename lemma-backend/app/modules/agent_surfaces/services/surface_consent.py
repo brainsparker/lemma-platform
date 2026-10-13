@@ -8,6 +8,8 @@ surface once it has.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+
 from app.modules.agent_surfaces.domain.credentials import WhatsAppCredentials
 
 from typing import TYPE_CHECKING, Any
@@ -285,7 +287,7 @@ class SurfaceConsentMixin:
 
         token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with outbound_http(10) as client:
                 token_response = await client.post(
                     token_url,
                     data={
@@ -325,7 +327,7 @@ class SurfaceConsentMixin:
             return False
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with outbound_http(10) as client:
                 probe = await client.get(
                     "https://graph.microsoft.com/v1.0/users?$top=1&$select=id",
                     headers={"Authorization": f"Bearer {token}"},

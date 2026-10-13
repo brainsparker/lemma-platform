@@ -20,6 +20,8 @@ functional gain, so the raw client is retained intentionally.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+
 import json
 from typing import Any
 
@@ -192,7 +194,7 @@ class TelegramClient:
         if client is not None:
             response = await client.post(url, json=payload)
         else:
-            async with httpx.AsyncClient(timeout=self._timeout) as own_client:
+            async with outbound_http(self._timeout) as own_client:
                 response = await own_client.post(url, json=payload)
         return self._parse(method, response)
 
@@ -217,7 +219,7 @@ class TelegramClient:
             for key, value in fields.items()
         }
         await assert_safe_api_base(self.base_url, platform="Telegram")
-        async with httpx.AsyncClient(timeout=timeout or self._timeout) as client:
+        async with outbound_http(timeout or self._timeout) as client:
             response = await client.post(
                 f"{self.base_url}/{method}",
                 data=data,

@@ -17,9 +17,10 @@ endorsements; both are checked here.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+
 import json
 from dataclasses import dataclass
-import httpx
 import jwt
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from jwt.algorithms import RSAAlgorithm
@@ -207,7 +208,7 @@ class TeamsJwtVerifier:
         if cached is not None:
             return cached
 
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with outbound_http(10) as client:
             response = await client.get(url)
             if response.status_code != 200:
                 raise SurfaceWebhookAuthenticationError(

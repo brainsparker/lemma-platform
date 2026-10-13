@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+
 from app.modules.agent_surfaces.domain.reply_targets import (
     TelegramReplyTarget,
     reply_target_as,
@@ -14,7 +16,6 @@ import hmac
 
 from typing import Any
 
-import httpx
 from redis.exceptions import RedisError
 from pydantic_ai.tools import RunContext
 
@@ -477,7 +478,7 @@ class TelegramPlatformService:
         file_id = str(attachment.get("file_id") or attachment.get("id") or "").strip()
         if not self._bot_token or not file_id:
             return None
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with outbound_http(60.0) as client:
             metadata_response = await client.post(
                 f"{self._client.base_url}/getFile",
                 json={"file_id": file_id},

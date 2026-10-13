@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import cache
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from app.modules.datastore.domain.errors import DatastoreQueryError
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 # got the driver's message instead of "only read-only SELECT queries are
 # allowed". A guarantee that holds by accident of a second control is not the
 # guarantee this function documents.
-@cache
+@lru_cache(maxsize=1)
 def _forbidden_nodes() -> tuple[type[exp.Expression], ...]:
     from sqlglot import exp
 
@@ -61,7 +61,7 @@ _FORBIDDEN_FUNCTIONS = frozenset({"set_config"})
 
 
 # Read-only statement roots permitted as the top-level expression.
-@cache
+@lru_cache(maxsize=1)
 def _allowed_roots() -> tuple[type[exp.Expression], ...]:
     from sqlglot import exp
 

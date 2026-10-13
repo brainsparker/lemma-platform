@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from functools import cache
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote_plus
 
@@ -44,7 +44,7 @@ logger = get_logger(__name__)
 # sqlglot loads on the first query, not at import: the connector registry puts
 # this module on app.app's import path, and the parser costs ~40 modules and
 # ~170 ms that starting the API does not need.
-@cache
+@lru_cache(maxsize=1)
 def _forbidden_nodes() -> tuple[type[exp.Expression], ...]:
     from sqlglot import exp
 
@@ -65,7 +65,7 @@ def _forbidden_nodes() -> tuple[type[exp.Expression], ...]:
     )
 
 
-@cache
+@lru_cache(maxsize=1)
 def _allowed_roots() -> tuple[type[exp.Expression], ...]:
     from sqlglot import exp
 

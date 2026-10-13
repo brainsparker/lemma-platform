@@ -186,6 +186,14 @@ class PlatformCapabilities:
     # group it created. Elsewhere a channel is answered only once it is
     # configured as a route.
     group_membership_authorizes: bool = False
+    # How often the platform's "working on it" indicator is refreshed while a
+    # run is going, in seconds; None where there is no indicator to keep alive.
+    # Each platform's indicator expires on its own clock. WhatsApp couples
+    # mark-as-read and the typing bubble into one call that the ingress path
+    # makes once; the bubble expires after about 25 s, so on anything longer
+    # than a quick answer it went dark exactly where it was the only sign of
+    # life.
+    typing_refresh_seconds: float | None = None
 
     @property
     def delivery_cardinality(self) -> DeliveryCardinality:
@@ -289,6 +297,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
     ),
     "TEAMS": PlatformCapabilities(
         platform="TEAMS",
+        typing_refresh_seconds=10.0,
         display_name="Microsoft Teams",
         supports_native_choices=True,
         # False, and not an oversight: `TeamsSurfaceAdapter` never overrides
@@ -308,6 +317,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
     ),
     "WHATSAPP": PlatformCapabilities(
         platform="WHATSAPP",
+        typing_refresh_seconds=20.0,
         display_name="WhatsApp",
         # Native interactive replies: ≤3 options as buttons, 4–10 as a list.
         # Multi-select / >10 options fall back to formatted text.
@@ -355,6 +365,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
     ),
     "TELEGRAM": PlatformCapabilities(
         platform="TELEGRAM",
+        typing_refresh_seconds=4.0,
         display_name="Telegram",
         # Native inline-keyboard ask_user; option taps resolve via a Redis
         # short-token store (64-byte callback_data limit). Multi-select falls

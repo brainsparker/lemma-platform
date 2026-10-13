@@ -23,7 +23,6 @@ from app.modules.agent.contracts import (
     AgentEventType,
 )
 from app.modules.agent.contracts import ConversationContext
-from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
@@ -70,16 +69,11 @@ _DELIVERY_ERRORS: tuple[type[BaseException], ...] = (
     *PLATFORM_TRANSPORT_ERRORS,
 )
 
+# Read from the capability registry once; a mapping so a test can shorten one.
 _TYPING_REFRESH_INTERVAL_SECONDS = {
-    SurfacePlatform.TELEGRAM.value: 4.0,
-    SurfacePlatform.TEAMS.value: 10.0,
-    # WhatsApp couples mark-as-read and the typing bubble into one call, which
-    # the ingress path already makes once when it picks the message up. The
-    # bubble expires after ~25s, so on anything longer than a quick answer it
-    # went dark and stayed dark — dead in exactly the runs where it was the only
-    # sign of life. Refreshed inside that window it costs no conversation
-    # message and no attention, unlike the posted updates that back it up.
-    SurfacePlatform.WHATSAPP.value: 20.0,
+    platform: capabilities.typing_refresh_seconds
+    for platform, capabilities in PLATFORM_CAPABILITIES.items()
+    if capabilities.typing_refresh_seconds is not None
 }
 _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
 

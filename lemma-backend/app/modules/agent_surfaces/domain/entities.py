@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
 
+from collections.abc import Callable
 from enum import StrEnum
 from datetime import datetime, timezone
 from typing import Any
@@ -448,12 +449,10 @@ class AgentSurfaceEntity(AggregateRoot):
         row accept every tenant's events, and an event with no tenant reach
         every surface.
         """
-        if self.surface_type is SurfacePlatform.TEAMS:
-            expected = self.external_tenant_id
-        elif self.surface_type is SurfacePlatform.SLACK:
-            expected = self.external_workspace_id
-        else:
+        tenant_key = _TENANT_KEY.get(self.surface_type)
+        if tenant_key is None:
             return True
+        expected = tenant_key(self)
         return bool(expected) and bool(tenant_id) and expected == tenant_id
 
     def should_ignore_sender(self, sender_external_user_id: str | None) -> bool:
@@ -544,6 +543,14 @@ class AgentSurfaceEntity(AggregateRoot):
         # the platform's adapter settled it before admission
         # (`InboundReader.settle_mention`).
         return event.mentioned_agent
+
+
+#: Where a surface records the tenant its installation is scoped to, on the
+#: platforms that scope one. A platform absent here is not tenant-scoped.
+_TENANT_KEY: dict[SurfacePlatform, Callable[[AgentSurfaceEntity], str | None]] = {
+    SurfacePlatform.TEAMS: lambda surface: surface.external_tenant_id,
+    SurfacePlatform.SLACK: lambda surface: surface.external_workspace_id,
+}
 
 
 class AgentSurfaceConversationLink(Entity):

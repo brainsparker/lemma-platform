@@ -166,18 +166,22 @@ async def private_onboarding_destination(
         raise PrivateDeliveryUnavailable(
             "The installation has no private sender context"
         )
-    if event.platform == SurfacePlatform.SLACK:
-        destination_id, reply_target = await _slack_private_destination(
+    openers: dict[
+        SurfacePlatform, Callable[[], Awaitable[tuple[str, dict[str, JsonValue]]]]
+    ] = {
+        SurfacePlatform.SLACK: lambda: _slack_private_destination(
             event, actor, credentials, open_slack
-        )
-    elif event.platform == SurfacePlatform.TEAMS:
-        destination_id, reply_target = await _teams_private_destination(
+        ),
+        SurfacePlatform.TEAMS: lambda: _teams_private_destination(
             event, open_http, fetch_token
-        )
-    else:
+        ),
+    }
+    open_private = openers.get(event.platform)
+    if open_private is None:
         raise PrivateDeliveryUnavailable(
             "Open a private conversation with the Lemma bot"
         )
+    destination_id, reply_target = await open_private()
     return event.model_copy(
         update={
             "is_dm": True,

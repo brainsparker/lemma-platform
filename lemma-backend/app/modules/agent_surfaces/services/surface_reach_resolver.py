@@ -22,6 +22,7 @@ from __future__ import annotations
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 from contextlib import suppress
+from functools import partial
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
@@ -223,23 +224,28 @@ class SurfaceReachResolver:
 
         Bounded by ``_LIVE_HANDLE_TIMEOUT_SECONDS`` so a hung provider can't stall
         the caller; a timeout is treated like any other failure (→ fallback)."""
-        if surface.surface_type is SurfacePlatform.SLACK:
-            user_id = surface.surface_identity_id
-            if credentials is None or not user_id:
-                return None
-            coro = self._slack_handle(user_id, credentials)
-        elif surface.surface_type is SurfacePlatform.TEAMS:
-            coro = self._teams_handle(surface)
-        elif surface.surface_type is SurfacePlatform.TELEGRAM:
-            if credentials is None:
-                return None
-            coro = self._telegram_handle(credentials)
-        elif surface.surface_type is SurfacePlatform.WHATSAPP:
-            if credentials is None:
-                return None
-            coro = self._whatsapp_handle(credentials)
-        else:
+        readers: dict[SurfacePlatform, Callable[[], Awaitable[str | None]] | None] = {
+            SurfacePlatform.SLACK: (
+                partial(self._slack_handle, surface.surface_identity_id, credentials)
+                if credentials is not None and surface.surface_identity_id
+                else None
+            ),
+            SurfacePlatform.TEAMS: partial(self._teams_handle, surface),
+            SurfacePlatform.TELEGRAM: (
+                partial(self._telegram_handle, credentials)
+                if credentials is not None
+                else None
+            ),
+            SurfacePlatform.WHATSAPP: (
+                partial(self._whatsapp_handle, credentials)
+                if credentials is not None
+                else None
+            ),
+        }
+        read = readers.get(surface.surface_type)
+        if read is None:
             return None
+        coro = read()
         try:
             return await asyncio.wait_for(coro, timeout=_LIVE_HANDLE_TIMEOUT_SECONDS)
         except Exception:  # timeout / API failure — never break the request

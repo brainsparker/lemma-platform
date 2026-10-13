@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    BeforeValidator,
     computed_field,
     model_validator,
 )
 
-from app.core.authorization.context import ResourceType, ResourceVisibility
+from app.core.authorization.context import (
+    ResourceType,
+    ResourceVisibility,
+    normalize_resource_visibility,
+)
 from app.core.authorization.grants import ensure_grant_uses_resource_name
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import (
@@ -66,6 +72,18 @@ class AgentPermissionsResponse(BaseModel):
     grants: list[AgentResourcePermissionResponse] = Field(default_factory=list)
 
 
+def _stored_visibility(value: object) -> object:
+    # Normalized on every write, but read back through the one function that
+    # knows the older spellings, so a legacy row still answers.
+    if isinstance(value, str):
+        return normalize_resource_visibility(value) or value
+    return value
+
+
+#: The enum in the published schema, where a bare ``str`` told clients nothing.
+StoredVisibility = Annotated[ResourceVisibility, BeforeValidator(_stored_visibility)]
+
+
 class AgentResponse(BaseModel):
     id: UUID
     pod_id: UUID
@@ -77,7 +95,7 @@ class AgentResponse(BaseModel):
     kind: AgentKind = AgentKind.USER
     description: str | None = None
     icon_url: str | None = None
-    visibility: str = "POD"
+    visibility: StoredVisibility = ResourceVisibility.POD
     instruction: str
     agent_runtime: AgentRuntimeConfig | None = None
     toolsets: list[AgentToolset] = Field(default_factory=list)
@@ -116,7 +134,7 @@ class AgentSummaryResponse(BaseModel):
     kind: AgentKind = AgentKind.USER
     description: str | None = None
     icon_url: str | None = None
-    visibility: str = "POD"
+    visibility: StoredVisibility = ResourceVisibility.POD
     toolsets: list[AgentToolset] = Field(default_factory=list)
     metadata: JsonObject | None = None
     created_at: datetime

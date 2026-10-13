@@ -297,9 +297,12 @@ class SurfaceSelector:
                 user_id, platform
             )
         except Exception:
-            logger.debug(
-                "agent_surfaces.ingress_service.clear_stale_surface_default_user.diagnostic",
-                user_id=user_id,
+            # Left in place, a stale default is read and declined again on
+            # every message this person sends.
+            logger.warning(
+                "agent_surfaces.surface_selector.stale_default_not_cleared.degraded",
+                user_id=str(user_id),
+                exc_info=True,
             )
 
     @staticmethod

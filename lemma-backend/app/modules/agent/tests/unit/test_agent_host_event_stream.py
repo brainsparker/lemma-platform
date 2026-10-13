@@ -145,6 +145,8 @@ class TestLifecycle:
         await stream.delete(run_id=run_id)
         await stream.delete(run_id=run_id)
 
+        assert await stream.read(run_id=run_id, block_ms=50) == []
+
     async def test_append_sets_a_ttl_so_an_abandoned_run_cannot_leak(
         self, stream
     ) -> None:

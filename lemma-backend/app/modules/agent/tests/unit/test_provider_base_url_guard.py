@@ -42,7 +42,11 @@ def local_install(monkeypatch):
 
 
 async def test_a_local_model_server_is_allowed_on_an_unshared_install(local_install):
-    await discovery._validate_public_base_url("http://127.0.0.1:11434/v1/models")
+    allowed = await discovery._validate_public_base_url(
+        "http://127.0.0.1:11434/v1/models"
+    )
+
+    assert allowed is None
 
 
 @pytest.mark.parametrize(
@@ -81,7 +85,8 @@ async def test_an_unresolvable_host_passes_under_test(monkeypatch):
     """The product scenarios point a provider at a reserved name their egress
     proxy answers for; the connector guard allows the same under `testing`."""
     monkeypatch.setattr(discovery.settings, "environment", "testing")
-    await discovery._validate_public_base_url(_UNRESOLVABLE)
+
+    assert await discovery._validate_public_base_url(_UNRESOLVABLE) is None
 
 
 async def test_an_unresolvable_host_is_a_typo_on_a_local_install(local_install):

@@ -114,7 +114,11 @@ async def test_an_unreachable_redis_lets_the_message_through(call):
         limit=0, email_limit=0, redis=FakeRedis(fail=True)
     )
 
+    # A limit of zero refuses every message whenever Redis can answer, so
+    # returning at all is the fail-open path being taken.
     if call == "check":
-        await limiter.check(pod_id=uuid4(), recipient_user_id=uuid4())
+        admitted = await limiter.check(pod_id=uuid4(), recipient_user_id=uuid4())
     else:
-        await limiter.check_email(pod_id=uuid4())
+        admitted = await limiter.check_email(pod_id=uuid4())
+
+    assert admitted is None

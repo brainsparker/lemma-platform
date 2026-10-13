@@ -29,14 +29,14 @@ def test_minor_and_patch_drift_is_allowed() -> None:
     """The upper bound in pyproject governs here; the private imports above
     would fail on their own if a name actually moved."""
     for version in ("2.0.0", "2.27.1", "2.99.3"):
-        pydantic_ai_compat.check_pydantic_ai_version(version)
+        assert pydantic_ai_compat.check_pydantic_ai_version(version) is None
 
 
 def test_a_non_numeric_version_is_not_treated_as_a_mismatch() -> None:
     """An editable install off a branch reports something like `2.28.0.dev`."""
-    pydantic_ai_compat.check_pydantic_ai_version("main")
+    assert pydantic_ai_compat.check_pydantic_ai_version("main") is None
 
 
 def test_the_installed_version_satisfies_the_check() -> None:
     """The import-time call already ran; this states the invariant plainly."""
-    pydantic_ai_compat.check_pydantic_ai_version()
+    assert pydantic_ai_compat.check_pydantic_ai_version() is None

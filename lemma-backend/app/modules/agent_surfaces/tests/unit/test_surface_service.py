@@ -923,8 +923,7 @@ async def test_resend_surface_allowed_without_public_url_when_polling_enabled(
     )
     surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
 
-    # Does not raise.
-    _runtime_service()._validate_runtime_supported(surface)
+    assert _runtime_service()._validate_runtime_supported(surface) is None
 
 
 async def test_resend_surface_rejected_on_local_url_without_polling(monkeypatch):

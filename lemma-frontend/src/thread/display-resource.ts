@@ -108,7 +108,7 @@ export function resourceHref(site: string, podId: string, resource: DisplayResou
         case "WORKFLOW":
             return name ? base + "/workflow/" + name : base + "/workflows";
         case "SCHEDULE":
-            return base + "/about?section=schedules";
+            return base + "/about/schedules";
         case "FUNCTION":
         case "APP":
         case "WIDGET":

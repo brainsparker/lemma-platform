@@ -368,7 +368,7 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
 function Facts({ orgId, detail }: { orgId: string; detail: AgentDetail }) {
     const runtime = useRunsOn(orgId, detail);
     return (
-        <Rail title="Runs on">
+        <Rail title="Model">
             <p className="agentpage__fact">{runtime || "The default model here"}</p>
             {(detail.input || detail.output) && (
                 <dl className="agentpage__schema">

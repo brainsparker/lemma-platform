@@ -157,8 +157,7 @@ async def _answers(
         scores = [row["score"] for row in rows]
         assert scores == sorted(scores, reverse=True), query
         answers[query] = {
-            (row["file_id"], row["chunk_index"], round(row["score"], 6))
-            for row in rows
+            (row["file_id"], row["chunk_index"], round(row["score"], 6)) for row in rows
         }
     return answers
 

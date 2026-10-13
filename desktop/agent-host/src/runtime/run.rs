@@ -19,6 +19,7 @@ impl TargetWorker {
         permit: OwnedSemaphorePermit,
     ) {
         let target_id = self.target.target_id;
+        let local_pairing = self.target.is_local_install();
         let journal = self.journal.clone();
         let driver = Arc::clone(&self.driver);
         let mcp_bridge_executable = self.mcp_bridge_executable.clone();
@@ -138,12 +139,15 @@ impl TargetWorker {
             // Read per run, so a change in Settings applies to the next turn.
             let own_settings = crate::config::HostConfig::load_or_create(&paths)
                 .is_ok_and(|config| config.own_settings.contains(&adapter.spec.key));
+            // Whose pairing this is decides whose word on the CLI is taken.
+            let lemma_cli_bin = crate::lemma_cli::cli_bin_for_run(local_pairing, &spec.mcp);
             let request = AcpRunRequest {
                 adapter,
                 run_spec: spec,
                 scratch_directory: scratch.clone(),
                 agent_environment,
                 own_settings,
+                lemma_cli_bin,
                 mcp_server: Some(mcp_server),
                 can_load_session,
                 published_config_options,

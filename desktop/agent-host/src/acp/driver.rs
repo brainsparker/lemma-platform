@@ -12,7 +12,7 @@ use super::{
     plan_configuration, prompt_blocks, prompt_turn, scoped_mcp_tool_names, session_to_resume,
     steering_advertised, tool_call_id,
 };
-use super::{PreApprovals, lemma_cli_bin, session_options};
+use super::{PreApprovals, session_options};
 use crate::normalize::{Dialect, Normalizer, RunContext};
 use crate::protocol::RunSpec;
 
@@ -95,7 +95,7 @@ impl AgentDriver for AcpDriver {
             &request.adapter.environment(),
             &request.run_spec,
             request.own_settings,
-            lemma_cli_bin(&request.run_spec).as_deref(),
+            request.lemma_cli_bin.as_deref(),
         );
         let agent = build_agent(
             &request.adapter,

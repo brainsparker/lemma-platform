@@ -334,6 +334,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                         // credential.
                         agent_environment: std::collections::BTreeMap::default(),
                         own_settings: false,
+                        lemma_cli_bin: None,
                         mcp_server: None,
                         can_load_session: false,
                         published_config_options: Vec::new(),

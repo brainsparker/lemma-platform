@@ -251,6 +251,19 @@ lemma-agent-host own-settings disable claude-code   # Lemma's only (the default)
 
 The setting is `own_settings` in `config.json`, read by each run as it starts.
 
+Each run's agent may run one `lemma` CLI without a permission request
+(`src/lemma_cli.rs`): the one the local install's backend names, or, for every
+other pairing, the one the app carries in `Contents/Resources/lemma-cli`
+(`make desktop-dmg` stages it with `scripts/build_desktop_lemma_cli.py`). From
+source there is no app bundle, so stage one and name it:
+
+```bash
+uv run --no-project python scripts/build_desktop_lemma_cli.py --output /tmp/lemma-cli
+LEMMA_AGENT_HOST_CLI_ROOT=/tmp/lemma-cli cargo run -p lemma-agent-host -- serve
+```
+
+The variable is read by debug builds only.
+
 ## How many runs at once
 
 A computer takes up to 20 runs at once, across all its pairings. More wait in

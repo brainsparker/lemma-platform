@@ -30,6 +30,8 @@ import { keepUnchanged } from "./turn-identity";
 import { useStableCallback } from "./stable-callback";
 import { conversationRefOf } from "@/data/live";
 import { draftKeyFor } from "./drafts";
+import { useAsksFollowWaiting } from "./use-conversation-asks";
+import { CONVERSATION_ASKS } from "./waiting-on-you";
 
 /** The conversation, on the SDK's own session.
  *
@@ -408,6 +410,9 @@ export function LiveConversation({
        host permission wait never leaves RUNNING. The card is in the messages
        the moment the call arrives. */
     const waitingOn = useMemo(() => openInteraction(turns), [turns]);
+    /* The rail and Home learn of a new ask, or of one answered anywhere, when
+       this conversation does rather than at the next minute's poll. */
+    useAsksFollowWaiting(waitingOn?.id ?? null);
     const signingIn = useMemo(() => openSignIn(turns), [turns]);
     /* Filled by the docked question while it is open: what is typed answers
        it (see `Questions`). */
@@ -763,7 +768,7 @@ export function LiveConversation({
             const queued = resolution?.status === "queued";
             /* Answered, so no longer owed: the rail and Home drop it now
                rather than at the next minute's refetch. */
-            void queryClient.invalidateQueries({ queryKey: ["conversation-asks"] });
+            void queryClient.invalidateQueries({ queryKey: [CONVERSATION_ASKS] });
             if (!queued) {
                 void loadMessages({ conversationId: conversation, limit: 100 }).catch(() => undefined);
             }

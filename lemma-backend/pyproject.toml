@@ -132,7 +132,7 @@ dev = [
     # depends on exactly what `LTRIM`/`LRANGE`/`LINDEX` do at their boundaries,
     # and a hand-written stand-in only asserts what its author already believed
     # those commands do -- which is how the cursor defect it now pins survived.
-    "fakeredis>=2.26.0",
+    "fakeredis[lua]>=2.26.0",
     "kubernetes>=34.1.0",
     "nest-asyncio>=1.6.0",
     "pip-audit>=2.9.0",

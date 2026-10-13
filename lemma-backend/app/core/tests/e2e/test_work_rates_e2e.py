@@ -48,7 +48,9 @@ def limit_rates() -> Iterator[_Port]:
         reset_work_limit_port()
 
 
-def _rated(registry: WorkRegistry, kind: str, cls: WorkClass, *uses: RateUse | str) -> None:
+def _rated(
+    registry: WorkRegistry, kind: str, cls: WorkClass, *uses: RateUse | str
+) -> None:
     @registry.handler(kind=kind, cls=cls, mode=WorkMode.FAST, payload=Demo, rates=uses)
     async def handle(ctx: FastContext, payload: Demo) -> None:
         await write_effect(ctx.uow.session, kind, ctx.item.id)
@@ -62,7 +64,9 @@ async def test_racing_dispatchers_in_two_classes_spend_exactly_the_budget(
     _rated(registry, "demo.mail_a", WorkClass.EVENTS, "email_out")
     _rated(registry, "demo.mail_b", WorkClass.DELIVERY, "email_out")
     for i in range(30):
-        await work_db.enqueue(registry, "demo.mail_a" if i % 2 else "demo.mail_b", POD_A)
+        await work_db.enqueue(
+            registry, "demo.mail_a" if i % 2 else "demo.mail_b", POD_A
+        )
 
     dispatchers = [
         dispatcher_for(work_db.sessions, cls, registry=registry, owner=f"d{n}")
@@ -81,10 +85,16 @@ async def test_racing_dispatchers_in_two_classes_spend_exactly_the_budget(
     assert len(await work_db.effects()) == 10
     # Everything over the rate waits, uncharged, for its token.
     assert await work_db.count("state = 'queued'") == 20
-    assert await work_db.count("attempts > 0 OR lease_losses > 0 OR error_class IS NOT NULL") == 0
+    assert (
+        await work_db.count(
+            "attempts > 0 OR lease_losses > 0 OR error_class IS NOT NULL"
+        )
+        == 0
+    )
     assert await work_db.count("state = 'queued' AND run_at <= now()") == 0
     tokens = await work_db.scalar(
-        "SELECT tokens FROM work_rate_buckets WHERE ns = :ns AND name = 'email_out'", ns=POD_A
+        "SELECT tokens FROM work_rate_buckets WHERE ns = :ns AND name = 'email_out'",
+        ns=POD_A,
     )
     assert float(tokens) == pytest.approx(0.0, abs=0.01)  # type: ignore[arg-type]
 
@@ -116,7 +126,9 @@ async def test_per_key_buckets_are_independent_and_each_spends_its_own(
     work_db: WorkDb, registry: WorkRegistry, limit_rates: _Port
 ) -> None:
     limit_rates.rates["trigger_fire"] = Rate(3, HOUR)
-    _rated(registry, "demo.fire", WorkClass.EVENTS, RateUse("trigger_fire", per_key=True))
+    _rated(
+        registry, "demo.fire", WorkClass.EVENTS, RateUse("trigger_fire", per_key=True)
+    )
     for schedule in ("schedule:1", "schedule:2"):
         for _ in range(5):
             await work_db.enqueue(registry, "demo.fire", POD_A, rate_key=schedule)
@@ -144,7 +156,9 @@ async def test_refill_follows_elapsed_time_and_stops_at_the_cap(
             "make_interval(secs => :s)",
             s=seconds,
         )
-        await work_db.execute("UPDATE work_items SET run_at = now() WHERE state = 'queued'")
+        await work_db.execute(
+            "UPDATE work_items SET run_at = now() WHERE state = 'queued'"
+        )
 
     # 2.5 s of refill: two whole tokens and half of a third.
     await rewind(2.5)
@@ -165,7 +179,9 @@ async def test_a_rate_limited_backlog_starves_neither_other_kinds_nor_other_pods
     limit_rates.rates["llm_filter_pod"] = Rate(1, HOUR)
     _rated(registry, "demo.filter", WorkClass.AUTOMATION, "llm_filter_pod")
 
-    @registry.handler(kind="demo.plain", cls=WorkClass.AUTOMATION, mode=WorkMode.FAST, payload=Demo)
+    @registry.handler(
+        kind="demo.plain", cls=WorkClass.AUTOMATION, mode=WorkMode.FAST, payload=Demo
+    )
     async def plain(ctx: FastContext, payload: Demo) -> None:
         await write_effect(ctx.uow.session, "plain", ctx.item.id)
 
@@ -176,7 +192,9 @@ async def test_a_rate_limited_backlog_starves_neither_other_kinds_nor_other_pods
     for _ in range(3):
         await work_db.enqueue(registry, "demo.filter", POD_B)
 
-    dispatcher = dispatcher_for(work_db.sessions, WorkClass.AUTOMATION, registry=registry, slots=4)
+    dispatcher = dispatcher_for(
+        work_db.sessions, WorkClass.AUTOMATION, registry=registry, slots=4
+    )
     for _ in range(12):
         items = await dispatcher.claim_once()
         await asyncio.gather(*(dispatcher.execute(i) for i in items))
@@ -206,7 +224,9 @@ async def test_retention_drops_only_buckets_that_have_refilled(
     retention.register(maintenance.registry.get("work.retention"))
     await work_db.enqueue(retention, "work.retention", "system")
     await run_until_idle(work_db.sessions, registry=retention)
-    remaining = await work_db.scalar("SELECT string_agg(ns, ',') FROM work_rate_buckets")
+    remaining = await work_db.scalar(
+        "SELECT string_agg(ns, ',') FROM work_rate_buckets"
+    )
     assert remaining == POD_A
 
 

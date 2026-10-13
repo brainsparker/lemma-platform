@@ -6,7 +6,6 @@ holding a FAST handler may not import the job runtime (see ``fast_guard``).
 
 from __future__ import annotations
 
-import asyncio
 from datetime import timedelta
 
 from pydantic import BaseModel
@@ -41,20 +40,23 @@ async def _effect(session: object, tag: str) -> None:
     lease=timedelta(seconds=3),
 )
 async def long_job(ctx: JobContext, payload: Empty) -> None:
-    """Runs until shutdown, stopping only at its safe points."""
+    """Idles until shutdown, then stops at its safe point."""
     async with ctx.checkpoint() as uow:
         await _effect(uow.session, "job.started")
-    while True:
-        await asyncio.sleep(0.05)
-        ctx.raise_if_stopping()
+    await ctx.until_stopping()
+    ctx.raise_if_stopping()
 
 
-@work_handler(kind="e2e.work.tick", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=Empty)
+@work_handler(
+    kind="e2e.work.tick", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=Empty
+)
 async def tick(ctx: FastContext, payload: Empty) -> None:
     await _effect(ctx.uow.session, "tick")
 
 
-@work_handler(kind="e2e.work.poison", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=Empty)
+@work_handler(
+    kind="e2e.work.poison", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=Empty
+)
 async def poison(ctx: FastContext, payload: Empty) -> None:
     raise PermanentFailure("never valid")
 

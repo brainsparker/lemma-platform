@@ -66,6 +66,9 @@ repeating them in each row.
 | `resource_permission_grants` | Named grants on one resource to one grantee inside one pod. This is what a delegated workload's context is built from, and what a bundle carries by name rather than by id |
 | `domain_event_outbox` | Events accepted in the state-change transaction and published to Redis Streams afterwards, with lease, attempt, and dead-letter columns so a crashed publisher's work is reclaimed rather than lost |
 | `domain_event_inbox` | Per-consumer delivery record keyed by consumer and event id, which is what makes at-least-once Redis Stream delivery idempotent at the handler |
+| `work_items` | The work runtime's live work: one row per queued or running item, written in the transaction that caused it and deleted in the one that completes it, plus dead items kept for inspection and retry. Its lease columns are what let a crashed or deployed process's work be reclaimed |
+| `work_queues` | One row per (work class, namespace) that has had work: the namespace's cap on running items, its named rates, whether it is paused, and when the fair claim last served it. No readiness flag — that is derived from `work_items` |
+| `work_rate_buckets` | Token buckets for rate-limited kinds, per namespace, rate name and optional key (a trigger), refilled and spent inside the claim transaction. A missing row is a full bucket |
 
 ## Cross-module runtime map
 

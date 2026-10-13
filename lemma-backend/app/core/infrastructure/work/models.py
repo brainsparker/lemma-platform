@@ -158,7 +158,9 @@ class WorkRateBucket(Base):
     cap: Mapped[float] = mapped_column(Double, nullable=False)
     per_second: Mapped[float] = mapped_column(Double, nullable=False)
     tokens: Mapped[float] = mapped_column(Double, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     full_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (Index("work_rate_buckets_full", "full_at"),)

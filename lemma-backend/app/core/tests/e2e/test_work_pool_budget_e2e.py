@@ -55,7 +55,9 @@ async def test_every_slot_busy_never_waits_past_the_pool(
 
     sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
 
-    @registry.handler(kind="demo.fast", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=Demo)
+    @registry.handler(
+        kind="demo.fast", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=Demo
+    )
     async def fast(ctx: FastContext, payload: Demo) -> None:
         await ctx.uow.session.execute(text("SELECT pg_sleep(0.02)"))
         await write_effect(ctx.uow.session, "fast", ctx.item.id)
@@ -63,7 +65,9 @@ async def test_every_slot_busy_never_waits_past_the_pool(
             # A namespace with no queue row: the writer's side connection.
             await ctx.work.add("demo.leaf", f"pod:{uuid4()}", Demo())
 
-    @registry.handler(kind="demo.leaf", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=Demo)
+    @registry.handler(
+        kind="demo.leaf", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=Demo
+    )
     async def leaf(ctx: FastContext, payload: Demo) -> None:
         await write_effect(ctx.uow.session, "leaf", ctx.item.id)
 
@@ -83,7 +87,9 @@ async def test_every_slot_busy_never_waits_past_the_pool(
 
     for i in range(FAST_ITEMS):
         tag = "spread" if i % 10 == 0 else ""
-        await work_db.enqueue(registry, "demo.fast", f"pod:{uuid4()}" if i % 3 else POD_A, Demo(tag=tag))
+        await work_db.enqueue(
+            registry, "demo.fast", f"pod:{uuid4()}" if i % 3 else POD_A, Demo(tag=tag)
+        )
     for _ in range(JOBS):
         await work_db.enqueue(registry, "demo.job", f"pod:{uuid4()}")
     # Caps never bind, so every slot can be busy at once.

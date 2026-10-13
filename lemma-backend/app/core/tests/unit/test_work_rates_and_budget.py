@@ -170,7 +170,11 @@ def test_a_rate_with_no_default_is_refused_at_registration() -> None:
     with pytest.raises(ValueError, match="no default for rate 'made_up'"):
 
         @registry.handler(
-            kind="k", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=_P, rates=["made_up"]
+            kind="k",
+            cls=WorkClass.EVENTS,
+            mode=WorkMode.FAST,
+            payload=_P,
+            rates=["made_up"],
         )
         async def handle(ctx: FastContext, payload: _P) -> None: ...
 
@@ -203,7 +207,9 @@ async def test_a_per_key_rate_needs_a_key_at_enqueue_and_a_key_needs_a_per_key_r
     )
     async def keyed(ctx: FastContext, payload: _P) -> None: ...
 
-    @registry.handler(kind="plain", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=_P)
+    @registry.handler(
+        kind="plain", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=_P
+    )
     async def plain(ctx: FastContext, payload: _P) -> None: ...
 
     # Refused before any statement runs, so no session is needed.
@@ -291,7 +297,10 @@ class _Directory:
 def test_the_directory_a_module_declares_is_what_slug_rules_use() -> None:
     try:
         configure_namespace_directory(
-            [LemmaModule(name="a"), LemmaModule(name="pod", namespace_directory=_Directory)]
+            [
+                LemmaModule(name="a"),
+                LemmaModule(name="pod", namespace_directory=_Directory),
+            ]
         )
         assert isinstance(work_limits.current_namespace_directory(), _Directory)
         with pytest.raises(RuntimeError, match="more than one module"):
@@ -305,7 +314,9 @@ def test_the_directory_a_module_declares_is_what_slug_rules_use() -> None:
         work_limits.declare_namespace_directory(None)
 
 
-async def test_slug_and_prefix_rules_reach_a_pod_through_the_declared_directory() -> None:
+async def test_slug_and_prefix_rules_reach_a_pod_through_the_declared_directory() -> (
+    None
+):
     raw = json.dumps(
         [
             {"slug_prefix": "ac", "max_running": {"events": 3}},

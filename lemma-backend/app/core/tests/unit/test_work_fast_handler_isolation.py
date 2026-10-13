@@ -126,7 +126,9 @@ def test_a_handler_must_declare_the_context_its_mode_gives_it(
             pass
         """,
     )
-    with pytest.raises(FastHandlerNotIsolated, match="annotated FastContext, got JobContext"):
+    with pytest.raises(
+        FastHandlerNotIsolated, match="annotated FastContext, got JobContext"
+    ):
         importlib.import_module(name)
 
 

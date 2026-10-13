@@ -106,7 +106,7 @@ def _origin(value: object) -> str | None:
 def _context_annotation(fn: Callable[..., object]) -> str | None:
     try:
         parameters = list(inspect.signature(fn).parameters.values())
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not parameters:
         return None
@@ -118,7 +118,9 @@ def _context_annotation(fn: Callable[..., object]) -> str | None:
     return getattr(annotation, "__name__", None)
 
 
-def check_handler_signature(kind: str, fn: Callable[..., object], expected: str) -> None:
+def check_handler_signature(
+    kind: str, fn: Callable[..., object], expected: str
+) -> None:
     """The handler's first parameter must say which context it gets."""
     if not inspect.iscoroutinefunction(fn):
         raise FastHandlerNotIsolated(f"work kind {kind!r}: handler must be async")

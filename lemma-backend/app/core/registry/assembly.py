@@ -85,7 +85,9 @@ def configure_namespace_directory(modules: Sequence[LemmaModule]) -> None:
     declared = [m for m in modules if m.namespace_directory is not None]
     if len(declared) > 1:
         names = ", ".join(module.name for module in declared)
-        raise RuntimeError(f"more than one module declares namespace_directory: {names}")
+        raise RuntimeError(
+            f"more than one module declares namespace_directory: {names}"
+        )
     provider = declared[0].namespace_directory if declared else None
     declare_namespace_directory(provider() if provider is not None else None)
 

@@ -24,6 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.work.db import AbstractSessionContext
+from app.core.infrastructure.work.types import WorkClass
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
 
@@ -131,7 +132,9 @@ async def sample(open_session: SessionOpener) -> None:
             else []
         )
     _snapshot.samples += 1
-    _snapshot.oldest = {
+    # A class with nothing due has been measured: its oldest wait is zero. An
+    # absent series would read as "no data" and silence the alert on it.
+    _snapshot.oldest = {cls.value: 0.0 for cls in WorkClass} | {
         row._mapping["class"]: float(row.oldest)
         for row in by_class
         if row.oldest is not None

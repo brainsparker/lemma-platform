@@ -199,7 +199,9 @@ class WorkRuntime:
         logger.info("work.runtime.stopped", released=sum(released))
 
 
-def _dedicated_sessions(database_url: str, budget: DbBudget) -> tuple[AsyncEngine, SessionMaker]:
+def _dedicated_sessions(
+    database_url: str, budget: DbBudget
+) -> tuple[AsyncEngine, SessionMaker]:
     from app.core.infrastructure.db.session import create_dedicated_engine
 
     engine = create_dedicated_engine(
@@ -226,7 +228,9 @@ async def work_runtime_lifespan(
     engine: AsyncEngine | None = None
     if session_maker is None:
         if database_url is None:
-            raise ValueError("work_runtime_lifespan needs a session_maker or a database_url")
+            raise ValueError(
+                "work_runtime_lifespan needs a session_maker or a database_url"
+            )
         engine, session_maker = _dedicated_sessions(database_url, budget)
     runtime = WorkRuntime(
         session_maker,

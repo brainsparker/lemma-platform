@@ -98,20 +98,30 @@ async def collector() -> AsyncIterator[Collector]:
 
 
 _SEED = [
-    "CREATE TABLE IF NOT EXISTS work_e2e_effects ("
-    "id bigserial PRIMARY KEY, tag text NOT NULL, item_id uuid)",
+    (
+        "CREATE TABLE IF NOT EXISTS work_e2e_effects ("
+        "id bigserial PRIMARY KEY, tag text NOT NULL, item_id uuid)"
+    ),
     "TRUNCATE work_items, work_queues, work_rate_buckets, work_e2e_effects",
-    "INSERT INTO work_queues (class, ns, max_running) VALUES "
-    "('automation', :pod, 32), ('events', :pod, 16)",
+    (
+        "INSERT INTO work_queues (class, ns, max_running) VALUES "
+        "('automation', :pod, 32), ('events', :pod, 16)"
+    ),
     # A job that runs until shutdown.
-    "INSERT INTO work_items (id, ns, class, kind) "
-    "VALUES (:job, :pod, 'automation', 'e2e.work.long_job')",
-    "INSERT INTO work_items (id, ns, class, kind) "
-    "VALUES (:poison, :pod, 'events', 'e2e.work.poison')",
+    (
+        "INSERT INTO work_items (id, ns, class, kind) "
+        "VALUES (:job, :pod, 'automation', 'e2e.work.long_job')"
+    ),
+    (
+        "INSERT INTO work_items (id, ns, class, kind) "
+        "VALUES (:poison, :pod, 'events', 'e2e.work.poison')"
+    ),
     # Left running by a process that no longer exists.
-    "INSERT INTO work_items (id, ns, class, kind, state, lease_owner, lease_until) "
-    "VALUES (:orphan, :pod, 'events', 'e2e.work.tick', 'running', 'gone:1', "
-    "now() - interval '1 minute')",
+    (
+        "INSERT INTO work_items (id, ns, class, kind, state, lease_owner, lease_until) "
+        "VALUES (:orphan, :pod, 'events', 'e2e.work.tick', 'running', 'gone:1', "
+        "now() - interval '1 minute')"
+    ),
 ]
 
 
@@ -156,15 +166,29 @@ async def test_a_real_worker_runs_schedules_exports_metrics_and_drains_on_sigter
             # The schedule: a periodic armed at boot fires again and again.
             await eventually(
                 label="the periodic tick fired at least twice",
-                probe=lambda: scalar("SELECT count(*) FROM work_e2e_effects WHERE tag = 'tick'"),
+                probe=lambda: scalar(
+                    "SELECT count(*) FROM work_e2e_effects WHERE tag = 'tick'"
+                ),
                 done=lambda n: int(n) >= 3,  # type: ignore[call-overload]
                 timeout_seconds=20,
-                fail_fast=lambda _: worker.read_log_tail() if worker.process.poll() else None,
+                fail_fast=lambda _: (
+                    worker.read_log_tail() if worker.process.poll() else None
+                ),
             )
-            assert await scalar(
-                "SELECT error_class FROM work_items WHERE id = :id", id=poison
-            ) == "permanent"
-            assert await scalar("SELECT count(*) FROM work_items WHERE id = :id", id=orphan) == 0
+            assert (
+                await scalar(
+                    "SELECT error_class FROM work_items WHERE id = :id", id=poison
+                )
+                == "permanent"
+            )
+            # Reaped: one lease loss charged, back in the queue behind its backoff.
+            assert (
+                await scalar(
+                    "SELECT state || ':' || lease_losses FROM work_items WHERE id = :id",
+                    id=orphan,
+                )
+                == "queued:1"
+            )
             await eventually(
                 label="the job started",
                 probe=lambda: scalar(

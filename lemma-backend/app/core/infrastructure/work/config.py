@@ -98,7 +98,7 @@ class WorkSettings(BaseSettings):
             'defaults, e.g. {"llm_filter": {"limit": 30, "per_seconds": 3600}}. '
             "A handler declares which named rates its items draw from; an item "
             "over a rate waits, it is never charged or dropped. Per-pod and "
-            "per-org exceptions go in WORK_LIMIT_OVERRIDES_JSON under \"rates\"."
+            'per-org exceptions go in WORK_LIMIT_OVERRIDES_JSON under "rates".'
         ),
     )
     work_db_slots_json: str = Field(

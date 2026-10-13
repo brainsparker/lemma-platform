@@ -187,7 +187,11 @@ class Dispatcher:
         finally:
             handler_duration.record(
                 time.monotonic() - started,
-                {"work_class": self.cls.value, "work_kind": item.kind, "outcome": outcome},
+                {
+                    "work_class": self.cls.value,
+                    "work_kind": item.kind,
+                    "outcome": outcome,
+                },
             )
         return outcome
 

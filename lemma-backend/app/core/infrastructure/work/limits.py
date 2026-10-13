@@ -106,6 +106,8 @@ def _rule(entry: JsonValue) -> OverrideRule | None:
             prefix_length = len(value) if key == "slug_prefix" else 0
             return OverrideRule((tier, prefix_length), key, value, caps, rates)
     return None
+
+
 @lru_cache(maxsize=8)
 def parse_overrides(raw: str) -> tuple[OverrideRule, ...]:
     """Override rules from ``WORK_LIMIT_OVERRIDES_JSON``.

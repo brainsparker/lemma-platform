@@ -34,9 +34,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.infrastructure.work import claim as claim_sql
 from app.core.infrastructure.work.context import FastContext
 from app.core.infrastructure.work.dispatcher import Dispatcher
+from app.core.infrastructure.work.db import DbBudget, WorkDb
 from app.core.infrastructure.work.execute import ExecEnv
 from app.core.infrastructure.work.listener import WorkWakeListener
-from app.core.infrastructure.work.models import WorkItem, WorkQueue
+from app.core.infrastructure.work.models import WorkItem, WorkQueue, WorkRateBucket
 from app.core.infrastructure.work.registry import WorkRegistry
 from app.core.infrastructure.work.types import ClaimedItem, WorkClass, WorkMode
 from app.core.infrastructure.work.writer import WorkWriter
@@ -99,11 +100,14 @@ async def reset(url: str) -> None:
     engine, _ = engine_for(url, 2)
     async with engine.begin() as conn:
         await conn.execute(
-            text("DROP TABLE IF EXISTS work_items, work_queues, bench_effects")
+            text(
+                "DROP TABLE IF EXISTS work_items, work_queues, work_rate_buckets, "
+                "bench_effects"
+            )
         )
         await conn.run_sync(
             WorkItem.metadata.create_all,
-            tables=[WorkItem.__table__, WorkQueue.__table__],
+            tables=[WorkItem.__table__, WorkQueue.__table__, WorkRateBucket.__table__],
         )
         await conn.execute(
             text(
@@ -168,9 +172,12 @@ async def _live(sessions: async_sessionmaker) -> int:
 async def _worker(
     url: str, slots: int, seconds: float, owner: str, until_empty: bool
 ) -> dict[str, object]:
-    engine, sessions = engine_for(url, slots + 8)
+    # As a worker runs it: handler connections bounded per class
+    # (WORK_DB_SLOTS_JSON), and a pool sized to exactly that budget.
+    budget = DbBudget.from_settings([WorkClass.EVENTS])
+    engine, sessions = engine_for(url, budget.total)
     env = ExecEnv(
-        session_maker=sessions,
+        db=WorkDb(sessions, budget),
         registry=REGISTRY,
         owner=owner,
         statement_timeout_ms=2000,

@@ -11,6 +11,11 @@ wins without the reader having to work out an MRO.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TeamsReplyTarget,
+    reply_target_as,
+)
+
 from app.modules.agent_surfaces.domain.models import ProgressHandle
 
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
@@ -123,7 +128,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         """
         del credentials
         url, token = await self._activities_endpoint(event, metadata)
-        reply_to_id = event.reply_target.get("reply_to_id")
+        reply_to_id = reply_target_as(event, TeamsReplyTarget).reply_to_id
         card = (metadata or {}).get("onboarding_card")
         chunks = chunk_text(message, limit=_TEAMS_TEXT_LIMIT) or [message]
         for index, chunk in enumerate(chunks):
@@ -174,10 +179,10 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         """
         tenant_id = event.tenant_id
         token = await self._get_bot_token(tenant_id) if tenant_id else None
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if tenant_id and token and conversation_id:
             url = (
-                f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+                f"{client.bf_service_url(reply_target_as(event, TeamsReplyTarget).service_url)}"
                 f"/v3/conversations/{quote(str(conversation_id))}/activities"
             )
             return url, token
@@ -212,7 +217,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         """
         del credentials, metadata
         url, token = await self._activities_endpoint(event, None)
-        reply_to_id = event.reply_target.get("reply_to_id")
+        reply_to_id = reply_target_as(event, TeamsReplyTarget).reply_to_id
         # The adaptive card carries the title/summary and the "Open file" button,
         # so no inline ``text`` (which would dump the raw URL next to the card).
         # ``summary`` is the Bot Framework notification field — shown in toasts,
@@ -243,7 +248,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     ) -> bool:
         del credentials, metadata
         tenant_id = event.tenant_id
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if not tenant_id or not conversation_id:
             return False
         token = await self._get_bot_token(tenant_id)
@@ -251,7 +256,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             return False
 
         url = (
-            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+            f"{client.bf_service_url(reply_target_as(event, TeamsReplyTarget).service_url)}"
             f"/v3/conversations/{quote(str(conversation_id))}/activities"
         )
         body: dict[str, Any] = {
@@ -263,7 +268,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                 }
             ],
         }
-        reply_to_id = event.reply_target.get("reply_to_id")
+        reply_to_id = reply_target_as(event, TeamsReplyTarget).reply_to_id
         if reply_to_id:
             body["replyToId"] = reply_to_id
 
@@ -282,7 +287,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         Approve/Deny Action.Submit buttons carrying the decision."""
         del credentials, metadata
         tenant_id = event.tenant_id
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if not tenant_id or not conversation_id:
             return False
         token = await self._get_bot_token(tenant_id)
@@ -290,7 +295,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             return False
 
         url = (
-            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+            f"{client.bf_service_url(reply_target_as(event, TeamsReplyTarget).service_url)}"
             f"/v3/conversations/{quote(str(conversation_id))}/activities"
         )
         body: dict[str, Any] = {
@@ -302,7 +307,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                 }
             ],
         }
-        reply_to_id = event.reply_target.get("reply_to_id")
+        reply_to_id = reply_target_as(event, TeamsReplyTarget).reply_to_id
         if reply_to_id:
             body["replyToId"] = reply_to_id
 
@@ -332,12 +337,12 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         if not bot_token:
             return
 
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if not conversation_id:
             return
 
         url = (
-            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+            f"{client.bf_service_url(reply_target_as(event, TeamsReplyTarget).service_url)}"
             f"/v3/conversations/{quote(str(conversation_id))}/activities"
         )
         try:
@@ -422,13 +427,15 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         # passes it to whichever adapter answers.
         del credentials, metadata
         tenant_id = event.tenant_id
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if not tenant_id or not conversation_id:
             return progress_handle
         bot_token = await self._get_bot_token(tenant_id)
         if not bot_token:
             return progress_handle
-        base = client.bf_service_url(event.reply_target.get("service_url"))
+        base = client.bf_service_url(
+            reply_target_as(event, TeamsReplyTarget).service_url
+        )
         activity_id = progress_handle.message_id if progress_handle else None
         body = {"type": "message", "text": progress_text}
         timeout = aiohttp.ClientTimeout(total=30)
@@ -473,13 +480,15 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         del credentials
         activity_id = progress_handle.message_id if progress_handle else None
         tenant_id = event.tenant_id
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if not activity_id or not tenant_id or not conversation_id:
             return
         bot_token = await self._get_bot_token(tenant_id)
         if not bot_token:
             return
-        base = client.bf_service_url(event.reply_target.get("service_url"))
+        base = client.bf_service_url(
+            reply_target_as(event, TeamsReplyTarget).service_url
+        )
         url = (
             f"{base}/v3/conversations/{quote(str(conversation_id))}"
             f"/activities/{quote(str(activity_id))}"

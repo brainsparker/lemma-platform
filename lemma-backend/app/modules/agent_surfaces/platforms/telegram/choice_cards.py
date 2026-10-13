@@ -8,6 +8,11 @@ the keyboard rides on a message rendered and chunked the ordinary way.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TelegramReplyTarget,
+    reply_target_as,
+)
+
 from collections.abc import Awaitable, Callable
 
 from app.core.log.log import get_logger
@@ -50,7 +55,9 @@ async def render_choices(
     formatted text) when there is no chat target or any question is
     multi-select (not expressible as a single-tap keyboard).
     """
-    chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+    chat_id = (
+        reply_target_as(event, TelegramReplyTarget).chat_id or event.external_channel_id
+    )
     if not chat_id:
         return False
     if any(q.multi_select for q in question_plan.questions):
@@ -119,7 +126,9 @@ async def render_decision(
     buttons; each button's ``callback_data`` is a short token resolving to
     ``{callback_id, decision}`` (Telegram caps callback_data at 64 bytes).
     """
-    chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+    chat_id = (
+        reply_target_as(event, TelegramReplyTarget).chat_id or event.external_channel_id
+    )
     if not chat_id:
         return False
     rows: list[list[dict[str, str]]] = []

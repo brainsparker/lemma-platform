@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    SlackReplyTarget,
+    reply_target_as,
+)
+
 from app.modules.agent_surfaces.domain.credentials import (
     CredentialsLike,
     SlackCredentials,
@@ -201,7 +206,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
             if (metadata or {}).get("private_onboarding"):
                 raise RuntimeError(
@@ -213,7 +218,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
             raise unsendable("Slack", access_token=token, channel=channel)
 
         client = await build_slack_client(self.credentials)
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         identity_kwargs = slack_customized_message_kwargs(
             self.credentials,
             (metadata or {}).get("agent_display_name"),
@@ -304,7 +309,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
     ) -> bool:
         """Post a resource as a Block Kit card. Always a card, so always True."""
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
             raise unsendable("Slack", access_token=token, channel=channel)
 
@@ -317,7 +322,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                 "text": render_plan.to_caption(),
                 "blocks": _display_resource_blocks(render_plan),
             }
-            thread_ts = event.reply_target.get("thread_ts")
+            thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
             if thread_ts:
                 payload["thread_ts"] = thread_ts
             payload.update(
@@ -345,7 +350,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
     ) -> bool:
         """Render ask_user questions as Block Kit selects + a Submit button."""
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel or not question_blocks_fit(question_plan):
             return False
         client = await build_slack_client(self.credentials)
@@ -354,7 +359,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
             "text": question_plan.title,
             "blocks": _question_blocks(question_plan),
         }
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         if thread_ts:
             payload["thread_ts"] = thread_ts
         payload.update(
@@ -376,7 +381,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
     ) -> bool:
         """Render a request_approval prompt as Block Kit Approve/Deny buttons."""
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
             return False
         client = await build_slack_client(self.credentials)
@@ -385,7 +390,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
             "text": f"Approval needed: {approval_plan.title}",
             "blocks": _approval_blocks(approval_plan),
         }
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         if thread_ts:
             payload["thread_ts"] = thread_ts
         payload.update(
@@ -406,9 +411,9 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
     ) -> None:
         del metadata  # Part of the adapter interface; the bubble text is fixed.
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         timestamp = event.external_message_id
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         if not token or not channel or not timestamp:
             logger.debug(
                 "agent_surfaces.service.slack_add_processing_indicator_skipped.diagnostic"

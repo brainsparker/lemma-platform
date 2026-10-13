@@ -7,6 +7,11 @@ Rendering and attachment handling reuse the shared email modules.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    EmailReplyTarget,
+    reply_target_as,
+)
+
 import base64
 from email.utils import formataddr
 from typing import Any
@@ -102,7 +107,10 @@ class ResendPlatformService:
     async def fetch_sender_profile(
         self, event: ParsedInboundSurfaceEvent
     ) -> SurfaceSenderProfile | None:
-        email = event.sender_email or event.reply_target.get("recipient_email")
+        email = (
+            event.sender_email
+            or reply_target_as(event, EmailReplyTarget).recipient_email
+        )
         if not email:
             return None
         return SurfaceSenderProfile(
@@ -117,17 +125,17 @@ class ResendPlatformService:
         message: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        target = reply_target_as(event, EmailReplyTarget)
         await self._send_email(
-            recipient_email=str(event.reply_target.get("recipient_email") or ""),
-            subject=event.reply_target.get("subject"),
-            in_reply_to=str(event.reply_target.get("in_reply_to") or "").strip()
-            or None,
-            references=[str(r) for r in (event.reply_target.get("references") or [])],
+            recipient_email=target.recipient_email or "",
+            subject=target.subject,
+            in_reply_to=target.in_reply_to,
+            references=list(target.references),
             content=message,
             content_type="markdown",
             attachments=list((metadata or {}).get("attachments") or []),
             from_name=self._sender_name(metadata),
-            cc=[str(a) for a in (event.reply_target.get("cc") or [])],
+            cc=list(target.cc),
         )
 
     def _raise_unsendable(self, recipient_email: str) -> None:

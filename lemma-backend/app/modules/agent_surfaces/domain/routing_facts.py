@@ -1,5 +1,5 @@
-"""The parts of an inbound event that decide whether it is admitted, and where
-a reply to it goes -- read as types rather than as mapping keys.
+"""The parts of an inbound event that decide whether it is admitted, read as
+types rather than as mapping keys. Where a reply goes is `reply_targets`.
 
 `ParsedInboundSurfaceEvent.metadata` and `.reply_target` are stored mappings:
 they ride in job payloads and in a conversation link's last event, so their
@@ -70,47 +70,4 @@ class InboundRoutingFacts:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class ReplyTarget:
-    """Where a reply to an event goes, on whichever platform it came from.
-
-    One record rather than one per platform: every platform's reply target is
-    a few of these strings, and which ones is the platform adapter's business.
-    """
-
-    #: Slack's channel; Telegram's chat; WhatsApp's recipient.
-    channel: str | None = None
-    #: Slack's thread ``ts``.
-    thread_ts: str | None = None
-    #: Telegram's chat id.
-    chat_id: str | None = None
-    #: The message being answered, where the platform can quote it.
-    message_id: str | None = None
-    #: Telegram's forum topic.
-    message_thread_id: str | None = None
-    #: Teams' Bot Framework endpoint for this conversation.
-    service_url: str | None = None
-    #: Teams' conversation id.
-    conversation_id: str | None = None
-    #: The WhatsApp number the message arrived on.
-    phone_number_id: str | None = None
-    #: Email: who the reply goes to.
-    recipient_email: str | None = None
-
-    @classmethod
-    def of(cls, event: ParsedInboundSurfaceEvent | None) -> Self:
-        target: Mapping[str, object] = (event.reply_target if event else None) or {}
-        return cls(
-            channel=_text(target.get("channel")),
-            thread_ts=_text(target.get("thread_ts")),
-            chat_id=_text(target.get("chat_id")),
-            message_id=_text(target.get("message_id")),
-            message_thread_id=_text(target.get("message_thread_id")),
-            service_url=_text(target.get("service_url")),
-            conversation_id=_text(target.get("conversation_id")),
-            phone_number_id=_text(target.get("phone_number_id")),
-            recipient_email=_text(target.get("recipient_email")),
-        )
-
-
-__all__ = ["InboundRoutingFacts", "ReplyTarget"]
+__all__ = ["InboundRoutingFacts"]

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    SlackReplyTarget,
+    reply_target_as,
+)
+
 import asyncio
 from uuid import UUID
 from pydantic import JsonValue, TypeAdapter
@@ -93,8 +98,9 @@ async def _open_onboarding_modal(
         tenant=tenant,
         receiver_ids=receiver_ids,
     )
-    if section(payload, "channel").get("id") != bound.destination.reply_target.get(
-        "channel"
+    if (
+        section(payload, "channel").get("id")
+        != reply_target_as(bound.destination, SlackReplyTarget).channel
     ):
         raise PrivateDeliveryUnavailable("Open setup from its private conversation")
     credentials = await _installation_credentials(uows, bound.installation_id, tenant)

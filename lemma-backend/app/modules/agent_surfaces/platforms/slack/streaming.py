@@ -7,6 +7,11 @@ call has to agree on its mode.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    SlackReplyTarget,
+    reply_target_as,
+)
+
 from dataclasses import replace
 
 from app.modules.agent_surfaces.domain.models import ProgressHandle, ProgressHandleKind
@@ -67,13 +72,13 @@ async def remove_processing_reaction(
     failing the reply that has just been delivered.
     """
     token = slack_access_token(credentials)
-    channel = event.reply_target.get("channel")
+    channel = reply_target_as(event, SlackReplyTarget).channel
     timestamp = event.external_message_id
     if not token or not channel or not timestamp:
         return
     if (
         event.is_dm
-        and event.reply_target.get("thread_ts")
+        and reply_target_as(event, SlackReplyTarget).thread_ts
         and "assistant:write" in slack_scopes(credentials)
     ):
         # The status bubble clears itself when a message is posted; there was
@@ -112,8 +117,8 @@ class SlackStreamSurface:
         step is invented to justify the message existing.
         """
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
-        thread_ts = event.reply_target.get("thread_ts")
+        channel = reply_target_as(event, SlackReplyTarget).channel
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         # An empty text is a request to *open* the stream (run start); only a
         # missing channel/thread makes it impossible.
         if not token or not channel or not thread_ts:
@@ -229,7 +234,9 @@ class SlackStreamSurface:
             return ""
         if not message.strip() and not handle.streamed_text:
             return ""
-        return handle.channel_id or str(event.reply_target.get("channel") or "")
+        return handle.channel_id or str(
+            reply_target_as(event, SlackReplyTarget).channel or ""
+        )
 
     async def _close_stream(
         self, handle: ProgressHandle, *, channel: str, chunks: list[str]
@@ -331,7 +338,10 @@ class SlackStreamSurface:
         if not token:
             return
         client = await build_slack_client(self.credentials)
-        channel = progress_handle.channel_id or event.reply_target.get("channel")
+        channel = (
+            progress_handle.channel_id
+            or reply_target_as(event, SlackReplyTarget).channel
+        )
         ts = progress_handle.message_id
         try:
             if progress_handle.kind is ProgressHandleKind.STREAM:

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TeamsReplyTarget,
+    reply_target_as,
+)
+
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 from typing import Any
@@ -125,8 +130,8 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
             return None
 
         tenant_id = event.tenant_id
-        team_id = event.reply_target.get("team_id")
-        channel_id = event.reply_target.get("channel_id")
+        team_id = reply_target_as(event, TeamsReplyTarget).team_id
+        channel_id = reply_target_as(event, TeamsReplyTarget).channel_id
         message_id = event.external_message_id
         if not tenant_id or not team_id or not channel_id or not message_id:
             logger.debug(
@@ -147,8 +152,10 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
 
         graph_team_id = await client.resolve_graph_team_id(
             raw_team_id=str(team_id),
-            team_aad_group_id=event.reply_target.get("team_aad_group_id"),
-            service_url=event.reply_target.get("service_url"),
+            team_aad_group_id=reply_target_as(
+                event, TeamsReplyTarget
+            ).team_aad_group_id,
+            service_url=reply_target_as(event, TeamsReplyTarget).service_url,
         )
         if not graph_team_id:
             logger.debug(
@@ -318,11 +325,13 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
         The response `properties` dict sometimes contains `email` depending on
         the tenant's Teams configuration. This does not require Graph admin consent.
         """
-        conversation_id = event.reply_target.get("conversation_id")
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
         if not event.tenant_id or not conversation_id:
             return None
         try:
-            base_url = client.bf_service_url(event.reply_target.get("service_url"))
+            base_url = client.bf_service_url(
+                reply_target_as(event, TeamsReplyTarget).service_url
+            )
         except AgentSurfaceValidationError:
             logger.warning(
                 "agent_surfaces.adapter.teams_service_url_refused.degraded",

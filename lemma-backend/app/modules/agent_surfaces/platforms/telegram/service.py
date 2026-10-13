@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TelegramReplyTarget,
+    reply_target_as,
+)
+
 from app.modules.agent_surfaces.domain.models import ProgressHandle
 
 import hashlib
@@ -186,7 +191,10 @@ class TelegramPlatformService:
         Returns the id of the first message sent -- the one any keyboard rides
         on -- when Telegram named it.
         """
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         thread_id = self._message_thread_id(event)
         reply_parameters = telegram_reply_parameters(event)
         reply_markup = (metadata or {}).get("reply_markup")
@@ -285,7 +293,7 @@ class TelegramPlatformService:
 
     @staticmethod
     def _message_thread_id(event: ParsedInboundSurfaceEvent) -> int | None:
-        raw = event.reply_target.get("message_thread_id")
+        raw = reply_target_as(event, TelegramReplyTarget).message_thread_id
         if raw in (None, "", "0", 0):
             raw = event.metadata.get("message_thread_id")
         if raw in (None, "", "0", 0):
@@ -308,7 +316,10 @@ class TelegramPlatformService:
         name it.
         """
         del metadata
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         reply_parameters = telegram_reply_parameters(event)
 
         payload: dict[str, Any] = {
@@ -397,7 +408,10 @@ class TelegramPlatformService:
         self, event: ParsedInboundSurfaceEvent, caption: str | None
     ) -> dict[str, Any] | None:
         """The form fields an upload carries, or ``None`` when there is no chat."""
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         if not chat_id:
             return None
         data: dict[str, Any] = {"chat_id": chat_id}
@@ -414,7 +428,10 @@ class TelegramPlatformService:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         del metadata
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         payload: dict[str, Any] = {"chat_id": chat_id, "action": "typing"}
         thread_id = self._message_thread_id(event)
         if thread_id is not None:

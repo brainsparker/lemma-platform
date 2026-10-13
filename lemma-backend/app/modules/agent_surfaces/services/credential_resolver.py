@@ -17,7 +17,10 @@ secrets stay `SecretStr` until the HTTP call that sends them.
 
 from __future__ import annotations
 
-from app.modules.agent_surfaces.domain.routing_facts import ReplyTarget
+from app.modules.agent_surfaces.domain.reply_targets import (
+    WhatsAppReplyTarget,
+    reply_target_of,
+)
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -171,7 +174,10 @@ def arrival_number(event: ParsedInboundSurfaceEvent | None) -> str | None:
     the same number. Each used to decide separately, and the ones that did not
     ask used the settings token for a message a pooled number received.
     """
-    return ReplyTarget.of(event).phone_number_id
+    if event is None:
+        return None
+    target = reply_target_of(event)
+    return target.phone_number_id if isinstance(target, WhatsAppReplyTarget) else None
 
 
 class PooledNumberReader(Protocol):

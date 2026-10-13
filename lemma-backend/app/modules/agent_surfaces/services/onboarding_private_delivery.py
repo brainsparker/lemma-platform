@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TeamsReplyTarget,
+    reply_target_as,
+)
+
 from app.modules.agent_surfaces.domain.credentials import (
     CredentialsLike,
     SurfaceCredentials,
@@ -98,7 +103,9 @@ async def _teams_private_destination(
         raise PrivateDeliveryUnavailable(
             "The Teams bot installation cannot send privately"
         )
-    service_url = teams_client.bf_service_url(event.reply_target.get("service_url"))
+    service_url = teams_client.bf_service_url(
+        reply_target_as(event, TeamsReplyTarget).service_url
+    )
     response = await open_http().post(
         f"{service_url}/v3/conversations",
         headers=teams_client.auth_headers(token),

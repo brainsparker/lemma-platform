@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    WhatsAppReplyTarget,
+    reply_target_as,
+    reply_target_for,
+)
+
 from typing import Any
 
 from pydantic_ai.tools import RunContext
@@ -76,7 +82,10 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
 
     def _arrival_number(self, event: ParsedInboundSurfaceEvent) -> str:
         """The number to send from: the one the message arrived on, else ours."""
-        return event.reply_target.get("phone_number_id") or self._phone_number_id
+        return (
+            reply_target_as(event, WhatsAppReplyTarget).phone_number_id
+            or self._phone_number_id
+        )
 
     async def fetch_sender_profile(
         self, event: ParsedInboundSurfaceEvent
@@ -188,14 +197,16 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
         note = (text or "").strip()
         if not note or not show_alert:
             return
-        reply_target = interaction.reply_target or {}
-        sender_wa_id = reply_target.get("sender_wa_id")
+        reply_target = reply_target_for("WHATSAPP", interaction.reply_target)
+        if not isinstance(reply_target, WhatsAppReplyTarget):
+            return
+        sender_wa_id = reply_target.sender_wa_id
         # The number it arrived on wins over the one this adapter was configured
         # with, exactly as `stream_progress` and the send paths do it. With a
         # pool the two differ, and the configured one is a number the person has
         # never written to -- so the acknowledgement for their own tap arrives
         # from somewhere else, outside the thread they are looking at.
-        phone_number_id = reply_target.get("phone_number_id") or self._phone_number_id
+        phone_number_id = reply_target.phone_number_id or self._phone_number_id
         if not sender_wa_id or not phone_number_id or not self._access_token:
             return
         try:

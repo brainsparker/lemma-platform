@@ -133,6 +133,7 @@ async def test_a_notification_send_remembers_which_message_carried_it(sent):
         send_message_payload=AsyncMock(return_value="wamid-77")
     )
     event = SimpleNamespace(
+        platform="WHATSAPP",
         reply_target={"phone_number_id": "pn-1", "sender_wa_id": "15550001"},
         sender_phone="15550001",
         is_dm=True,

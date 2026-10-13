@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TelegramReplyTarget,
+    reply_target_as,
+)
+
 from app.modules.agent_surfaces.domain.models import ProgressHandle, ProgressHandleKind
 
 from collections.abc import Awaitable, Callable
@@ -177,7 +182,9 @@ async def stream_progress(
     *,
     bot_token: str,
 ) -> ProgressHandle | None:
-    chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+    chat_id = (
+        reply_target_as(event, TelegramReplyTarget).chat_id or event.external_channel_id
+    )
     if not bot_token or not chat_id:
         return progress_handle
     draft = await _send_rich_progress_draft(
@@ -214,7 +221,7 @@ async def _send_rich_progress_draft(
         draft_id = int(
             progress_handle.message_id
             if progress_handle is not None
-            else event.reply_target.get("message_id") or 1
+            else reply_target_as(event, TelegramReplyTarget).message_id or 1
         )
     except TypeError, ValueError:
         draft_id = 1
@@ -287,7 +294,9 @@ async def end_progress(
     event: ParsedInboundSurfaceEvent,
     progress_handle: ProgressHandle | None,
 ) -> None:
-    chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+    chat_id = (
+        reply_target_as(event, TelegramReplyTarget).chat_id or event.external_channel_id
+    )
     # A draft is replaced by the answer itself, so there is nothing to delete.
     if (
         progress_handle is None
@@ -336,7 +345,7 @@ def reply_parameters(event: ParsedInboundSurfaceEvent) -> dict[str, Any] | None:
     if event.is_dm or not event.answers_inbound:
         return None
     try:
-        message_id = int(event.reply_target.get("message_id") or 0)
+        message_id = int(reply_target_as(event, TelegramReplyTarget).message_id or 0)
     except TypeError, ValueError:
         return None
     if message_id <= 0:
@@ -345,7 +354,7 @@ def reply_parameters(event: ParsedInboundSurfaceEvent) -> dict[str, Any] | None:
 
 
 def _message_thread_id(event: ParsedInboundSurfaceEvent) -> int | None:
-    raw = event.reply_target.get("message_thread_id")
+    raw = reply_target_as(event, TelegramReplyTarget).message_thread_id
     if raw in (None, "", "0", 0):
         raw = event.metadata.get("message_thread_id")
     if raw in (None, "", "0", 0):

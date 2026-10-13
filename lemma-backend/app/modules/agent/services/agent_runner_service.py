@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 from app.modules.agent.contracts.run_observer import RunObserver
 from uuid import UUID
@@ -14,6 +15,7 @@ from pydantic_ai import UsageLimits
 
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 from opentelemetry import trace
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.observability.telemetry import (
@@ -46,13 +48,13 @@ from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.capabilities import build_lemma_harness_tooling
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.infrastructure.repositories import (
-    AgentRuntimeProfileRepository,
     AgentRepository,
     ConversationRepository,
 )
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
     ResolvedAgentRuntime,
+    runtime_profile_service_for,
 )
 from app.modules.agent.services.outsider_runtime import (
     default_runtimes,
@@ -104,7 +106,6 @@ from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.final_answer import get_final_answer_tool
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
-from app.core.crypto import get_secret_cipher
 from app.modules.agent.services.run_input_settings import (
     run_input_text,
     with_reply_budget,
@@ -126,6 +127,10 @@ _FINALIZATION_TIMEOUT_SECONDS = 8.0
 AgentRunObserver = RunObserver
 
 
+#: Builds the runtime-profile resolver over one unit of work.
+ProfileServices = Callable[[SqlAlchemyUnitOfWork], AgentRuntimeProfileService]
+
+
 class AgentRunnerService:
     """Executes one persisted agent run and persists harness messages."""
 
@@ -136,9 +141,13 @@ class AgentRunnerService:
         harness_registry: HarnessRegistry,
         fallback_model_name: str | None = None,
         fixed_usage_limits: UsageLimits | None = None,
+        profile_services: ProfileServices = runtime_profile_service_for,
     ) -> None:
         self.uow_factory = uow_factory
         self.harness_registry = harness_registry
+        # The shared factory by default, so a run resolves exactly as the MCP
+        # bridge and the routes do -- harness included.
+        self.profile_services = profile_services
         self.fallback_model_name = fallback_model_name
         self.fixed_usage_limits = fixed_usage_limits or harness_usage_limits()
         self.tool_assembler = RunToolAssembler(uow_factory)
@@ -471,13 +480,7 @@ class AgentRunnerService:
     ) -> ResolvedAgentRuntime:
         with run_phase("resolve_runtime"):
             async with self.uow_factory() as uow:
-                service = AgentRuntimeProfileService(
-                    AgentRuntimeProfileRepository(
-                        uow,
-                        encryption=get_secret_cipher(),
-                    )
-                )
-                return await service.resolve(
+                return await self.profile_services(uow).resolve(
                     runtime=agent_runtime,
                     organization_id=organization_id,
                     user_id=user_id,

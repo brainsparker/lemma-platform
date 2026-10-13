@@ -10,7 +10,9 @@ from pydantic import HttpUrl
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import (
@@ -457,6 +459,23 @@ class AgentRuntimeProfileService:
             organization_id=organization_id,
             user_id=user_id,
         )
+
+
+def runtime_profile_service_for(
+    uow: SqlAlchemyUnitOfWork,
+) -> AgentRuntimeProfileService:
+    """The one resolver every run path and route builds, over ``uow``.
+
+    Always with the host repository: without it a harness profile's vision
+    comes from the catalog copied at creation, often before the harness's own
+    probe said it reads images, while the MCP bridge -- which had it -- asked
+    the harness. Two resolvers gave one run two answers about whether its
+    model can see.
+    """
+    return AgentRuntimeProfileService(
+        AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
+        AgentHostRepository(uow),
+    )
 
 
 def _profile_availability(

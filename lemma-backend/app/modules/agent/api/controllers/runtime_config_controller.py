@@ -26,10 +26,6 @@ from app.modules.agent.api.schemas import (
     UpdateOpenAICompatibleRuntimeProfileRequest,
 )
 from app.modules.agent.agent_runtime_defaults import AgentRuntimeDefaultService
-from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
-from app.modules.agent.infrastructure.repositories import (
-    AgentRuntimeProfileRepository,
-)
 from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import effective_agent_host_status
 from app.modules.agent.domain.organization_default import organization_default_of
@@ -47,8 +43,8 @@ from app.modules.agent.services.runtime_profile_editor import (
 )
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
+    runtime_profile_service_for,
 )
-from app.core.crypto import get_secret_cipher
 
 logger = get_logger(__name__)
 
@@ -155,13 +151,7 @@ async def _load_profile_or_404(
 
 
 def _runtime_profile_service(uow: UoWDep) -> AgentRuntimeProfileService:
-    return AgentRuntimeProfileService(
-        repository=AgentRuntimeProfileRepository(
-            uow,
-            encryption=get_secret_cipher(),
-        ),
-        host_repository=AgentHostRepository(uow),
-    )
+    return runtime_profile_service_for(uow)
 
 
 @router.get(

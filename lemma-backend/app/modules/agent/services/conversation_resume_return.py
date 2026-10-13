@@ -351,11 +351,8 @@ class ResumeToolReturnBuilder:
         """
         from app.core.infrastructure.db.session import async_session_maker
         from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-        from app.modules.agent.infrastructure.repositories import (
-            AgentRuntimeProfileRepository,
-        )
         from app.modules.agent.services.runtime_profile_service import (
-            AgentRuntimeProfileService,
+            runtime_profile_service_for,
         )
         from app.modules.agent.tools.callable_tool_factory import (
             AgentCallableToolFactory,
@@ -364,7 +361,6 @@ class ResumeToolReturnBuilder:
         from app.modules.agent.services.host_execution_selection import (
             recorded_host_workspace,
         )
-        from app.core.crypto import get_secret_cipher
         from app.modules.agent.services.workspace_location import resolve_pod_cwd
 
         uow_factory = SessionUnitOfWorkFactory(async_session_maker)
@@ -375,10 +371,7 @@ class ResumeToolReturnBuilder:
         )
         selected_runtime = await turn_runtime(self.uow, conversation, agent)
         async with uow_factory() as uow:
-            profile_service = AgentRuntimeProfileService(
-                AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
-            )
-            resolved = await profile_service.resolve(
+            resolved = await runtime_profile_service_for(uow).resolve(
                 runtime=selected_runtime,
                 organization_id=conversation.organization_id,
                 user_id=user_id,

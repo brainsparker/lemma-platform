@@ -389,6 +389,13 @@ async def _v2_search_files(conn: AsyncConnection, schema: str) -> None:
             f"CREATE INDEX IF NOT EXISTS ix_search_files_path_tsv "
             f"ON {q}.search_files USING GIN (path_tsv)"
         ),
+        # Duplicates could exist: nothing prevented two concurrent index runs
+        # of one file from both inserting. Keep the newest of each pair.
+        (
+            f"DELETE FROM {q}.reserved_chunks a USING {q}.reserved_chunks b "
+            "WHERE a.file_id = b.file_id AND a.chunk_index = b.chunk_index "
+            "AND (a.created_at, a.id) < (b.created_at, b.id)"
+        ),
         # Chunks written before this version carry their file's path; one
         # row per file is rebuilt from them.
         (
@@ -400,13 +407,6 @@ async def _v2_search_files(conn: AsyncConnection, schema: str) -> None:
             "count(*), COALESCE(max(created_at), now()) "
             f"FROM {q}.reserved_chunks GROUP BY file_id "
             "ON CONFLICT (file_id) DO NOTHING"
-        ),
-        # Duplicates could exist: nothing prevented two concurrent index runs
-        # of one file from both inserting. Keep the newest of each pair.
-        (
-            f"DELETE FROM {q}.reserved_chunks a USING {q}.reserved_chunks b "
-            "WHERE a.file_id = b.file_id AND a.chunk_index = b.chunk_index "
-            "AND (a.created_at, a.id) < (b.created_at, b.id)"
         ),
         (
             f"ALTER TABLE {q}.reserved_chunks ADD COLUMN IF NOT EXISTS tsv tsvector "

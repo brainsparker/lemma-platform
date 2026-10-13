@@ -167,23 +167,36 @@ def create_dedicated_engine(url: str, *, pool_size: int, logging_name: str):
     The work runtime bounds every connection it takes and sizes this pool to
     that bound, which is a guarantee only while nothing else draws from the
     same pool. Same serializer, server-side timeouts and instrumentation as the
-    primary engine; always pooled (one long-lived event loop owns it) and never
-    overflowing.
+    primary engine, and the same pooling rule: never overflowing, and unpooled
+    under test unless DB_POOL_IN_TESTING asks for a pool.
     """
+    pooling: dict[str, object] = {
+        "pool_size": pool_size,
+        "max_overflow": 0,
+        "pool_timeout": settings.db_pool_timeout_seconds,
+        "pool_recycle": settings.db_pool_recycle_seconds,
+        "pool_use_lifo": True,
+    }
+    if settings.environment == "testing" and not settings.db_pool_in_testing:
+        # As the primary engine does under test: parallel e2e workers each run
+        # a worker process, and idle pooled connections from every one of them
+        # add up past the test server's connection limit. The runtime's own
+        # semaphores still bound how many it opens at once.
+        pooling = {"poolclass": NullPool}
     dedicated = create_async_engine(
         url,
         json_serializer=lambda obj: json.dumps(obj, default=json_serial),
         pool_pre_ping=True,
         connect_args=_build_connect_args(),
         pool_logging_name=logging_name,
-        pool_size=pool_size,
-        max_overflow=0,
-        pool_timeout=settings.db_pool_timeout_seconds,
-        pool_recycle=settings.db_pool_recycle_seconds,
-        pool_use_lifo=True,
+        # SQLAlchemy's default, stated: the work runtime's own statements are a
+        # fixed set, and handler queries are the same shapes the primary sees.
+        query_cache_size=500,
+        **pooling,
     )
-    pool = dedicated.sync_engine.pool
-    event.listen(pool, "checkout", _pool_utilization_listener(pool))
+    if "pool_size" in pooling:
+        pool = dedicated.sync_engine.pool
+        event.listen(pool, "checkout", _pool_utilization_listener(pool))
     attach_connection_scope_monitor(dedicated)
     watch_compiled_cache(logging_name, dedicated)
     return dedicated

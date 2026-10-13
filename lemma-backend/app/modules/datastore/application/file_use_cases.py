@@ -33,7 +33,7 @@ from app.modules.datastore.domain.errors import DatastoreDomainError
 from app.core.authorization.authz_epoch import bump_pod_authz_epoch
 from app.modules.datastore.events.file_work import (
     cleanup_payload,
-    enqueue_file_cleanup,
+    add_file_cleanup_work,
 )
 from app.modules.datastore.services.file_service import DatastoreFileService
 from app.modules.datastore.services.files.http_cache import (
@@ -261,7 +261,7 @@ class FileUseCases:
             cleanup = await service.resolve_delete_path(pod_id, path, ctx=scope.ctx)
             in_process = datastore_settings.e2e_disable_worker_file_autoindex
             if not in_process:
-                await enqueue_file_cleanup(
+                await add_file_cleanup_work(
                     scope.uow,
                     pod_id=cleanup.pod_id,
                     payload=cleanup_payload(cleanup),

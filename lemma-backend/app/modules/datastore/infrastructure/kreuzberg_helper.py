@@ -12,10 +12,23 @@ import aiohttp
 
 from app.core.concurrency.offload import run_blocking
 from app.modules.datastore.config import datastore_settings
-from app.modules.datastore.domain.errors import (
-    DocumentExtractionUnavailableError,
-    ExtractorFailedOnDocument,
+from app.modules.datastore.infrastructure.kreuzberg_errors import (
+    KreuzbergCompatibilityError,
+    KreuzbergRateLimited,
+    KreuzbergUnhealthy,
+    KreuzbergUnreachable,
+    _DocumentLevelFailure,
+    judge_document_failure,
+    raise_for_status,
 )
+
+__all__ = [
+    "KreuzbergCompatibilityError",
+    "KreuzbergHelper",
+    "KreuzbergRateLimited",
+    "KreuzbergUnhealthy",
+    "KreuzbergUnreachable",
+]
 from app.modules.datastore.infrastructure.extraction_result import (
     KreuzbergExtractionResult,
 )
@@ -35,35 +48,6 @@ logger = get_logger(__name__)
 # Retry connection failures; defer timeouts; only schema errors try a legacy config.
 _TRANSIENT_RETRY_ATTEMPTS = 3
 _TRANSIENT_RETRY_BASE_DELAY_SECONDS = 1.0
-
-
-class KreuzbergUnreachable(DocumentExtractionUnavailableError):
-    """The connection to Kreuzberg failed after the in-request retries."""
-
-    evidence = "connection_refused"
-
-
-class KreuzbergUnhealthy(DocumentExtractionUnavailableError):
-    """Kreuzberg failed a request and then failed its own health check."""
-
-    evidence = "health_check_failing"
-
-
-class KreuzbergRateLimited(DocumentExtractionUnavailableError):
-    """Kreuzberg said 429: it is busy, not broken, and not this document's fault."""
-
-    evidence = "rate_limited"
-
-
-class _DocumentLevelFailure(Exception):
-    """A 5xx, 408 or 413 on this request, before the health check decides whose."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-
-
-class KreuzbergCompatibilityError(RuntimeError):
-    """The extractor rejected the request schema and a legacy config may work."""
 
 
 class KreuzbergHelper:
@@ -548,30 +532,7 @@ class KreuzbergHelper:
     async def _judge_document_failure(
         self, session: aiohttp.ClientSession, message: str
     ) -> Exception:
-        """Whose failure a 5xx, timeout or 413 is: this document's, or Kreuzberg's.
-
-        Asked once, of Kreuzberg itself. A passing health check means it is
-        serving others, so the document is charged an attempt and counted
-        (once) against it in the breaker; a failing one means it is down, and
-        waiting is not charged.
-        """
-        if await self._is_healthy(session):
-            get_kreuzberg_circuit().record_failure()
-            return ExtractorFailedOnDocument(message)
-        get_kreuzberg_circuit().record_failure(document_key=None)
-        return KreuzbergUnhealthy(f"{message}; Kreuzberg health check failing")
-
-    async def _is_healthy(self, session: aiohttp.ClientSession) -> bool:
-        timeout = aiohttp.ClientTimeout(
-            total=datastore_settings.kreuzberg_health_timeout_seconds
-        )
-        try:
-            async with session.get(
-                f"{self.base_url}/health", timeout=timeout
-            ) as response:
-                return response.status < 500
-        except aiohttp.ClientError, asyncio.TimeoutError, TimeoutError:
-            return False
+        return await judge_document_failure(session, self.base_url, message)
 
     @staticmethod
     def _parse_extract_response(data: Any) -> KreuzbergExtractionResult:
@@ -680,27 +641,4 @@ class KreuzbergHelper:
         return formatted
 
     async def _raise_for_status(self, response: aiohttp.ClientResponse) -> None:
-        if response.status < 400:
-            return
-        body = await response.text()
-        message = f"Extractor request failed with status {response.status}: {body}"
-        if response.status in {400, 422}:
-            # 400 = bad request/config (the compat-config ladder may recover it);
-            # 422 = the document itself could not be parsed or OCR'd.
-            raise KreuzbergCompatibilityError(message)
-        if response.status == 429:
-            retry_after = response.headers.get("Retry-After")
-            raise KreuzbergRateLimited(
-                message,
-                retry_after_seconds=float(retry_after)
-                if retry_after and retry_after.isdigit()
-                else None,
-            )
-        if response.status in {408, 413} or response.status >= 500:
-            # A per-file extraction timeout arrives as a 500 carrying
-            # error_type=TimeoutError, a panic on one document as a plain 500,
-            # and a cold container's failed model download as a 502. The status
-            # cannot say whether the document or the extractor is at fault;
-            # the health check asked by the caller can.
-            raise _DocumentLevelFailure(message)
-        raise RuntimeError(message)
+        await raise_for_status(response)

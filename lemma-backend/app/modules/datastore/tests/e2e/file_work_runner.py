@@ -25,6 +25,7 @@ install_datastore_composition(DatastoreComposition(embedder_provider=lambda: _em
 
 
 async def _run(lease_seconds: float) -> None:
+    import app.events  # noqa: F401 - every module's models and kinds, as a worker has
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.work import WorkClass
     from app.core.infrastructure.work.testing import dispatcher_for
@@ -34,11 +35,8 @@ async def _run(lease_seconds: float) -> None:
     dispatcher = dispatcher_for(
         async_session_maker, WorkClass.INGESTION, registry=registry, owner="runner"
     )
-    while True:
-        items = await dispatcher.claim_once()
-        await asyncio.gather(*(dispatcher.execute(item) for item in items))
-        if not items:
-            await asyncio.sleep(0.05)
+    # The production loop: claim, start, idle on the poll until killed.
+    await dispatcher.run()
 
 
 if __name__ == "__main__":

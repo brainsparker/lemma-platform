@@ -36,7 +36,7 @@ from app.modules.datastore.infrastructure.storage_paths import (
     fallback_keys,
     readable_keys,
 )
-from app.modules.datastore.services.file_processing_service import unavailable_for
+from app.modules.datastore.services.processing_run import unavailable_for
 
 pytestmark = pytest.mark.unit
 

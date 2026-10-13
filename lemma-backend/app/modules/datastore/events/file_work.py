@@ -52,7 +52,6 @@ FILE_PROCESS = "file.process"
 FILE_CLEANUP = "file.cleanup"
 
 
-
 class FileProcessPayload(BaseModel):
     file_id: UUID
     #: The bytes this run is for. A run whose row now holds other bytes stops:
@@ -244,7 +243,7 @@ def cleanup_payload(cleanup: _DeletionCleanup) -> FileCleanupPayload:
     )
 
 
-async def enqueue_file_cleanup(
+async def add_file_cleanup_work(
     uow: SqlAlchemyUnitOfWork,
     *,
     pod_id: UUID,

@@ -24,14 +24,29 @@ import sys
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from pathlib import Path
+from uuid import UUID
 
 import pypdfium2 as pdfium
 import pytest
 from fastapi import status
 
+from app.core.authorization.authz_epoch import pod_authz_epoch
 from app.core.config import settings
+from app.core.infrastructure.redis.client import get_redis
 from app.core.object_storage import local_object_storage_path
+from app.core.infrastructure.work import (
+    SYSTEM_NAMESPACE,
+    WorkClass,
+    WorkRegistry,
+    WorkWriter,
+)
+from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.datastore.config import datastore_settings
+from app.modules.datastore.events.storage_work import (
+    PARENT_BACKFILL,
+    STORAGE_COPY,
+    register_storage_work,
+)
 from app.modules.datastore.infrastructure.kreuzberg_circuit import (
     get_kreuzberg_circuit,
     reset_kreuzberg_circuit,
@@ -44,7 +59,12 @@ from app.modules.datastore.tests.e2e.file_work_support import (
     FileWork,
     file_work_registry,
 )
-from app.modules.datastore.tests.e2e.harness import DatastoreApi, build_pdf_bytes
+from app.modules.datastore.tests.e2e.harness import (
+    DatastoreApi,
+    build_pdf_bytes,
+    invite_to_pod,
+    signup_user,
+)
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
@@ -242,8 +262,8 @@ async def test_a_failed_reindex_leaves_the_previous_revision_searchable(
     row = await file_work.row(document["id"])
     assert row["status"] == "FAILED_PERMANENT"
     assert row["indexed_sha256"] == indexed["content_sha256"]
-    results = await pod_api.search_files("Deterministic extracted content swap")
-    assert [hit["file_id"] for hit in results["results"]] == [document["id"]]
+    results = await pod_api.search_files("Deterministic extracted content")
+    assert [hit["file_id"] for hit in results["items"]] == [document["id"]]
 
 
 async def test_preflight_limits_fail_a_document_before_the_extractor_sees_it(
@@ -349,6 +369,7 @@ async def test_a_rename_moves_no_bytes_once_the_object_layout_is_on(
     pod_api: DatastoreApi, file_work: FileWork, monkeypatch
 ) -> None:
     monkeypatch.setattr(datastore_settings, "datastore_object_storage_layout", True)
+    await pod_api.create_folder("/docs")
     document = await _upload_pdf(
         pod_api, "plan.pdf", "quarterly plan", directory_path="/docs"
     )
@@ -373,10 +394,12 @@ async def test_a_rename_moves_no_bytes_once_the_object_layout_is_on(
     assert await pod_api.download_file("/archive/plan.pdf") == original.read_bytes()
 
     hits = await pod_api.search_files("Deterministic extracted", scope_path="/archive")
-    assert [hit["file_id"] for hit in hits["results"]] == [document["id"]]
-    assert [hit["path"] for hit in hits["results"]] == ["/archive/plan.pdf"]
+    assert [hit["file_id"] for hit in hits["items"]] == [document["id"]]
+    assert [hit["path"] for hit in hits["items"]] == ["/archive/plan.pdf"]
+    # The old folder is gone, from the index as from the tree.
+    await pod_api.create_folder("/docs")
     missed = await pod_api.search_files("Deterministic extracted", scope_path="/docs")
-    assert missed["results"] == []
+    assert missed["items"] == []
     assert await file_work.queued() == 0
 
 
@@ -414,12 +437,16 @@ async def test_a_worker_killed_mid_extraction_loses_its_lease_and_the_file_finis
             stderr=subprocess.STDOUT,
         )
         try:
-            await eventually(
-                label="the runner's extraction to reach the extractor",
-                probe=lambda: _extractions(file_work, "hang-contract.pdf"),
-                done=lambda count: count >= 1,
-                timeout_seconds=60,
-            )
+            try:
+                await eventually(
+                    label="the runner's extraction to reach the extractor",
+                    probe=lambda: _extractions(file_work, "hang-contract.pdf"),
+                    done=lambda count: count >= 1,
+                    timeout_seconds=60,
+                )
+            except BaseException:
+                print(log.read_text()[-6000:])
+                raise
             os.kill(runner.pid, signal.SIGKILL)
             runner.wait(timeout=30)
         finally:
@@ -467,3 +494,182 @@ async def test_a_lease_longer_than_the_extraction_is_kept_alive_by_the_heartbeat
 
     assert (await file_work.row(document["id"]))["status"] == "COMPLETED"
     assert file_work.extractions("delayed-long.pdf") == 1
+
+
+# --- The search scope cache and the pod's authorization epoch ---------------
+
+
+async def _epoch(api: DatastoreApi) -> str:
+    epoch = await pod_authz_epoch(UUID(api.pod_id))
+    assert epoch is not None, "the e2e Redis must be reachable"
+    return epoch
+
+
+async def test_every_change_to_who_may_read_what_moves_the_pods_epoch(
+    pod_api: DatastoreApi,
+    file_work: FileWork,
+    authenticated_client,
+    async_client,
+    fixed_test_org,
+) -> None:
+    async def moved_by(action) -> None:
+        before = await _epoch(pod_api)
+        await action()
+        assert await _epoch(pod_api) != before, action.__name__
+
+    folder = await pod_api.create_folder("/team")
+    uploaded: dict = {}
+
+    async def create():
+        uploaded.update(await _upload_pdf(pod_api, "notes.pdf", directory_path="/team"))
+
+    async def completion():
+        await file_work.drain()
+
+    async def visibility():
+        response = await pod_api.request(
+            "PATCH",
+            f"/pods/{pod_api.pod_id}/datastore/files/by-path",
+            files=[
+                ("path", (None, "/team/notes.pdf", None)),
+                ("visibility", (None, "RESTRICTED", None)),
+            ],
+        )
+        assert response.status_code == status.HTTP_200_OK, response.text
+
+    async def move():
+        await pod_api.update_file("/team/notes.pdf", new_path="/team/minutes.pdf")
+
+    async def grant():
+        response = await authenticated_client.put(
+            f"/pods/{pod_api.pod_id}/roles/POD_VIEWER/permissions",
+            json={
+                "grants": [
+                    {
+                        "resource_type": "folder",
+                        "resource_name": folder["path"],
+                        "permission_ids": ["folder.read"],
+                    }
+                ]
+            },
+        )
+        assert response.status_code == status.HTTP_200_OK, response.text
+
+    async def membership():
+        viewer = await signup_user(async_client, "epoch-viewer")
+        await invite_to_pod(
+            authenticated_client,
+            async_client,
+            org_id=fixed_test_org["id"],
+            pod_id=pod_api.pod_id,
+            user=viewer,
+            role="POD_VIEWER",
+        )
+
+    async def delete():
+        await pod_api.delete_file("/team/minutes.pdf")
+
+    for action in (create, completion, visibility, move, grant, membership, delete):
+        await moved_by(action)
+
+
+async def test_a_cached_search_scope_never_outlives_a_visibility_change(
+    pod_api: DatastoreApi,
+    file_work: FileWork,
+    authenticated_client,
+    async_client,
+    fixed_test_org,
+) -> None:
+    """The readable side is sent as an exact filter, and its results are not
+    re-authorized -- so a stale cache entry would show a document its reader
+    just lost. The epoch is what retires it."""
+    viewer = await signup_user(async_client, "scope-viewer")
+    await invite_to_pod(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        pod_id=pod_api.pod_id,
+        user=viewer,
+        role="POD_VIEWER",
+    )
+    document = await _upload_pdf(pod_api, "budget.pdf", visibility="POD")
+    # More the viewer may not read than may: the readable side is the shorter
+    # one, so it is what gets sent.
+    for n in range(3):
+        await _upload_pdf(pod_api, f"board-{n}.pdf", visibility="RESTRICTED")
+    await file_work.drain()
+    reader = DatastoreApi(async_client, pod_api.pod_id, user=viewer)
+
+    first = await reader.search_files("Deterministic extracted content")
+    assert [hit["file_id"] for hit in first["items"]] == [document["id"]]
+    cached = await _scope_cache_keys(pod_api.pod_id)
+    assert cached, "the viewer's split was not cached"
+    again = await reader.search_files("Deterministic extracted content")
+    assert again["items"] == first["items"]
+
+    response = await pod_api.request(
+        "PATCH",
+        f"/pods/{pod_api.pod_id}/datastore/files/by-path",
+        files=[
+            ("path", (None, "/budget.pdf", None)),
+            ("visibility", (None, "RESTRICTED", None)),
+        ],
+    )
+    assert response.status_code == status.HTTP_200_OK, response.text
+
+    after = await reader.search_files("Deterministic extracted content")
+    assert after["items"] == []
+    owner = await pod_api.search_files("Deterministic extracted content")
+    assert document["id"] in {hit["file_id"] for hit in owner["items"]}
+
+
+async def _scope_cache_keys(pod_id: str) -> list[str]:
+    redis = get_redis(url=settings.redis_url)
+    return [
+        key async for key in redis.scan_iter(match=f"datastore:search-scope:{pod_id}:*")
+    ]
+
+
+async def test_the_backfills_fill_parents_and_move_bytes_to_the_object_layout(
+    pod_api: DatastoreApi, file_work: FileWork, monkeypatch
+) -> None:
+    await pod_api.create_folder("/old")
+    document = await _upload_pdf(pod_api, "kept.pdf", directory_path="/old")
+    await file_work.drain()
+    folder_id = (await file_work.row(document["id"]))["parent_id"]
+    assert folder_id is not None
+    # Rows written before the column existed.
+    await file_work.execute("UPDATE datastore_files SET parent_id = NULL")
+    registry = WorkRegistry()
+    register_storage_work(registry)
+
+    async def run(kind: str) -> None:
+        async with file_work.session_maker() as session:
+            await WorkWriter(session, registry=registry).add(kind, SYSTEM_NAMESPACE)
+            await session.commit()
+        await run_until_idle(
+            file_work.session_maker, registry=registry, classes=[WorkClass.ADMIN]
+        )
+
+    await run(PARENT_BACKFILL)
+    assert (await file_work.row(document["id"]))["parent_id"] == folder_id
+
+    row = await file_work.row(document["id"])
+    root = local_object_storage_path("datastore") / f"pods/{pod_api.pod_id}"
+    legacy = root / "files/old/kept.pdf"
+    assert legacy.exists() and row["storage_layout"] == "path"
+    await run(STORAGE_COPY)  # the switch is off: nothing moves
+    assert (await file_work.row(document["id"]))["storage_layout"] == "path"
+
+    monkeypatch.setattr(datastore_settings, "datastore_object_storage_layout", True)
+    await run(STORAGE_COPY)
+
+    assert (await file_work.row(document["id"]))["storage_layout"] == "object"
+    moved = root / f"objects/{document['id']}/{row['content_sha256']}"
+    assert (moved / "content").read_bytes() == await pod_api.download_file(
+        "/old/kept.pdf"
+    )
+    assert any((moved / "derived").iterdir())
+    assert not legacy.exists()
+    hits = await pod_api.search_files("Deterministic extracted", scope_path="/old")
+    assert [hit["file_id"] for hit in hits["items"]] == [document["id"]]

@@ -21,33 +21,23 @@ its lease cannot overwrite a newer one.
 
 from __future__ import annotations
 
-import json
 import mimetypes
 import os
 import time
-from contextlib import AbstractAsyncContextManager, suppress
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from contextlib import suppress
 from pathlib import Path
-from typing import Protocol
 from uuid import UUID
 
-import httpx
 
 from app.core.api.uploads import upload_source_sha256
 from app.core.authorization.authz_epoch import bump_pod_authz_epoch
-from app.core.embeddings.embeddings import EmbeddingProviderError
-from app.core.embeddings.local_embedder import EmbeddingModelUnavailableError
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.work import (
     ItemFailure,
     LeaseLost,
     Released,
-    Unavailable,
-    UnavailableEvidence,
 )
 from app.modules.datastore.domain.document_processing import (
     DocumentExtraction,
@@ -60,7 +50,6 @@ from app.modules.datastore.domain.errors import (
     DatastoreDomainError,
     DatastoreObjectIntegrityError,
     DatastoreObjectNotFoundError,
-    DocumentExtractionUnavailableError,
 )
 from app.modules.datastore.domain.file_entities import FileStatus
 from app.modules.datastore.domain.ports import DocumentProcessorPort
@@ -76,7 +65,6 @@ from app.modules.datastore.infrastructure.streaming import stream_to_tempfile
 from app.modules.datastore.infrastructure.markdown_images import (
     rewrite_image_references,
 )
-from app.modules.datastore.infrastructure.models import DatastoreFile
 from app.modules.datastore.infrastructure.repositories.file_repository import (
     DatastoreFileRepository,
 )
@@ -90,10 +78,18 @@ from app.modules.datastore.infrastructure.storage_paths import (
     object_keys,
 )
 from app.modules.datastore.services import processing_preflight
+from app.modules.datastore.services.processing_projection import (
+    write_converted_projection,
+)
+from app.modules.datastore.services.processing_run import (
+    DirectRun,
+    ProcessingRun,
+    _FileSnapshot,
+    _waiting_note,
+    unavailable_for,
+)
 from app.modules.datastore.services.files.page_markers import parse_page_offsets
 from app.modules.datastore.services.search.indexing_availability import (
-    EMBEDDING_MODEL_DOWNLOADING,
-    embedding_model_is_loading,
     sanitize_processing_error,
     warn_if_a_facility_is_absent,
 )
@@ -119,8 +115,6 @@ _MANIFEST_VERSION = 3
 _USER_MARKDOWN_SOURCE = "user"
 _MARKDOWN_ASSET_NAMES_KEY = "markdown_asset_names"
 
-#: Embedding provider answers that mean "down or busy", not "this document".
-_EMBEDDING_UNAVAILABLE_STATUSES = frozenset({502, 503, 504})
 
 _CONVERTED_MARKDOWN_MIME_TYPES: frozenset[str] = frozenset(
     {
@@ -136,125 +130,6 @@ _CONVERTED_MARKDOWN_MIME_TYPES: frozenset[str] = frozenset(
         "application/vnd.ms-outlook",
     }
 )
-
-
-class ProcessingRun(Protocol):
-    """What one processing run needs from whoever drives it.
-
-    ``checkpoint`` opens a short, committed unit of work for intermediate state;
-    ``completion`` the one the outcome is written in (fenced by the work item's
-    lease when a worker drives it); ``raise_if_stopping`` is a safe point at
-    which a shutting-down worker may hand the item back.
-    """
-
-    def checkpoint(self) -> AbstractAsyncContextManager[SqlAlchemyUnitOfWork]: ...
-
-    def completion(self) -> AbstractAsyncContextManager[SqlAlchemyUnitOfWork]: ...
-
-    def raise_if_stopping(self) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class DirectRun:
-    """A run with no work item behind it: every unit of work from one factory."""
-
-    uow_factory: UnitOfWorkFactory
-
-    def checkpoint(self) -> AbstractAsyncContextManager[SqlAlchemyUnitOfWork]:
-        return self.uow_factory()
-
-    def completion(self) -> AbstractAsyncContextManager[SqlAlchemyUnitOfWork]:
-        return self.uow_factory()
-
-    def raise_if_stopping(self) -> None:
-        return None
-
-
-@dataclass(frozen=True, slots=True)
-class _FileSnapshot:
-    """The row as this run read it. Read-only; the session is gone by the I/O."""
-
-    id: UUID
-    pod_id: UUID
-    kind: str
-    status: str
-    path: str
-    name: str
-    mime_type: str | None
-    size_bytes: int
-    search_enabled: bool
-    content_sha256: str | None
-    indexed_sha256: str | None
-    storage_layout: str
-    owner_user_id: UUID | None
-    file_metadata: dict[str, object] = field(default_factory=dict)
-
-    @classmethod
-    def of(cls, model: DatastoreFile) -> "_FileSnapshot":
-        return cls(
-            id=model.id,
-            pod_id=model.pod_id,
-            kind=model.kind,
-            status=model.status,
-            path=model.path,
-            name=model.name,
-            mime_type=model.mime_type,
-            size_bytes=int(model.size_bytes or 0),
-            search_enabled=bool(model.search_enabled),
-            content_sha256=model.content_sha256,
-            indexed_sha256=getattr(model, "indexed_sha256", None),
-            storage_layout=getattr(model, "storage_layout", "path") or "path",
-            owner_user_id=model.owner_user_id,
-            file_metadata=dict(model.file_metadata or {}),
-        )
-
-
-def unavailable_for(exc: BaseException) -> Unavailable | None:
-    """The ``Unavailable`` this failure is, if it is evidence a dependency is down.
-
-    Only evidence counts: a refused connection, a failing health check, a
-    circuit opened by other documents, a 429, an embedding provider answering
-    502/503/504. Anything else is this document's failure.
-    """
-    if isinstance(exc, DocumentExtractionUnavailableError):
-        retry_after = exc.retry_after_seconds
-        return Unavailable(
-            str(exc),
-            evidence=UnavailableEvidence(exc.evidence),
-            retry_after=timedelta(seconds=retry_after) if retry_after else None,
-        )
-    if isinstance(exc, EmbeddingModelUnavailableError):
-        return Unavailable(str(exc), evidence=UnavailableEvidence.HEALTH_CHECK_FAILING)
-    if isinstance(exc, EmbeddingProviderError):
-        cause = exc.__cause__
-        if isinstance(cause, httpx.HTTPStatusError):
-            status = cause.response.status_code
-            if status == 429:
-                return Unavailable(str(exc), evidence=UnavailableEvidence.RATE_LIMITED)
-            if status in _EMBEDDING_UNAVAILABLE_STATUSES:
-                return Unavailable(
-                    str(exc), evidence=UnavailableEvidence.HEALTH_CHECK_FAILING
-                )
-        if isinstance(cause, httpx.TransportError):
-            return Unavailable(
-                str(exc), evidence=UnavailableEvidence.CONNECTION_REFUSED
-            )
-    return None
-
-
-def _waiting_note(exc: BaseException, unavailable: Unavailable) -> str:
-    """What the row says while it waits: why, in words a person can act on."""
-    if embedding_model_is_loading(exc):
-        return EMBEDDING_MODEL_DOWNLOADING
-    dependency = (
-        "embedding provider"
-        if isinstance(exc, (EmbeddingProviderError, EmbeddingModelUnavailableError))
-        else "document extractor"
-    )
-    return (
-        f"Waiting for the {dependency} ({unavailable.evidence.value}); "
-        "this document will be processed when it is back."
-    )
 
 
 class DatastoreFileProcessingService:
@@ -427,7 +302,8 @@ class DatastoreFileProcessingService:
             page_count = extraction.page_count
             has_markdown = extraction.has_markdown
             await self._ensure_claim_current(snapshot, token)
-            await self._write_converted_projection(
+            await write_converted_projection(
+                self.storage,
                 snapshot,
                 keys,
                 extraction,
@@ -673,90 +549,3 @@ class DatastoreFileProcessingService:
         if file_entity.path and "/" in file_entity.path[1:]:
             enriched["parent_path"] = file_entity.path.rsplit("/", 1)[0]
         return enriched
-
-    async def _write_converted_projection(
-        self,
-        file_entity: _FileSnapshot,
-        keys: FileKeys,
-        extraction: DocumentExtraction,
-        search_metadata: dict,
-        *,
-        user_markdown_bytes: bytes | None = None,
-    ) -> None:
-        """Write the file's derived child artifacts into its hidden colocated
-        container: page-marked ``document.md``, extracted figures, and a
-        ``manifest.json`` index. The markdown already carries native page markers
-        and rewritten inline image references (the processor owns that).
-
-        When ``user_markdown_bytes`` is given (bring-your-own markdown), the
-        user's source ``source.md`` is re-persisted here — delete_child_artifacts
-        above wipes the whole container, so this is the single place that keeps it
-        alive across reprocesses."""
-        if not is_object_layout(file_entity):
-            # The path layout has one container per file, so it is replaced in
-            # place. The object layout writes this revision's own prefix and
-            # never touches the one readers are using.
-            await self._delete_child_container(keys)
-
-        document_bytes = extraction.markdown.encode("utf-8")
-        await self.storage.upload_file(keys.markdown, document_bytes)
-        if user_markdown_bytes is not None:
-            await self.storage.upload_file(keys.user_markdown, user_markdown_bytes)
-
-        manifest = {
-            "version": _MANIFEST_VERSION,
-            "source_path": file_entity.path,
-            "source_name": file_entity.name,
-            "source_mime_type": file_entity.mime_type,
-            "source_sha256": file_entity.content_sha256,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "markdown_source": (
-                _USER_MARKDOWN_SOURCE
-                if user_markdown_bytes is not None
-                else "extracted"
-            ),
-            "extraction_mode": extraction.extraction_mode,
-            "detected_languages": extraction.detected_languages,
-            "page_count": extraction.page_count,
-            "pages": [
-                {
-                    "page_number": page.page_number,
-                    "is_blank": page.is_blank,
-                    "image_count": page.image_count,
-                    "table_count": page.table_count,
-                }
-                for page in extraction.pages
-            ],
-            "artifacts": [
-                {
-                    "name": "document.md",
-                    "content_type": "text/markdown; charset=utf-8",
-                    "size_bytes": len(document_bytes),
-                    "kind": "markdown",
-                }
-            ],
-            "search_metadata": search_metadata,
-        }
-
-        # Drain the list rather than iterating it: each image's ``content`` bytes
-        # can be large (base64-decoded figures from a scanned doc), and holding the
-        # whole list resident until this method returns is the biggest avoidable
-        # chunk of steady-state memory during ingestion. Popping each image before
-        # uploading lets the GC reclaim its bytes as soon as the upload completes,
-        # so only one image's bytes are held at a time instead of all of them.
-        while extraction.images:
-            image = extraction.images.pop(0)
-            await self.storage.upload_file(keys.child(image.name), image.content)
-            manifest["artifacts"].append(
-                {
-                    "name": image.name,
-                    "content_type": image.mime_type,
-                    "size_bytes": len(image.content),
-                    "kind": "image",
-                    "page_number": image.page_number,
-                }
-            )
-
-        await self.storage.upload_file(
-            keys.manifest, json.dumps(manifest).encode("utf-8")
-        )

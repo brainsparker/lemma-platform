@@ -1210,12 +1210,14 @@ async def test_agent_failure_fails_workflow_run(
     run = await _create_run(authenticated_client, pod_id, workflow["name"])
     conversation_id = run["active_wait"]["external_ref"]
 
-    await _fail_agent_conversation(conversation_id, "agent tool crashed")
+    reason = "The model ran out of room to answer."
+    await _fail_agent_conversation(conversation_id, reason)
 
     failed = await _get_run(authenticated_client, pod_id, run["id"])
     assert failed["status"] == "FAILED"
     assert failed["failed_node_id"] == "parse"
-    assert failed["error"] == "Agent conversation FAILED"
+    # The agent run's own reason, not only that the agent failed.
+    assert failed["error"] == f"Agent conversation FAILED: {reason}"
     assert failed["active_wait"] is None
     failed_steps = [s for s in failed["step_history"] if s["status"] == "FAILED"]
     assert failed_steps and failed_steps[0]["node_id"] == "parse"

@@ -247,7 +247,11 @@ class AgentControlAdapter(AgentPort):
         )
 
     async def get_conversation_status(self, conversation_id: UUID) -> dict[str, object]:
-        conversation = await self.conversation_repo.get_conversation(conversation_id)
+        # With its latest run: `last_run_error` below is derived from it, and
+        # without it a failed step only ever said that the agent failed.
+        conversation = await self.conversation_repo.get_conversation(
+            conversation_id, include_runs=True
+        )
         if conversation is None or conversation.status is None:
             return {"status": "NOT_FOUND"}
         output = self._normalize_agent_output(conversation.output)

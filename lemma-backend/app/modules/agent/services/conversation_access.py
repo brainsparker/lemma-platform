@@ -34,7 +34,8 @@ from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
 )
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.ports import AgentRepository, ConversationRepository
+from app.modules.agent.domain.conversation_ports import ConversationLookup
+from app.modules.agent.domain.ports import AgentRepository
 
 
 def validate_conversation_access(
@@ -145,7 +146,7 @@ async def resolve_expected_agent_id(
 
 
 async def authorized_conversation(
-    conversation_repository: ConversationRepository,
+    conversation_repository: ConversationLookup,
     agent_repository: AgentRepository,
     *,
     conversation_id: UUID,

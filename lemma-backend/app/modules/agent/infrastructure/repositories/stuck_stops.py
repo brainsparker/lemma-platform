@@ -9,11 +9,11 @@ from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import AgentRunStatus
 
 if TYPE_CHECKING:
-    from app.modules.agent.domain.ports import ConversationRepository
+    from app.modules.agent.domain.conversation_ports import StuckStopSweep
 
 
 async def settle_stuck_stops(
-    repository: ConversationRepository, *, cutoff_seconds: int
+    repository: StuckStopSweep, *, cutoff_seconds: int
 ) -> list[tuple[UUID, UUID, AgentRunStatus]]:
     """Finish stops that no worker ever acted on, as STOPPED.
 

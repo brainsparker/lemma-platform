@@ -17,6 +17,7 @@ from uuid import UUID
 
 from redis.exceptions import RedisError
 
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import Conversation
 from app.modules.agent_surfaces.platforms.delivery import SendOutcome, track_sends
@@ -36,6 +37,7 @@ _SCHEDULE_ERRORS: tuple[type[BaseException], ...] = (RedisError, OSError)
 class ReplyState(Protocol):
     """What of the observer the reply reads and records."""
 
+    uow_factory: UnitOfWorkFactory
     _run_files: RunFiles
     _final_delivered: bool
     _final_send_failed: bool
@@ -138,6 +140,7 @@ async def _owe(
                 message=message,
             ),
             retry_after=outcome.retry_after,
+            uow_factory=state.uow_factory,
         )
     except _SCHEDULE_ERRORS:
         logger.warning(

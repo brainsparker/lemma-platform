@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.core.authorization.current import reset_current_context, set_current_context
@@ -504,7 +505,10 @@ async def conversation_metadata_value(
 
 
 async def set_conversation_metadata_value(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, key: str, value: str | None
+    uow: SqlAlchemyUnitOfWork,
+    conversation_id: UUID,
+    key: str,
+    value: str | BaseModel | None,
 ) -> None:
     """Write one metadata key, leaving every sibling key alone.
 
@@ -512,9 +516,14 @@ async def set_conversation_metadata_value(
     writes it back, so a concurrent writer touching another key loses. This
     goes through `jsonb_set`, which is what a flag written from an inbound
     webhook while a run is stamping its own metadata needs.
+
+    A model is stored as its JSON object, so its fields can be queried
+    (`conversation_metadata_records`).
     """
     await ConversationRepository(uow).set_conversation_metadata_key(
-        conversation_id, key, value
+        conversation_id,
+        key,
+        value.model_dump(mode="json") if isinstance(value, BaseModel) else value,
     )
 
 

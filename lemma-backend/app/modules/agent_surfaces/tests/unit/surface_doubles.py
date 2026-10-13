@@ -57,6 +57,7 @@ from app.modules.test_support.surface_routing_double import routing_surfaces_dou
 #: ones reach a database.
 _CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
 _AGENT_DIRECTORY = "app.modules.agent.contracts.agents"
+_METADATA_RECORDS = "app.modules.agent.contracts.conversation_metadata_records"
 
 
 async def _the_tap_stands(_uow, **kwargs) -> agent_conversations.ApprovalResolution:
@@ -95,6 +96,12 @@ def conversation_operations(monkeypatch):
     }
     for name, double in doubles.items():
         monkeypatch.setattr(f"{_CONVERSATIONS}.{name}", double)
+    records = {
+        "forget_conversation_metadata_record": AsyncMock(),
+        "due_conversation_metadata_records": AsyncMock(return_value=[]),
+    }
+    for name, double in records.items():
+        monkeypatch.setattr(f"{_METADATA_RECORDS}.{name}", double)
     monkeypatch.setattr(
         f"{_AGENT_DIRECTORY}.agent_name_for_id", AsyncMock(return_value="Surface Agent")
     )

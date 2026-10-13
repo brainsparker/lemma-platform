@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import func, literal, select, update
+from sqlalchemy import DateTime, func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -180,6 +180,45 @@ class ConversationRepository(
         )
         await self.session.execute(stmt)
         await self.session.flush()
+
+    async def remove_conversation_metadata_key(
+        self, conversation_id: UUID, key: str, *, matching: JsonObject
+    ) -> None:
+        """Drop one metadata key, only while its object still holds ``matching``.
+
+        Conditional, so a writer clearing the record it acted on cannot remove
+        a newer one written under the same key meanwhile. Removed rather than
+        set to null, so the key's presence -- what `list_metadata_due` finds
+        rows by, through the GIN index -- means a record is there.
+        """
+        column = ConversationModel.conversation_metadata
+        await self.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .where(column[key].op("@>")(literal(matching, JSONB)))
+            .values(conversation_metadata=column - key)
+        )
+        await self.session.flush()
+
+    async def list_metadata_due(
+        self, *, key: str, due_field: str, due_before: datetime, limit: int
+    ) -> list[tuple[UUID, JsonValue]]:
+        """Conversations whose ``key`` record fell due before ``due_before``.
+
+        ``due_field`` is an ISO timestamp inside the record. The key-exists
+        test is what the metadata GIN index answers, so the scan is of the
+        conversations holding such a record, not of every conversation.
+        """
+        column = ConversationModel.conversation_metadata
+        record = column[key]
+        result = await self.session.execute(
+            select(ConversationModel.id, record)
+            .where(column.has_key(key))
+            .where(func.jsonb_typeof(record) == "object")
+            .where(record[due_field].astext.cast(DateTime(timezone=True)) < due_before)
+            .limit(limit)
+        )
+        return [(row[0], row[1]) for row in result.all()]
 
     async def get_conversation(
         self,

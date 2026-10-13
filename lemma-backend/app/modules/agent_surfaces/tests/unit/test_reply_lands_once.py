@@ -63,7 +63,17 @@ from app.modules.agent_surfaces.services import (
     pending_envelope,
     progress_reply,
 )
-from app.modules.agent_surfaces.services.owed_reply import OwedReply
+from app.modules.agent_surfaces.services.owed_reply import (
+    OWED_REPLY_KEY,
+    OwedReply,
+)
+from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    conversation_operations,  # noqa: F401  (autouse fixture)
+)
+from app.modules.agent.contracts import (
+    conversation_metadata_records as metadata_records,
+    conversations_for_surfaces as agent_conversations,
+)
 from app.modules.agent_surfaces.services.pending_envelope import RunFiles
 
 
@@ -218,6 +228,7 @@ async def test_an_answer_the_platform_deferred_is_owed_not_lost(monkeypatch):
 
     run_id = uuid4()
     state = SimpleNamespace(
+        uow_factory=_UowFactory(),
         _run_files=RunFiles(run_id),
         _final_delivered=False,
         _final_send_failed=False,
@@ -237,6 +248,35 @@ async def test_an_answer_the_platform_deferred_is_owed_not_lost(monkeypatch):
     assert (owed.message, owed.agent_run_id) == ("the answer", run_id)
     assert (job["_defer_until"] - before).total_seconds() >= 300
     assert state._final_send_failed is True
+    # Written into the conversation too, due when the job is, so a worker
+    # that loses the job does not lose the answer.
+    [written] = agent_conversations.set_conversation_metadata_value.await_args_list
+    _uow, conversation_id, key, record = written.args
+    assert (conversation_id, key) == (conversation.id, OWED_REPLY_KEY)
+    assert record.message == "the answer"
+    assert record.next_at == job["_defer_until"]
+
+
+async def test_the_debt_is_written_down_before_the_job_is_queued():
+    """The other order can leave a queued job with no record, or -- when the
+    queue is down -- neither."""
+    order: list[str] = []
+    agent_conversations.set_conversation_metadata_value.side_effect = lambda *_a, **_k: (
+        order.append("recorded")
+    )
+
+    class _Ordered(_Queue):
+        async def enqueue(self, job_name: str, **kwargs: Any) -> None:
+            order.append("queued")
+
+    await owed_reply.owe_reply(
+        OwedReply(conversation_id=uuid4(), agent_run_id=None, message="hi"),
+        retry_after=None,
+        uow_factory=_UowFactory(),
+        job_queue=_Ordered(),
+    )
+
+    assert order == ["recorded", "queued"]
 
 
 async def test_an_owed_reply_is_sent_once_however_often_its_job_runs(claims):
@@ -254,6 +294,13 @@ async def test_an_owed_reply_is_sent_once_however_often_its_job_runs(claims):
 
     assert len(sends) == 1
     assert sends[0]["attach_files_of"] == RunFiles(owed.agent_run_id)
+    # Paid: the record is cleared, and only while it is still this reply's.
+    forgets = metadata_records.forget_conversation_metadata_record.await_args_list
+    assert forgets, "a delivered reply left its record to be swept again"
+    assert all(
+        call.kwargs["matching"] == {"agent_run_id": str(owed.agent_run_id)}
+        for call in forgets
+    )
 
 
 async def test_an_owed_reply_still_refused_waits_as_long_as_asked(claims):
@@ -292,6 +339,8 @@ async def test_an_owed_reply_that_partly_arrived_is_not_sent_again(claims):
     )
 
     assert queue.jobs == []
+    # Given up: nothing is left for the sweep to send again.
+    metadata_records.forget_conversation_metadata_record.assert_awaited_once()
 
 
 # ── a send that may have landed is not sent again ───────────────────────────

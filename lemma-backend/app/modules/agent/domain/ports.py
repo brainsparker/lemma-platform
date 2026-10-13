@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection
+from datetime import datetime
 from typing import AsyncIterator, Protocol, Sequence
 from uuid import UUID
 
@@ -137,6 +138,14 @@ class ConversationRepository(Protocol):
         key: str,
         value: JsonValue,
     ) -> None: ...
+
+    async def remove_conversation_metadata_key(
+        self, conversation_id: UUID, key: str, *, matching: JsonObject
+    ) -> None: ...
+
+    async def list_metadata_due(
+        self, *, key: str, due_field: str, due_before: datetime, limit: int
+    ) -> list[tuple[UUID, JsonValue]]: ...
 
     async def lock_conversation(self, conversation_id: UUID) -> None: ...
 

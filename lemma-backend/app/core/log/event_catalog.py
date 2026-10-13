@@ -693,6 +693,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.orphan_schemas.drop.degraded': EventSpec('warning', frozenset({'schema_name'})),
     'datastore.orphan_schemas.dropped': EventSpec('info', frozenset({'schema_name'})),
     'datastore.orphan_schemas.reaped': EventSpec('info', frozenset({'dropped_count', 'failed_count', 'retention_days', 'scanned_count'})),
+    'datastore.outbox_retention.pruned.observed': EventSpec('debug', frozenset({'deleted_count'})),
     'datastore.postgres_search_service.add_file_search_s.propagated': EventSpec('debug', frozenset()),
     'datastore.postgres_search_service.datastore_indexing_stages_file_s.observed': EventSpec('debug', frozenset({'count', 'embedding_seconds', 'file_id', 'persistence_seconds', 'schema_seconds'})),
     'datastore.postgres_search_service.legacy_index_drop.degraded': EventSpec('warning', frozenset({'index_name', 'schema_name'})),

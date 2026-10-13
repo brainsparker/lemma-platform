@@ -18,6 +18,10 @@ same worker slot.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
 from app.core.infrastructure.events.retention import prune_event_delivery_records
 from app.core.infrastructure.jobs.streaq_runtime import Lane, streaq_cron
@@ -27,27 +31,41 @@ from app.modules.datastore.config import datastore_settings
 logger = get_logger(__name__)
 
 
-def datastore_outbox_is_separate() -> bool:
+def datastore_outbox_is_separate(
+    database_url: str | None = None, datastore_database_url: str | None = None
+) -> bool:
     """True when record events are staged outside the main database.
 
     When the two URLs match there is one outbox table, and the main sweep
     already covers it; pruning it twice would only race the same rows.
     """
-    datastore_url = datastore_settings.datastore_database_url or settings.database_url
-    return datastore_url != settings.database_url
+    main_url = database_url if database_url is not None else settings.database_url
+    datastore_url = (
+        datastore_database_url
+        if datastore_database_url is not None
+        else datastore_settings.datastore_database_url
+    ) or main_url
+    return datastore_url != main_url
 
 
-async def prune_datastore_outbox() -> dict[str, int] | None:
-    """One sweep; None when there is no separate datastore outbox to prune."""
-    if not datastore_outbox_is_separate():
-        return None
+def _datastore_session_maker() -> Callable[[], AsyncSession]:
     from app.modules.datastore.infrastructure.session import (
         get_datastore_session_maker,
     )
 
-    return await prune_event_delivery_records(
-        get_datastore_session_maker(), include_inbox=False
-    )
+    return get_datastore_session_maker()
+
+
+async def prune_datastore_outbox(
+    *,
+    is_separate: Callable[[], bool] = datastore_outbox_is_separate,
+    session_maker: Callable[[], Callable[[], AsyncSession]] = _datastore_session_maker,
+    prune: Callable[..., Awaitable[dict[str, int]]] = prune_event_delivery_records,
+) -> dict[str, int] | None:
+    """One sweep; None when there is no separate datastore outbox to prune."""
+    if not is_separate():
+        return None
+    return await prune(session_maker(), include_inbox=False)
 
 
 @streaq_cron("37 * * * *", name="prune_datastore_outbox", lane=Lane.BULK)

@@ -2,50 +2,59 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.datastore.events import outbox_retention_tasks as tasks
+from app.modules.datastore.events.outbox_retention_tasks import (
+    datastore_outbox_is_separate,
+    prune_datastore_outbox,
+)
+
+
+def test_one_database_is_not_separate() -> None:
+    assert not datastore_outbox_is_separate("postgresql://h/main", "")
+    assert not datastore_outbox_is_separate(
+        "postgresql://h/main", "postgresql://h/main"
+    )
+
+
+def test_a_database_of_its_own_is_separate() -> None:
+    assert datastore_outbox_is_separate(
+        "postgresql://h/main", "postgresql://h/datastores"
+    )
 
 
 @pytest.mark.asyncio
-async def test_a_shared_database_is_left_to_the_main_sweep(monkeypatch) -> None:
+async def test_a_shared_database_is_left_to_the_main_sweep() -> None:
     """One database means one outbox, and the main cron already prunes it."""
-    monkeypatch.setattr(tasks.settings, "database_url", "postgresql://h/main")
-    monkeypatch.setattr(tasks.datastore_settings, "datastore_database_url", None)
-    called = False
+    calls: list[object] = []
 
     async def prune(*args, **kwargs):
-        nonlocal called
-        called = True
+        calls.append((args, kwargs))
         return {}
 
-    monkeypatch.setattr(tasks, "prune_event_delivery_records", prune)
+    result = await prune_datastore_outbox(
+        is_separate=lambda: False,
+        session_maker=lambda: pytest.fail("no session for a shared database"),
+        prune=prune,
+    )
 
-    assert await tasks.prune_datastore_outbox() is None
-    assert called is False
+    assert result is None
+    assert calls == []
 
 
 @pytest.mark.asyncio
-async def test_a_separate_database_has_its_outbox_pruned(monkeypatch) -> None:
+async def test_a_separate_database_has_its_outbox_pruned() -> None:
     """The case that filled a disk: record events staged in their own database."""
-    monkeypatch.setattr(tasks.settings, "database_url", "postgresql://h/main")
-    monkeypatch.setattr(
-        tasks.datastore_settings, "datastore_database_url", "postgresql://h/datastores"
-    )
-    seen: dict = {}
     marker = object()
+    seen: dict = {}
 
     async def prune(session_maker, **kwargs):
         seen["session_maker"] = session_maker
         seen.update(kwargs)
         return {"outbox_published": 3, "outbox_dead_letter": 0}
 
-    import app.modules.datastore.infrastructure.session as session_module
+    result = await prune_datastore_outbox(
+        is_separate=lambda: True, session_maker=lambda: marker, prune=prune
+    )
 
-    monkeypatch.setattr(session_module, "get_datastore_session_maker", lambda: marker)
-    monkeypatch.setattr(tasks, "prune_event_delivery_records", prune)
-
-    assert await tasks.prune_datastore_outbox() == {
-        "outbox_published": 3,
-        "outbox_dead_letter": 0,
-    }
+    assert result == {"outbox_published": 3, "outbox_dead_letter": 0}
     assert seen["session_maker"] is marker
     assert seen["include_inbox"] is False

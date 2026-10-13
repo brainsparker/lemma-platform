@@ -511,6 +511,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
 
         See `SandboxRepository.claim_for_destroy`.
         """
+        self.forget(sandbox_id)
         deadline_at = datetime.now(timezone.utc) + timedelta(seconds=60)
         async with self._uow_factory() as uow:
             repository = SandboxRepository(uow)
@@ -521,7 +522,6 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             await uow.commit()
         if sandbox is None or (instance is None and expected_epoch is not None):
             return False
-        self.forget(sandbox_id)
 
         if instance is not None and instance.provider_id:
             await self._provider.destroy(instance.provider_id, deadline_at=deadline_at)

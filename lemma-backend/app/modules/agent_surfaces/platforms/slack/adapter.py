@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
+
 from app.modules.agent_surfaces.domain.channel_setup import ChannelSetupRequest
 
 from app.modules.agent_surfaces.domain.models import ProgressHandle
@@ -46,7 +48,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         return (
             not event.is_dm
             and event.mentioned_agent
-            and event.metadata.get("event_type") != "app_mention"
+            and InboundRoutingFacts.of(event).event_type != "app_mention"
         )
 
     async def settle_mention(
@@ -66,7 +68,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         del credentials
         if not self.mention_is_provisional(event):
             return event
-        mentioned = {str(uid) for uid in event.metadata.get("mentioned_user_ids") or []}
+        mentioned = InboundRoutingFacts.of(event).mentioned_user_ids
         return event.model_copy(
             update={"mentioned_agent": bool(bot_user_id) and bot_user_id in mentioned}
         )

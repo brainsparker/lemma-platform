@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
+
 from enum import StrEnum
 from datetime import datetime, timezone
 from typing import Any
@@ -138,7 +140,7 @@ def is_slack_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
     """A Slack conversation between several people and the bot (an ``mpim``)."""
     return (
         event.platform is SurfacePlatform.SLACK
-        and event.metadata.get("channel_type") == "mpim"
+        and InboundRoutingFacts.of(event).channel_type == "mpim"
     )
 
 
@@ -535,7 +537,7 @@ class AgentSurfaceEntity(AggregateRoot):
         # its own it admitted every threaded reply in a connected channel,
         # whoever it was to. The caller resolves the rest; see
         # `SurfaceInboundMixin._admit`.
-        if event.metadata.get("is_thread_reply") and thread_is_ours:
+        if InboundRoutingFacts.of(event).is_thread_reply and thread_is_ours:
             return True
         # `mentioned_agent` means *this* bot by now: where the parser could
         # not tell (a Slack `message` mentioning anyone, a Telegram @name),

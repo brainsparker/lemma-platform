@@ -17,6 +17,8 @@ secrets stay `SecretStr` until the HTTP call that sends them.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.routing_facts import ReplyTarget
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
@@ -169,10 +171,7 @@ def arrival_number(event: ParsedInboundSurfaceEvent | None) -> str | None:
     the same number. Each used to decide separately, and the ones that did not
     ask used the settings token for a message a pooled number received.
     """
-    if event is None:
-        return None
-    arrived = event.reply_target.get("phone_number_id")
-    return str(arrived) if arrived else None
+    return ReplyTarget.of(event).phone_number_id
 
 
 class PooledNumberReader(Protocol):

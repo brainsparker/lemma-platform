@@ -17,6 +17,8 @@ arguments.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
+
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -248,7 +250,7 @@ async def admitted_surfaces(
         for surface in surfaces
         if surface.allows_inbound_event(parsed, thread_is_ours=False)
     ]
-    if admitted or not parsed.metadata.get("is_thread_reply"):
+    if admitted or not InboundRoutingFacts.of(parsed).is_thread_reply:
         return admitted
     thread_surface_id = await links.find_surface_id_for_external_thread(
         platform=parsed.platform.value,

@@ -9,6 +9,8 @@ all -- which a platform's capabilities answer rather than a list of platforms.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
+
 from uuid import UUID
 
 from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
@@ -33,7 +35,7 @@ from app.modules.agent_surfaces.services.surface_route_types import (
 
 def _addressed(parsed: ParsedInboundSurfaceEvent) -> bool:
     """Whether a group message is for the bot: an @mention, or a reply in its thread."""
-    return bool(parsed.mentioned_agent or parsed.metadata.get("is_thread_reply"))
+    return parsed.mentioned_agent or InboundRoutingFacts.of(parsed).is_thread_reply
 
 
 def _channel_route_key(

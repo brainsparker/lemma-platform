@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
@@ -151,11 +152,12 @@ class MemberReach:
         asking = await needs_asking(uow, conversation_id)
         if asking:
             try:
-                await reopener.reopen_reply_window(
-                    credentials=target.credentials,
-                    event=target.event,
-                    template=template,
-                )
+                async with connection_released(uow.session):
+                    await reopener.reopen_reply_window(
+                        credentials=target.credentials,
+                        event=target.event,
+                        template=template,
+                    )
             except PLATFORM_TRANSPORT_ERRORS:
                 logger.warning(
                     "agent_surfaces.member_reach.reengage_not_sent.degraded",

@@ -20,6 +20,7 @@ from pydantic_ai.toolsets import AbstractToolset
 
 from app.modules.agent.domain.run_budget import RunSpend
 from app.modules.agent.domain.run_notices import RunNotices
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.domain.value_objects import (
     DEFAULT_HISTORY_HARD_TOKEN_CEILING,
     DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES,
@@ -67,4 +68,8 @@ class HarnessOptions[DepsT = object]:
     #: things that post to it are optional, delivering nothing is free, and an
     #: optional mailbox would put a None check at every posting site.
     notices: RunNotices = field(default_factory=RunNotices)
+    #: The runtime this run resolved to. Typed here rather than carried in
+    #: ``extra``, where every reader re-checked a dict and compared its
+    #: protocol as a string.
+    runtime_profile: RuntimeSnapshot | None = None
     extra: JsonObject = field(default_factory=dict)

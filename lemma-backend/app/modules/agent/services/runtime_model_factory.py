@@ -29,6 +29,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.services.model_stream_budget import (
     ModelStreamBudgetTransport,
 )
@@ -284,7 +285,7 @@ def _unmetered_model_from_runtime_profile(
         runtime_profile, config, runtime_credentials
     )
 
-    if protocol == "OPENAI_COMPATIBLE":
+    if protocol == RuntimeProfileProtocol.OPENAI_COMPATIBLE:
         base_url = config.get("base_url")
         if not isinstance(base_url, str) or not base_url:
             return None
@@ -308,7 +309,7 @@ def _unmetered_model_from_runtime_profile(
             profile=openai_compatible_model_profile,
         )
 
-    if protocol == "ANTHROPIC_COMPATIBLE":
+    if protocol == RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE:
         from pydantic_ai.models.anthropic import AnthropicModel
         from pydantic_ai.providers.anthropic import AnthropicProvider
         from anthropic import AsyncAnthropic

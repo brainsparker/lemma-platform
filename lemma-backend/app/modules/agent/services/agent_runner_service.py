@@ -200,7 +200,8 @@ class AgentRunnerService:
             )
             harness = self.harness_registry.get(resolved_runtime.harness_kind)
             outcome = RunOutcome()
-            runtime_profile_snapshot = resolved_runtime.runtime_snapshot().as_payload()
+            snapshot = resolved_runtime.runtime_snapshot()
+            runtime_profile_snapshot = snapshot.as_payload()
             runtime_credentials = resolved_runtime.credentials or {}
             ctx = await build_run_context(
                 uow_factory=self.uow_factory,
@@ -291,8 +292,8 @@ class AgentRunnerService:
                 ),
                 history_hard_token_ceiling=context_budget.hard_token_ceiling,
                 context_window=context_budget.window,
+                runtime_profile=snapshot,
                 extra={
-                    "runtime_profile": runtime_profile_snapshot,
                     "runtime_credentials": runtime_credentials,
                 },
             )

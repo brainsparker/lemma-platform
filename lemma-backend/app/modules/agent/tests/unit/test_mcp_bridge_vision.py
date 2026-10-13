@@ -376,6 +376,8 @@ def test_the_snapshot_the_bridge_reads_carries_those_capabilities():
     from app.modules.agent.domain.runtime_profiles import (
         RuntimeModelCapability,
         RuntimeProfileKind,
+        RuntimeProfileProtocol,
+        RuntimeProfileScope,
     )
     from app.modules.agent.services.runtime_profile_service import (
         ResolvedAgentRuntime,
@@ -387,8 +389,8 @@ def test_the_snapshot_the_bridge_reads_carries_those_capabilities():
         name="Claude Code",
         user_id=None,
         harness_id=None,
-        scope=SimpleNamespace(value="PERSONAL"),
-        protocol=SimpleNamespace(value="AGENT_HOST"),
+        scope=RuntimeProfileScope.PERSONAL,
+        protocol=RuntimeProfileProtocol.AGENT_HOST,
         kind=RuntimeProfileKind.HARNESS,
         config=None,
     )

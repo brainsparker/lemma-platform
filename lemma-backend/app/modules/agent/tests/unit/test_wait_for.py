@@ -323,6 +323,27 @@ async def test_the_in_process_harness_is_never_asked_to_cancel_itself(
 
 
 @pytest.mark.asyncio
+async def test_a_target_that_cannot_be_read_still_waits_and_says_so(
+    suspend_harness, monkeypatch, caplog
+):
+    """An unreadable probe is "ask again", so the wait is armed anyway -- but
+    production logs at INFO, and a wait that should have answered at once and
+    did not has to leave a trace someone can see."""
+    from app.modules.agent.services import wait_targets
+
+    async def _unreadable(**_):
+        return wait_targets.TargetOutcome(reason=None, unreadable=True)
+
+    monkeypatch.setattr(wait_targets, "read_target", _unreadable)
+
+    with caplog.at_level("WARNING"), pytest.raises(AgentInputRequired):
+        await wait_for(_ctx(), WaitForRequest(reason="build", process_id="proc-1"))
+
+    assert len(suspend_harness.created) == 1
+    assert "agent.wait.target_unreadable_at_suspend.degraded" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_wait_for_clamps_an_over_long_request(suspend_harness):
     """The ceiling is policy, not a misunderstanding, so it clamps rather than errors."""
     ctx = _ctx()

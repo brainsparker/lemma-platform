@@ -210,6 +210,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.wait.reconcile_fired_lost_timer': EventSpec('warning', frozenset({'conversation_id', 'wait_id'})),
     'agent.wait.suspended': EventSpec('debug', frozenset({'conversation_id', 'wait_type'})),
     'agent.wait.target_unreadable.degraded': EventSpec('warning', frozenset({'conversation_id', 'unreadable_seconds', 'wait_id'})),
+    'agent.wait.target_unreadable_at_suspend.degraded': EventSpec('warning', frozenset({'conversation_id', 'wait_type'})),
     'agent.wait.woke': EventSpec('debug', frozenset({'conversation_id', 'wait_type', 'woke_because'})),
     'agent.web_fetch.batch_deadline_reached.degraded': EventSpec('warning', frozenset({'captured', 'requested'})),
     'agent.web_fetch.capture_stop_failed.degraded': EventSpec('warning', frozenset({'process_id'})),

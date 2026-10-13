@@ -266,6 +266,15 @@ async def _already_settled(
         pod_id=deps.pod_id,
         conversation_id=deps.conversation_id,
     )
+    if outcome.unreadable:
+        # The wait still goes ahead -- the resolver gives an unreadable target a
+        # grace period -- but it starts blind, and the probe failing is the only
+        # trace of why a wait that should have answered at once did not.
+        logger.warning(
+            "agent.wait.target_unreadable_at_suspend.degraded",
+            conversation_id=str(deps.conversation_id),
+            wait_type=wait_type.value,
+        )
     if outcome.reason is None:
         return None
     return WaitForResponse(

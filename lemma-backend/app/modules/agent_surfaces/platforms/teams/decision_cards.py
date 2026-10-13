@@ -17,6 +17,10 @@ from app.modules.agent_surfaces.domain.decision_card import (
     DecisionCardHandle,
 )
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TeamsReplyTarget,
+    reply_target_as,
+)
 from app.modules.agent_surfaces.platforms.decision_cards import remember_decision_card
 from app.modules.agent_surfaces.platforms.teams import client
 
@@ -43,7 +47,8 @@ async def remember_teams_card(
     card: dict[str, object],
 ) -> None:
     """Remember a posted card by its activity id."""
-    conversation_id = str(event.reply_target.get("conversation_id") or "")
+    target = reply_target_as(event, TeamsReplyTarget)
+    conversation_id = target.conversation_id or ""
     if not activity_id or not conversation_id or not event.tenant_id:
         return
     await remember_decision_card(
@@ -54,7 +59,7 @@ async def remember_teams_card(
             message_id=activity_id,
             blocks=_readable_body(card),
             extra={
-                "service_url": str(event.reply_target.get("service_url") or ""),
+                "service_url": target.service_url or "",
                 "conversation_id": conversation_id,
                 "tenant_id": event.tenant_id,
             },

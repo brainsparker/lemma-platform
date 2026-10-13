@@ -13,6 +13,10 @@ from app.modules.agent_surfaces.domain.credentials import (
     WhatsAppCredentials,
 )
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.reply_targets import (
+    WhatsAppReplyTarget,
+    reply_target_as,
+)
 from app.modules.agent_surfaces.domain.surface_config import ReengageTemplate
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.whatsapp.client import WhatsAppClient
@@ -32,7 +36,8 @@ async def send_reengage_template(
     whatsapp = WhatsAppCredentials.of(credentials)
     client = WhatsAppClient.from_credentials(whatsapp)
     phone_number_id = (
-        str(event.reply_target.get("phone_number_id") or "") or whatsapp.phone_number_id
+        reply_target_as(event, WhatsAppReplyTarget).phone_number_id
+        or whatsapp.phone_number_id
     )
     recipient = whatsapp_recipient(
         event.reply_target, fallback_wa_id=event.sender_phone

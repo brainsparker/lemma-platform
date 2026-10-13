@@ -112,11 +112,13 @@ async def render_choices(
             # every question is tappable, and nothing then accepts a typed
             # answer to the ones that arrived as words.
             return PartDelivery.DEGRADED
-        await _remember(question_plan.callback_id, chat_id, message_id)
+        await _remember_choice_card(question_plan.callback_id, chat_id, message_id)
     return True
 
 
-async def _remember(callback_id: str, chat_id: object, message_id: str | None) -> None:
+async def _remember_choice_card(
+    callback_id: str, chat_id: object, message_id: str | None
+) -> None:
     """Remember a keyboard so it can be taken away once its pause is over."""
     if message_id is not None:
         await remember_decision_card(
@@ -171,5 +173,5 @@ async def render_decision(
         "\n\n".join(body_lines),
         metadata={"reply_markup": {"inline_keyboard": rows}},
     )
-    await _remember(approval_plan.callback_id, chat_id, message_id)
+    await _remember_choice_card(approval_plan.callback_id, chat_id, message_id)
     return True

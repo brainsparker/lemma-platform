@@ -110,7 +110,7 @@ you talk to, the space is what you share. The app has two altitudes.
   line of what is true there and a dot when it waits on a person. A tile
   opens its part as a page of its own, `/t/{pod}/about/{part}`, so Back
   steps out and a link can name it.
-- A part's page uses the room it has. Nothing on it is a compact widget
+- A part's page uses the width it has. Nothing on it is a compact widget
   carried over from a long page: the default model is the full list of the
   organization's models, one row each, with a link to Settings → Models;
   skills wrap in a grid rather than travelling in a carousel; channels are

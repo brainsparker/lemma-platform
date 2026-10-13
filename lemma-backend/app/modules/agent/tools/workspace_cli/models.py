@@ -54,8 +54,9 @@ class ExecCommandRequest(BaseModel):
         ge=10,
         le=600,
         description=(
-            "How long to wait for the command before returning, up to 600s, "
-            "instead of the default 60s. This is THIS CALL'S patience, not a "
+            "How long to wait for the command before returning, up to 600s. "
+            "Without it the call returns after `yield_time_ms` (30s) if the "
+            "command is still running. This is THIS CALL'S patience, not a "
             "limit on the command: if the command is still running when the wait is up you "
             "get `completed: false` and a `process_id`, and the command keeps "
             "running in the background. Hand that id to `wait_for` rather than "

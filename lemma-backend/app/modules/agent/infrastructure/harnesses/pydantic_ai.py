@@ -217,7 +217,7 @@ class PydanticAIHarness:
             # ordinary execution errors into tool responses), or a response the
             # output cap cut off before it held anything usable.
             logger.warning(
-                "agent.pydantic_ai.agent_run_ended_after_repeated.degraded",
+                "agent.pydantic_ai.agent_run_ended_on_unusable_response.degraded",
                 exc_info=True,
             )
             terminal = AgentEvent(

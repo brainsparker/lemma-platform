@@ -28,15 +28,17 @@ from app.modules.agent_surfaces.api.dependencies import (
 )
 from app.modules.agent_surfaces.api.schemas import (
     AgentSurfaceListResponse,
-    AgentSurfaceResponse,
     AvailableSurfaceChannelResponse,
     AvailableSurfaceChannelsResponse,
-    SurfaceCreateRequest,
-    SurfaceReach,
     SurfaceSendRequest,
     SurfaceSendResponse,
     SurfaceSetupResponse,
     SurfaceUpdateRequest,
+)
+from app.modules.agent_surfaces.domain.surface_representation import (
+    AgentSurfaceResponse,
+    SurfaceCreateRequest,
+    SurfaceReach,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -45,11 +47,13 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.contracts.provisioning import surface_response
 from app.modules.agent_surfaces.contracts.provisioning import warned_surface_response
 from app.modules.agent_surfaces.services.contact_keepers import contacts_warnings
-from app.modules.agent_surfaces.api.surface_config_resolver import (
+from app.modules.agent_surfaces.services.surface_config_input import (
     merge_surface_config,
+    resolve_surface_config,
+)
+from app.modules.agent_surfaces.api.surface_config_resolver import (
     require_own_account,
     require_surface_agent_action,
-    resolve_surface_config,
     surface_setup_for_reader,
 )
 from app.modules.agent_surfaces.services.surface_identity_claim import (

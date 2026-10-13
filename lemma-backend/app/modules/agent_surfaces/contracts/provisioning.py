@@ -14,9 +14,10 @@ argument that neither of them used, and every caller had to build one to pass
 it. Surface config resolution is about apps and channels; nothing in it asks
 about an agent.
 
-A submodule rather than `contracts/__init__`: this reaches the service and API
-schema layers, and `contracts/__init__` is imported by anything that wants any
-contract at all.
+A submodule rather than `contracts/__init__`: this reaches the service layer,
+and `contracts/__init__` is imported by anything that wants any contract at
+all. It does not reach the HTTP layer: the surface's written-down shape is
+`domain.surface_representation`, which the API serves and the bundle carries.
 """
 
 from __future__ import annotations
@@ -29,14 +30,14 @@ from app.modules.agent_surfaces.composition import build_surface_service
 from app.modules.agent_surfaces.services.surface_identity_claim import (
     create_surface_claiming_identity,
 )
-from app.modules.agent_surfaces.api.schemas import (
+from app.modules.agent_surfaces.domain.surface_representation import (
     AgentSurfaceResponse,
     SurfaceBehaviorConfigInput,
     SurfaceConfigResponse,
     SurfaceConnection,
     SurfaceReach,
 )
-from app.modules.agent_surfaces.api.surface_config_resolver import (
+from app.modules.agent_surfaces.services.surface_config_input import (
     merge_surface_config,
     resolve_surface_config,
 )

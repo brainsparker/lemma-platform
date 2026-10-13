@@ -32,7 +32,7 @@ from app.modules.agent_surfaces.platforms.common import (
     PLATFORM_TRANSPORT_ERRORS,
 )
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.api.schemas import SurfaceReach
+from app.modules.agent_surfaces.domain.surface_representation import SurfaceReach
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,

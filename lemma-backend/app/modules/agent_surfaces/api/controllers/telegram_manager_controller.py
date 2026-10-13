@@ -11,6 +11,8 @@ from app.core.authorization.permissions import Permissions
 from app.modules.agent.contracts.agents import agent_id_for_name
 from app.modules.agent_surfaces.api.surface_config_resolver import (
     require_surface_agent_action,
+)
+from app.modules.agent_surfaces.services.surface_config_input import (
     resolve_telegram_config,
 )
 from app.modules.agent_surfaces.api.dependencies import (
@@ -20,6 +22,8 @@ from app.modules.agent_surfaces.api.dependencies import (
 from app.modules.agent_surfaces.api.schemas import (
     TelegramManagedBotSetupRequest,
     TelegramManagedBotSetupResponse,
+)
+from app.modules.agent_surfaces.domain.surface_representation import (
     surface_config_from_input,
 )
 from app.modules.agent_surfaces.domain.entities import (

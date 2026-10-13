@@ -1,0 +1,46 @@
+"""Which layer of this module may import which.
+
+The HTTP layer sits on top. Contracts are what other modules call, so a
+contract that imported an API schema made every caller of it -- the pod-bundle
+exporter among them -- depend on this module's HTTP layer, and services that
+did the same could not be used without it. The checks read import statements,
+so a violation fails here rather than in review.
+"""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+import pytest
+
+_MODULE = Path(__file__).resolve().parents[2]
+_PACKAGE = "app.modules.agent_surfaces"
+
+
+def _imports(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module)
+        elif isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+    return found
+
+
+def _violations(layer: str, forbidden: str) -> list[str]:
+    root = _MODULE / layer
+    bad: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        for module in _imports(path):
+            if module == forbidden or module.startswith(f"{forbidden}."):
+                bad.append(f"{path.relative_to(_MODULE)} imports {module}")
+    return bad
+
+
+@pytest.mark.parametrize(
+    "layer", ["contracts", "domain", "services", "platforms", "infrastructure"]
+)
+def test_nothing_below_the_http_layer_imports_it(layer: str) -> None:
+    assert _violations(layer, f"{_PACKAGE}.api") == []

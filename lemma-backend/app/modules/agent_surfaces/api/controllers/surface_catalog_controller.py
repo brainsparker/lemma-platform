@@ -17,7 +17,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.modules.connectors.contracts.surfaces import surface_connector
 from app.modules.agent_surfaces.api.dependencies import get_surface_service
-from app.modules.agent_surfaces.api.schemas import AvailableSurfacesResponse
+from app.modules.agent_surfaces.domain.surface_catalog import AvailableSurfacesResponse
 from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
 from app.modules.agent_surfaces.services.available_surfaces_builder import (
     build_available_surfaces,

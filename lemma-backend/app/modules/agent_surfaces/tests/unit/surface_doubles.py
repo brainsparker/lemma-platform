@@ -97,6 +97,7 @@ def conversation_operations(monkeypatch):
     for name, double in doubles.items():
         monkeypatch.setattr(f"{_CONVERSATIONS}.{name}", double)
     records = {
+        "conversation_metadata_record": AsyncMock(return_value=None),
         "forget_conversation_metadata_record": AsyncMock(),
         "due_conversation_metadata_records": AsyncMock(return_value=[]),
     }

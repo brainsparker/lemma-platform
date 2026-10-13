@@ -77,6 +77,7 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     every_attachment_failed,
 )
 from app.modules.agent_surfaces.domain.decision_card import CardRetirement
+from app.modules.agent_surfaces.services.held_replies import deliver_held_replies
 from app.modules.agent_surfaces.services.card_retirement import (
     retire_superseded_cards,
 )
@@ -197,6 +198,15 @@ class SurfaceTurnStarter:
                 },
             )
 
+        # Their message reopened a closed reply window: what waited for that
+        # goes first, so the answer to this message follows it.
+        await deliver_held_replies(
+            adapter=adapter,
+            credentials=credentials,
+            event=context.event,
+            conversation_id=context.conversation_id,
+            uow_factory=self.uow_factory,
+        )
         ingest = await self._ingest_files(context, credentials)
         ingested: list[IngestedAttachment] = ingest.saved
         metadata = _message_metadata(context, ingest)

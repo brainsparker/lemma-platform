@@ -27,7 +27,9 @@ from app.modules.agent_surfaces.domain.adapter_port import (
     InboundReader,
     InChatSetup,
     OutboundDelivery,
+    ReplyWindowReopener,
     in_chat_setup,
+    reply_window_reopener,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 
@@ -70,6 +72,7 @@ _PORT = (
     | _port_methods(OutboundDelivery)
 )
 _IN_CHAT_SETUP = _port_methods(InChatSetup)
+_REPLY_WINDOW = _port_methods(ReplyWindowReopener)
 
 
 @pytest.mark.parametrize("platform, adapter", _registered_adapters())
@@ -81,7 +84,7 @@ def test_adapter_exposes_nothing_the_port_does_not_name(platform, adapter):
         if cls is not object
         for name in _public_methods(cls)
     }
-    undeclared = sorted(exposed - _PORT - _IN_CHAT_SETUP)
+    undeclared = sorted(exposed - _PORT - _IN_CHAT_SETUP - _REPLY_WINDOW)
     assert not undeclared, (
         f"{platform} exposes {undeclared}, which no port declares. Shared code "
         "reaches adapters through the port, so a method it does not name is "
@@ -106,6 +109,16 @@ def test_in_chat_setup_is_all_or_nothing(platform, adapter):
         f"{platform} implements {sorted(present)} of InChatSetup, not all of it"
     )
     assert (in_chat_setup(adapter) is not None) == bool(present)
+
+
+def test_only_a_platform_with_a_reply_window_can_reopen_one():
+    """WhatsApp's 24 hours; nowhere else closes a chat on the bot."""
+    reopening = sorted(
+        platform
+        for platform, adapter in _registered_adapters()
+        if reply_window_reopener(adapter) is not None
+    )
+    assert reopening == ["WHATSAPP"]
 
 
 def test_the_base_adapter_claims_no_in_chat_setup():

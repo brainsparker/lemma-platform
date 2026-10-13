@@ -24,6 +24,7 @@ from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.surface_config import (
     ContactAnswer,
     SurfaceContactPolicy,
+    SurfaceWhatsAppConfig,
 )
 from app.modules.agent_surfaces.domain.surface_representation import (
     SurfaceBehaviorConfigInput,
@@ -216,6 +217,11 @@ async def merge_surface_config(
             platform=platform,
             app_name=config_input.slack.app_name,
             ctx=ctx,
+        )
+    if "whatsapp" in config_input.model_fields_set:
+        updates["whatsapp"] = SurfaceWhatsAppConfig(
+            reengage_template=config_input.whatsapp.reengage_template,
+            language=config_input.whatsapp.language,
         )
     if "groups" in config_input.model_fields_set:
         updates["groups"] = SurfaceGroupPolicy(

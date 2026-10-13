@@ -184,6 +184,43 @@ class WhatsAppClient:
             phone_number_id=phone_number_id, payload=payload
         )
 
+    async def send_template(
+        self,
+        *,
+        phone_number_id: str,
+        to: str,
+        name: str,
+        language: str,
+        body_parameters: list[str] | None = None,
+    ) -> str | None:
+        """Send an approved message template; return the outbound message id.
+
+        The one message a business may start outside the 24-hour window. Meta
+        checks ``name`` and ``language`` against the templates approved on the
+        number's business account, and the body's parameters against the
+        template's own placeholders, so neither is checked here.
+        """
+        template: dict[str, object] = {"name": name, "language": {"code": language}}
+        if body_parameters:
+            template["components"] = [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": text} for text in body_parameters
+                    ],
+                }
+            ]
+        return await self.send_message_payload(
+            phone_number_id=phone_number_id,
+            payload={
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": to,
+                "type": "template",
+                "template": template,
+            },
+        )
+
     async def send_interactive(
         self,
         *,

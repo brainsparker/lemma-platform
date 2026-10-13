@@ -30,6 +30,15 @@ class MetadataRecord:
     value: JsonValue
 
 
+async def conversation_metadata_record(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, key: str
+) -> JsonValue | None:
+    """The record under ``key``, for its owner to validate; None when absent."""
+    return await ConversationRepository(uow).get_conversation_metadata_key(
+        conversation_id, key
+    )
+
+
 async def forget_conversation_metadata_record(
     uow: SqlAlchemyUnitOfWork,
     conversation_id: UUID,
@@ -64,6 +73,7 @@ async def due_conversation_metadata_records(
 
 __all__ = [
     "MetadataRecord",
+    "conversation_metadata_record",
     "due_conversation_metadata_records",
     "forget_conversation_metadata_record",
 ]

@@ -13,7 +13,7 @@ from __future__ import annotations
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
@@ -30,6 +30,8 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.surface_config import (
     ContactAnswer,
     SurfaceContactPolicy,
+    SurfaceWhatsAppConfig,
+    whatsapp_template_name,
 )
 
 
@@ -131,6 +133,27 @@ class SurfaceSlackConfigResponse(BaseModel):
     app_name: str | None = None
 
 
+class SurfaceWhatsAppConfigInput(BaseModel):
+    """WhatsApp settings. Mirrored across request and response."""
+
+    reengage_template: str | None = Field(
+        default=None,
+        description=(
+            "An approved message template on this number's business account. "
+            "Sent to a member whose 24-hour window has closed, holding the "
+            "message itself until they reply. Unset, such a message is refused."
+        ),
+    )
+    language: str = Field(default="en_US", description="The template's language code.")
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("reengage_template")
+    @classmethod
+    def _template_name(cls, value: str | None) -> str | None:
+        return whatsapp_template_name(value)
+
+
 class SurfaceBehaviorConfigInput(BaseModel):
     identity: SurfaceIdentityConfigInput = Field(
         default_factory=SurfaceIdentityConfigInput
@@ -152,6 +175,9 @@ class SurfaceBehaviorConfigInput(BaseModel):
         default_factory=SurfaceTelegramConfigInput
     )
     slack: SurfaceSlackConfigInput = Field(default_factory=SurfaceSlackConfigInput)
+    whatsapp: SurfaceWhatsAppConfigInput = Field(
+        default_factory=SurfaceWhatsAppConfigInput
+    )
     groups: SurfaceGroupsConfig = Field(default_factory=SurfaceGroupsConfig)
     contacts: SurfaceContactsConfig = Field(default_factory=SurfaceContactsConfig)
 
@@ -184,6 +210,9 @@ class SurfaceConfigResponse(BaseModel):
     slack: SurfaceSlackConfigResponse = Field(
         default_factory=SurfaceSlackConfigResponse
     )
+    whatsapp: SurfaceWhatsAppConfigInput = Field(
+        default_factory=SurfaceWhatsAppConfigInput
+    )
     groups: SurfaceGroupsConfig = Field(default_factory=SurfaceGroupsConfig)
     contacts: SurfaceContactsConfig = Field(default_factory=SurfaceContactsConfig)
 
@@ -207,6 +236,10 @@ def surface_config_from_input(
         send_policy=SurfaceSendPolicy(allow_send=config_input.send_policy.allow_send),
         telegram=SurfaceTelegramConfig(app_name=config_input.telegram.app_name),
         slack=SurfaceSlackConfig(app_name=config_input.slack.app_name),
+        whatsapp=SurfaceWhatsAppConfig(
+            reengage_template=config_input.whatsapp.reengage_template,
+            language=config_input.whatsapp.language,
+        ),
         groups=SurfaceGroupPolicy(
             answers_outsiders=config_input.groups.answers_outsiders
         ),

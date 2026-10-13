@@ -53,6 +53,7 @@ from app.modules.agent_surfaces.services.dm_link_adoption import (
 )
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.services.contact_keepers import owned_or_moved
+from app.modules.agent_surfaces.services.held_replies import has_held_replies
 
 logger = get_logger(__name__)
 
@@ -387,6 +388,16 @@ class ConversationBinder:
             current_conversation_agent_id=current_conversation_agent_id,
         ):
             return True
+        # Messages held behind a closed reply window hold it too: the person
+        # is writing back because they were asked to, and what waits for them
+        # is delivered only on the conversation it was held on.
+        if await has_held_replies(self.uow, link.conversation_id):
+            logger.info(
+                "agent_surfaces.conversation_binder.reset_held_for_held_replies.observed",
+                surface_id=str(surface.id),
+                conversation_id=str(link.conversation_id),
+            )
+            return False
         # A run paused on the person holds the thread the same way, and for the
         # same reason: the card they were shown answers only that conversation.
         # Cutting to a new one left its buttons doing nothing and sent a typed

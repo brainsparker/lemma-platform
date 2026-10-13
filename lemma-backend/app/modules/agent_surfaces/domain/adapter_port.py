@@ -46,6 +46,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, SurfaceEnvelope
 from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.surface_config import ReengageTemplate
 from app.modules.agent_surfaces.domain.models import (
     ColdEmailSendResult,
     ProgressHandle,
@@ -366,6 +367,26 @@ class InChatSetup(Protocol):
         ...
 
 
+class ReplyWindowReopener(Protocol):
+    """Asking somebody to write again once the platform's reply window has
+    closed. Optional; WhatsApp only, where an approved template is the one
+    message a business may start after 24 hours of silence.
+
+    Checked with `reply_window_reopener`, like `InChatSetup`.
+    """
+
+    async def reopen_reply_window(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        template: ReengageTemplate,
+    ) -> None:
+        """Send ``template`` to the person ``event`` is from. Raises when it
+        could not go: the caller holds a message on the strength of it."""
+        ...
+
+
 class SurfacePlatformAdapterPort(
     InboundParser, InboundReader, OutboundDelivery, Protocol
 ):
@@ -393,11 +414,22 @@ def in_chat_setup(adapter: object) -> InChatSetup | None:
     return adapter if _has_in_chat_setup(adapter) else None
 
 
+def _reopens_reply_window(adapter: object) -> TypeIs[ReplyWindowReopener]:
+    return callable(getattr(adapter, "reopen_reply_window", None))
+
+
+def reply_window_reopener(adapter: object) -> ReplyWindowReopener | None:
+    """The adapter's way to reopen a closed window, or None where it has none."""
+    return adapter if _reopens_reply_window(adapter) else None
+
+
 __all__ = [
     "InChatSetup",
     "InboundParser",
     "InboundReader",
     "OutboundDelivery",
+    "ReplyWindowReopener",
     "SurfacePlatformAdapterPort",
     "in_chat_setup",
+    "reply_window_reopener",
 ]

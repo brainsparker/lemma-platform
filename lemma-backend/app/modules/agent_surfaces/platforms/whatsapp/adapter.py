@@ -30,6 +30,10 @@ from app.modules.agent_surfaces.platforms.whatsapp.client import WhatsAppClient
 from app.modules.agent_surfaces.platforms.whatsapp.decision_cards import (
     retire_whatsapp_card,
 )
+from app.modules.agent_surfaces.platforms.whatsapp.reengage import (
+    send_reengage_template,
+)
+from app.modules.agent_surfaces.domain.surface_config import ReengageTemplate
 from app.modules.agent_surfaces.platforms.whatsapp.group_updates import (
     whatsapp_group_updates,
 )
@@ -115,6 +119,15 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         return await WhatsAppPlatformService(credentials)._render_decision(
             event, approval_plan, metadata
         )
+
+    async def reopen_reply_window(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        template: ReengageTemplate,
+    ) -> None:
+        await send_reengage_template(credentials, event, template)
 
     async def retire_decision_card(
         self,

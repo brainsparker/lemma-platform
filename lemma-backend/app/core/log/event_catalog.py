@@ -994,6 +994,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.poller.stopped': EventSpec('info', frozenset({'service'})),
     'schedule.poller.tick_failed.degraded': EventSpec('warning', frozenset()),
     'schedule.repository.config_match_saturated.degraded': EventSpec('warning', frozenset({'limit', 'schedule_type'})),
+    'schedule.run_cap.fire_skipped': EventSpec('info', frozenset({'max_concurrent_runs', 'schedule_id'})),
+    'schedule.run_cap.invalid_config.degraded': EventSpec('warning', frozenset({'schedule_id'})),
     'schedule.runs.pruned': EventSpec('info', frozenset({'deleted_count'})),
     'schedule.runs.recovered': EventSpec('warning', frozenset({'dead_lettered', 'reconciled', 'redelivered', 'still_running'})),
     'schedule.schedule_consumer.filter_skipped.diagnostic': EventSpec('debug', frozenset({'found', 'judged', 'schedule_id'})),

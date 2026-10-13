@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 
+from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.schedule.config import BREAKER_STREAK_SCAN_LIMIT
 from app.modules.schedule.domain.schedule import (
@@ -139,6 +141,53 @@ class ScheduleRunRepository:
             .limit(1)
         )
         return found is not None
+
+    async def lock_admission(self, schedule_id: UUID) -> None:
+        """Serialize admission to one schedule until this transaction ends.
+
+        Counting runs in flight and then claiming one is a race between two
+        fires of the same schedule: both count below the cap and both claim.
+        The transaction-scoped advisory lock closes it -- the second fire's
+        count waits until the first's claim is committed -- and, unlike a lock
+        on the schedule row, it does not hold up the outcome and breaker
+        writes that lock that row.
+        """
+        digest = hashlib.blake2b(
+            schedule_id.bytes, digest_size=8, person=b"lemma-sched-cap"
+        ).digest()
+        await self.session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": int.from_bytes(digest, "big", signed=True)},
+        )
+        mark_transaction_scoped_lock(self.session)
+
+    async def count_in_flight(
+        self, schedule_id: UUID, *, excluding_source_event_id: str, limit: int
+    ) -> int:
+        """Runs started and not yet finished, counted up to ``limit``.
+
+        In flight is claimed (PROCESSING) or handed to its target (DISPATCHED)
+        with no outcome back yet. The caller only compares against ``limit``,
+        so counting further would read more history for nothing.
+        """
+        in_flight = (
+            select(ScheduleRun.id)
+            .where(
+                ScheduleRun.schedule_id == schedule_id,
+                ScheduleRun.target_outcome.is_(None),
+                ScheduleRun.status.in_(
+                    (
+                        ScheduleRunStatus.PROCESSING.value,
+                        ScheduleRunStatus.DISPATCHED.value,
+                    )
+                ),
+                ScheduleRun.source_event_id != excluding_source_event_id,
+            )
+            .limit(limit)
+            .subquery()
+        )
+        counted = await self.session.scalar(select(func.count()).select_from(in_flight))
+        return int(counted or 0)
 
     async def insert_filtered(
         self,

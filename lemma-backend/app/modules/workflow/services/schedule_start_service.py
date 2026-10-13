@@ -17,6 +17,7 @@ from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.core.log.log import get_logger
 from app.modules.schedule.contracts.dispatch import (
+    admit_schedule_fire,
     claim_schedule_run,
     mark_run_dispatched,
     mark_run_failed,
@@ -250,6 +251,14 @@ class ScheduleStartService:
         ):
             return
         run_user_id = _schedule_run_user_id(schedule, user_id)
+        if not await admit_schedule_fire(
+            self._uow,
+            schedule,
+            source_event_id=schedule_event_id,
+            user_id=run_user_id,
+            metadata=metadata,
+        ):
+            return
 
         schedule_run = await claim_schedule_run(
             self._uow,

@@ -197,9 +197,9 @@ class TestPdfPagesRespectTheMode:
         _pdf_services(monkeypatch)
         monkeypatch.delenv("VISION_MODEL", raising=False)
         monkeypatch.setattr(agent_settings, "vision_model", None)
-        # A deployment with its own model and no VISION_MODEL: the message
-        # names the setting. Without a system model the workspace is asked
-        # instead (test_workspace_model_fallback.py).
+        # A deployment with its own model and no VISION_MODEL: the message says
+        # no image model is set up (the log names the setting). Without a system
+        # model the workspace is asked instead (test_workspace_model_fallback.py).
         monkeypatch.setattr(
             "app.modules.agent.services.runtime_system_profiles."
             "system_profile_configured",
@@ -213,7 +213,8 @@ class TestPdfPagesRespectTheMode:
 
         assert not isinstance(result, ToolReturn)
         assert result["success"] is False
-        assert "VISION_MODEL" in result["error"]
+        assert "reads images" in result["error"]
+        assert "VISION_MODEL" not in result["error"]
         assert "pod_read_file" in result["error"]
 
 

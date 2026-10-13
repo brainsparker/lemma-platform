@@ -28,6 +28,7 @@ from app.modules.agent.infrastructure.harnesses.sender_labels import (
     sender_label,
 )
 
+
 def _message_text(msg: object) -> str:
     return getattr(msg, "text", None) or ""
 

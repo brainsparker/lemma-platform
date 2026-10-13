@@ -36,7 +36,8 @@ import { GroupPage } from "@/space/group-page";
 import { Home } from "@/space/home";
 import { ChatsPage } from "@/space/chats-page";
 import { RunPage } from "@/space/run-page";
-import { AboutPage, isAboutSection, type AboutSection } from "@/space/about-page";
+import { AboutPage, aboutLabel, isAboutSection, type AboutSection } from "@/space/about-page";
+import { settingsSectionOf } from "@/space/about-sections";
 import { TeammateRail } from "@/space/teammate-rail";
 import { TeammatesPage } from "@/space/teammates-page";
 import { owedFrom } from "@/space/teammates";
@@ -240,7 +241,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        recorded the API sends it to the app root, and the panel that reads it
        is the one that has to be open. */
     const [settings, setSettings] = useState<SettingsSection | null>(() =>
-        settingsFromQuery(incoming.get("settings")) ?? (incoming.get("connect") ? "connectors" : null));
+        settingsFromQuery(incoming.get("settings")) ?? (incoming.get("connect") ? "connectors" : null)
+        /* About carried the organization's models and usage for a while; an
+           old `?section=` naming one opens it where it lives. */
+        ?? settingsSectionOf(incoming.get("section")));
     /* The desktop menu and tray open Settings at a section by raising
        `lemma:open-settings` in this page. Keyed by request, so asking for a
        different section while Settings is already open moves it there. */
@@ -321,11 +325,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        one other door into that sheet is mounted beside the people dialog,
        which is here for the same reason. */
     const [reaching, setReaching] = useState(() => incoming.get('reach') === '1');
-    /** Which part of About a link asked for. Counted, so asking for the same
-     *  section twice scrolls to it twice. An old `?section=` still lands. */
-    const [aboutSection, setAboutSection] = useState<{ at: AboutSection | null; id: number }>(() => {
+    /** Which part of About is open, or null for its overview. Each part has
+     *  an address of its own (`/about/people`); an old `?section=` still lands. */
+    const [aboutSection, setAboutSection] = useState<AboutSection | null>(() => {
         const asked = incoming.get("section");
-        return { at: isAboutSection(asked) ? asked : null, id: 0 };
+        return isAboutSection(asked) ? asked : null;
     });
 
     // Only the explicitly labelled, isolated product-tour document accepts this prop.
@@ -337,7 +341,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         if (!preview || demoStep === undefined) return;
         setPreviewTeam(false);
         setPreviewPod("kit");
-        setAboutSection((was) => ({ at: previewAboutForStep(demoStep), id: was.id + 1 }));
+        setAboutSection(previewAboutForStep(demoStep));
         setSelection(previous => previous.id === null ? previous : { id: null, generation: previous.generation + 1 });
         setSettings(null);
         setSearching(false);
@@ -725,10 +729,18 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
 
     const openAbout = useCallback((at: AboutSection | null) => {
         if (!pod) return;
-        setAboutSection((was) => ({ at, id: was.id + 1 }));
+        setAboutSection(at);
         setExpandedTab(null);
         setPeekedTab(null);
         setTabs((previous) => ({ ...previous, [pod.id]: "space:about" }));
+    }, [pod]);
+    /* A part of About is one teammate's: moving to another opens its overview.
+       Not on the first teammate to arrive, whose part a link may have named. */
+    const aboutOf = useRef<string | null>(null);
+    useEffect(() => {
+        if (!pod) return;
+        if (aboutOf.current && aboutOf.current !== pod.id) setAboutSection(null);
+        aboutOf.current = pod.id;
     }, [pod]);
 
     /* Agents are a section of the teammate's profile rather than a view of
@@ -903,6 +915,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        after the tab, and the mirror would otherwise write the chat being left
        over the one asked for — as a new history entry. */
     const pendingConversation = useRef<string | null>(null);
+    /* And for a part of About: Back from one sets the section a render after
+       the address, and the mirror would write the part being left back over
+       the overview asked for. Undefined when nothing is pending. */
+    const pendingSection = useRef<AboutSection | null | undefined>(undefined);
     /* Pages renamed in this session, old tab id to new, so an address still in
        the browser's history (Back to the page under its old name) lands on
        the page instead of on a file that is not there any more. */
@@ -941,6 +957,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
 
         setTabs((previous) => (previous[pod.id] === wanted ? previous : { ...previous, [pod.id]: wanted }));
         if (address.agentName) setOpenAgentName(address.agentName);
+        /* Back from a part of About lands on its overview, which names none. */
+        if (wanted === "space:about") {
+            pendingSection.current = address.section ?? null;
+            setAboutSection(address.section ?? null);
+        }
         if (address.conversationId && address.conversationId !== selection.id) {
             pendingConversation.current = address.conversationId;
             setConversationId(address.conversationId);
@@ -979,6 +1000,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             if (activeTab.kind === "conversation" && pendingConversation.current !== conversationId) return;
             pendingConversation.current = null;
         }
+        if (pendingSection.current !== undefined) {
+            if (activeTab.id === "space:about" && pendingSection.current !== aboutSection) return;
+            pendingSection.current = undefined;
+        }
 
         const url = writeAddress({
             podId: pod.id,
@@ -988,13 +1013,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             conversationId:
                 activeTab.kind === "conversation" && conversationId !== NEW_CONVERSATION ? conversationId : null,
             agentName: activeTab.kind === "profile" ? openAgentName : null,
+            ...(activeTab.id === "space:about" && aboutSection ? { section: aboutSection } : {}),
         });
         if (url === pathname) return;
         applied.current = url;
         if (replaceNext.current) { replaceNext.current = false; window.history.replaceState(null, "", url); }
         else if (isNewPlace(readAddress(pathname), readAddress(url))) window.history.pushState(null, "", url);
         else window.history.replaceState(null, "", url);
-    }, [pod, activeTab, conversationId, openAgentName, pathname, preview]);
+    }, [pod, activeTab, conversationId, openAgentName, aboutSection, pathname, preview]);
 
     useEffect(() => {
         try {
@@ -1400,12 +1426,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     aria-label={"About " + pod.name} onClick={() => { openAbout(null); setMobileOpen(false); }}>
                                     <span className="side__mate-name">{pod.name}</span>
                                 </button>
-                                {/* What this space can be reached from, and what
-                                    it may spend: sections of that page, and the
-                                    one door to them. At the top beside the name,
-                                    because at the foot nobody found it. */}
+                                {/* How this teammate is set up: About's overview,
+                                    a tile for each part of it. At the top beside
+                                    the name, because at the foot nobody found it. */}
                                 <button className="icon-button side__gear" title="Settings" aria-label={"Settings for " + pod.name}
-                                    onClick={() => { openAbout("ai-tools"); setMobileOpen(false); }}>
+                                    onClick={() => { openAbout(null); setMobileOpen(false); }}>
                                     <SettingsIcon size={18} />
                                 </button>
                                 {/* On a phone the toolbar is already full; the
@@ -1737,7 +1762,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     <button type="button" className="crumb__from" onClick={() => pickTab(cameFrom.id)}>{cameFrom.label}</button>
                                     <span className="crumb__sep crumb__sep--from">/</span>
                                 </>}
-                                <span className="crumb__here">{activeTab?.kind === "conversation" ? "Chat" : activeTab?.label ?? "Pages"}</span>
+                                {/* A part of About sits one step under it. */}
+                                {activeTab?.id === "space:about" && aboutSection ? <>
+                                    <button type="button" className="crumb__from" onClick={() => openAbout(null)}>{activeTab.label}</button>
+                                    <span className="crumb__sep crumb__sep--from">/</span>
+                                    <span className="crumb__here">{aboutLabel(aboutSection)}</span>
+                                </> : (
+                                    <span className="crumb__here">{activeTab?.kind === "conversation" ? "Chat" : activeTab?.label ?? "Pages"}</span>
+                                )}
                             </>}
                         </div>
                             {activeTab?.kind !== "space" && <ViewActions key={activeTab?.id} tab={activeTab} podId={pod.id}
@@ -1879,8 +1911,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             pod={pod}
                                             orgId={activeOrgId}
                                             orgName={activeOrg?.name ?? "this organization"}
-                                            section={aboutSection.at}
-                                            request={aboutSection.id}
+                                            section={aboutSection}
+                                            onSection={openAbout}
+                                            onOpenSettings={(section) => { setSettingsFocus(null); setSettings(section); setSettingsRequest((count) => count + 1); }}
                                             onAsk={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
                                             onOpenAgent={openAgent}
                                             onOpenTeammate={(id) => goToPod(id)}

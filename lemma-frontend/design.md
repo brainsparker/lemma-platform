@@ -103,9 +103,22 @@ you talk to, the space is what you share. The app has two altitudes.
   its face, its job (the pod's `description`), one line of news (what is
   waiting on you, or its latest conversation) and the people in its space.
   Those that need you come first; there are never more than two groups.
-- About is long, so a row of jumps (People, Channels, Taught, Remembers,
-  Standing work, Hands work to, Runs on) stays at the top while it scrolls
-  and marks the section in view.
+- About opens on an overview that fits one screen: the face, name and job,
+  then ten tiles in two columns (Default model, Skills / Memory, Agents /
+  Connectors, Standing work / Channels, MCP / People, Teammates), named with
+  plain nouns — "Agents", not "Hands work to". Each tile carries one live
+  line of what is true there and a dot when it waits on a person. A tile
+  opens its part as a page of its own, `/t/{pod}/about/{part}`, so Back
+  steps out and a link can name it.
+- A part's page uses the room it has. Nothing on it is a compact widget
+  carried over from a long page: the default model is the full list of the
+  organization's models, one row each, with a link to Settings → Models;
+  skills wrap in a grid rather than travelling in a carousel; channels are
+  the whole channel manager, not a strip of chips with a sheet behind it.
+  Connectors is a part of About although the accounts are the
+  organization's — what a teammate can reach is the first thing people look
+  for on its page. The organization's models and usage stay in Settings,
+  linked under the tiles.
 - Zoomed in, `/t/{pod}/…`: one teammate's space. Its face and job head the
   sidebar and open About (`/t/{pod}/about`), which holds everything about how
   it works — people, channels, skills, standing work, the agents it hands work
@@ -129,8 +142,8 @@ March by Priya", on About, from the pod's `created_at` and `user_id`),
 reliability (run history on standing work, never called learning), and
 learning (what it wrote down).
 
-- About has "What Kit remembers" beside "What Kit has been taught". Taught is
-  skills, which people write; remembers is memory, which the teammate writes
+- About has Memory beside Skills. Skills are what people write; memory is
+  what the teammate writes
   under `/memory`, `/memory/agents/pod-default` and, privately,
   `/me/agents/pod-default`. One line a note, indexes (`AGENTS.md`) left out,
   a filled dot for a note changed this week. Shared and Personal are two
@@ -285,7 +298,7 @@ somebody standing in it (`src/tour/guides.ts`, drawn by `PlaceGuide`).
   by being one, made from its template the first time; other guides put a
   whole-sentence ask in the chat box, unsent.
 - A place that already explains each of its parts gets no card: About has a
-  note under every section.
+  line on every tile and a note atop every part.
 
 ## Desktop
 

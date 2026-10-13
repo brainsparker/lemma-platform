@@ -17,6 +17,7 @@ from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.organization_default import (
     ORGANIZATION_DEFAULT_KEY,
     can_be_organization_default,
@@ -123,11 +124,13 @@ class TestWhoCanBeTheDefault:
     )
     def test_nothing_else_can(self, profile: AgentRuntimeProfile) -> None:
         assert not can_be_organization_default(profile)
-        with pytest.raises(ValueError, match="organization-wide model provider"):
+        with pytest.raises(
+            RuntimeProfileValidationError, match="organization-wide model provider"
+        ):
             with_default_mark(profile, model_name=None)
 
     def test_a_model_the_provider_does_not_list_is_refused(self) -> None:
-        with pytest.raises(ValueError, match="does not offer"):
+        with pytest.raises(RuntimeProfileValidationError, match="does not offer"):
             with_default_mark(_provider("Alpha", "a-1"), model_name="a-9")
 
 
@@ -342,7 +345,9 @@ class TestTestingASavedProvider:
         assert result.message == "LM Studio isn't running on this computer."
 
     async def test_a_coding_agent_is_not_tested_here(self) -> None:
-        with pytest.raises(ValueError, match="Only a model provider"):
+        with pytest.raises(
+            RuntimeProfileValidationError, match="Only a model provider"
+        ):
             await check_saved_provider_connection(
                 ResolvedAgentRuntime(
                     profile=_harness(),

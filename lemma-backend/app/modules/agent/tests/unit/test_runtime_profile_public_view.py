@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     OpenAICompatibleRuntimeConfig,
@@ -141,7 +142,7 @@ def test_an_edit_carrying_the_old_mask_is_refused(
         field: value,
     }
 
-    with pytest.raises(ValueError, match="<redacted>"):
+    with pytest.raises(RuntimeProfileValidationError, match="<redacted>"):
         resolve_provider_patch(
             profile,
             profile.config,

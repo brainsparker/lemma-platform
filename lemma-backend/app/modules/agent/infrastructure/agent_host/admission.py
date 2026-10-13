@@ -28,6 +28,7 @@ from app.modules.agent.domain.agent_host_readiness import (
     harness_refusal,
     host_refusal,
 )
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_selections,
 )
@@ -197,5 +198,5 @@ async def _require_admissible_harness(
             config_options=harness.config_options or [],
             selections=run_spec.config_selections,
         )
-    except ValueError as exc:
+    except RuntimeProfileValidationError as exc:
         raise AgentHostRunConflict(str(exc)) from exc

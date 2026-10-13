@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.core.exposure import exposure_settings
 
 from app.modules.agent.services import runtime_provider_discovery as discovery
@@ -55,7 +56,7 @@ async def test_a_local_model_server_is_allowed_on_an_unshared_install(local_inst
     ],
 )
 async def test_lemmas_own_ports_are_never_a_provider(local_install, url):
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeProfileValidationError):
         await discovery._validate_public_base_url(url)
 
 
@@ -63,12 +64,12 @@ async def test_loopback_is_refused_while_the_install_is_shared(
     local_install, monkeypatch
 ):
     monkeypatch.setattr(exposure_settings, "installation_shared", True)
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeProfileValidationError):
         await discovery._validate_public_base_url("http://127.0.0.1:11434/v1/models")
 
 
 async def test_private_addresses_stay_refused_in_local_mode(local_install):
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeProfileValidationError):
         await discovery._validate_public_base_url("http://192.168.1.5:11434/v1")
 
 
@@ -84,17 +85,17 @@ async def test_an_unresolvable_host_passes_under_test(monkeypatch):
 
 
 async def test_an_unresolvable_host_is_a_typo_on_a_local_install(local_install):
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeProfileValidationError):
         await discovery._validate_public_base_url(_UNRESOLVABLE)
 
 
 async def test_an_unresolvable_host_is_refused_in_production(monkeypatch):
     monkeypatch.setattr(discovery.settings, "environment", "production")
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeProfileValidationError):
         await discovery._validate_public_base_url(_UNRESOLVABLE)
 
 
 async def test_a_private_address_is_refused_even_under_test(monkeypatch):
     monkeypatch.setattr(discovery.settings, "environment", "testing")
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeProfileValidationError):
         await discovery._validate_public_base_url("http://10.0.0.5/v1/models")

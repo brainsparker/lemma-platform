@@ -2,6 +2,7 @@ import pytest
 from uuid import UUID, uuid4
 from types import SimpleNamespace
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.config import agent_settings
 from app.modules.agent.defaults import default_agent_runtime_profile_id
@@ -869,7 +870,7 @@ async def test_create_agent_host_profile_rejects_unknown_harness():
         host_repository=_HostRepository({}, {}),
     )
 
-    with pytest.raises(ValueError, match="not available"):
+    with pytest.raises(RuntimeProfileValidationError, match="not available"):
         await service.create_agent_host_profile(
             organization_id=uuid4(),
             user_id=user_id,
@@ -891,7 +892,7 @@ async def test_create_agent_host_profile_rejects_offline_host():
         _ProfileRepository([]), host_repository=host_repo
     )
 
-    with pytest.raises(ValueError, match="offline"):
+    with pytest.raises(RuntimeProfileValidationError, match="offline"):
         await service.create_agent_host_profile(
             organization_id=org_id,
             user_id=user_id,
@@ -910,7 +911,7 @@ async def test_create_agent_host_profile_rejects_unhealthy_harness():
         _ProfileRepository([]), host_repository=host_repo
     )
 
-    with pytest.raises(ValueError, match="not ready"):
+    with pytest.raises(RuntimeProfileValidationError, match="not ready"):
         await service.create_agent_host_profile(
             organization_id=org_id,
             user_id=user_id,
@@ -939,7 +940,9 @@ async def test_create_agent_host_profile_rejects_model_the_harness_does_not_offe
         _ProfileRepository([]), host_repository=host_repo
     )
 
-    with pytest.raises(ValueError, match="not offered by this harness"):
+    with pytest.raises(
+        RuntimeProfileValidationError, match="not offered by this harness"
+    ):
         await service.create_agent_host_profile(
             organization_id=org_id,
             user_id=user_id,
@@ -957,7 +960,9 @@ async def test_create_agent_host_profile_rejects_a_harness_owned_by_someone_else
         _ProfileRepository([]), host_repository=host_repo
     )
 
-    with pytest.raises(ValueError, match="not owned by the current user"):
+    with pytest.raises(
+        RuntimeProfileValidationError, match="not owned by the current user"
+    ):
         await service.create_agent_host_profile(
             organization_id=org_id,
             user_id=uuid4(),
@@ -1070,7 +1075,7 @@ async def test_create_provider_profile_requires_discovery_or_model_names(monkeyp
     )
     service = AgentRuntimeProfileService(_ProfileRepository([]))
 
-    with pytest.raises(ValueError, match="type a model name below"):
+    with pytest.raises(RuntimeProfileValidationError, match="type a model name below"):
         await service.create_openai_compatible_profile(
             organization_id=uuid4(),
             name="Unknown provider",
@@ -1091,7 +1096,7 @@ async def test_create_openai_compatible_profile_rejects_ssrf_base_url(base_url):
     """A caller-supplied base_url that targets a private/link-local/non-http(s)
     address must be rejected before any server-side request is issued."""
     service = AgentRuntimeProfileService(_ProfileRepository([]))
-    with pytest.raises(ValueError, match="public http"):
+    with pytest.raises(RuntimeProfileValidationError, match="public http"):
         await service.create_openai_compatible_profile(
             organization_id=uuid4(),
             name="evil",
@@ -1530,7 +1535,7 @@ async def test_a_harness_config_edit_rejects_an_unknown_selection():
         organization_id=organization_id, user_id=user_id, config_options=[]
     )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeProfileValidationError):
         await AgentRuntimeProfileEditor(service).update_agent_host_profile(
             profile_id=profile.id,
             organization_id=organization_id,
@@ -1817,7 +1822,7 @@ async def test_a_config_edit_still_needs_the_computer_awake():
     host.status = "OFFLINE"
     host.last_seen_at = None
 
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeProfileValidationError):
         await AgentRuntimeProfileEditor(service).update_agent_host_profile(
             profile_id=profile.id,
             organization_id=organization_id,

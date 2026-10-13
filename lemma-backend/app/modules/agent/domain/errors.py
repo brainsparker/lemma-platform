@@ -56,14 +56,14 @@ class OrganizationDefaultConflictError(AgentModuleError):
         super().__init__(message, code="ORGANIZATION_DEFAULT_CONFLICT", status_code=409)
 
 
-class RuntimeProfileValidationError(AgentModuleError, ValueError):
+class RuntimeProfileValidationError(AgentModuleError):
     """A runtime profile create or edit the caller can correct.
 
-    Also a ``ValueError``, because the domain helpers that raise it (selection
-    and catalog checks) are shared with callers that are not an HTTP request
-    and already handle the bad value that way. The message is always written
-    for the person: a validator's text is passed through ``invalid_profile``,
-    never a raw pydantic error, which quotes the input it refused.
+    The message is always written for the person: a validator's text is
+    passed through ``invalid_profile``, never a raw pydantic error, which
+    quotes the input it refused. Callers that are not a request -- Agent Host
+    admission, a run carrying selections across a harness republish -- catch
+    this type by name.
     """
 
     def __init__(self, message: str, *, code: str = "RUNTIME_PROFILE_INVALID"):

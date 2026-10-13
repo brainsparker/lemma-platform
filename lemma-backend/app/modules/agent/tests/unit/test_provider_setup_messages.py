@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import httpx
 import pytest
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.infrastructure.transport_errors import (
     local_model_server_down_message,
 )
@@ -89,7 +90,7 @@ class TestDiscovery:
         assert discovery._anthropic_models_url(base_url) == expected
 
     def test_an_unreadable_list_names_the_provider_and_the_way_out(self) -> None:
-        with pytest.raises(ValueError) as caught:
+        with pytest.raises(RuntimeProfileValidationError) as caught:
             discovery._provider_model_catalog(
                 discovered_models=[],
                 fallback_model_names=[],
@@ -170,7 +171,7 @@ class TestSharedInstallation:
         monkeypatch.setattr(settings, "environment", "local")
         monkeypatch.setattr(exposure_settings, "installation_shared", True)
 
-        with pytest.raises(ValueError) as caught:
+        with pytest.raises(RuntimeProfileValidationError) as caught:
             asyncio.run(
                 discovery._validate_public_base_url("http://127.0.0.1:11434/v1")
             )

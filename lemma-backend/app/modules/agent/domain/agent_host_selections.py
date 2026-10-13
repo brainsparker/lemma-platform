@@ -150,7 +150,7 @@ def carry_agent_host_model(
         return validate_agent_host_model(
             config_options=config_options, model_name=model_name
         )
-    except ValueError:
+    except RuntimeProfileValidationError:
         return None
 
 

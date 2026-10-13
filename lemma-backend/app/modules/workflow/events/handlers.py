@@ -1,4 +1,11 @@
-"""Background job handlers and FastStream event consumers for Workflow module."""
+"""The workflow module's remaining stream consumers, streaq tasks and crons.
+
+Function-step resumes, timers, decisions, expiries and admission are work items
+now (``run_work.py``, ``step_jobs.py``). What is left here moves in the next
+step of the cutover: AGENT-step resumes ride ``workflow-agent-events`` until the
+agent's finalize emits facts, and schedule fires ride ``workflow-schedule-events``
+until schedules write ``workflow.start``.
+"""
 
 from datetime import datetime
 
@@ -32,11 +39,6 @@ from app.modules.agent.domain.events import (
     AGENT_EVENTS_STREAM,
     AgentRunCompletedEvent,
 )
-from app.modules.function.domain.events import (
-    FUNCTION_RUN_EVENTS_STREAM,
-    FunctionRunCompletedEvent,
-    FunctionRunFailedEvent,
-)
 from app.modules.schedule.domain.events.schedule import ScheduleFired
 from app.modules.workflow.api.dependencies import build_workflow_engine
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
@@ -60,47 +62,6 @@ def provide_job_queue() -> SharedStreaqJobQueue:
 
 def provide_uow_factory() -> UnitOfWorkFactory:
     return SessionUnitOfWorkFactory(async_session_maker)
-
-
-@reliable_redis_stream_subscriber(
-    router,
-    FUNCTION_RUN_EVENTS_STREAM,
-    group="workflow-function-events",
-    consumer="workflow-function-events-consumer",
-)
-async def handle_function_run_event(
-    event: dict,
-    fs_logger: Logger,
-    job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
-):
-    """Handle function run events for workflow resumption."""
-    event_type = event.get("event_type")
-
-    if event_type not in {
-        FunctionRunCompletedEvent.get_event_type(),
-        FunctionRunFailedEvent.get_event_type(),
-    }:
-        return
-
-    async def process() -> None:
-        if event_type == FunctionRunCompletedEvent.get_event_type():
-            parsed = FunctionRunCompletedEvent.model_validate(event)
-            status = "COMPLETED"
-            output = parsed.output_data
-        else:
-            parsed = FunctionRunFailedEvent.model_validate(event)
-            status = "FAILED"
-            output = {"error": parsed.error}
-        await job_queue.enqueue(
-            "resume_workflow_run_for_function",
-            function_run_id=str(parsed.run_id),
-            run_status=status,
-            output=output,
-            _job_id=f"workflow-resume-function:{parsed.run_id}:{status}",
-        )
-
-    await inbox.process("workflow.function-resume", event, process)
 
 
 @reliable_redis_stream_subscriber(
@@ -145,28 +106,6 @@ async def handle_agent_run_event(
     await inbox.process("workflow.agent-resume", event, process)
 
 
-@streaq_task(name="resume_workflow_run_for_function")
-async def resume_workflow_run_for_function(
-    function_run_id: str,
-    run_status: str,
-    output: dict | None = None,
-):
-    """Resume a workflow waiting for a function run."""
-    worker_ctx: AppWorkerContext = streaq_worker.context
-    logger.debug(
-        "workflow.handlers.job_resuming_workflow_run_waiting.observed",
-        function_run_id=function_run_id,
-    )
-
-    async with worker_ctx.uow() as uow:
-        service = RunResumeService(build_workflow_engine(uow))
-        await service.resume_for_function_run(
-            function_run_id=function_run_id,
-            run_status=run_status,
-            output=output,
-        )
-
-
 @streaq_task(name="resume_workflow_run_for_agent")
 async def resume_workflow_run_for_agent(
     agent_conversation_id: str,
@@ -190,7 +129,11 @@ async def resume_workflow_run_for_agent(
 
 @streaq_cron("1-59/5 * * * *", name="reconcile_workflow_waits")
 async def reconcile_workflow_waits():
-    """Self-heal runs whose agent/function completion events were lost."""
+    """Self-heal AGENT waits whose completion event was lost, and expire hung ones.
+
+    Agent waits only: every other wait is woken or expired by the work items
+    written with it. This goes when agent finalize emits ``AgentRunFinished``.
+    """
     worker_ctx: AppWorkerContext = streaq_worker.context
     async with worker_ctx.uow() as uow:
         service = RunResumeService(build_workflow_engine(uow))

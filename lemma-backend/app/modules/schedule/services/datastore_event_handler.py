@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import List
 from uuid import UUID
 
 from app.modules.datastore.domain.events import DatastoreRecordEvent, RecordOrigin
-from app.modules.schedule.domain.interfaces import ScheduleFilterTaskQueue
 from app.modules.schedule.domain.match_conditions import evaluate_match_conditions
-from app.modules.schedule.domain.schedule import ScheduleFireStatus, ScheduleType
 from app.modules.schedule.domain.value_objects import (
     DatastoreOperation,
     parse_datastore_operation,
 )
-from app.modules.schedule.infrastructure.adapters.filter_task_queue import (
-    StreaqScheduleFilterTaskQueue,
-)
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
-from app.modules.schedule.services.schedule_processor import ScheduleProcessor
-from app.core.infrastructure.db.session_uow import commit_now
+from app.modules.schedule.services.trigger_fire import (
+    FireOutcome,
+    FireTrigger,
+    TriggerEvent,
+    fire_trigger,
+    jsonable,
+)
 from app.core.log.log import get_logger
 from app.core.origin import Origin, OriginKind, origin_scope
 
@@ -57,32 +56,25 @@ def _fire_metadata(
 
 
 class DatastoreEventHandler:
-    """Handler that matches datastore events to DATASTORE schedules and fires them."""
+    """Matches one record event to DATASTORE schedules and fires them.
+
+    Every matching schedule fires through ``fire_trigger`` on the repository's
+    unit of work, so the run rows and the work items they cause commit with the
+    consumer's transaction -- a schedule with a filter gets its
+    ``schedule.filter`` item there too. Nothing here waits on anything outside
+    the database, so one transaction covers the whole event.
+    """
 
     def __init__(
-        self,
-        schedule_repository: ScheduleRepository,
-        schedule_processor: ScheduleProcessor,
-        filter_task_queue: ScheduleFilterTaskQueue | None = None,
+        self, schedule_repository: ScheduleRepository, *, fire: FireTrigger = fire_trigger
     ):
         self.schedule_repository = schedule_repository
-        self.schedule_processor = schedule_processor
-        self.filter_task_queue = filter_task_queue or StreaqScheduleFilterTaskQueue()
+        self._fire = fire
 
     async def handle_datastore_event(
         self,
         event: DatastoreRecordEvent,
     ) -> List[UUID]:
-        """Handle a datastore record event and fire matching schedules.
-
-        The connection is handed back before each schedule is processed; see the
-        comment in the loop. That used to be an optional ``release`` callback the
-        consumer passed and every test omitted, so the release had no coverage
-        and the static gate could not see it either. It is taken from the
-        repository's own unit of work now, which is the same object the consumer
-        was passing.
-        """
-
         # Bridge datastore's record operation (lowercase) to schedule's
         # DatastoreOperation used for matching.
         operation = parse_datastore_operation(event.operation.value)
@@ -93,97 +85,35 @@ class DatastoreEventHandler:
             operation=operation,
         )
         if not schedules:
-            await self._log_unmatched_event(event)
             return []
 
         metadata = _fire_metadata(event, operation)
         from_outside = event.origin is RecordOrigin.OUTSIDE
-
+        uow = self.schedule_repository.uow
         fired_schedule_ids: list[UUID] = []
-        for schedule in schedules:
-            # A stranger's row starts nothing unless the schedule asked for it:
-            # it is the cheapest way in from outside to a pod's agent.
-            if (
-                from_outside and not schedule.include_outside_rows
-            ) or not self._matches_conditions(schedule, event, operation):
-                await self._record_fire(schedule.id, status=ScheduleFireStatus.FILTERED)
-                continue
-
-            # Let the connection go before anything leaves the process -- the
-            # filter task's enqueue or the fire's publish -- rather than hold
-            # one transaction open across every schedule's awaits in this loop.
-            #
-            # A commit rather than `connection_released`: a previous iteration
-            # may have written a FILTERED fire row, and `safe_to_release`
-            # correctly refuses a dirty session -- the release would be a
-            # silent no-op exactly when the loop is longest.
-            await commit_now(self.schedule_repository)
-
-            owner = event.owner_user_id or schedule.user_id
-            if schedule.filter_instruction:
-                # Judged by the same task a webhook's filter is: retried with
-                # backoff when the provider does not answer, dead-lettered when
-                # it never does, not judged twice for a redelivered event, and
-                # recorded as a FILTERED run carrying its answers when skipped.
-                # Asking inline would hold this stream for the length of a
-                # model call per schedule, with none of that. Queued under
-                # DATA_TRIGGER, which the job carries to the task, for the same
-                # reason the inline path below runs under it.
-                with origin_scope(Origin(OriginKind.DATA_TRIGGER)):
-                    await self.filter_task_queue.enqueue(
-                        schedule_id=schedule.id,
-                        payload=event.payload or {},
-                        metadata=metadata,
+        # Deliberately *overrides* the inbound event's origin: this work arrived
+        # because a table changed, whatever the write came through.
+        with origin_scope(Origin(OriginKind.DATA_TRIGGER)):
+            for schedule in schedules:
+                # A stranger's row starts nothing unless the schedule asked for
+                # it: it is the cheapest way in from outside to a pod's agent.
+                if (
+                    from_outside and not schedule.include_outside_rows
+                ) or not self._matches_conditions(schedule, event, operation):
+                    continue
+                outcome = await self._fire(
+                    uow,
+                    schedule,
+                    TriggerEvent(
                         source_event_id=str(event.event_id),
-                        user_id=owner,
-                    )
-                continue
-
-            # One bad schedule must not drop the event for the rest.
-            try:
-                # Deliberately *overrides* the inbound event's origin. The row
-                # may well have been written from the web, but that is how the
-                # write arrived -- this schedule's work arrived because a table
-                # changed, and DATA_TRIGGER is the honest answer for everything
-                # raised from here down.
-                with origin_scope(Origin(OriginKind.DATA_TRIGGER)):
-                    processed = await self.schedule_processor.process_event(
-                        schedule=schedule,
-                        payload=event.payload or {},
-                        user_id=owner,
-                        metadata=metadata,
-                        source_event_id=str(event.event_id),
-                    )
-            except Exception as exc:
-                logger.debug(
-                    "schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated",
-                    record_id=event.record_id,
-                    exc_info=True,
+                        payload=jsonable(event.payload),
+                        metadata=jsonable(metadata),
+                        user_id=event.owner_user_id,
+                        source_occurred_at=event.occurred_at,
+                    ),
                 )
-                await self._record_fire(
-                    schedule.id, status=ScheduleFireStatus.ERROR, error=str(exc)
-                )
-                raise
-
-            latency_ms = int(
-                (datetime.now(timezone.utc) - event.occurred_at).total_seconds() * 1000
-            )
-            logger.debug(
-                "schedule.fire.latency_ms",
-                schedule_id=str(schedule.id),
-                latency_ms=latency_ms,
-            )
-            await self._record_fire(
-                schedule.id,
-                status=(
-                    ScheduleFireStatus.TRIGGERED
-                    if processed.fired
-                    else ScheduleFireStatus.FILTERED
-                ),
-            )
-            if processed.fired:
-                fired_schedule_ids.append(schedule.id)
-
+                if outcome in (FireOutcome.STARTED, FireOutcome.FILTERING):
+                    fired_schedule_ids.append(schedule.id)
         return fired_schedule_ids
 
     def _matches_conditions(
@@ -234,51 +164,3 @@ class DatastoreEventHandler:
             previous=event.previous,
         )
 
-    async def _record_fire(
-        self,
-        schedule_id: UUID,
-        *,
-        status: ScheduleFireStatus,
-        error: str | None = None,
-    ) -> None:
-        try:
-            await self.schedule_repository.record_fire(
-                schedule_id, status=status, error=error
-            )
-        except Exception:
-            logger.debug(
-                "schedule.fire_telemetry.failed",
-                schedule_id=schedule_id,
-                exc_info=True,
-            )
-
-    async def _log_unmatched_event(self, event: DatastoreRecordEvent) -> None:
-        """An event with no match is the signature of a misconfigured schedule.
-
-        When active DATASTORE schedules exist for this pod but none matched,
-        escalate to warning so the drop is visible.
-        """
-        try:
-            active, _ = await self.schedule_repository.list(
-                schedule_type=ScheduleType.DATASTORE,
-                is_active=True,
-                pod_id=event.pod_id,
-            )
-        except Exception:
-            # Degraded, not failed: this lookup only decides the severity of the
-            # unmatched-event record below, so nothing user-facing breaks. But
-            # "no schedules are configured" and "the database is down" must not
-            # render as the same sentence, which is what an empty list did.
-            logger.warning(
-                "schedule.datastore_event_handler.active_schedule_lookup.degraded",
-                pod_id=str(event.pod_id),
-                exc_info=True,
-            )
-            active = []
-        if active:
-            logger.debug(
-                "schedule.datastore_event_handler.datastore_event_s_s_record.diagnostic",
-                record_id=event.record_id,
-                count=len(active),
-                pod_id=event.pod_id,
-            )

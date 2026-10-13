@@ -57,6 +57,8 @@ _ENSURE_QUEUE = text(
     """
 )
 
+_DROP_QUEUED = text("DELETE FROM work_items WHERE ns = :ns AND state = 'queued'")
+
 # Postgres folds identical notifications within one transaction into one.
 _NOTIFY = text("SELECT pg_notify(:channel, '')")
 
@@ -147,6 +149,19 @@ class WorkWriter:
         await self._ensure_queue(spec.cls, ns)
         await self._notify(spec.cls)
         return item_id
+
+    async def drop_queued(self, ns: str) -> int:
+        """Delete every queued item of ``ns`` in this transaction; returns how many.
+
+        For a namespace whose owner is going away (a deleted pod): its waiting
+        work has nothing left to act on. Running items are left alone -- they
+        finish, or lose their lease and find their subject gone -- and dead ones
+        stay for inspection until retention. Work that must outlive the
+        namespace is written under another one (the pod's ``org:``) after this.
+        """
+        validate_namespace(ns)
+        result = await self._session.execute(_DROP_QUEUED, {"ns": ns})
+        return int(result.rowcount)  # type: ignore[attr-defined]
 
     async def _ensure_queue(self, cls: WorkClass, ns: str) -> None:
         """Make sure (class, ns) has a queue row, without locking it in this transaction.

@@ -29,9 +29,6 @@ from app.core.infrastructure.db.uow_factory import (
     UnitOfWorkFactory,
 )
 from app.core.log.log import get_logger
-from app.modules.schedule.infrastructure.adapters.decision_filter import (
-    create_schedule_processor,
-)
 
 router = RedisRouter()
 logger = get_logger(__name__)
@@ -134,7 +131,6 @@ async def handle_datastore_event(
                 schedule_repository=ScheduleRepository(
                     uow=uow, message_bus=get_message_bus()
                 ),
-                schedule_processor=create_schedule_processor(),
             )
             schedule_ids = await handler.handle_datastore_event(record_event)
         if schedule_ids:

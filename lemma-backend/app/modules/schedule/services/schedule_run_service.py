@@ -7,7 +7,7 @@ from uuid import UUID
 from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.schedule.domain.events.schedule import ScheduleFired
+from app.core.infrastructure.work import WorkWriter
 from app.modules.schedule.domain.errors import (
     ScheduleNotFoundError,
     ScheduleRunNotRetryableError,
@@ -24,6 +24,7 @@ from app.modules.schedule.domain.schedule import (
 from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
 )
+from app.modules.schedule.services.trigger_fire import enqueue_start
 
 
 class ScheduleRunService:
@@ -104,21 +105,7 @@ class ScheduleRunService:
             raise ScheduleRunNotRetryableError()
         schedule_run, created = result
         if created:
-            self.uow.collect_events(
-                [
-                    ScheduleFired(
-                        schedule_id=schedule.id,
-                        user_id=schedule_run.user_id,
-                        schedule_type=schedule.schedule_type,
-                        pod_id=schedule.pod_id,
-                        account_id=schedule.account_id,
-                        payload=schedule_run.payload,
-                        metadata=schedule_run.metadata,
-                        llm_output=schedule_run.llm_output,
-                        scheduled_at=schedule_run.source_occurred_at,
-                        source_event_id=schedule_run.source_event_id,
-                        causation_id=schedule_run.id,
-                    )
-                ]
+            await enqueue_start(
+                WorkWriter.of(self.uow), schedule, schedule_run.id
             )
         return schedule_run

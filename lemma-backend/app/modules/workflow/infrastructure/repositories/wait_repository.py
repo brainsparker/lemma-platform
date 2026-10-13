@@ -60,6 +60,10 @@ class SqlAlchemyWorkflowRunWaitRepository(WorkflowRunWaitRepository):
         await self.session.execute(stmt)
         return wait
 
+    async def get(self, wait_id: UUID) -> WorkflowRunWaitEntity | None:
+        model = await self.session.get(WorkflowRunWaitModel, wait_id)
+        return self._to_entity(model) if model else None
+
     async def get_active_for_run(
         self,
         run_id: UUID,

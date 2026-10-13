@@ -220,12 +220,10 @@ def _routers():
     ]
 
 
-def _event_routers():
-    from app.modules.datastore.events.pod_schema_consumer import (
-        router as pod_schema_router,
-    )
-
-    return [pod_schema_router]
+def _register_work() -> None:
+    # In every process: the pod-create transaction (API) writes this kind
+    # through the `PodCreated` fact this module subscribes it to.
+    import app.modules.datastore.events.pod_provision_work  # noqa: F401
 
 
 def _register_streaq() -> None:
@@ -334,8 +332,8 @@ module = LemmaModule(
     name="datastore",
     resource_names=_resource_names,
     routers=_routers,
-    event_routers=_event_routers,
     register_streaq=_register_streaq,
+    register_work=_register_work,
     # Nothing here may scale with data: see `test_boot_hooks.py`. The query
     # role and its grants are ensured lazily, and the datastore outbox table is
     # created by the first record write or the worker's dispatcher.
@@ -345,5 +343,4 @@ module = LemmaModule(
         _preload_local_embeddings,
         _datastore_outbox_dispatcher,
     ),
-    stream_groups=(("pod_events", "pod-provisioning-events"),),
 )

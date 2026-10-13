@@ -23,9 +23,14 @@ def _routers():
 
 
 def _event_routers():
-    from app.modules.mcp_access.events import event_deliveries, pod_lifecycle
+    from app.modules.mcp_access.events import event_deliveries
 
-    return [pod_lifecycle.router, event_deliveries.router]
+    return [event_deliveries.router]
+
+
+def _register_work() -> None:
+    # Every process: a pod deletion (API) writes this through `PodDeleted`.
+    import app.modules.mcp_access.events.pod_lifecycle  # noqa: F401
 
 
 def _register_streaq() -> None:
@@ -38,8 +43,6 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     register_streaq=_register_streaq,
-    stream_groups=(
-        ("pod_events", "mcp-access-pod-events"),
-        ("datastore.events", "mcp-access-event-deliveries"),
-    ),
+    register_work=_register_work,
+    stream_groups=(("datastore.events", "mcp-access-event-deliveries"),),
 )

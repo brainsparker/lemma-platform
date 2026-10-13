@@ -6,7 +6,6 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin
 from uuid import UUID
 
 import httpx
@@ -25,6 +24,8 @@ from app.modules.function.application.dispatch_failures import (
     runtime_failure_message,
 )
 from app.modules.function.application.function_run_token import function_run_token
+from app.core.infrastructure.work import Released
+from app.modules.function.domain.errors import PodAtCapacity, SandboxNotReady
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
     FunctionSessionTokenCache,
@@ -33,6 +34,7 @@ from app.modules.function.application.function_session_token_cache import (
 from app.modules.function.application.runtime_policy import (
     FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
 )
+from sandbox_runtime.errors import SandboxUnavailable
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpoint,
     FunctionRuntimeEndpointCache,
@@ -58,7 +60,6 @@ from app.modules.function.domain.entities import (
     FunctionRunRuntimeContext,
     FunctionRunStatus,
 )
-from app.modules.function.domain.ports import PodRunSlotsPort
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
 )
@@ -73,6 +74,9 @@ tracer = trace.get_tracer(__name__)
 # starting opens. If a start takes longer, the lease is fetched again.
 _START_ALLOWANCE_SECONDS = 60
 
+#: How long a synchronous call waits between looks at a full pod's gate.
+_CAPACITY_POLL_SECONDS = (0.25, 2.0)
+
 POD_AT_CAPACITY_ERROR = (
     "Function never started: its pod was running as many functions as it can "
     "until this run's start deadline. Nothing ran, so it is safe to retry."
@@ -83,6 +87,7 @@ START_DEADLINE_ERROR = (
 )
 
 RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
+SafePoint = Callable[[], None]
 TokenMinter = Callable[..., Awaitable[FunctionSessionToken]]
 OrganizationResolver = Callable[[UUID | None], Awaitable[str | None]]
 
@@ -106,7 +111,7 @@ class FunctionDispatcher:
         runtime_http_client_factory: RuntimeHttpClientFactory,
         organization_resolver: OrganizationResolver,
         delegated_tokens_enabled: bool,
-        pod_runs: PodRunSlotsPort,
+        max_running_per_pod: int,
     ) -> None:
         self._uow_factory = uow_factory
         self._token_minter = token_minter
@@ -118,12 +123,11 @@ class FunctionDispatcher:
         self._runtime_http_client_factory = runtime_http_client_factory
         self._organization_resolver = organization_resolver
         self._delegated_tokens_enabled = delegated_tokens_enabled
-        self._pod_runs = pod_runs
+        self._max_running_per_pod = max_running_per_pod
         self._quarantine = FunctionRuntimeQuarantine(
             routes=self._routes,
             uow_factory=uow_factory,
             runtime_http_client_factory=runtime_http_client_factory,
-            pod_runs=pod_runs,
         )
         self._invoker = FunctionRuntimeInvoker(
             routes=self._routes,
@@ -137,6 +141,11 @@ class FunctionDispatcher:
         *,
         mode: FunctionDispatchMode,
     ) -> FunctionRunEntity:
+        """Run it now, for a caller holding a request open.
+
+        A full pod is waited out up to the run's start deadline: the run is
+        still PENDING, and its execution budget starts only when it does.
+        """
         # Spanned per phase because the gap between a run being created and
         # reaching RUNNING was measurable even warm and uncontended, but not
         # attributable: this path had no instrumentation at all, so the only
@@ -150,46 +159,57 @@ class FunctionDispatcher:
             if isinstance(dispatch, FunctionRunEntity):
                 return dispatch
             span.set_attribute("lemma.pod_id", str(dispatch.pod_id))
-            return await self._execute_with_pod_slot(run_id, dispatch)
+            pause, longest = _CAPACITY_POLL_SECONDS
+            while True:
+                try:
+                    if await self._pod_has_room(dispatch.pod_id):
+                        return await self._execute_dispatch(run_id, dispatch)
+                except PodAtCapacity:
+                    pass
+                remaining = (dispatch.deadline_at - self._now()).total_seconds()
+                if remaining <= 0:
+                    return await self._fail_unstarted(
+                        run_id, error=POD_AT_CAPACITY_ERROR
+                    )
+                await asyncio.sleep(min(pause, remaining))
+                pause = min(pause * 2, longest)
 
-    async def _execute_with_pod_slot(
-        self,
-        run_id: UUID,
-        dispatch: FunctionExecutionDispatch,
+    async def run_queued(
+        self, run_id: UUID, *, before_start: SafePoint | None = None
     ) -> FunctionRunEntity:
-        """Hold one of the pod's run slots from before the start until settled.
+        """Start and invoke a queued run, for the ``function.run`` work item.
 
-        Waiting here costs the run nothing: it is still PENDING, and its
-        execution budget starts only when it does. A run the runtime accepted
-        asynchronously keeps its slot after this returns; the terminal
-        callback, a cancellation, or the slot's own expiry gives it back.
+        Raises ``PodAtCapacity`` when the pod's gate is full and
+        ``SandboxNotReady`` when its sandbox cannot be reached yet -- both with
+        the run still PENDING, so the item can come back for it. A run that is
+        no longer PENDING is returned untouched: a start that already happened
+        is never repeated, whoever made it.
         """
-        latest_end = dispatch.deadline_at + timedelta(
-            seconds=dispatch.execution_seconds
+        dispatch = await self._resolve_dispatch(
+            run_id, mode=FunctionDispatchMode.ASYNCHRONOUS
         )
-        with tracer.start_as_current_span("lemma.function.dispatch.pod_slot"):
-            acquired = await self._pod_runs.acquire(
-                dispatch.pod_id,
-                dispatch.run_id,
-                hold_until=self._slot_lapses_at(latest_end),
-                wait_until=dispatch.deadline_at,
-            )
-        if not acquired:
-            return await self._fail_unstarted(run_id, error=POD_AT_CAPACITY_ERROR)
-        runtime_holds_run = False
-        try:
-            run, runtime_holds_run = await self._execute_dispatch(run_id, dispatch)
-            return run
-        finally:
-            if not runtime_holds_run:
-                await self._pod_runs.release(dispatch.pod_id, dispatch.run_id)
+        if isinstance(dispatch, FunctionRunEntity):
+            return dispatch
+        # Cheap and unlocked, so a pod at its cap costs a count rather than a
+        # sandbox lease and a token per turned-away run; the start re-checks
+        # under the pod's lock.
+        if not await self._pod_has_room(dispatch.pod_id):
+            raise PodAtCapacity(str(dispatch.pod_id))
+        return await self._execute_dispatch(
+            run_id, dispatch, queued=True, before_start=before_start
+        )
 
     async def _execute_dispatch(
         self,
         run_id: UUID,
         dispatch: FunctionExecutionDispatch,
-    ) -> tuple[FunctionRunEntity, bool]:
-        """Run it; the flag says whether the runtime still holds the run."""
+        *,
+        queued: bool = False,
+        before_start: SafePoint | None = None,
+    ) -> FunctionRunEntity:
+        """Start it and invoke it. A ``queued`` run's work item can come back,
+        so before the start an unreachable sandbox raises ``SandboxNotReady``
+        and a stop leaves the run PENDING, instead of failing it."""
         execution_ends_at = self._now() + timedelta(
             seconds=dispatch.execution_seconds + _START_ALLOWANCE_SECONDS
         )
@@ -209,20 +229,22 @@ class FunctionDispatcher:
             # the three rather than their sum. Which one that is comes from the
             # child spans each of them opens.
             with tracer.start_as_current_span("lemma.function.dispatch.prepare"):
-                endpoint, function_token, organization_id = await asyncio.gather(
-                    endpoint_task,
-                    token_task,
-                    organization_task,
-                )
+                try:
+                    endpoint, function_token, organization_id = await asyncio.gather(
+                        endpoint_task,
+                        token_task,
+                        organization_task,
+                    )
+                except SandboxUnavailable as exc:
+                    if not queued:
+                        raise
+                    raise SandboxNotReady(str(exc)) from exc
+            if before_start is not None:
+                before_start()
             with tracer.start_as_current_span("lemma.function.dispatch.start"):
                 started = await self._start_dispatch(dispatch)
             if started is None:
-                return await self._not_started(run_id, dispatch), False
-            await self._pod_runs.extend(
-                dispatch.pod_id,
-                dispatch.run_id,
-                hold_until=self._slot_lapses_at(started.deadline_at),
-            )
+                return await self._not_started(run_id, dispatch)
             endpoint = await self._endpoint_covering(dispatch, endpoint, started)
 
             runtime_response = await self._invoke_runtime_with_recovery(
@@ -233,13 +255,20 @@ class FunctionDispatcher:
                 organization_id=organization_id,
             )
             if isinstance(runtime_response, RuntimeAcceptedResponse):
-                return await self._load_run(run_id), True
-            return await self._complete_dispatch(started, runtime_response), False
+                return await self._load_run(run_id)
+            return await self._complete_dispatch(started, runtime_response)
         except BaseException as exc:
             if isinstance(exc, asyncio.CancelledError):
-                async with self._uow_factory() as uow:
-                    await FunctionExecutionRepository(uow).cancel_dispatch(dispatch)
-                await self._best_effort_cancel(dispatch, endpoint=endpoint)
+                # A queued run stopped before its start goes back to the queue
+                # untouched; anything else that is cancelled ends cancelled.
+                if started is not None or not queued:
+                    async with self._uow_factory() as uow:
+                        await FunctionExecutionRepository(uow).cancel_dispatch(dispatch)
+                    await self._best_effort_cancel(dispatch, endpoint=endpoint)
+                raise
+            if isinstance(exc, (PodAtCapacity, SandboxNotReady)) or (
+                queued and started is None and isinstance(exc, Released)
+            ):
                 raise
             # Interpreter teardown is not a dispatch failure. `CancelledError`
             # is handled above because it has a durable outcome to record --
@@ -258,8 +287,8 @@ class FunctionDispatcher:
                 and started is not None
             ):
                 # The runtime may still own the task. Its callback or the
-                # deadline reconciler will durably settle this JOB run.
-                return await self._load_run(run_id), True
+                # run's deadline item will durably settle this JOB run.
+                return await self._load_run(run_id)
             if isinstance(exc, InvocationOutcomeUnconfirmed) and started is not None:
                 await self._best_effort_cancel(dispatch, endpoint=endpoint)
             message = self._execution_error(exc)
@@ -283,7 +312,7 @@ class FunctionDispatcher:
                     dispatch,
                     error=message,
                 )
-            return (failed or await self._load_run(run_id)), False
+            return failed or await self._load_run(run_id)
         finally:
             for task in (endpoint_task, token_task, organization_task):
                 if not task.done():
@@ -296,17 +325,30 @@ class FunctionDispatcher:
             )
 
     async def cancel(self, run_id: UUID) -> FunctionRunEntity:
-        dispatch = await self._active_dispatch(
-            run_id,
-            mode=FunctionDispatchMode.ASYNCHRONOUS,
-        )
+        async with self._uow_factory() as uow:
+            dispatch = await FunctionExecutionRepository(uow).active_dispatch(
+                run_id, mode=FunctionDispatchMode.ASYNCHRONOUS
+            )
         if dispatch is None:
             return await self._load_run(run_id)
         async with self._uow_factory() as uow:
             run = await FunctionExecutionRepository(uow).cancel_dispatch(dispatch)
         await self._best_effort_cancel(dispatch)
-        await self._pod_runs.release(dispatch.pod_id, dispatch.run_id)
         return run or await self._load_run(run_id)
+
+    async def cancel_in_runtime(self, run_id: UUID) -> None:
+        """Ask the sandbox to stop a run already cancelled in the database."""
+        async with self._uow_factory() as uow:
+            dispatch = await FunctionExecutionRepository(uow).dispatch_of(
+                run_id, mode=FunctionDispatchMode.ASYNCHRONOUS
+            )
+        if dispatch is not None:
+            await self._best_effort_cancel(dispatch)
+
+    async def _pod_has_room(self, pod_id: UUID) -> bool:
+        async with self._uow_factory() as uow:
+            running = await FunctionExecutionRepository(uow).running_on_pod(pod_id)
+        return running < self._max_running_per_pod
 
     async def _resolve_dispatch(
         self,
@@ -355,14 +397,6 @@ class FunctionDispatcher:
             )
         return failed or await self._load_run(run_id)
 
-    @staticmethod
-    def _slot_lapses_at(execution_ends_at: datetime) -> datetime:
-        # Past the end of execution by the callback grace, which is as long as
-        # anything may still be settling an asynchronous run.
-        return execution_ends_at + timedelta(
-            seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS
-        )
-
     async def _endpoint_covering(
         self,
         dispatch: FunctionExecutionDispatch,
@@ -383,24 +417,14 @@ class FunctionDispatcher:
             wait_until=started.deadline_at,
         )
 
-    async def _active_dispatch(
-        self,
-        run_id: UUID,
-        *,
-        mode: FunctionDispatchMode,
-    ) -> FunctionExecutionDispatch | None:
-        async with self._uow_factory() as uow:
-            return await FunctionExecutionRepository(uow).active_dispatch(
-                run_id,
-                mode=mode,
-            )
-
     async def _start_dispatch(
         self,
         dispatch: FunctionExecutionDispatch,
     ) -> FunctionRunRuntimeContext | None:
         async with self._uow_factory() as uow:
-            return await FunctionExecutionRepository(uow).start_execution(dispatch)
+            return await FunctionExecutionRepository(uow).start_execution(
+                dispatch, max_running_per_pod=self._max_running_per_pod
+            )
 
     async def _complete_dispatch(
         self,
@@ -483,22 +507,7 @@ class FunctionDispatcher:
         *,
         endpoint: FunctionRuntimeEndpoint | None = None,
     ) -> None:
-        try:
-            control_endpoint = endpoint or await self._routes.control_endpoint(dispatch)
-            runtime = self._runtime_http_client_factory()
-            await runtime.post(
-                urljoin(
-                    control_endpoint.url,
-                    (f"functions/{dispatch.function_id}/runs/{dispatch.run_id}:cancel"),
-                ),
-                headers=control_endpoint.headers(),
-                timeout=httpx.Timeout(5),
-            )
-        except Exception:
-            logger.warning(
-                "function.dispatcher.runtime_cancellation.failed",
-                run_id=str(dispatch.run_id),
-            )
+        await self._invoker.cancel(dispatch, endpoint=endpoint)
 
     # Above this, the lease was not reusable and a sandbox had to be brought up.
     # A warm reuse is a dict lookup; anything in this range is a control-plane

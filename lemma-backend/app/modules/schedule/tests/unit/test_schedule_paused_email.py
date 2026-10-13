@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from app.modules.schedule.handlers.schedule_notification_consumer import (
+from app.modules.schedule.services.paused_email import (
     render_schedule_paused_email,
 )
 

@@ -30,7 +30,6 @@ from app.modules.function.domain.entities import (
     FunctionRunRuntimeContext,
     FunctionRunStatus,
 )
-from app.modules.function.tests.fakes import InMemoryPodRunSlots
 
 
 class _UowFactory:
@@ -112,10 +111,8 @@ def _run(
     )
 
 
-def _dispatcher(
-    runtime_client, *, pod_runs: InMemoryPodRunSlots | None = None
-) -> FunctionDispatcher:
-    return FunctionDispatcher(
+def _dispatcher(runtime_client) -> FunctionDispatcher:
+    dispatcher = FunctionDispatcher(
         uow_factory=_UowFactory(),
         sandbox_client_factory=AsyncMock,
         token_minter=_token_minter,
@@ -124,8 +121,11 @@ def _dispatcher(
         runtime_http_client_factory=lambda: runtime_client,
         organization_resolver=_organization_resolver,
         delegated_tokens_enabled=True,
-        pod_runs=pod_runs or InMemoryPodRunSlots(),
+        max_running_per_pod=1_000,
     )
+    # The pod gate's count is a database read; these tests start no other run.
+    dispatcher._pod_has_room = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    return dispatcher
 
 
 @pytest.mark.asyncio
@@ -153,8 +153,7 @@ async def test_api_dispatch_sends_complete_v2_envelope_and_uses_direct_result(
                 },
             )
 
-    pod_runs = InMemoryPodRunSlots()
-    dispatcher = _dispatcher(_Runtime(), pod_runs=pod_runs)
+    dispatcher = _dispatcher(_Runtime())
     endpoint = _endpoint("https://sandbox.test/runtime/")
     monkeypatch.setattr(
         dispatcher,
@@ -190,9 +189,6 @@ async def test_api_dispatch_sends_complete_v2_envelope_and_uses_direct_result(
     assert observed["json"]["input"] == dispatch.input_data
     assert observed["json"]["config"] == dispatch.config
     assert observed["json"]["identity"]["function_id"] == str(dispatch.function_id)
-    # Settled inline, so the pod's slot is free for the next run.
-    assert pod_runs.released == [dispatch.run_id]
-    assert pod_runs.held[dispatch.pod_id] == set()
 
 
 @pytest.mark.asyncio
@@ -213,8 +209,7 @@ async def test_job_returns_after_runtime_acceptance_and_uses_same_function_token
                 json={"accepted": True, "run_id": str(dispatch.run_id)},
             )
 
-    pod_runs = InMemoryPodRunSlots()
-    dispatcher = _dispatcher(_Runtime(), pod_runs=pod_runs)
+    dispatcher = _dispatcher(_Runtime())
     monkeypatch.setattr(
         dispatcher,
         "_resolve_dispatch",
@@ -238,10 +233,6 @@ async def test_job_returns_after_runtime_acceptance_and_uses_same_function_token
     )
 
     assert result.status == FunctionRunStatus.RUNNING
-    # Accepted asynchronously: the runtime holds the run, so its pod slot stays
-    # taken until the terminal callback gives it back.
-    assert pod_runs.held[dispatch.pod_id] == {dispatch.run_id}
-    assert pod_runs.released == []
     assert observed["headers"]["Prefer"] == "respond-async"
     assert observed["headers"]["Authorization"] == "Bearer delegated-function-token"
     assert observed["headers"]["E2B-Traffic-Access-Token"] == "provider-secret"

@@ -1,34 +1,9 @@
-"""Schedule notification handlers.
-
-Consumes ``schedule_events`` (own consumer group) and, on a
-``ScheduleDeactivated`` event from the failure circuit breaker, emails the
-schedule's creator. This subscriber is the extension point for reacting to
-deactivation — future consumers (in-app notification, admin alerting) add their
-own subscriber without touching the breaker.
-"""
+"""The email that tells an owner the platform paused their schedule."""
 
 from __future__ import annotations
 
-from urllib.parse import quote
-
 from uuid import UUID
 
-from faststream import Depends, Logger
-from faststream.redis import RedisRouter
-
-from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow_factory import (
-    SessionUnitOfWorkFactory,
-    UnitOfWorkFactory,
-)
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
-)
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
-)
-from app.core.config import settings
 from app.core.email.transactional import (
     EmailAction,
     EmailDetail,
@@ -36,18 +11,6 @@ from app.core.email.transactional import (
     render_transactional_email,
 )
 from app.core.helpers.humanize import humanize_name
-from app.core.log.log import get_logger
-from app.modules.schedule.domain.events.schedule import (
-    ScheduleDeactivated,
-    ScheduleEvents,
-)
-
-router = RedisRouter()
-logger = get_logger(__name__)
-
-
-def provide_uow_factory() -> UnitOfWorkFactory:
-    return SessionUnitOfWorkFactory(async_session_maker)
 
 
 def render_schedule_paused_email(
@@ -91,6 +54,16 @@ def render_schedule_paused_email(
                 "automation back on."
             ),
         ),
+        "fire_cap": (
+            "was paused because it fired more times in a day than allowed",
+            (
+                "Lemma paused this automation because it started more runs in "
+                "one day than its daily limit. That usually means it is "
+                "triggering itself -- a workflow writing to the table it "
+                "watches, or a webhook sending in a loop. What it would have "
+                "fired since is listed as skipped on the schedule."
+            ),
+        ),
         "SCHEDULE_VALIDATION_ERROR": (
             "was paused because its configuration is invalid",
             "Lemma paused this scheduled automation because its time configuration is invalid.",
@@ -129,62 +102,3 @@ def render_schedule_paused_email(
         ),
     )
     return f"{display_name} {summary}", rendered
-
-
-@reliable_redis_stream_subscriber(
-    router,
-    ScheduleEvents.STREAM,
-    group="schedule-notifications",
-    consumer="schedule-notifications-consumer",
-)
-async def on_schedule_deactivated(
-    event: dict,
-    fs_logger: Logger,
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
-) -> None:
-    """Email the creator when their schedule is auto-deactivated."""
-    if event.get("event_type") != ScheduleDeactivated.get_event_type():
-        return
-
-    async def send_notification() -> None:
-        from app.core.email.email_sender import EmailSender
-        from app.modules.identity.contracts.profiles import user_profile
-        from app.modules.schedule.repositories.schedule_repository import (
-            ScheduleRepository,
-        )
-
-        parsed = ScheduleDeactivated.model_validate(event)
-        async with uow_factory() as uow:
-            owner = await user_profile(uow.session, parsed.user_id)
-            schedule = await ScheduleRepository(uow=uow).get(parsed.schedule_id)
-        email = owner.email if owner else None
-        if email is None:
-            logger.debug(
-                "schedule.schedule_notification_consumer.scheduledeactivated_s_has_no_notification.diagnostic",
-                schedule_id=parsed.schedule_id,
-            )
-            return
-
-        review_url = settings.frontend_url.rstrip("/")
-        if schedule and schedule.pod_id:
-            review_url = (
-                f"{review_url}/t/{quote(str(schedule.pod_id), safe='')}"
-                "/about?section=schedules"
-            )
-        subject, rendered = render_schedule_paused_email(
-            schedule_name=schedule.name if schedule else None,
-            schedule_id=parsed.schedule_id,
-            consecutive_failures=parsed.consecutive_failures,
-            review_url=review_url,
-            reason=parsed.reason,
-        )
-
-        await EmailSender.from_settings().send_email(
-            to_email=email,
-            subject=subject,
-            html_content=rendered.html,
-            text_content=rendered.text,
-        )
-
-    await inbox.process("schedule-notifications", event, send_notification)

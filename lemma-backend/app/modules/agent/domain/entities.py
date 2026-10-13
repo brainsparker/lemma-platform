@@ -217,9 +217,9 @@ class AgentRun(Entity):
     agent_id: UUID | None = None
     parent_run_id: UUID | None = None
     status: AgentRunStatus = AgentRunStatus.RUNNING
-    agent_runtime: AgentRuntimeConfig = Field(
-        default_factory=lambda: AgentRuntimeConfig(profile_id="system:lemma")
-    )
+    # Required: a run records the runtime it was started on, and a default here
+    # would quietly read "system" for a run whose creator forgot to say.
+    agent_runtime: AgentRuntimeConfig
     started_at: datetime
     finished_at: datetime | None = None
     error: str | None = None

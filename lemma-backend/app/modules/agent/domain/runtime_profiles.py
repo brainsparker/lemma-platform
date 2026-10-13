@@ -29,6 +29,12 @@ from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.value_objects import HarnessKind, JsonObject
 
 
+#: The deployment's own profile, built from its environment rather than
+#: stored. Bare string ids name a runtime in several places (agents,
+#: conversations, runs, pod config), so this one is spelled once, here.
+SYSTEM_LEMMA_PROFILE_ID = "system:lemma"
+
+
 class RuntimeProfileScope(str, Enum):
     SYSTEM = "SYSTEM"
     ORGANIZATION = "ORGANIZATION"

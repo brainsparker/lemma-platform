@@ -16,6 +16,8 @@ import pytest
 
 from sandbox_runtime.errors import SandboxRejected
 
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.agent_host import AGENT_HOST_SESSION_METADATA_KEY
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.domain.prompt_directories import _directory_sections
@@ -122,10 +124,14 @@ def _conversation(user_id: UUID = PAIRED, **metadata) -> Conversation:
     )
 
 
+_SYSTEM_RUNTIME = AgentRuntimeConfig(profile_id=SYSTEM_LEMMA_PROFILE_ID)
+
+
 def _run(conversation: Conversation, source: str | None = "user_message") -> AgentRun:
     return AgentRun(
         conversation_id=conversation.id,
         started_at=datetime.now(timezone.utc),
+        agent_runtime=_SYSTEM_RUNTIME,
         metadata={"source": source} if source else {},
     )
 

@@ -30,6 +30,8 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse
 
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.entities import (
     AgentRun,
     Message,
@@ -141,7 +143,11 @@ class AgentSide:
 
     def start_run(self, conversation_id: UUID, text: str) -> AgentRun:
         """A person's message, and the run that answers it."""
-        run = AgentRun(conversation_id=conversation_id, started_at=_now())
+        run = AgentRun(
+            conversation_id=conversation_id,
+            started_at=_now(),
+            agent_runtime=AgentRuntimeConfig(profile_id=SYSTEM_LEMMA_PROFILE_ID),
+        )
         self.runs[conversation_id].append(run)
         self._append(
             conversation_id,

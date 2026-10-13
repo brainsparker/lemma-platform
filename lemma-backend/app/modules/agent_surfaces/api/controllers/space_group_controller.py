@@ -297,7 +297,7 @@ async def _bot_username(
         return surface.surface_identity_username
     reach = await SurfaceReachResolver().resolve(
         surface,
-        credential_resolver=service._credential_resolver,
+        credential_resolver=service.credential_resolver,
         find_account=partial(account, uow),
         surface_repository=service.surface_repository,
     )

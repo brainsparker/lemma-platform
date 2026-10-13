@@ -96,6 +96,14 @@ class AgentSurfaceService(
         self._credential_resolver = credential_resolver
         self._adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
 
+    @property
+    def credential_resolver(self) -> "SurfaceCredentialResolver | None":
+        """The resolver this service was built with, for callers that read a
+        surface's reach or webhook credentials beside it. None where the
+        service was composed without one, which leaves nothing to verify or
+        reach with."""
+        return self._credential_resolver
+
     async def list_channels(
         self, *, surface: AgentSurfaceEntity
     ) -> list["SurfaceChannelInfo"]:

@@ -76,7 +76,7 @@ async def _resolve_surface_reaches(
     and a session cannot serve two of those at once. See ``resolve_many``."""
     return await SurfaceReachResolver().resolve_many(
         surfaces,
-        credential_resolver=service._credential_resolver,
+        credential_resolver=service.credential_resolver,
         find_account=partial(account, uow),
         surface_repository=service.surface_repository,
     )

@@ -13,8 +13,6 @@ three platforms where ``acknowledge_interaction`` was a no-op.
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.infrastructure.db.transaction_locks import connection_released
@@ -77,6 +75,11 @@ from app.core.log.log import get_logger
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 
+from app.modules.agent_surfaces.services.interaction_recovery import (
+    InteractionAttempt,
+    recover_from_failed_interaction,
+)
+
 logger = get_logger(__name__)
 
 #: Taps that never reach a conversation, by why: what to say, and whether the
@@ -105,21 +108,6 @@ def _authorized_surface_ids(request) -> list[UUID] | None:
     if isinstance(request, SurfaceDirectWebhookIngress):
         return [request.surface_id]
     return request.receiver_surface_ids
-
-
-@dataclass
-class _InteractionAttempt:
-    """What one submission has done so far, for the failure path to read.
-
-    A failure has to know how far the tap got: before the claim there is nothing
-    to give back, after the answer reached the run there is nothing to undo.
-    """
-
-    delivery: InteractionDelivery | None = None
-    #: The replay claim is held, and should be handed back if the work fails.
-    claimed: bool = False
-    #: The answer (or the retry) reached the run, so a repeat must stay a repeat.
-    applied: bool = False
 
 
 class SurfaceInteractionMixin:
@@ -207,7 +195,7 @@ class SurfaceInteractionMixin:
         agent receives a proper structured answer, not a plain message. Best
         effort; never raises to the caller.
         """
-        attempt = _InteractionAttempt()
+        attempt = InteractionAttempt()
         try:
             await self._process_interaction(
                 parsed, attempt, authorized_surface_ids=authorized_surface_ids
@@ -228,12 +216,17 @@ class SurfaceInteractionMixin:
                 ),
                 exc_info=True,
             )
-            await self._recover_from_failed_interaction(parsed, attempt)
+            await recover_from_failed_interaction(
+                parsed,
+                attempt,
+                event_dedup_store=self.event_dedup_store,
+                acknowledge=self._acknowledge,
+            )
 
     async def _process_interaction(
         self,
         parsed: ParsedSurfaceInteraction,
-        attempt: _InteractionAttempt,
+        attempt: InteractionAttempt,
         *,
         authorized_surface_ids: list[UUID] | None,
     ) -> None:
@@ -409,7 +402,7 @@ class SurfaceInteractionMixin:
     async def _retry_interaction(
         self,
         parsed: ParsedSurfaceInteraction,
-        attempt: _InteractionAttempt,
+        attempt: InteractionAttempt,
         delivery: InteractionDelivery,
         conversation: SurfaceConversation,
     ) -> None:
@@ -450,7 +443,7 @@ class SurfaceInteractionMixin:
     async def _resolve_interaction(
         self,
         parsed: ParsedSurfaceInteraction,
-        attempt: _InteractionAttempt,
+        attempt: InteractionAttempt,
         delivery: InteractionDelivery,
         conversation: SurfaceConversation,
         *,
@@ -491,62 +484,6 @@ class SurfaceInteractionMixin:
             show_alert=text not in (DONE, RUNNING_NOW),
             clear_actions=True,
         )
-
-    async def _recover_from_failed_interaction(
-        self,
-        parsed: ParsedSurfaceInteraction,
-        attempt: _InteractionAttempt,
-    ) -> None:
-        """Make a failed tap retryable, and tell the person it did not work.
-
-        Runs inside the failure handler, so it must not raise: anything that goes
-        wrong here is logged and left, or the failure it is recovering from would
-        be replaced by a less useful one.
-
-        Once the answer has reached the run (``applied``) nothing is undone and
-        nothing is said -- a failed *acknowledgement* is not a failed action, and
-        giving the claim back would let a second tap answer the same question
-        twice.
-        """
-        if attempt.applied or attempt.delivery is None:
-            return
-        _link, surface, _adapter, _credentials = attempt.delivery
-
-        async def hand_the_replay_claim_back() -> None:
-            if attempt.claimed:
-                await self.event_dedup_store.release_message(
-                    surface_installation_id=surface.id,
-                    platform=surface.surface_type,
-                    external_channel_id=parsed.external_channel_id,
-                    external_thread_id=parsed.external_thread_id,
-                    external_message_id=parsed.dedup_id,
-                )
-
-        # Gathered rather than awaited in turn, so one step failing cannot stop
-        # the other: a Redis outage must not leave the person without their
-        # answer, nor a Slack one leave the claim spent.
-        released, acknowledged = await asyncio.gather(
-            hand_the_replay_claim_back(),
-            self._acknowledge(
-                parsed,
-                attempt.delivery,
-                text="I couldn’t complete that action.",
-                show_alert=True,
-            ),
-            return_exceptions=True,
-        )
-        if isinstance(released, Exception):
-            logger.warning(
-                "agent_surfaces.ingress_service.surface_interaction_claim_release_failed.degraded",
-                surface_id=str(surface.id),
-                exc_info=released,
-            )
-        if isinstance(acknowledged, Exception):
-            logger.warning(
-                "agent_surfaces.ingress_service.surface_interaction_failure_unacknowledged.degraded",
-                surface_id=str(surface.id),
-                exc_info=acknowledged,
-            )
 
     async def _refresh_interaction_conversation(
         self,

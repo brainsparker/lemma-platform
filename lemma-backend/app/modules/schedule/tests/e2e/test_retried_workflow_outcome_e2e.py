@@ -129,6 +129,33 @@ async def test_a_retried_workflow_that_succeeds_replaces_its_failure(
     assert row.is_active is True
 
 
+async def test_a_workflow_reporting_naive_times_is_read_as_utc(
+    authenticated_client, fixed_test_org, db_manager
+) -> None:
+    """A workflow run's times have no zone, and its terminal event says so.
+
+    Comparing one with the recorded aware time raised, so the retried success
+    was never recorded; storing one let the database read it as local time.
+    """
+    _, schedule_id, user_id = await _workflow_schedule(
+        authenticated_client, fixed_test_org["id"]
+    )
+    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+    run = await _dispatched(
+        factory, schedule_id=schedule_id, user_id=user_id, key="fire", kind="WORKFLOW"
+    )
+    failed_at = datetime(2026, 1, 1, 12, 0)
+    assert await _outcome(factory, run, ScheduleRunStatus.TARGET_FAILED, failed_at)
+
+    retried_at = failed_at + timedelta(minutes=5)
+    assert await _outcome(factory, run, ScheduleRunStatus.COMPLETED, retried_at)
+
+    async with factory() as uow:
+        (stored,) = await ScheduleRunRepository(uow).list_for_schedule(schedule_id)
+    assert stored.status is ScheduleRunStatus.COMPLETED
+    assert stored.completed_at == retried_at.replace(tzinfo=timezone.utc)
+
+
 async def test_only_a_later_different_workflow_outcome_replaces_a_failure(
     authenticated_client, fixed_test_org, db_manager
 ) -> None:

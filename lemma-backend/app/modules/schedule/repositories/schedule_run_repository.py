@@ -325,6 +325,7 @@ class ScheduleRunRepository:
             ScheduleRunStatus.CANCELLED,
         }:
             raise ValueError(f"Invalid target outcome status: {status.value}")
+        completed_at = _as_utc(completed_at)
 
         model = await self.session.scalar(
             select(ScheduleRun)
@@ -515,6 +516,19 @@ class ScheduleRunRepository:
             )
         )
         return [row.to_entity() for row in rows.all()]
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """A target's finish time, aware.
+
+    A workflow run keeps its times in a column without a zone, so the time on
+    its terminal event is naive -- UTC wall time. Left naive, comparing it with
+    the recorded one raised, and storing it let the database read it in the
+    server's local zone.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
 
 
 def _is_retried_workflow_outcome(

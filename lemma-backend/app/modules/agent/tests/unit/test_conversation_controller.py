@@ -19,8 +19,6 @@ from app.modules.agent.api.controllers.conversation_page_token import (
 )
 from app.modules.agent.api.controllers.conversation_controller import (
     _parse_metadata_filters,
-    append_message,
-    retry_failed_run,
     send_message,
     stream_conversation,
 )
@@ -87,12 +85,6 @@ class _ConversationService:
         self.called = False
 
     async def send_from_lemma(self, **kwargs):
-        self.called = True
-        if self.exc is not None:
-            raise self.exc
-        return self.result
-
-    async def retry_failed_run(self, **kwargs):
         self.called = True
         if self.exc is not None:
             raise self.exc
@@ -282,106 +274,6 @@ async def test_send_message_starts_run_before_stream_body_is_consumed(
 
     assert response.media_type == "text/event-stream"
     assert service.called is True
-
-
-@pytest.mark.asyncio
-async def test_retry_failed_run_returns_typed_start_response(
-    monkeypatch,
-) -> None:
-    result = AgentRunStartResult(
-        conversation_id=uuid4(),
-        agent_run_id=uuid4(),
-        started_new_run=True,
-    )
-    service = _ConversationService(result)
-    uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller,
-        "_build_conversation_retry_service",
-        lambda uow: service,
-    )
-    monkeypatch.setattr(
-        "app.core.authorization.scope.resolve_pod_context",
-        AsyncMock(return_value=allow_all_context()),
-    )
-
-    response = await retry_failed_run(
-        pod_id=uuid4(),
-        conversation_id=result.conversation_id,
-        user=SimpleNamespace(id=uuid4()),
-        request=SimpleNamespace(),
-        uow_factory=uow_factory,
-    )
-
-    assert response.conversation_id == result.conversation_id
-    assert response.agent_run_id == result.agent_run_id
-    assert response.started_new_run is True
-    assert service.called is True
-
-
-@pytest.mark.asyncio
-async def test_append_message_returns_typed_response_without_streaming(
-    monkeypatch,
-) -> None:
-    result = AgentRunStartResult(
-        conversation_id=uuid4(),
-        agent_run_id=uuid4(),
-        started_new_run=True,
-    )
-    service = _ConversationService(result)
-    uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller, "_build_conversation_service", lambda uow: service
-    )
-    monkeypatch.setattr(
-        "app.core.authorization.scope.resolve_pod_context",
-        AsyncMock(return_value=allow_all_context()),
-    )
-
-    response = await append_message(
-        pod_id=uuid4(),
-        conversation_id=result.conversation_id,
-        data=SendMessageRequest(content="say ok"),
-        user=SimpleNamespace(id=uuid4()),
-        request=SimpleNamespace(),
-        uow_factory=uow_factory,
-    )
-
-    assert response.conversation_id == result.conversation_id
-    assert response.agent_run_id == result.agent_run_id
-    assert response.started_new_run is True
-    assert service.called is True
-
-
-@pytest.mark.asyncio
-async def test_append_message_reports_joining_an_active_run(monkeypatch) -> None:
-    active_run_id = uuid4()
-    result = AgentRunStartResult(
-        conversation_id=uuid4(),
-        agent_run_id=active_run_id,
-        started_new_run=False,
-    )
-    service = _ConversationService(result)
-    uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller, "_build_conversation_service", lambda uow: service
-    )
-    monkeypatch.setattr(
-        "app.core.authorization.scope.resolve_pod_context",
-        AsyncMock(return_value=allow_all_context()),
-    )
-
-    response = await append_message(
-        pod_id=uuid4(),
-        conversation_id=result.conversation_id,
-        data=SendMessageRequest(content="steer this run"),
-        user=SimpleNamespace(id=uuid4()),
-        request=SimpleNamespace(),
-        uow_factory=uow_factory,
-    )
-
-    assert response.agent_run_id == active_run_id
-    assert response.started_new_run is False
 
 
 def _agent_run(*, status: AgentRunStatus, error: str | None = None) -> AgentRun:

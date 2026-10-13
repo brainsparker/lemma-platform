@@ -5,6 +5,7 @@ import {
     agentChanges, agentProblems, agentRows, draftOfAgent, hasAgentChanges,
     answeringAs, may, readAgentDetail, readAgentRow, readSchema, runtimeLine, surfacesLost, whyNot,
 } from "../src/data/agents.ts";
+import type { Runtime } from "../src/data/runtimes.ts";
 
 const OWNER = ["agent.read", "agent.execute", "agent.update", "agent.delete"];
 
@@ -185,6 +186,44 @@ test("a runtime profile with no model named is still a pinned runtime", () => {
 test("no runtime pinned reads as no runtime, not as a blank one", () => {
     assert.equal(readAgentDetail({ name: "a" }).runtime, null);
     assert.equal(runtimeLine({ runtime: null }), "");
+    assert.equal(runtimeLine({ runtime: null }, [runtimeOf({ id: "house" })]), "");
+});
+
+function runtimeOf(over: Partial<Runtime>): Runtime {
+    return {
+        id: "rt-1", name: "Anthropic", kind: "key", harness: "", harnessId: "",
+        models: [{ name: "sonnet", label: "Sonnet" }], defaultModel: "sonnet",
+        selections: {}, scope: "org", archived: false, trouble: "",
+        ...over,
+    };
+}
+
+test("a pinned runtime is named the way the model picker names it, not by its id", () => {
+    const runtimes = [runtimeOf({ id: "7f3c-profile" })];
+    const pinned = (model: string) => ({ runtime: { profile: "7f3c-profile", model, settings: {} } });
+
+    assert.equal(runtimeLine(pinned("sonnet"), runtimes), "Anthropic · Sonnet");
+    assert.equal(runtimeLine(pinned(""), runtimes), "Anthropic · Sonnet", "the profile's own default, named");
+});
+
+test("an agent pinned to a retired runtime says so, by name", () => {
+    // The listing the page reads includes retired profiles for exactly this:
+    // without them a retired pin was a bare id, and the one thing worth
+    // knowing about it — that it cannot take a run — went unsaid.
+    const runtimes = [runtimeOf({ id: "old-key", name: "Old key", archived: true })];
+    const detail = { runtime: { profile: "old-key", model: "sonnet", settings: {} } };
+
+    assert.equal(runtimeLine(detail, runtimes), "Old key (retired) · Sonnet");
+    assert.equal(
+        runtimeLine({ runtime: { profile: "old-key", model: "", settings: {} } }, [runtimeOf({ id: "old-key", name: "Old key", archived: true, models: [], defaultModel: "" })]),
+        "Old key (retired)",
+    );
+});
+
+test("a runtime not in the list, or before the list loads, falls back to its id", () => {
+    const detail = { runtime: { profile: "someone-elses", model: "sonnet", settings: {} } };
+    assert.equal(runtimeLine(detail, []), "someone-elses · sonnet");
+    assert.equal(runtimeLine(detail, undefined), "someone-elses · sonnet");
 });
 
 test("a schema this cannot name is opaque, never absent", () => {

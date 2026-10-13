@@ -1,5 +1,6 @@
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { capabilities, firstSentence } from "@/stage/colleagues";
+import { describeChoice, type Runtime } from "./runtimes";
 
 /** The agents behind a teammate, read off the wire.
  *
@@ -380,12 +381,21 @@ export function agentProblems(draft: AgentDraft): Partial<Record<keyof AgentDraf
     return found;
 }
 
-/** What a pinned runtime is called, when it is pinned at all. */
-export function runtimeLine(detail: Pick<AgentDetail, "runtime">): string {
+/** What a pinned runtime is called, when it is pinned at all.
+ *
+ *  `agent_runtime` holds the profile's id, which is nothing a person named.
+ *  Given the organization's runtimes — the whole list, retired ones included —
+ *  it says the profile's name the way the model picker does, and says when the
+ *  profile has been retired: an agent pinned to one cannot take a run, and
+ *  that is the one thing about it worth knowing. The id is the fallback while
+ *  the list loads, or for a profile this person cannot see. */
+export function runtimeLine(detail: Pick<AgentDetail, "runtime">, runtimes?: readonly Runtime[]): string {
     if (!detail.runtime) return "";
-    return detail.runtime.model
-        ? detail.runtime.profile + " · " + detail.runtime.model
-        : detail.runtime.profile;
+    const { profile, model } = detail.runtime;
+    const runtime = runtimes?.find((entry) => entry.id === profile);
+    const said = runtime ? describeChoice([runtime], { runtimeId: profile, model }) : "";
+    if (!runtime || !said) return model ? profile + " · " + model : profile;
+    return runtime.archived ? runtime.name + " (retired)" + said.slice(runtime.name.length) : said;
 }
 
 /** The addresses that stop answering if this agent goes.

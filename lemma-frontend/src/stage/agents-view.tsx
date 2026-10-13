@@ -33,12 +33,14 @@ import { BackIcon, ChatIcon, ChevronRightIcon, CloseIcon, WarningIcon } from "@/
  *  pod has a handful of agents and eight bordered boxes make the eye cross a
  *  border to get from one name to the next.
  */
-export function AgentsView({ podId, teammate, embedded, open: opened, onOpen: setOpened, onDiscussAgent }: {
+export function AgentsView({ podId, orgId, teammate, embedded, open: opened, onOpen: setOpened, onDiscussAgent }: {
     /** Rendered inside the teammate's profile rather than as a view of its
      *  own. The profile's section already carries a heading, and a second one
      *  under it announced the same thing twice. */
     embedded?: boolean;
     podId: string;
+    /** Where the pod's runtimes are listed, so "Runs on" can name one. */
+    orgId?: string;
     /** Whose agents these are, so the page can say whose. */
     teammate: string;
     /** Which one is showing, held by the shell rather than here: search can
@@ -68,6 +70,7 @@ export function AgentsView({ podId, teammate, embedded, open: opened, onOpen: se
         return (
             <AgentDetailPane
                 podId={podId}
+                orgId={orgId}
                 name={opened}
                 teammate={teammate}
                 onBack={() => setOpened(null)}
@@ -154,8 +157,9 @@ function Row({ podId, row, onOpen }: { podId: string; row: AgentRow; onOpen: () 
 
 /* ── one agent ─────────────────────────────────────────────────────── */
 
-function AgentDetailPane({ podId, name, teammate, onBack, onDiscussAgent, onGone }: {
+function AgentDetailPane({ podId, orgId, name, teammate, onBack, onDiscussAgent, onGone }: {
     podId: string;
+    orgId?: string;
     name: string;
     teammate: string;
     onBack: () => void;
@@ -271,7 +275,7 @@ function AgentDetailPane({ podId, name, teammate, onBack, onDiscussAgent, onGone
                             onDone={() => setEditing(false)}
                         />
                     ) : (
-                        <Reading detail={detail} />
+                        <Reading orgId={orgId} detail={detail} />
                     )}
                 </>
             )}
@@ -280,8 +284,8 @@ function AgentDetailPane({ podId, name, teammate, onBack, onDiscussAgent, onGone
 }
 
 /** What the agent is, read rather than edited. */
-function Reading({ detail }: { detail: AgentDetail }) {
-    const runtime = runtimeLine(detail);
+function Reading({ orgId, detail }: { orgId?: string; detail: AgentDetail }) {
+    const runtime = useRunsOn(orgId, detail);
     return (
         <>
             {detail.description && <p className="agents-blurb">{detail.description}</p>}
@@ -366,6 +370,19 @@ function Block({ title, meta, children }: { title: string; meta?: string; childr
             {children}
         </div>
     );
+}
+
+/** "Runs on", by the profile's name rather than its id, and marked when the
+ *  profile is retired. Under the model picker's key, which lists retired
+ *  profiles too, so it is usually already loaded. */
+export function useRunsOn(orgId: string | undefined, detail: AgentDetail): string {
+    const runtimes = useQuery({
+        queryKey: ["runtimes", orgId],
+        queryFn: () => source.listRuntimes(orgId ?? ""),
+        enabled: Boolean(orgId && detail.runtime),
+        staleTime: 5 * 60_000,
+    });
+    return runtimeLine(detail, runtimes.data);
 }
 
 /* ── editing ───────────────────────────────────────────────────────── */

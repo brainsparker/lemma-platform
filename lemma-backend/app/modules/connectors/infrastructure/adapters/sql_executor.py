@@ -49,6 +49,7 @@ def _forbidden_nodes() -> tuple[type[exp.Expression], ...]:
     from sqlglot import exp
 
     return (
+        exp.Into,
         exp.Insert,
         exp.Update,
         exp.Delete,
@@ -70,6 +71,10 @@ def _allowed_roots() -> tuple[type[exp.Expression], ...]:
 
     return (exp.Select, exp.Union, exp.Intersect, exp.Except, exp.Subquery, exp.With)
 
+
+# Session-setting functions ride inside an otherwise read-only SELECT; the
+# datastore refuses the same one for the same reason.
+_FORBIDDEN_FUNCTIONS = frozenset({"set_config"})
 
 _DIALECT_DRIVERS = {
     "postgresql": "postgresql+asyncpg",
@@ -115,6 +120,19 @@ def _ensure_read_only(sql: str) -> None:
         raise OperationExecutionValidationError(
             "Only read-only SELECT queries are allowed."
         )
+    from sqlglot import exp
+
+    for function in statement.find_all(exp.Func):
+        # Unmodelled functions parse as Anonymous and carry their own name.
+        name = (
+            function.name
+            if isinstance(function, exp.Anonymous)
+            else function.sql_name()
+        )
+        if name.lower() in _FORBIDDEN_FUNCTIONS:
+            raise OperationExecutionValidationError(
+                f"{name}() is not allowed in connector queries."
+            )
 
 
 def _resolve_row_cap(connection_config: dict[str, Any]) -> int:

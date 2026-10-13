@@ -49,6 +49,15 @@ logger = get_logger(__name__)
 # exists so the ceiling is a number somebody chose.
 _MAX_PROVIDER_CLIENTS = 256
 
+# The output cap an Anthropic-compatible request carries when its caller set
+# none. pydantic-ai used to default to this; later 2.x releases send the model's
+# maximum output instead (16384 for a name it does not recognise), which for a
+# model behind an operator's gateway can be far more than the call was written
+# for. Agent runs and the connection check always set their own cap, so this
+# holds only for the one-shot calls that do not -- vision descriptions and
+# titles -- and keeps them where they were. Request settings override it.
+ANTHROPIC_DEFAULT_MAX_TOKENS = 4096
+
 _provider_clients: BoundedDict[str, httpx2.AsyncClient] = BoundedDict(
     _MAX_PROVIDER_CLIENTS,
     name="agent.provider_clients",
@@ -330,7 +339,11 @@ def _unmetered_model_from_runtime_profile(
                 ),
             )
         )
-        return AnthropicModel(model_name_value, provider=provider)
+        return AnthropicModel(
+            model_name_value,
+            provider=provider,
+            settings=ModelSettings(max_tokens=ANTHROPIC_DEFAULT_MAX_TOKENS),
+        )
 
     return None
 

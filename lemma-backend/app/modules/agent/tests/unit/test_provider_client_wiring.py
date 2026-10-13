@@ -19,8 +19,10 @@ import httpx2
 import pytest
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
+from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.settings import ModelSettings
 
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
@@ -159,3 +161,34 @@ def test_the_factory_builds_each_sdk_over_the_pooled_client(
         protocol=pool_protocol, base_url=base_url, profile_id="profile-wiring"
     )
 
+
+def test_an_anthropic_request_with_no_cap_keeps_the_old_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pydantic-ai stopped defaulting to 4096 and now sends the model's maximum.
+
+    Vision and title calls set no cap of their own, so without a model-level
+    default they would ask a gateway model for its whole output range. A
+    request's own `max_tokens` still wins: model settings sit under it.
+    """
+    monkeypatch.setattr(mock_model, "is_mock_llm_enabled", lambda: False)
+
+    model = factory.connection_check_model(
+        runtime_profile={
+            "protocol": RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
+            "provider_model_name": "a-1",
+            "profile_id": "profile-wiring",
+            "config": {"base_url": "https://api.anthropic.example.test"},
+        },
+        runtime_credentials={"api_key": "test"},
+    )
+
+    assert isinstance(model, AnthropicModel)
+    assert model.settings == {"max_tokens": factory.ANTHROPIC_DEFAULT_MAX_TOKENS}
+    unset, _ = model.prepare_request(None, ModelRequestParameters())
+    assert unset is not None
+    assert unset.get("max_tokens") == factory.ANTHROPIC_DEFAULT_MAX_TOKENS
+    explicit, _ = model.prepare_request(
+        ModelSettings(max_tokens=123), ModelRequestParameters()
+    )
+    assert explicit is not None and explicit.get("max_tokens") == 123

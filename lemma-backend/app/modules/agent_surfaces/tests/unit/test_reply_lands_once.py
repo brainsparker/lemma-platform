@@ -23,6 +23,11 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import (
+    OWED_REPLY_CLAIMS,
+    PENDING_DISPLAY_PATHS,
+    surface_caches,
+)
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -191,11 +196,13 @@ def _fake_store(prefix: str) -> RedisJsonCache:
 def claims() -> Iterator[RedisJsonCache]:
     """The Redis the owed reply and the held files live in, in memory."""
     store = _fake_store("test:owed-reply")
-    previous = (owed_reply._claims_cache, pending_envelope._cache)
-    owed_reply._claims_cache = store
-    pending_envelope._cache = _fake_store("test:held-files")
-    yield store
-    owed_reply._claims_cache, pending_envelope._cache = previous
+    with (
+        surface_caches.substituted(OWED_REPLY_CLAIMS, store),
+        surface_caches.substituted(
+            PENDING_DISPLAY_PATHS, _fake_store("test:held-files")
+        ),
+    ):
+        yield store
 
 
 async def test_an_answer_the_platform_deferred_is_owed_not_lost(monkeypatch):

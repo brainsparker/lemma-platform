@@ -19,29 +19,18 @@ from __future__ import annotations
 from pydantic import ValidationError
 from redis.exceptions import RedisError
 
-from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import DECISION_CARDS, surface_caches
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
 
 logger = get_logger(__name__)
 
-_CARD_TTL_SECONDS = 30 * 24 * 60 * 60
-
 _STORE_ERRORS = (RedisError, OSError)
-
-_store: RedisJsonCache | None = None
 
 
 def _cards() -> RedisJsonCache:
-    global _store
-    if _store is None or _store._redis_url != settings.redis_url:
-        _store = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:decision-card",
-            ttl_seconds=_CARD_TTL_SECONDS,
-        )
-    return _store
+    return surface_caches.get(DECISION_CARDS)
 
 
 async def remember_decision_card(callback_id: str, handle: DecisionCardHandle) -> None:

@@ -20,6 +20,10 @@ import pytest
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import (
+    WHATSAPP_SENT_MESSAGES,
+    surface_caches,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
@@ -86,10 +90,8 @@ def sent() -> Iterator[None]:
         redis_url=settings.redis_url, key_prefix="test:whatsapp-sent", ttl_seconds=60
     )
     cache._redis = fakeredis.FakeAsyncRedis(decode_responses=True)
-    previous = sent_messages._cache
-    sent_messages._cache = cache
-    yield
-    sent_messages._cache = previous
+    with surface_caches.substituted(WHATSAPP_SENT_MESSAGES, cache):
+        yield
 
 
 async def test_a_notification_meta_reports_undelivered_is_no_longer_delivered(sent):

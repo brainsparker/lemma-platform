@@ -15,7 +15,6 @@ import httpx
 from redis.exceptions import RedisError
 
 from app.core.config import reveal_secret
-from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.domain.entities import (
@@ -35,6 +34,7 @@ from app.modules.agent_surfaces.domain.setup_guides import (
     build_surface_setup_guide,
 )
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import TEAMS_CONSENT_CHECKS, surface_caches
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -42,11 +42,6 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     pass
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
-
-# Shared Redis cache of Teams admin-consent probe results (per-entry TTL: 60 s
-# granted / 10 s denied), so the Graph probe is shared across replicas. Redis
-# unavailable -> re-probe (never fails).
-_consent_check_cache: RedisJsonCache | None = None
 
 
 def access_token_from(payload: object) -> str | None:
@@ -68,17 +63,9 @@ def access_token_from(payload: object) -> str | None:
 
 
 def _get_consent_cache() -> RedisJsonCache:
-    global _consent_check_cache
-    if (
-        _consent_check_cache is None
-        or _consent_check_cache._redis_url != settings.redis_url
-    ):
-        _consent_check_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:teams-consent",
-            ttl_seconds=60,
-        )
-    return _consent_check_cache
+    """Teams admin-consent probe results (60 s granted, 10 s denied), so the
+    Graph probe is shared across replicas. Redis down -> re-probe."""
+    return surface_caches.get(TEAMS_CONSENT_CHECKS)
 
 
 if TYPE_CHECKING:

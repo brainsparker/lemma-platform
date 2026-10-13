@@ -24,6 +24,10 @@ import pytest
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import (
+    TELEGRAM_CALLBACK_TOKENS,
+    surface_caches,
+)
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
@@ -31,7 +35,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.platforms.telegram import callback_token_store
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
     ResumeOutcome,
     maybe_resume_pending_interaction,
@@ -77,10 +80,8 @@ def callback_tokens():
         redis_url=settings.redis_url, key_prefix="test:cb-journey", ttl_seconds=60
     )
     cache._redis = fakeredis.FakeAsyncRedis(decode_responses=True)
-    previous = callback_token_store._token_store
-    callback_token_store._token_store = cache
-    yield cache
-    callback_token_store._token_store = previous
+    with surface_caches.substituted(TELEGRAM_CALLBACK_TOKENS, cache):
+        yield cache
 
 
 @pytest.fixture

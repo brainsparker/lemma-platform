@@ -28,9 +28,9 @@ from uuid import UUID
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.config import settings
 from app.core.domain.job_queue import JobQueuePort
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import OWED_REPLY_CLAIMS, surface_caches
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -70,18 +70,9 @@ _ATTEMPT_ERRORS: tuple[type[BaseException], ...] = (
     *PLATFORM_TRANSPORT_ERRORS,
 )
 
-_claims_cache: RedisJsonCache | None = None
-
 
 def _claims() -> RedisJsonCache:
-    global _claims_cache
-    if _claims_cache is None or _claims_cache._redis_url != settings.redis_url:
-        _claims_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:owed-reply",
-            ttl_seconds=_SENT_TTL_SECONDS,
-        )
-    return _claims_cache
+    return surface_caches.get(OWED_REPLY_CLAIMS)
 
 
 class OwedReply(BaseModel):

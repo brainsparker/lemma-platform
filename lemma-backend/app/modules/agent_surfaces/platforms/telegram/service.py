@@ -65,8 +65,8 @@ from app.modules.agent_surfaces.platforms.telegram.message_experience import (
 from app.modules.agent_surfaces.platforms.telegram.models import (
     TelegramFileAttachment,
 )
-from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import TELEGRAM_BOT_INFO, surface_caches
 from app.core.log.log import get_logger
 from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.platforms.attachment_limits import (
@@ -74,11 +74,6 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
 )
 
 logger = get_logger(__name__)
-
-# Shared Redis cache: bot → getMe result dict (username + id), so mention
-# verification doesn't hit the Telegram API on every message and is shared across
-# replicas. Redis unavailable -> refetch (never fails).
-_bot_info_cache: RedisJsonCache | None = None
 
 
 def _bot_cache_key(bot_token: str) -> str:
@@ -95,14 +90,9 @@ def _bot_cache_key(bot_token: str) -> str:
 
 
 def _get_bot_info_cache() -> RedisJsonCache:
-    global _bot_info_cache
-    if _bot_info_cache is None or _bot_info_cache._redis_url != settings.redis_url:
-        _bot_info_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:telegram-bot",
-            ttl_seconds=3600,
-        )
-    return _bot_info_cache
+    """Bot → getMe result (username and id), shared across replicas so mention
+    checks do not ask Telegram on every message. Redis down -> refetch."""
+    return surface_caches.get(TELEGRAM_BOT_INFO)
 
 
 class TelegramPlatformService:

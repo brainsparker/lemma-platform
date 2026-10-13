@@ -27,6 +27,11 @@ from pydantic_ai.exceptions import (
 from pydantic_ai.messages import (
     ModelMessage,
 )
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_driver import (
+    STOP_WHILE_BUSY,
+    next_event_or_stop,
+    teardown_driver,
+)
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import NodeLoop
 from app.modules.agent.infrastructure.unavailable_models import (
     remember_provider_refusal,
@@ -87,12 +92,6 @@ logger = get_logger(__name__)
 #: enough that an ordinary consumer never waits, small enough that a stalled one
 #: stops the producer rather than growing without limit.
 _STREAM_QUEUE_ITEMS = 256
-
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_driver import (  # noqa: E402
-    STOP_WHILE_BUSY,
-    next_event_or_stop,
-    teardown_driver,
-)
 
 StopChecker = Callable[[], Awaitable[bool]]
 

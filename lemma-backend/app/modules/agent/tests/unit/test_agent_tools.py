@@ -35,6 +35,7 @@ from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.runtime_history import (
     ELISION_BLOCK_RUNS,
     FULL_HISTORY_AGENT_RUN_COUNT,
+    select_runtime_history,
 )
 from app.modules.agent.tools.callable_tool_factory import (
     AgentCallableToolFactory,
@@ -1843,9 +1844,7 @@ def test_runner_keeps_last_five_agent_runs_in_full_and_elides_older_runs():
         _agent_run_with_messages(run_index)
         for run_index in range(FULL_HISTORY_AGENT_RUN_COUNT + ELISION_BLOCK_RUNS)
     ]
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
-
-    selected = runner._select_runtime_history(runs)
+    selected = select_runtime_history(runs)
     grouped = _messages_by_run(selected)
     older_run = runs[0]
 

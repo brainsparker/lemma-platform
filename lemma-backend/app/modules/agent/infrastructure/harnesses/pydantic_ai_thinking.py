@@ -179,7 +179,3 @@ def thinking_part_from_message(
 
 def _identity_string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
-
-
-def _identity_string(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None

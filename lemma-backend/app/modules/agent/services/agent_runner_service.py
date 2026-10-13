@@ -74,7 +74,6 @@ from app.modules.agent.services.run_phase_spans import (
 from app.modules.agent.services.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
-    select_runtime_history,
     without_private_runs,
 )
 from app.modules.agent.services.run_context_builder import build_run_context
@@ -297,10 +296,6 @@ class AgentRunnerService:
                     "runtime_credentials": runtime_credentials,
                 },
             )
-            harness_agent = self._agent_with_resolved_runtime_metadata(
-                agent,
-                resolved_runtime=resolved_runtime,
-            )
             tracer = trace.get_tracer(__name__)
             with agent_run_telemetry_context(
                 conversation_id=conversation.id,
@@ -344,7 +339,7 @@ class AgentRunnerService:
                             await self.event_pump.drive(
                                 observe_first_output(
                                     harness.run(
-                                        agent=harness_agent,
+                                        agent=agent,
                                         conversation=conversation,
                                         messages=messages,
                                         ctx=ctx,
@@ -487,15 +482,6 @@ class AgentRunnerService:
                     user_id=user_id,
                 )
 
-    def _agent_with_resolved_runtime_metadata(
-        self,
-        agent: Agent,
-        *,
-        resolved_runtime: ResolvedAgentRuntime,
-    ) -> Agent:
-        del resolved_runtime
-        return agent
-
     async def _load_run_context(
         self,
         *,
@@ -542,14 +528,6 @@ class AgentRunnerService:
                     )
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages
-
-    def _select_runtime_history(
-        self,
-        runs: list[AgentRun],
-        *,
-        already_dropped: int = 0,
-    ) -> list[Message]:
-        return select_runtime_history(runs, already_dropped=already_dropped)
 
     def _resolve_output_type(
         self, agent: Agent, conversation: Conversation

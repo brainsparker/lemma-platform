@@ -80,6 +80,8 @@ class FunctionRuntimeQuarantine:
             )
             return False
         destroyed_at = datetime.now(timezone.utc)
+        # False also when the sandbox had already been replaced: the runs in
+        # flight now are on the replacement, and failing them would be wrong.
         if await self._routes.quarantine(pod_id, endpoint):
             await self._fail_orphaned_runs(pod_id, started_before=destroyed_at)
         return True

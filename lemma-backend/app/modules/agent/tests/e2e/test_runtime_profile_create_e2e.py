@@ -110,3 +110,29 @@ async def test_a_stored_profile_keeps_the_id_it_was_built_with(fixed_test_org) -
 
     assert stored.id == built.id
     assert found is not None and found.name == built.name
+
+
+@pytest.mark.asyncio
+async def test_a_refused_profile_says_why_without_quoting_pydantic(
+    authenticated_client, fixed_test_org
+) -> None:
+    """Each refusal is a typed error with its own code. A pydantic message,
+    which quotes the input it refused, used to reach the client verbatim."""
+    created = await authenticated_client.post(
+        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+        json={
+            "source": "OPENAI_COMPATIBLE",
+            "name": f"Hot {uuid4().hex[:8]}",
+            "base_url": "http://127.0.0.1:9/v1",
+            "api_key": "sk-e2e-not-real",
+            "model_names": ["model-1"],
+            "model_settings": {"temperature": "hot-and-secret"},
+        },
+    )
+
+    assert created.status_code == status.HTTP_400_BAD_REQUEST, created.text
+    body = created.json()
+    assert body["code"] == "RUNTIME_PROFILE_INVALID"
+    assert "temperature" in body["message"]
+    for leaked in ("validation error for", "input_value", "hot-and-secret"):
+        assert leaked not in created.text

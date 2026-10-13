@@ -76,7 +76,7 @@ _PARENT_PAGE = text(
         WHERE child.id = page.id
         RETURNING child.id
     )
-    SELECT (SELECT max(id) FROM page) AS last_id,
+    SELECT (SELECT id FROM page ORDER BY id DESC LIMIT 1) AS last_id,
            (SELECT count(*) FROM page) AS seen,
            (SELECT count(*) FROM linked) AS linked
     """

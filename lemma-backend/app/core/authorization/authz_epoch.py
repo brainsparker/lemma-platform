@@ -28,6 +28,7 @@ from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.infrastructure.db.session_uow import active_uow
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
@@ -92,15 +93,16 @@ async def bump_pod_authz_epoch(pod_id: UUID | None) -> None:
 _PENDING_BUMPS = "lemma_authz_epoch_bumps"
 
 
-async def bump_after_commit(session: AsyncSession, pod_id: UUID | None) -> None:
+def bump_after_commit(session: AsyncSession, pod_id: UUID | None) -> None:
     """Bump once the session's transaction commits; once per pod per transaction.
 
-    Immediately when the session has no unit of work to defer to: an early
-    bump costs a recomputation, a missed one serves stale permissions.
+    Synchronous on purpose: it only registers the bump, so a caller holding a
+    session never waits on Redis. A session with no unit of work to defer to
+    gets no bump -- anything keyed by the old epoch lives out its short TTL,
+    which is the same bound as a bump lost to a Redis outage.
     """
-    uow = session.info.get("lemma_uow")
+    uow = active_uow(session)
     if uow is None:
-        await bump_pod_authz_epoch(pod_id)
         return
     pending: set[UUID | None] = session.info.setdefault(_PENDING_BUMPS, set())
     if pod_id in pending:

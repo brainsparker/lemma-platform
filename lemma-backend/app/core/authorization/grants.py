@@ -216,7 +216,7 @@ async def replace_grantee_resource_grants(
         )
     await session.flush()
     await _bump_if_agent(session, grantee_type, grantee_id)
-    await bump_after_commit(session, pod_id)
+    bump_after_commit(session, pod_id)
 
 
 async def replace_resource_grantee_grant(
@@ -253,7 +253,7 @@ async def replace_resource_grantee_grant(
         )
     await session.flush()
     await _bump_if_agent(session, grantee_type, grantee_id)
-    await bump_after_commit(session, pod_id)
+    bump_after_commit(session, pod_id)
 
 
 async def delete_resource_grantee_grant(
@@ -276,7 +276,7 @@ async def delete_resource_grantee_grant(
     )
     await session.flush()
     await _bump_if_agent(session, grantee_type, grantee_id)
-    await bump_after_commit(session, pod_id)
+    bump_after_commit(session, pod_id)
 
 
 async def delete_resource_grants(
@@ -311,7 +311,7 @@ async def delete_resource_grants(
         },
     )
     await session.flush()
-    await bump_after_commit(session, pod_id)
+    bump_after_commit(session, pod_id)
 
 
 async def delete_resource_sharing_grants(
@@ -337,7 +337,7 @@ async def delete_resource_sharing_grants(
         )
     )
     await session.flush()
-    await bump_after_commit(session, pod_id)
+    bump_after_commit(session, pod_id)
 
 
 async def delete_grantee_grants(
@@ -357,7 +357,7 @@ async def delete_grantee_grants(
     )
     await session.flush()
     await _bump_if_agent(session, grantee_type, grantee_id)
-    await bump_after_commit(session, pod_id)
+    bump_after_commit(session, pod_id)
 
 
 async def _bump_if_agent(

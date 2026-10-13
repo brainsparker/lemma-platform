@@ -223,7 +223,7 @@ async def test_delete_path_in_process_cleanup_runs_after_release(monkeypatch):
         ucmod.datastore_settings, "e2e_disable_worker_file_autoindex", True
     )
     enqueue_mock = AsyncMock(return_value=True)
-    monkeypatch.setattr(ucmod, "enqueue_file_cleanup", enqueue_mock)
+    monkeypatch.setattr(ucmod, "add_file_cleanup_work", enqueue_mock)
 
     await _use_cases(factory, service).delete_path(
         pod_id=uuid4(), path="/x.txt", request=SimpleNamespace(), user_id=uuid4()
@@ -255,7 +255,7 @@ async def test_delete_path_enqueues_cleanup_in_the_deleting_transaction(monkeypa
     monkeypatch.setattr(
         ucmod.datastore_settings, "e2e_disable_worker_file_autoindex", False
     )
-    monkeypatch.setattr(ucmod, "enqueue_file_cleanup", _enqueue)
+    monkeypatch.setattr(ucmod, "add_file_cleanup_work", _enqueue)
 
     await _use_cases(factory, service).delete_path(
         pod_id=uuid4(), path="/folder", request=SimpleNamespace(), user_id=uuid4()

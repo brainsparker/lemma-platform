@@ -6,11 +6,12 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.infrastructure.events.models import DomainEventOutbox
 from app.core.infrastructure.events.outbox import OutboxDispatcher
+from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.tests.e2e.harness import (
     DatastoreApi,
     build_pdf_bytes,
@@ -23,6 +24,13 @@ from app.modules.test_support.e2e.waiters import eventually, wait_for_status
 from app.modules.test_support.e2e.worker_process import ProductionWorkerProcess
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
+
+
+@pytest.fixture(autouse=True)
+def _uploads_enqueue_processing(monkeypatch):
+    """The API writes ``file.process`` in the upload's transaction, as in
+    production; the e2e default indexes in-process instead."""
+    monkeypatch.setattr(datastore_settings, "e2e_disable_worker_file_autoindex", False)
 
 
 async def _dispatch_outbox(db_manager) -> None:
@@ -288,10 +296,9 @@ async def test_kreuzberg_extractor_behaviour_matrix(
         assert fake_document_processor_server.requests["kreuzberg:chunk"] == 1
 
 
-#: How long an upload may take to reach its worker by the event path: well
-#: past what it takes, and short of the minute after which the pending-file
-#: dispatch cron would pick the file up instead. A miss then fails here, with
-#: the worker's log, instead of passing a minute late with nothing to show why.
+#: How long an upload may take to reach its worker: the work item is written
+#: in the upload's transaction and the worker is woken by NOTIFY, so this is
+#: generous. A miss fails here, with the worker's log.
 _EVENT_PATH_SECONDS = 25.0
 
 
@@ -314,6 +321,7 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
 ):
     asked_key = "kreuzberg:provider-error.pdf"
     asked_before = fake_document_processor_server.requests[asked_key]
+    fake_document_processor_server.healthy = False
     async with document_worker("kreuzberg") as worker:
         malformed = await pod_api.upload_file(
             "malformed.pdf",
@@ -329,13 +337,14 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
 
         # A response we cannot make sense of is a DOCUMENT-level failure: the
         # extractor answered, we just can't use the answer. It spends an attempt
-        # and goes terminal so a poison file can't loop forever.
+        # -- the worker here has one -- and goes terminal, so a poison file
+        # cannot loop.
         failed = await _within_the_event_path(
             worker,
             _wait_for_status(
                 pod_api,
                 malformed["path"],
-                {"FAILED"},
+                {"FAILED_PERMANENT"},
                 timeout_seconds=_EVENT_PATH_SECONDS,
             ),
         )
@@ -343,16 +352,10 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
         assert "CANARY_DATASTORE_PROVIDER_SECRET" not in str(failed)
         assert (await pod_api.list_children(malformed["path"]))["items"] == []
 
-        # A 5xx is INFRASTRUCTURE unavailability — nothing was learned about the
-        # document. It must go back to PENDING with its attempt refunded, or an
-        # extractor outage would burn the 3-attempt budget and permanently fail
-        # perfectly good user documents.
-        #
-        # A file is PENDING before it is processed, too, so PENDING alone
-        # proves nothing: this used to pass before the extractor was ever
-        # asked, and tear the worker down mid-job. Once the extractor has been
-        # asked, the file was claimed (PROCESSING), so PENDING again can only
-        # be the release.
+        # A 5xx while the extractor's health check also fails is the extractor
+        # being down: nothing was learned about the document, so nothing is
+        # charged and the file waits. (A 5xx while it is healthy is the
+        # document's failure -- see test_file_work_e2e.)
         async def times_asked() -> int:
             return fake_document_processor_server.requests[asked_key]
 
@@ -367,13 +370,37 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
             ),
         )
         released = await _wait_for_status(pod_api, provider_error["path"], {"PENDING"})
-        assert released["processing_attempts"] == 0, (
-            "a 5xx from the extractor must not spend the file's retry budget"
-        )
-        assert released["status"] != "FAILED_PERMANENT"
+        item = await _work_item(db_manager, provider_error["id"])
+        assert (item.attempts, item.error_class) == (
+            0,
+            "unavailable:health_check_failing",
+        ), "an extractor outage must not spend the file's retry budget"
+        assert "Waiting for the document extractor" in released["last_processing_error"]
         # The upstream body carries a credential; it must never be persisted.
         assert "CANARY_DATASTORE_PROVIDER_SECRET" not in str(released)
+        assert "CANARY_DATASTORE_PROVIDER_SECRET" not in str(item.last_error)
         assert (await pod_api.list_children(provider_error["path"]))["items"] == []
+
+
+async def _work_item(db_manager, file_id: str):
+    async def settled():
+        async with db_manager.session_factory() as session:
+            return (
+                await session.execute(
+                    text(
+                        "SELECT attempts, error_class, last_error FROM work_items "
+                        "WHERE kind = 'file.process' AND payload ->> 'file_id' = :id"
+                    ),
+                    {"id": file_id},
+                )
+            ).one_or_none()
+
+    return await eventually(
+        label=f"the work item for {file_id} to record its outcome",
+        probe=settled,
+        done=lambda row: row is not None and row.error_class is not None,
+        timeout_seconds=_EVENT_PATH_SECONDS,
+    )
 
 
 @pytest.mark.asyncio
@@ -410,7 +437,7 @@ async def test_docling_adapter_runs_through_http_outbox_and_worker(
             docling_malformed,
             docling_submit_error,
         ):
-            await _wait_for_status(pod_api, failed_file["path"], {"FAILED"})
+            await _wait_for_status(pod_api, failed_file["path"], {"FAILED_PERMANENT"})
         docling_children = await pod_api.list_children(docling["path"])
         docling_markdown = next(
             item for item in docling_children["items"] if item["name"] == "document.md"
@@ -484,7 +511,7 @@ async def test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wh
         await _wait_for_status(pod_api, pdf["path"], {"COMPLETED"})
         await _wait_for_status(pod_api, markdown["path"], {"COMPLETED"})
         await _wait_for_status(pod_api, html["path"], {"COMPLETED"})
-        failed = await _wait_for_status(pod_api, corrupt["path"], {"FAILED"})
+        failed = await _wait_for_status(pod_api, corrupt["path"], {"FAILED_PERMANENT"})
 
         # A failure must stay terminal and must not carry the extractor's own
         # words into a stored, user-visible field.
@@ -532,5 +559,5 @@ async def test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wh
         assert nodes[pdf["path"]]["status"] == "COMPLETED"
         assert nodes[pdf["path"]]["indexed"] is True
         assert nodes[pdf["path"]]["has_markdown"] is True
-        assert nodes[corrupt["path"]]["status"] == "FAILED"
+        assert nodes[corrupt["path"]]["status"] == "FAILED_PERMANENT"
         assert nodes[corrupt["path"]]["indexed"] is False

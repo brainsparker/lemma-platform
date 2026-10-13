@@ -20,7 +20,13 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.datastore.domain.file_entities import (
+    DatastoreFileEntity,
     FileStatus,
+    ProcessingRequest,
+)
+from app.modules.datastore.events.file_work import (
+    content_update_delay,
+    enqueue_file_processing,
 )
 from app.modules.datastore.infrastructure.models import DatastoreFile
 
@@ -41,6 +47,24 @@ class DatastoreFileProcessingStateMixin:
     """Processing-state transitions for the host repository's session."""
 
     session: AsyncSession
+
+    async def _enqueue_requested_processing(
+        self, entity: DatastoreFileEntity, instance: DatastoreFile
+    ) -> None:
+        """Write the work item a transition asked for, in this transaction."""
+        request = entity.processing_request
+        if request is None:
+            return
+        entity.clear_processing_request()
+        await enqueue_file_processing(
+            self.session,
+            pod_id=instance.pod_id,
+            file_id=instance.id,
+            sha256=instance.content_sha256,
+            delay=(
+                content_update_delay() if request is ProcessingRequest.CONTENT else None
+            ),
+        )
 
     async def mark_not_required(self, file_id: UUID) -> None:
         await self.session.execute(

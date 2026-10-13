@@ -8,7 +8,6 @@ from uuid import UUID
 
 from sqlalchemy import func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
-from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -216,10 +215,9 @@ class ConversationRepository(
         self,
         conversation_id: UUID,
         *,
-        include_messages: bool = False,
         include_runs: bool = False,
     ) -> ConversationEntity | None:
-        """Load a conversation, optionally with its messages and its latest run.
+        """Load a conversation, optionally with its latest run.
 
         ``include_runs`` used to eager-load every run of the conversation and
         every message of every run. Nothing consumed that: the entity derives
@@ -234,8 +232,6 @@ class ConversationRepository(
         ``status`` and the ``last_run_*`` fields from it unchanged.
         """
         stmt = select(ConversationModel).where(ConversationModel.id == conversation_id)
-        if include_messages:
-            stmt = stmt.options(selectinload(ConversationModel.messages))
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         if model is None:

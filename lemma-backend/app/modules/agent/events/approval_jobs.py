@@ -100,7 +100,6 @@ async def reconcile_agent_approval_now(
             uow=uow,
             conversation_repository=conversation_repository,
             agent_repository=AgentRepository(uow),
-            authorization_service=create_authorization_data_service(uow),
             usage_service=build_usage_service(uow),
         )
         # An approved request_approval runs its wrapped tool with a user's

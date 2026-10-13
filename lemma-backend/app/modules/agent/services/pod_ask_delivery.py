@@ -164,7 +164,6 @@ class PodAskDelivery:
                     uow=uow,
                     conversation_repository=ConversationRepository(uow),
                     agent_repository=AgentRepository(uow),
-                    authorization_service=create_authorization_data_service(uow),
                     usage_service=build_usage_service(uow),
                 ).turns
                 for content, metadata in deliveries:

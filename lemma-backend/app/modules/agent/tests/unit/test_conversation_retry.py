@@ -23,9 +23,7 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 import app.modules.agent.services.conversation_retry_service as retry_service_module
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
-)
+from app.modules.agent.services.conversation_service import ConversationService
 
 
 def _run(
@@ -87,7 +85,7 @@ def _service(
         conversations_with_pending_interaction=AsyncMock(return_value=set()),
     )
     uow = SimpleNamespace(collect_events=MagicMock(), commit=AsyncMock())
-    service = ConversationRetryService(
+    service = ConversationService(
         uow=uow,
         conversation_repository=repository,
         agent_repository=SimpleNamespace(
@@ -95,7 +93,6 @@ def _service(
                 return_value=SimpleNamespace(name="lem", kind=None, agent_runtime=None)
             )
         ),
-        authorization_service=SimpleNamespace(),
         usage_service=usage_service,
         turn_runtime_check=runtime_check or _RuntimeCheck(),
     )
@@ -192,7 +189,7 @@ def _metered_retry_setup(
     monkeypatch: pytest.MonkeyPatch,
     *,
     allowed: bool,
-) -> tuple[ConversationRetryService, SimpleNamespace, AgentRun, Conversation]:
+) -> tuple[ConversationService, SimpleNamespace, AgentRun, Conversation]:
     usage_service = _usage_service(allowed=allowed)
     service, repository, _ = _service(usage_service)
     conversation = Conversation(

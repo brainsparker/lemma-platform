@@ -162,7 +162,6 @@ def _service(conversations: dict):
             conversations
         ),
         agent_repository=None,  # type: ignore[arg-type]
-        authorization_service=None,
     )
 
 

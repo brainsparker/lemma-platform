@@ -41,9 +41,6 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageRole,
 )
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
 from app.modules.agent.services.conversation_access import (
     require_agent_action,
     resolve_agent,
@@ -468,10 +465,6 @@ class TurnCoordinator:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-
-    @property
-    def wait_repository(self) -> AgentConversationWaitRepository:
-        return self.stops.wait_repository
 
     async def withdraw_queued_message(
         self,

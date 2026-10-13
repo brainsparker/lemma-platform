@@ -1708,7 +1708,6 @@ def _conversation_service_with_repo(repo):
         uow=None,
         conversation_repository=repo,
         agent_repository=None,
-        authorization_service=None,
     )
 
 

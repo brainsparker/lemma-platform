@@ -138,15 +138,8 @@ class _FakeRepo:
         self.uow = uow
 
     async def get_conversation(
-        self, conversation_id, *, include_messages=False, include_runs=False
+        self, conversation_id, *, include_runs=False
     ) -> Conversation | None:
-        if include_messages:
-            # Titling needs two rows. Loading the transcript to find them cost
-            # seconds of materialisation inside an open transaction.
-            raise AssertionError(
-                "titling must not load the transcript; "
-                "use get_conversation_opening_texts"
-            )
         return self.uow.conversation
 
     async def get_conversation_opening_texts(self, conversation_id):

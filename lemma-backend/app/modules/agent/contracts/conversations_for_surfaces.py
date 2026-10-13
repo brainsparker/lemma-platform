@@ -9,13 +9,8 @@ collaborator *off* the service (`conversation_repository`, `agent_repository`,
 `services/interaction_helpers.py` assembled a second service out of six of them.
 
 Twelve operations replace it. Two of the six collaborators turned out to be
-dead weight: `ConversationService` stores `authorization_service` and
-`fallback_model_name` and neither it nor any of the five coordinators it builds
-ever reads them -- `agent/api/dependencies.py` has never even passed a
-`fallback_model_name`, so every surface was threading `None` across a module
-boundary. They are still on the constructor -- taking a parameter off it is a
-change to every place in `agent` that builds one, and not this change -- but
-nothing crosses a module boundary for them any more.
+dead weight -- nothing ever read `authorization_service` or
+`fallback_model_name` -- and are gone from `ConversationService` altogether.
 
 Every operation takes the unit of work rather than being handed a bound service,
 which is also what makes the worker's two modes disappear from the caller: the
@@ -64,9 +59,7 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
 )
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
-)
+from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.usage.contracts.execution import build_usage_service
 
 #: The pausing kind a surface renders as a decision rather than as a question.
@@ -448,11 +441,10 @@ async def retry_failed_run(
     )
     token = set_current_context(auth_ctx)
     try:
-        await ConversationRetryService(
+        await ConversationService(
             uow=uow,
             conversation_repository=ConversationRepository(uow),
             agent_repository=AgentRepository(uow),
-            authorization_service=create_authorization_data_service(uow),
             usage_service=build_usage_service(uow),
         ).retry_failed_run(
             conversation_id=conversation_id,

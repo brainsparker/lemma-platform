@@ -7,14 +7,27 @@ nothing left -- never a boot hook, which would grow with the table:
 * ``datastore.parent_backfill`` fills ``parent_id`` for rows written before it
   existed (new writes set it themselves).
 * ``datastore.storage_copy`` copies a path-layout file's original and derived
-  container to its object-layout keys, flips the row, and drops the old keys.
-  It runs only while ``DATASTORE_OBJECT_STORAGE_LAYOUT`` is on. Reads look in
-  both layouts throughout, so a row flipped between a reader's read and its
-  download still resolves.
+  container to its object-layout keys and flips the row. It runs only while
+  ``DATASTORE_OBJECT_STORAGE_LAYOUT`` is on. Reads look in both layouts
+  throughout, so a row flipped between a reader's read and its download still
+  resolves.
+
+The old keys are not dropped with the flip. Signed URLs name an object key:
+the HMAC token served by ``/public/datastore/files`` embeds it, and on GCS the
+URL is the bucket's own, signed for that key, which nothing of ours sees when
+it is opened. A URL minted before the copy -- a page image in an agent's
+transcript, say -- names the path key, and dropping it would 404 every one of
+them. Resolving a link by file id instead would need the id in every URL and
+could never reach a GCS signed URL at all, so the keys simply outlive every
+link that could name them: the flip enqueues ``datastore.storage_release``,
+due once the longest URL anyone could have minted has expired, which drops
+them -- unless a path-layout file has since been written at that path (the
+switch turned back off), whose bytes those keys now are.
 """
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import timedelta
 from uuid import UUID
 
@@ -48,6 +61,7 @@ logger = get_logger(__name__)
 
 PARENT_BACKFILL = "datastore.parent_backfill"
 STORAGE_COPY = "datastore.storage_copy"
+STORAGE_RELEASE = "datastore.storage_release"
 PARENT_BACKFILL_PAGE = 1_000
 STORAGE_COPY_PAGE = 100
 BACKFILL_EVERY = timedelta(hours=1)
@@ -100,11 +114,41 @@ _FLIP = text(
     """
 )
 
+# Whether a path-layout file now sits at the released path: its bytes are at
+# the keys the release would drop.
+_PATH_TAKEN = text(
+    """
+    SELECT EXISTS (
+        SELECT 1 FROM datastore_files
+        WHERE pod_id = :pod_id AND path = :path
+          AND storage_layout = 'path' AND kind = 'FILE'
+    )
+    """
+)
+
+#: Past the ceiling on a signed URL's lifetime: a GCS URL is signed for whole
+#: hours, rounded, so it can outlive the seconds asked for by up to half of one.
+_RELEASE_MARGIN = timedelta(hours=1)
+
 _ZERO_ID = UUID(int=0)
+
+
+def release_delay() -> timedelta:
+    """How long old keys are kept after a copy: every URL naming them is dead."""
+    return (
+        timedelta(seconds=datastore_settings.datastore_signed_url_max_expiry_seconds)
+        + _RELEASE_MARGIN
+    )
 
 
 class CursorPayload(BaseModel):
     after: UUID = _ZERO_ID
+
+
+class ReleasePayload(BaseModel):
+    pod_id: UUID
+    file_id: UUID
+    path: str
 
 
 async def run_parent_backfill(ctx: FastContext, payload: CursorPayload) -> None:
@@ -183,20 +227,18 @@ async def run_storage_copy(ctx: JobContext, payload: CursorPayload) -> None:
                     _FLIP, {"id": row.id, "path": row.path, "sha": row.content_sha256}
                 )
             ).rowcount
+            if flipped:
+                # In the flip's transaction: a flip whose release was lost
+                # would keep its old keys forever.
+                await ctx.writer(uow).add(
+                    STORAGE_RELEASE,
+                    SYSTEM_NAMESPACE,
+                    ReleasePayload(pod_id=row.pod_id, file_id=row.id, path=row.path),
+                    dedup_key=f"{STORAGE_RELEASE}:{row.id}",
+                    delay=release_delay(),
+                )
         if flipped:
             moved += 1
-            legacy = path_keys(row.pod_id, row.path)
-            for drop in (
-                storage.delete_file(legacy.original),
-                storage.delete_prefix(legacy.child_prefix),
-            ):
-                try:
-                    await drop
-                except DatastoreDomainError:
-                    logger.debug(
-                        "datastore.storage_copy.legacy_delete.diagnostic",
-                        exc_info=True,
-                    )
         else:
             # The row moved or changed while its bytes were copied; the next
             # pass copies it again from where it is now.
@@ -219,6 +261,24 @@ async def run_storage_copy(ctx: JobContext, payload: CursorPayload) -> None:
         logger.info("datastore.storage_copy.page.observed", moved=moved)
 
 
+async def run_storage_release(ctx: JobContext, payload: ReleasePayload) -> None:
+    """Drop a copied file's path-layout keys, now nothing can name them."""
+    async with ctx.checkpoint() as uow:
+        taken = await uow.session.scalar(
+            _PATH_TAKEN, {"pod_id": payload.pod_id, "path": payload.path}
+        )
+    if taken:
+        return
+    storage = create_datastore_storage()
+    legacy = path_keys(payload.pod_id, payload.path)
+    # Any other failure is the item's: it is retried, and the keys are not
+    # left behind unnoticed.
+    with suppress(DatastoreObjectNotFoundError):
+        await storage.delete_file(legacy.original)
+    with suppress(DatastoreObjectNotFoundError):
+        await storage.delete_prefix(legacy.child_prefix)
+
+
 def register_storage_work(registry: WorkRegistry) -> None:
     registry.handler(
         kind=PARENT_BACKFILL,
@@ -232,6 +292,12 @@ def register_storage_work(registry: WorkRegistry) -> None:
         mode=WorkMode.JOB,
         payload=CursorPayload,
     )(run_storage_copy)
+    registry.handler(
+        kind=STORAGE_RELEASE,
+        cls=WorkClass.ADMIN,
+        mode=WorkMode.JOB,
+        payload=ReleasePayload,
+    )(run_storage_release)
     registry.periodic(PARENT_BACKFILL, BACKFILL_EVERY, PARENT_BACKFILL)
     registry.periodic(STORAGE_COPY, BACKFILL_EVERY, STORAGE_COPY)
 

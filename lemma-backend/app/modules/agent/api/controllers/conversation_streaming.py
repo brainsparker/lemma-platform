@@ -33,6 +33,7 @@ async def start_and_stream_run(
     channel_service: ChannelServiceDep,
     conversation_id: UUID,
     start_run: Callable[[], Awaitable[AgentRunStartResult]],
+    load_run: Callable[[UUID], Awaitable[AgentRun]],
 ) -> StreamingResponse:
     async def close_subscription(
         exc_type=None,
@@ -68,9 +69,23 @@ async def start_and_stream_run(
         # only ever thrown away here.
         yield encode_stream_chunk(
             event_type="status",
-            data={"started_new_run": result.started_new_run},
+            data={
+                "started_new_run": result.started_new_run,
+                "deduplicated": result.deduplicated,
+            },
             agent_run_id=result.agent_run_id,
         )
+        if result.deduplicated:
+            # A re-send joins the run its first copy started, which may have
+            # ended -- and published its ending -- before this subscription
+            # existed. Waiting for that ending again never ends: the stream sat
+            # on keepalives forever. Read once the subscription is open, so a
+            # run that ends after this read is still heard below.
+            ending = terminal_run_chunk(await load_run(result.agent_run_id))
+            if ending is not None:
+                yield ending
+                await close_subscription()
+                return
         try:
             async for chunk in with_keepalive(
                 iter_subscription(iterator, result.agent_run_id)

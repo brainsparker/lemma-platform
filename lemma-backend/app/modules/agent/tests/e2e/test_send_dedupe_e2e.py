@@ -11,17 +11,21 @@ second a Redis window, and a stand-in for either answers whatever it is told.
 from __future__ import annotations
 
 import asyncio
-from uuid import uuid4
+import json
+from uuid import UUID, uuid4
 
 import pytest
 from starlette import status
 
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
-from app.modules.agent.domain.value_objects import MessageRole
+from app.core.infrastructure.channels.channel_service import get_channel_service
+from app.modules.agent.api.controllers.shared import conversation_channel
+from app.modules.agent.domain.value_objects import AgentRunStatus, MessageRole
 from app.modules.agent.services.send_window import WINDOW_SECONDS, SendWindow
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     conversation_service,
+    finish,
     messages,
     owner_uow,
     runs,
@@ -38,6 +42,28 @@ async def _append(scenario, seeded: Seeded, body: dict):
     )
     assert sent.status_code == status.HTTP_200_OK, sent.text
     return sent.json()
+
+
+async def _stream_resend(scenario, seeded: Seeded, body: dict):
+    """Re-send on the streaming route; every data frame until the stream ends.
+
+    Bounded: the failure this guards against is a stream that never ends.
+    """
+    frames: list[dict] = []
+    async with scenario.owner_client.stream(
+        "POST",
+        f"/pods/{scenario.pod_id}/conversations/{seeded.conversation_id}/messages",
+        json=body,
+        timeout=30,
+    ) as response:
+        assert response.status_code == status.HTTP_200_OK, await response.aread()
+        async with asyncio.timeout(15):
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                frame = json.loads(line.removeprefix("data: "))
+                frames.append(frame)
+    return frames
 
 
 async def _typed(seeded: Seeded, text: str):
@@ -153,3 +179,64 @@ async def test_a_redis_outage_never_stops_a_send(scenario):
 
     assert result.started_new_run is True
     assert len(await _typed(seeded, "Still works?")) == 1
+
+
+async def test_a_resend_after_its_run_finished_streams_the_ending_and_closes(
+    scenario,
+):
+    """The streaming route used to subscribe for a run that had already ended,
+    so the re-send waited forever on keepalives for an ending already sent."""
+    seeded = await seeded_conversation(scenario)
+    client_id = f"web-{uuid4()}"
+    first = await _append(
+        scenario,
+        seeded,
+        {"content": "File the report.", "client_message_id": client_id},
+    )
+    await finish(UUID(first["agent_run_id"]), status=AgentRunStatus.COMPLETED)
+
+    frames = await _stream_resend(
+        scenario,
+        seeded,
+        {"content": "File the report.", "client_message_id": client_id},
+    )
+
+    assert [frame["type"] for frame in frames] == ["status", "completed"]
+    assert frames[0]["data"] == {"started_new_run": False, "deduplicated": True}
+    assert {frame["agent_run_id"] for frame in frames} == {first["agent_run_id"]}
+
+
+async def test_a_resend_while_its_run_is_working_follows_the_run(scenario):
+    seeded = await seeded_conversation(scenario)
+    client_id = f"web-{uuid4()}"
+    first = await _append(
+        scenario, seeded, {"content": "Draft it.", "client_message_id": client_id}
+    )
+    run_id = first["agent_run_id"]
+    assert (await runs(seeded.conversation_id))[0].status not in {
+        "COMPLETED",
+        "FAILED",
+        "STOPPED",
+    }
+    channel = await get_channel_service()
+
+    async def run_ends() -> None:
+        # After the re-send is listening: the ending it must still hear.
+        await asyncio.sleep(0.5)
+        await channel.publish(
+            conversation_channel(seeded.conversation_id),
+            {
+                "type": "completed",
+                "agent_run_id": run_id,
+                "data": {"status": "COMPLETED"},
+            },
+        )
+
+    publishing = asyncio.create_task(run_ends())
+    frames = await _stream_resend(
+        scenario, seeded, {"content": "Draft it.", "client_message_id": client_id}
+    )
+    await publishing
+
+    assert [frame["type"] for frame in frames] == ["status", "completed"]
+    assert frames[0]["data"] == {"started_new_run": False, "deduplicated": True}

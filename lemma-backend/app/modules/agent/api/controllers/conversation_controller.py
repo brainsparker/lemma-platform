@@ -17,6 +17,7 @@ from app.core.authorization.dependencies import (
 from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.domain.entities import AgentRun
 from app.modules.agent.domain.server_metadata import client_metadata
 from app.modules.agent.services.runtime_availability import check_runtime_for_pod
 from app.modules.agent.api.controllers.conversation_streaming import (
@@ -401,10 +402,23 @@ async def send_message(
                 client_message_id=data.client_message_id,
             )
 
+    async def load_run(agent_run_id: UUID) -> AgentRun:
+        async with pod_context_scope(
+            uow_factory, request=request, user_id=user.id, pod_id=pod_id
+        ) as scope:
+            return await load_authorized_agent_run(
+                _build_conversation_service(scope.uow),
+                conversation_id=conversation_id,
+                agent_run_id=agent_run_id,
+                user_id=user.id,
+                pod_id=pod_id,
+            )
+
     return await start_and_stream_run(
         channel_service=channel_service,
         conversation_id=conversation_id,
         start_run=start_run,
+        load_run=load_run,
     )
 
 

@@ -9,6 +9,7 @@ from attrs import field as _attrs_field
 
 from ..models.agent_host_status import AgentHostStatus
 from ..models.harness_kind import HarnessKind
+from ..models.runtime_profile_availability import RuntimeProfileAvailability
 from ..models.runtime_profile_kind import RuntimeProfileKind
 from ..models.runtime_profile_protocol import RuntimeProfileProtocol
 from ..models.runtime_profile_scope import RuntimeProfileScope
@@ -63,7 +64,7 @@ class AgentRuntimeProfileDetailResponse:
                 than failing the whole listing.
             scope (RuntimeProfileScope):
             status (RuntimeProfileStatus):
-            availability_status (None | str | Unset):
+            availability_status (None | RuntimeProfileAvailability | Unset):
             config (AgentRuntimeProfileDetailResponseConfig | Unset):
             default_model_name (None | str | Unset):
             description (None | str | Unset):
@@ -84,7 +85,7 @@ class AgentRuntimeProfileDetailResponse:
     protocol: RuntimeProfileProtocol
     scope: RuntimeProfileScope
     status: RuntimeProfileStatus
-    availability_status: None | str | Unset = UNSET
+    availability_status: None | RuntimeProfileAvailability | Unset = UNSET
     config: AgentRuntimeProfileDetailResponseConfig | Unset = UNSET
     default_model_name: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
@@ -118,6 +119,8 @@ class AgentRuntimeProfileDetailResponse:
         availability_status: None | str | Unset
         if isinstance(self.availability_status, Unset):
             availability_status = UNSET
+        elif isinstance(self.availability_status, RuntimeProfileAvailability):
+            availability_status = self.availability_status.value
         else:
             availability_status = self.availability_status
 
@@ -256,12 +259,22 @@ class AgentRuntimeProfileDetailResponse:
 
         status = RuntimeProfileStatus(d.pop("status"))
 
-        def _parse_availability_status(data: object) -> None | str | Unset:
+        def _parse_availability_status(
+            data: object,
+        ) -> None | RuntimeProfileAvailability | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
-            return cast(None | str | Unset, data)
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                availability_status_type_0 = RuntimeProfileAvailability(data)
+
+                return availability_status_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | RuntimeProfileAvailability | Unset, data)
 
         availability_status = _parse_availability_status(
             d.pop("availability_status", UNSET)

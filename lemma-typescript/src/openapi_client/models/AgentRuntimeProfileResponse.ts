@@ -4,12 +4,13 @@
 /* eslint-disable */
 import type { HarnessKind } from './HarnessKind.js';
 import type { RuntimeModelCatalogEntry } from './RuntimeModelCatalogEntry.js';
+import type { RuntimeProfileAvailability } from './RuntimeProfileAvailability.js';
 import type { RuntimeProfileKind } from './RuntimeProfileKind.js';
 import type { RuntimeProfileProtocol } from './RuntimeProfileProtocol.js';
 import type { RuntimeProfileScope } from './RuntimeProfileScope.js';
 import type { RuntimeProfileStatus } from './RuntimeProfileStatus.js';
 export type AgentRuntimeProfileResponse = {
-    availability_status?: (string | null);
+    availability_status?: (RuntimeProfileAvailability | null);
     config?: Record<string, any>;
     default_model_name?: (string | null);
     derived_harness_kind: HarnessKind;

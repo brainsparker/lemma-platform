@@ -251,6 +251,21 @@ lemma-agent-host own-settings disable claude-code   # Lemma's only (the default)
 
 The setting is `own_settings` in `config.json`, read by each run as it starts.
 
+## How many runs at once
+
+A computer takes up to 20 runs at once, across all its pairings. More wait in
+Lemma's queue for a slot. The person can choose another limit, from 1 to 128:
+
+```bash
+lemma-agent-host max-runs          # show it
+lemma-agent-host max-runs 8        # choose it; applies when the host next starts
+```
+
+The setting is `max_runs` in `config.json`, with `max_runs_chosen` recording
+that the person set it. Older builds wrote their default of 2 into every
+config; a 2 nobody chose is lifted to the current default when the config is
+read, and a chosen one is kept.
+
 ## Host execution
 
 On macOS the host can also run the paired user's Lemma agent commands on this

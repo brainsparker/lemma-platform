@@ -96,6 +96,12 @@ impl Harness {
     }
 
     async fn with_manifest(manifest: AdapterManifest) -> Self {
+        Self::with_slots(manifest, 2).await
+    }
+
+    /// A worker that may run `max_runs` at once, as `HostRuntime::serve`
+    /// sizes it from the config.
+    async fn with_slots(manifest: AdapterManifest, max_runs: u16) -> Self {
         let server = StubLink::start().await;
         let stub = Arc::clone(&server.state);
         let directory = tempfile::TempDir::new().unwrap();
@@ -126,8 +132,8 @@ impl Harness {
             manifest,
             Arc::new(IdleDriver),
             PathBuf::from("/nonexistent-bridge"),
-            Arc::new(Semaphore::new(2)),
-            2,
+            Arc::new(Semaphore::new(usize::from(max_runs))),
+            max_runs,
             shutdown_rx,
             watch::channel(0_u64).1,
         )

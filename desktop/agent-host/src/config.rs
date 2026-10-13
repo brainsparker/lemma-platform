@@ -161,6 +161,12 @@ pub struct HostConfig {
     pub targets: Vec<TargetConfig>,
     #[serde(default = "default_max_runs")]
     pub max_runs: u16,
+    /// Whether a person chose `max_runs` (`lemma-agent-host max-runs`),
+    /// rather than it being whatever default the build that wrote the file
+    /// had. Only an unchosen value is lifted when the default rises
+    /// (`migrate_max_runs`); a chosen one is the person's and stays.
+    #[serde(default)]
+    pub max_runs_chosen: bool,
     /// The host-wide switch older builds wrote. It applied to every pairing
     /// -- a hosted workspace's and a teammate's shared install's included --
     /// so it is read once, moved onto the local pairing (`TargetConfig::
@@ -278,9 +284,19 @@ impl TargetConfig {
     }
 }
 
+/// How many runs one computer takes at once unless its person chose otherwise.
+///
+/// Each run is one coding-agent process waiting on a model most of the time,
+/// so a Mac holds many; two made the third conversation of a busy afternoon
+/// queue behind the first two.
 const fn default_max_runs() -> u16 {
-    2
+    20
 }
+
+/// The default older builds wrote into every config they created. A file
+/// still holding it, with no choice recorded, holds it only because nobody
+/// changed it.
+const RETIRED_DEFAULT_MAX_RUNS: u16 = 2;
 
 const fn default_enabled() -> bool {
     true
@@ -288,6 +304,20 @@ const fn default_enabled() -> bool {
 
 impl HostConfig {
     pub fn load_or_create(paths: &HostPaths) -> anyhow::Result<Self> {
+        let config = Self::load_or_create_unlocked(paths)?;
+        if config.max_runs_needs_lifting() {
+            // Saved, not only lifted in memory, and under the write lock: a
+            // save from here without it could write back a config loaded
+            // before another process's pairing landed, and lose the pairing.
+            // `mutate` reloads inside the lock and lifts what it finds.
+            return Self::mutate(paths, |_| Ok(false));
+        }
+        Ok(config)
+    }
+
+    /// `load_or_create` for a caller already holding the write lock, or one
+    /// that only reads. Fixups that need no save happen here, in memory.
+    fn load_or_create_unlocked(paths: &HostPaths) -> anyhow::Result<Self> {
         paths.ensure()?;
         if paths.config.exists() {
             let mut value: Self = serde_json::from_slice(&std::fs::read(&paths.config)?)?;
@@ -300,10 +330,42 @@ impl HostConfig {
             targets: Vec::new(),
             max_runs: default_max_runs(),
             legacy_host_execution: false,
+            max_runs_chosen: false,
             own_settings: std::collections::BTreeSet::new(),
         };
         config.save(paths)?;
         Ok(config)
+    }
+
+    fn max_runs_needs_lifting(&self) -> bool {
+        !self.max_runs_chosen && self.max_runs == RETIRED_DEFAULT_MAX_RUNS
+    }
+
+    /// Lift a concurrency limit nobody chose to the current default. Returns
+    /// whether it changed anything.
+    ///
+    /// Every config an older build created was written with that build's
+    /// default of two, so on disk it reads exactly like a choice. A file
+    /// holding two with no choice recorded is the old default; one holding
+    /// any other number, or holding two by choice, is left alone.
+    pub(crate) fn migrate_max_runs(&mut self) -> bool {
+        if !self.max_runs_needs_lifting() {
+            return false;
+        }
+        self.max_runs = default_max_runs();
+        true
+    }
+
+    /// Set the concurrency limit as the person's own choice, which no later
+    /// change of default overrides.
+    pub fn choose_max_runs(&mut self, max_runs: u16) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            (1..=MAX_SUPPORTED_RUNS).contains(&max_runs),
+            "max_runs must be between 1 and {MAX_SUPPORTED_RUNS}"
+        );
+        self.max_runs = max_runs;
+        self.max_runs_chosen = true;
+        Ok(())
     }
 
     /// Move the host-wide switch an older build wrote onto the local pairing.
@@ -392,8 +454,9 @@ impl HostConfig {
         change: impl FnOnce(&mut Self) -> anyhow::Result<bool>,
     ) -> anyhow::Result<Self> {
         let _guard = paths.lock_config()?;
-        let mut config = Self::load_or_create(paths)?;
-        if change(&mut config)? {
+        let mut config = Self::load_or_create_unlocked(paths)?;
+        let migrated = config.migrate_max_runs();
+        if change(&mut config)? || migrated {
             config.save(paths)?;
         }
         Ok(config)
@@ -545,6 +608,7 @@ mod tests {
             ],
             max_runs: default_max_runs(),
             legacy_host_execution: false,
+            max_runs_chosen: false,
             own_settings: std::collections::BTreeSet::new(),
         };
         config.migrate_retired_local_hosts();
@@ -563,6 +627,95 @@ mod tests {
                 "http://app.10.0.0.7.sslip.io:61003/",
             ]
         );
+    }
+
+    fn saved(paths: &HostPaths) -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(&paths.config).unwrap()).unwrap()
+    }
+
+    /// Every config an older build made holds its default of two, which a
+    /// Mac outgrew: the third conversation queued behind the first two. A
+    /// limit nobody chose is lifted, and written back so the file says so.
+    #[test]
+    fn the_old_default_nobody_chose_is_lifted_and_saved() {
+        let directory = TempDir::new().unwrap();
+        let paths = HostPaths::under(directory.path());
+        paths.ensure().unwrap();
+        let pairing = serde_json::json!({
+            "target_id": Uuid::new_v4(),
+            "name": "hosted",
+            "base_url": "https://lemma.example/",
+            "host_id": Uuid::new_v4(),
+            "user_id": Uuid::new_v4(),
+            "host_secret": "secret",
+        });
+        std::fs::write(
+            &paths.config,
+            serde_json::json!({
+                "installation_id": "installation",
+                "max_runs": 2,
+                "targets": [pairing],
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let config = HostConfig::load_or_create(&paths).unwrap();
+
+        assert_eq!(config.max_runs, 20);
+        assert!(!config.max_runs_chosen);
+        assert_eq!(saved(&paths)["max_runs"], 20);
+        // Nothing else in the file moved.
+        assert_eq!(saved(&paths)["targets"][0]["name"], "hosted");
+        assert_eq!(config.targets.len(), 1);
+    }
+
+    #[test]
+    fn a_new_config_takes_twenty_runs() {
+        let directory = TempDir::new().unwrap();
+        let paths = HostPaths::under(directory.path());
+        let config = HostConfig::load_or_create(&paths).unwrap();
+        assert_eq!((config.max_runs, config.max_runs_chosen), (20, false));
+    }
+
+    /// A limit the person set is theirs: two by choice stays two, and so does
+    /// any other number, chosen or not -- only the old default is lifted.
+    #[test]
+    fn a_chosen_limit_is_never_lifted() {
+        let directory = TempDir::new().unwrap();
+        let paths = HostPaths::under(directory.path());
+        HostConfig::mutate(&paths, |config| {
+            config.choose_max_runs(2)?;
+            Ok(true)
+        })
+        .unwrap();
+        let config = HostConfig::load_or_create(&paths).unwrap();
+        assert_eq!((config.max_runs, config.max_runs_chosen), (2, true));
+        assert_eq!(saved(&paths)["max_runs_chosen"], true);
+
+        std::fs::write(
+            &paths.config,
+            serde_json::json!({ "installation_id": "installation", "max_runs": 5 }).to_string(),
+        )
+        .unwrap();
+        assert_eq!(HostConfig::load_or_create(&paths).unwrap().max_runs, 5);
+    }
+
+    #[test]
+    fn a_choice_outside_what_lemma_accepts_is_refused() {
+        let mut config = HostConfig {
+            installation_id: "installation".into(),
+            targets: Vec::new(),
+            max_runs: 20,
+            max_runs_chosen: false,
+            legacy_host_execution: false,
+            own_settings: std::collections::BTreeSet::new(),
+        };
+        assert!(config.choose_max_runs(0).is_err());
+        assert!(config.choose_max_runs(MAX_SUPPORTED_RUNS + 1).is_err());
+        assert_eq!((config.max_runs, config.max_runs_chosen), (20, false));
+        config.choose_max_runs(MAX_SUPPORTED_RUNS).unwrap();
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -648,6 +801,7 @@ mod tests {
     fn rejects_a_capacity_the_backend_would_refuse_on_every_poll() {
         let config = |max_runs| HostConfig {
             legacy_host_execution: false,
+            max_runs_chosen: false,
             own_settings: std::collections::BTreeSet::default(),
             installation_id: "installation".into(),
             max_runs,
@@ -668,6 +822,7 @@ mod tests {
     fn rejects_remote_plain_http() {
         let config = HostConfig {
             legacy_host_execution: false,
+            max_runs_chosen: false,
             own_settings: std::collections::BTreeSet::default(),
             installation_id: "installation".into(),
             max_runs: 1,
@@ -751,6 +906,7 @@ mod tests {
             targets: vec![pairing(me), pairing(them)],
             max_runs: 1,
             legacy_host_execution: false,
+            max_runs_chosen: false,
             own_settings: std::collections::BTreeSet::default(),
         };
         assert_eq!(config.apply_session(&url, Some(me)), 1);

@@ -56,8 +56,10 @@ from app.modules.agent.services.agent_host_auth import (
 
 logger = get_logger(__name__)
 
-#: How many commands one read of the queue hands out, as the poll did.
-MAX_COMMANDS_PER_READ = 16
+#: How many commands one read of the queue hands out. Above a Desktop host's
+#: default run limit (20), so a burst of starts queued while the link was down
+#: goes out in one read rather than waiting for the next poke.
+MAX_COMMANDS_PER_READ = 32
 
 
 @dataclass(frozen=True, slots=True)

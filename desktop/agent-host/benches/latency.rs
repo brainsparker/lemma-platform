@@ -554,6 +554,7 @@ async fn start_host(
     .unwrap();
     let config = lemma_agent_host::config::HostConfig {
         legacy_host_execution: false,
+        max_runs_chosen: false,
         installation_id,
         targets: vec![target],
         max_runs: 1,

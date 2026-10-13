@@ -200,3 +200,60 @@ async fn a_genuinely_stale_start_is_refused_with_both_revisions() {
          failing every run until the next refresh"
     );
 }
+
+/// A Mac takes twenty runs at once unless its person chose otherwise -- an
+/// old config holding the previous default of two included -- and the
+/// twenty-first is handed back for later rather than taken.
+#[tokio::test]
+async fn twenty_runs_are_taken_at_once_by_default() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::config::HostPaths::under(directory.path());
+    paths.ensure().unwrap();
+    std::fs::write(
+        &paths.config,
+        serde_json::json!({ "installation_id": "installation", "max_runs": 2 }).to_string(),
+    )
+    .unwrap();
+    let config = crate::config::HostConfig::load_or_create(&paths).unwrap();
+    assert_eq!(config.max_runs, 20);
+
+    let mut harness = Harness::with_slots(echo_manifest(), config.max_runs).await;
+    let harness_id = Uuid::new_v4();
+    harness.worker.store_published(ProbedHarnesses {
+        published: vec![published_harness(harness_id, REVISION_A)],
+        probes: HashMap::new(),
+        retry_soon: false,
+    });
+    harness.worker.refresh_due = std::time::Instant::now() + Duration::from_secs(900);
+    harness.worker.sync_harnesses_for_commands().await;
+
+    // No await between the starts: every run spawned here still holds its
+    // slot when the next is judged.
+    for index in 0..20 {
+        let command = start_command(harness_id, Uuid::new_v4(), REVISION_A);
+        if let Err(error) = harness.worker.handle_command(&command) {
+            panic!("run {index} of 20 was refused: {error}");
+        }
+    }
+    let capacity = harness.worker.capacity();
+    assert_eq!(
+        (
+            capacity.max_runs,
+            capacity.active_runs,
+            capacity.available_runs
+        ),
+        (20, 20, 0)
+    );
+
+    let command = start_command(harness_id, Uuid::new_v4(), REVISION_A);
+    let error = harness
+        .worker
+        .handle_command(&command)
+        .expect_err("a twenty-first run has no slot");
+    let rejection = command_rejection(&command, &error).expect("a refused start is reported");
+    assert_eq!(rejection.code, RejectionCode::CapacityLost);
+    assert!(
+        rejection.retryable,
+        "the run waits for a slot, it does not fail"
+    );
+}

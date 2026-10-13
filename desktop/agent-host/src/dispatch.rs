@@ -170,6 +170,27 @@ pub(crate) async fn run() -> anyhow::Result<()> {
             );
             Ok(())
         }
+        Command::MaxRuns { value, json } => {
+            let config = match value {
+                Some(value) => HostConfig::mutate(&paths, |config| {
+                    config.choose_max_runs(value)?;
+                    Ok(true)
+                })?,
+                None => HostConfig::load_or_create(&paths)?,
+            };
+            print_value(
+                &serde_json::json!({
+                    "max_runs": config.max_runs,
+                    "chosen": config.max_runs_chosen,
+                }),
+                json,
+            );
+            if value.is_some() && !json {
+                // The running host sized its run slots when it started.
+                println!("Applies when the Agent Host next starts (quit and reopen Lemma).");
+            }
+            Ok(())
+        }
         Command::Drain { target } => {
             update_targets(&paths, target.as_deref(), |item| item.draining = true)?;
             println!("Agent Host target(s) are draining.");

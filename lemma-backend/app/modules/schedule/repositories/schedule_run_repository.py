@@ -262,7 +262,14 @@ class ScheduleRunRepository:
         completed_at: datetime | None,
         error_type: str | None = None,
     ) -> ScheduleRunEntity | None:
-        """Apply one target outcome, using the state transition as its idempotency gate."""
+        """Apply one target outcome, using the state transition as its idempotency gate.
+
+        Once recorded, an outcome is final -- with one exception. A workflow run
+        that failed can be retried from its failed step under the same run id,
+        and when it then finishes it reports again, later. That second report
+        replaces the failure: left as TARGET_FAILED, the schedule shows a run
+        that in fact succeeded, and its breaker counts it toward deactivation.
+        """
         if status not in {
             ScheduleRunStatus.COMPLETED,
             ScheduleRunStatus.TARGET_FAILED,
@@ -278,8 +285,18 @@ class ScheduleRunRepository:
             )
             .with_for_update()
         )
-        if model is None or model.target_outcome is not None:
+        if model is None:
             return None
+        if model.target_outcome is not None:
+            if not _is_retried_workflow_outcome(
+                model, target_kind=target_kind, status=status, completed_at=completed_at
+            ):
+                return None
+            model.target_outcome = status.value
+            model.error_type = error_type
+            model.completed_at = completed_at
+            await self.session.flush()
+            return model.to_entity()
 
         if model.status in {
             ScheduleRunStatus.COMPLETED.value,
@@ -449,3 +466,27 @@ class ScheduleRunRepository:
             )
         )
         return [row.to_entity() for row in rows.all()]
+
+
+def _is_retried_workflow_outcome(
+    model: ScheduleRun,
+    *,
+    target_kind: str,
+    status: ScheduleRunStatus,
+    completed_at: datetime | None,
+) -> bool:
+    """A failed workflow run's later, different outcome, after a retry.
+
+    Workflow only: an agent conversation is not retried under the same id.
+    Strictly later, so a redelivered copy of the original failure -- or an
+    out-of-order one -- cannot flip a recorded outcome back and forth. A failed
+    retry leaves the failure as it was.
+    """
+    return (
+        target_kind == "WORKFLOW"
+        and model.target_outcome == ScheduleRunStatus.TARGET_FAILED.value
+        and status is not ScheduleRunStatus.TARGET_FAILED
+        and completed_at is not None
+        and model.completed_at is not None
+        and completed_at > model.completed_at
+    )

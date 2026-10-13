@@ -23,7 +23,10 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.telegram.membership import (
     joined_group_event,
 )
-from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
@@ -272,8 +275,15 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         )
 
     async def retire_decision_card(
-        self, *, credentials: SurfaceCredentials, handle: DecisionCardHandle
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        handle: DecisionCardHandle,
+        reason: CardRetirement = CardRetirement.SUPERSEDED,
     ) -> None:
+        # The card's words stay as written and its keyboard goes, whatever
+        # ended the pause: there is no message to rewrite a note into.
+        del reason
         await retire_telegram_card(TelegramClient.from_credentials(credentials), handle)
 
     async def add_processing_indicator(

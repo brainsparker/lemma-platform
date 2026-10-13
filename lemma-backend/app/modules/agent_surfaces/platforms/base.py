@@ -18,7 +18,10 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceLifecycleEvent,
 )
 from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
-from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.platforms.envelope_delivery import (
     EnvelopeDeliveryMixin,
@@ -238,12 +241,16 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin):
         del credentials, interaction, text, show_alert, clear_actions
 
     async def retire_decision_card(
-        self, *, credentials: SurfaceCredentials, handle: DecisionCardHandle
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        handle: DecisionCardHandle,
+        reason: CardRetirement = CardRetirement.SUPERSEDED,
     ) -> None:
-        """Take a superseded approval card's buttons away. Default: the
-        platform keeps no handle to edit by, so a tap on it is answered
-        instead (see `interaction_acks`)."""
-        del credentials, handle
+        """Take a finished pause's card buttons away. Default: the platform
+        keeps no handle to edit by, so a tap on it is answered instead (see
+        `interaction_acks`)."""
+        del credentials, handle, reason
 
     async def fetch_thread_context(
         self,

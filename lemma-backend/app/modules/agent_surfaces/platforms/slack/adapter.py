@@ -23,6 +23,10 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
 )
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
 from app.modules.agent_surfaces.platforms.slack.home import SlackHomeSurface
@@ -176,6 +180,15 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         return await self._service(credentials)._render_decision(
             event=event, approval_plan=approval_plan, metadata=metadata
         )
+
+    async def retire_decision_card(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        handle: DecisionCardHandle,
+        reason: CardRetirement = CardRetirement.SUPERSEDED,
+    ) -> None:
+        await self._service(credentials).retire_decision_card(handle, reason)
 
     async def parse_inbound_lifecycle(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None

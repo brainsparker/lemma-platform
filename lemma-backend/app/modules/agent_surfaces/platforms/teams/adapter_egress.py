@@ -47,6 +47,16 @@ from app.modules.agent_surfaces.platforms.delivery import (
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.teams import client
+from app.modules.agent_surfaces.platforms.teams.decision_cards import (
+    activity_url,
+    remember_teams_card,
+    retired_activity,
+)
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
+from app.modules.agent_surfaces.domain.errors import AgentSurfacePlatformError
 from app.modules.agent_surfaces.platforms.teams.cards import (
     _teams_approval_card,
     _teams_display_resource_card,
@@ -259,12 +269,13 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             f"{client.bf_service_url(reply_target_as(event, TeamsReplyTarget).service_url)}"
             f"/v3/conversations/{quote(str(conversation_id))}/activities"
         )
+        card = _teams_question_card(question_plan)
         body: dict[str, Any] = {
             "type": "message",
             "attachments": [
                 {
                     "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": _teams_question_card(question_plan),
+                    "content": card,
                 }
             ],
         }
@@ -272,7 +283,8 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         if reply_to_id:
             body["replyToId"] = reply_to_id
 
-        await self._post_activity(url, token=token, body=body)
+        activity_id = await self._post_activity(url, token=token, body=body)
+        await remember_teams_card(question_plan.callback_id, activity_id, event, card)
         return True
 
     async def _render_decision(
@@ -298,12 +310,13 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             f"{client.bf_service_url(reply_target_as(event, TeamsReplyTarget).service_url)}"
             f"/v3/conversations/{quote(str(conversation_id))}/activities"
         )
+        card = _teams_approval_card(approval_plan)
         body: dict[str, Any] = {
             "type": "message",
             "attachments": [
                 {
                     "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": _teams_approval_card(approval_plan),
+                    "content": card,
                 }
             ],
         }
@@ -311,8 +324,31 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         if reply_to_id:
             body["replyToId"] = reply_to_id
 
-        await self._post_activity(url, token=token, body=body)
+        activity_id = await self._post_activity(url, token=token, body=body)
+        await remember_teams_card(approval_plan.callback_id, activity_id, event, card)
         return True
+
+    async def retire_decision_card(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        handle: DecisionCardHandle,
+        reason: CardRetirement = CardRetirement.SUPERSEDED,
+    ) -> None:
+        """Replace a finished pause's card with its words and no actions."""
+        del credentials
+        token = await self._get_bot_token(handle.extra.get("tenant_id") or "")
+        if not token:
+            raise AgentSurfacePlatformError("TEAMS", "bot token unavailable")
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
+            async with session.put(
+                activity_url(handle),
+                headers=client.auth_headers(token),
+                json=retired_activity(handle, reason),
+            ) as response:
+                response.raise_for_status()
 
     async def add_processing_indicator(
         self,

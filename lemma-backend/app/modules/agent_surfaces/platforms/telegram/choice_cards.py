@@ -83,7 +83,7 @@ async def render_choices(
         )
         rows.append([{"text": "✏️ Other (type a reply)", "callback_data": other_token}])
         try:
-            await send_message(
+            message_id = await send_message(
                 event,
                 outbound.question_with_option_notes(question),
                 metadata={"reply_markup": {"inline_keyboard": rows}},
@@ -112,7 +112,19 @@ async def render_choices(
             # every question is tappable, and nothing then accepts a typed
             # answer to the ones that arrived as words.
             return PartDelivery.DEGRADED
+        await _remember(question_plan.callback_id, chat_id, message_id)
     return True
+
+
+async def _remember(callback_id: str, chat_id: object, message_id: str | None) -> None:
+    """Remember a keyboard so it can be taken away once its pause is over."""
+    if message_id is not None:
+        await remember_decision_card(
+            callback_id,
+            DecisionCardHandle(
+                platform="TELEGRAM", channel=str(chat_id), message_id=message_id
+            ),
+        )
 
 
 async def render_decision(
@@ -159,11 +171,5 @@ async def render_decision(
         "\n\n".join(body_lines),
         metadata={"reply_markup": {"inline_keyboard": rows}},
     )
-    if message_id is not None:
-        await remember_decision_card(
-            approval_plan.callback_id,
-            DecisionCardHandle(
-                platform="TELEGRAM", channel=str(chat_id), message_id=message_id
-            ),
-        )
+    await _remember(approval_plan.callback_id, chat_id, message_id)
     return True

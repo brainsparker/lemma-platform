@@ -266,7 +266,9 @@ async def test_telegram_send_questions_builds_inline_keyboard():
         patch(
             "app.modules.agent_surfaces.platforms.telegram.service."
             "TelegramPlatformService.send_message",
-            new=AsyncMock(),
+            # The id of the message sent: None, as for a send Telegram did
+            # not number, so no card is remembered.
+            new=AsyncMock(return_value=None),
         ) as send_message,
     ):
         ok = await adapter._render_choices(

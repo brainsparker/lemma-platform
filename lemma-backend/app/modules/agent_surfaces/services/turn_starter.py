@@ -76,6 +76,7 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     SurfaceFileIngestService,
     every_attachment_failed,
 )
+from app.modules.agent_surfaces.domain.decision_card import CardRetirement
 from app.modules.agent_surfaces.services.card_retirement import (
     retire_superseded_cards,
 )
@@ -239,15 +240,17 @@ class SurfaceTurnStarter:
         # it is no longer true: `PendingUserMessagesCapability` steers these
         # into the run already going, which answers all of them at once.
         async with self.uow_factory() as uow:
-            superseded = await write_inbound_message(
-                context, message_text, metadata, uow
-            )
-        if superseded:
+            finished = await write_inbound_message(context, message_text, metadata, uow)
+        for tool_call_ids, reason in (
+            (finished.superseded, CardRetirement.SUPERSEDED),
+            (finished.answered, CardRetirement.ANSWERED),
+        ):
             await retire_superseded_cards(
                 adapter=adapter,
                 credentials=credentials,
                 conversation_id=context.conversation_id,
-                tool_call_ids=superseded,
+                tool_call_ids=tool_call_ids,
+                reason=reason,
             )
         if not message_text.strip() and not context.event.metadata.get("attachments"):
             # Nothing a person sent is empty: a body we failed to fetch or

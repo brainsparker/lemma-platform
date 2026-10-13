@@ -35,7 +35,10 @@ from typing import Any, Protocol, TypeIs
 
 from app.modules.agent_surfaces.domain.channel_setup import ChannelSetupRequest
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
-from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
@@ -259,10 +262,15 @@ class OutboundDelivery(Protocol):
     ) -> None: ...
 
     async def retire_decision_card(
-        self, *, credentials: SurfaceCredentials, handle: DecisionCardHandle
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        handle: DecisionCardHandle,
+        reason: CardRetirement = CardRetirement.SUPERSEDED,
     ) -> None:
-        """Take the buttons off a card whose pause was cancelled. A no-op where
-        the platform keeps no handle to edit by."""
+        """Take the buttons off a card whose pause is over -- cancelled by a
+        new message or answered by a typed one. A no-op where the platform
+        keeps no handle to edit by."""
         ...
 
     async def set_thread_title(

@@ -21,7 +21,15 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
 )
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.whatsapp.client import WhatsAppClient
+from app.modules.agent_surfaces.platforms.whatsapp.decision_cards import (
+    retire_whatsapp_card,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.group_updates import (
     whatsapp_group_updates,
 )
@@ -106,6 +114,17 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
     ) -> bool:
         return await WhatsAppPlatformService(credentials)._render_decision(
             event, approval_plan, metadata
+        )
+
+    async def retire_decision_card(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        handle: DecisionCardHandle,
+        reason: CardRetirement = CardRetirement.SUPERSEDED,
+    ) -> None:
+        await retire_whatsapp_card(
+            WhatsAppClient.from_credentials(credentials), handle, reason
         )
 
     async def acknowledge_interaction(

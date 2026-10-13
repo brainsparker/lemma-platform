@@ -63,7 +63,15 @@ from app.modules.agent_surfaces.platforms.slack.client import (
     slack_retry_after,
     slack_scopes,
 )
+from app.modules.agent_surfaces.platforms.slack.decision_cards import (
+    remember_slack_card,
+    retire_slack_card,
+)
 from app.modules.agent_surfaces.platforms.slack.files import SlackFilesMixin
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -369,7 +377,8 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                 (metadata or {}).get("agent_icon_url"),
             )
         )
-        await self._post_message(client, payload)
+        ts = await self._post_message(client, payload)
+        await remember_slack_card(question_plan.callback_id, ts, payload)
         return True
 
     async def _render_decision(
@@ -400,8 +409,17 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                 (metadata or {}).get("agent_icon_url"),
             )
         )
-        await self._post_message(client, payload)
+        ts = await self._post_message(client, payload)
+        await remember_slack_card(approval_plan.callback_id, ts, payload)
         return True
+
+    async def retire_decision_card(
+        self, handle: DecisionCardHandle, reason: CardRetirement
+    ) -> None:
+        """Rewrite a finished pause's card without its controls."""
+        await retire_slack_card(
+            await build_slack_client(self.credentials), handle, reason
+        )
 
     async def add_processing_indicator(
         self,

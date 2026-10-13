@@ -23,6 +23,9 @@ from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
     WhatsAppClient,
 )
+from app.modules.agent_surfaces.platforms.whatsapp.decision_cards import (
+    remember_whatsapp_card,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     WhatsAppRecipient,
     build_whatsapp_approval_interactive,
@@ -95,7 +98,7 @@ class WhatsAppInteractiveRenders:
             interactives.append(interactive)
         for index, interactive in enumerate(interactives):
             try:
-                await self._client.send_interactive(
+                message_id = await self._client.send_interactive(
                     phone_number_id=phone_number_id,
                     to=sender_wa_id,
                     interactive=interactive,
@@ -125,6 +128,15 @@ class WhatsAppInteractiveRenders:
                 # every question is tappable, and nothing then accepts a typed
                 # answer to the ones that arrived as words.
                 return PartDelivery.DEGRADED
+            if not index:
+                # The first question only: one line quoting it says the set
+                # is no longer needed, where one per question would repeat it.
+                await remember_whatsapp_card(
+                    question_plan.callback_id,
+                    message_id,
+                    phone_number_id=phone_number_id,
+                    recipient_wa_id=sender_wa_id,
+                )
         return True
 
     async def _render_decision(
@@ -151,10 +163,16 @@ class WhatsAppInteractiveRenders:
         interactive = build_whatsapp_approval_interactive(approval_plan)
         if interactive is None:
             return False
-        await self._client.send_interactive(
+        message_id = await self._client.send_interactive(
             phone_number_id=phone_number_id,
             to=sender_wa_id,
             interactive=interactive,
+        )
+        await remember_whatsapp_card(
+            approval_plan.callback_id,
+            message_id,
+            phone_number_id=phone_number_id,
+            recipient_wa_id=sender_wa_id,
         )
         return True
 

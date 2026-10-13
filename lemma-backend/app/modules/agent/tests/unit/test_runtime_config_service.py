@@ -16,7 +16,10 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileStatus,
     reveal_credentials,
 )
-from app.modules.agent.domain.errors import RuntimeUnavailableError
+from app.modules.agent.domain.errors import (
+    RuntimeProfileNotFoundError,
+    RuntimeUnavailableError,
+)
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -584,10 +587,13 @@ def test_system_openai_catalog_declares_vision_per_model(monkeypatch):
         "model-text-a": False,
         "model-text-b": False,
     }
-    # Structured output is not tracked per-model (universal), so the catalog only
-    # ever carries TEXT/TOOLS plus VISION where supported.
+    # The catalog only ever carries TEXT/TOOLS plus VISION where supported.
     for model in profile.model_catalog:
-        assert RuntimeModelCapability.STRUCTURED_OUTPUT not in model.capabilities
+        assert set(model.capabilities) <= {
+            RuntimeModelCapability.TEXT,
+            RuntimeModelCapability.TOOLS,
+            RuntimeModelCapability.VISION,
+        }
 
 
 def test_system_anthropic_catalog_declares_vision_for_all_models(monkeypatch):
@@ -1606,7 +1612,8 @@ async def test_the_built_in_profile_cannot_be_edited_or_archived():
     user_id = uuid4()
     service = AgentRuntimeProfileService(repository=_ProfileRepository([]))
 
-    with pytest.raises(ValueError):
+    # Not stored, so not found: a 404 rather than the 400 of a bad edit.
+    with pytest.raises(RuntimeProfileNotFoundError):
         await AgentRuntimeProfileEditor(service).archive_profile(
             profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
             organization_id=organization_id,

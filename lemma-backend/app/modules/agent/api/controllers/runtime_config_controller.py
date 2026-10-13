@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import assert_never
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -238,57 +239,46 @@ async def create_runtime_profile(
             Permissions.ORG_UPDATE, ResourceRef.organization(organization_id)
         )
     service = _runtime_profile_service(uow)
-    try:
-        if isinstance(data, CreateAgentHostRuntimeProfileRequest):
-            profile = await service.create_agent_host_profile(
-                organization_id=organization_id,
-                user_id=user.id,
-                harness_id=data.harness_id,
-                name=data.name,
-                scope=data.scope,
-                description=data.description,
-                default_model_name=data.default_model_name,
-                config_selections=data.config_selections,
-            )
-        elif isinstance(data, CreateOpenAICompatibleRuntimeProfileRequest):
-            profile = await service.create_openai_compatible_profile(
-                organization_id=organization_id,
-                name=data.name,
-                base_url=data.base_url,
-                api_key=data.api_key,
-                description=data.description,
-                default_model_name=data.default_model_name,
-                model_names=data.model_names,
-                vision_model_names=data.vision_model_names,
-                reasoning_model_names=data.reasoning_model_names,
-                headers=data.headers,
-                model_settings=data.model_settings,
-            )
-        elif isinstance(data, CreateAnthropicCompatibleRuntimeProfileRequest):
-            profile = await service.create_anthropic_compatible_profile(
-                organization_id=organization_id,
-                name=data.name,
-                api_key=data.api_key,
-                base_url=data.base_url,
-                description=data.description,
-                default_model_name=data.default_model_name,
-                model_names=data.model_names,
-                reasoning_model_names=data.reasoning_model_names,
-                headers=data.headers,
-                model_settings=data.model_settings,
-            )
-        else:
-            raise ValueError("Unsupported runtime profile source")
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
+    if isinstance(data, CreateAgentHostRuntimeProfileRequest):
+        profile = await service.create_agent_host_profile(
+            organization_id=organization_id,
+            user_id=user.id,
+            harness_id=data.harness_id,
+            name=data.name,
+            scope=data.scope,
+            description=data.description,
+            default_model_name=data.default_model_name,
+            config_selections=data.config_selections,
+        )
+    elif isinstance(data, CreateOpenAICompatibleRuntimeProfileRequest):
+        profile = await service.create_openai_compatible_profile(
+            organization_id=organization_id,
+            name=data.name,
+            base_url=data.base_url,
+            api_key=data.api_key,
+            description=data.description,
+            default_model_name=data.default_model_name,
+            model_names=data.model_names,
+            vision_model_names=data.vision_model_names,
+            reasoning_model_names=data.reasoning_model_names,
+            headers=data.headers,
+            model_settings=data.model_settings,
+        )
+    elif isinstance(data, CreateAnthropicCompatibleRuntimeProfileRequest):
+        profile = await service.create_anthropic_compatible_profile(
+            organization_id=organization_id,
+            name=data.name,
+            api_key=data.api_key,
+            base_url=data.base_url,
+            description=data.description,
+            default_model_name=data.default_model_name,
+            model_names=data.model_names,
+            reasoning_model_names=data.reasoning_model_names,
+            headers=data.headers,
+            model_settings=data.model_settings,
+        )
+    else:
+        assert_never(data)
     return AgentRuntimeProfileResponse.model_validate(profile.public_dict())
 
 
@@ -391,29 +381,18 @@ async def update_runtime_profile(
         "organization_id": organization_id,
         "user_id": user.id,
     }
-    try:
-        if isinstance(data, UpdateAgentHostRuntimeProfileRequest):
-            updated = await editor.update_agent_host_profile(**common, **changes)
-        elif isinstance(data, UpdateOpenAICompatibleRuntimeProfileRequest):
-            updated = await editor.update_openai_compatible_profile(
-                **common, refresh_models=data.refresh_models, **changes
-            )
-        elif isinstance(data, UpdateAnthropicCompatibleRuntimeProfileRequest):
-            updated = await editor.update_anthropic_compatible_profile(
-                **common, refresh_models=data.refresh_models, **changes
-            )
-        else:
-            raise ValueError("Unsupported runtime profile source")
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
+    if isinstance(data, UpdateAgentHostRuntimeProfileRequest):
+        updated = await editor.update_agent_host_profile(**common, **changes)
+    elif isinstance(data, UpdateOpenAICompatibleRuntimeProfileRequest):
+        updated = await editor.update_openai_compatible_profile(
+            **common, refresh_models=data.refresh_models, **changes
+        )
+    elif isinstance(data, UpdateAnthropicCompatibleRuntimeProfileRequest):
+        updated = await editor.update_anthropic_compatible_profile(
+            **common, refresh_models=data.refresh_models, **changes
+        )
+    else:
+        assert_never(data)
     return _profile_response(updated)
 
 
@@ -440,17 +419,11 @@ async def archive_runtime_profile(
     await _require_profile_editor(
         profile=profile, organization_id=organization_id, user=user, ctx=ctx
     )
-    try:
-        await AgentRuntimeProfileEditor(service).archive_profile(
-            profile_id=profile_id,
-            organization_id=organization_id,
-            user_id=user.id,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+    await AgentRuntimeProfileEditor(service).archive_profile(
+        profile_id=profile_id,
+        organization_id=organization_id,
+        user_id=user.id,
+    )
     return
 
 
@@ -474,21 +447,9 @@ async def restore_runtime_profile(
     await _require_profile_editor(
         profile=profile, organization_id=organization_id, user=user, ctx=ctx
     )
-    try:
-        restored = await AgentRuntimeProfileEditor(service).restore_profile(
-            profile_id=profile_id,
-            organization_id=organization_id,
-            user_id=user.id,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except RuntimeError as exc:
-        # Another profile took this name while it sat archived.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
+    restored = await AgentRuntimeProfileEditor(service).restore_profile(
+        profile_id=profile_id,
+        organization_id=organization_id,
+        user_id=user.id,
+    )
     return _profile_response(restored)

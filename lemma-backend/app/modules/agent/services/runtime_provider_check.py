@@ -29,6 +29,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
 from app.core.log.log import get_logger
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
     OpenAICompatibleRuntimeConfig,
@@ -110,7 +111,7 @@ async def check_saved_provider_connection(
     """
     profile = resolved.profile
     if profile.kind is not RuntimeProfileKind.MODEL_PROVIDER:
-        raise ValueError("Only a model provider can be tested")
+        raise RuntimeProfileValidationError("Only a model provider can be tested")
     seams = collaborators or ProviderCheckCollaborators()
     try:
         models = await _listed_models(resolved, seams)

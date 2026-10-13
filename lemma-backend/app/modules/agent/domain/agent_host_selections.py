@@ -9,6 +9,7 @@ with different values.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.value_objects import JsonObject
 
 
@@ -42,10 +43,14 @@ def validate_agent_host_selections(
         normalized_key = str(key).strip()
         option = options_by_key.get(normalized_key)
         if option is None:
-            raise ValueError(f"Unknown Agent Host configuration selection: {key}")
+            raise RuntimeProfileValidationError(
+                f"Unknown Agent Host configuration selection: {key}"
+            )
         option_category = str(option.get("category") or "").strip()
         if option_category == "model":
-            raise ValueError("Model must be configured through default_model_name")
+            raise RuntimeProfileValidationError(
+                "Model must be configured through default_model_name"
+            )
         # Membership in what the host published is the whole check. The host
         # owns the permission policy: it removes every value that would turn
         # off the approval gate (`bypassPermissions`, `acceptEdits`, ...)
@@ -57,7 +62,7 @@ def validate_agent_host_selections(
         # person may make.
         allowed_values = _agent_host_option_values(option.get("options"))
         if allowed_values and value not in allowed_values:
-            raise ValueError(
+            raise RuntimeProfileValidationError(
                 f"Invalid value for Agent Host configuration selection: {key}"
             )
         normalized[normalized_key] = value
@@ -73,7 +78,7 @@ def validate_agent_host_model(
         return None
     normalized = model_name.strip()
     if not normalized:
-        raise ValueError("default_model_name cannot be empty")
+        raise RuntimeProfileValidationError("default_model_name cannot be empty")
     model_options: list[object] = []
     has_model_option = False
     for raw_option in config_options:
@@ -84,7 +89,9 @@ def validate_agent_host_model(
         has_model_option = True
         model_options.extend(_agent_host_option_values(raw_option.get("options")))
     if not has_model_option or normalized not in model_options:
-        raise ValueError("default_model_name is not offered by this harness")
+        raise RuntimeProfileValidationError(
+            "default_model_name is not offered by this harness"
+        )
     return normalized
 
 

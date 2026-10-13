@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     RuntimeProfileKind,
@@ -78,18 +79,20 @@ def with_default_mark(
 ) -> AgentRuntimeProfile:
     """``profile`` carrying the mark, on ``model_name`` or its own default.
 
-    Raises ``ValueError`` for a profile that may not be the default, or a model
+    Raises `RuntimeProfileValidationError` for a profile that may not be the default, or a model
     the provider does not list -- both are caller mistakes worth a 400.
     """
     if not can_be_organization_default(profile):
-        raise ValueError(
+        raise RuntimeProfileValidationError(
             "Only an active, organization-wide model provider can be the "
             "organization's default"
         )
     if model_name is not None and model_name not in {
         entry.name for entry in profile.model_catalog
     }:
-        raise ValueError(f"{profile.name} does not offer the model {model_name!r}")
+        raise RuntimeProfileValidationError(
+            f"{profile.name} does not offer the model {model_name!r}"
+        )
     return profile.with_changes(
         metadata={
             **profile.metadata,

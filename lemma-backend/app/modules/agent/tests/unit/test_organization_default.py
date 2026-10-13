@@ -99,6 +99,7 @@ def _harness() -> AgentRuntimeProfile:
         protocol=RuntimeProfileProtocol.AGENT_HOST,
         name="A coding agent",
         model_catalog=[_entry("agent-model")],
+        config={"harness_snapshot_revision": "rev-1"},
     )
 
 

@@ -18,7 +18,7 @@ can hang on somebody else's network.
 
 from __future__ import annotations
 
-from uuid import UUID, uuid4
+from uuid import UUID, uuid7
 
 from pydantic import HttpUrl, SecretStr
 
@@ -32,8 +32,10 @@ from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_model,
     validate_agent_host_selections,
 )
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     with_reasoning_declared,
+    checked_profile,
     AnthropicCompatibleRuntimeConfig,
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
@@ -63,7 +65,7 @@ from app.modules.agent.services.runtime_system_profiles import (
 def normalize_profile_name(name: str) -> str:
     normalized = name.strip()
     if not normalized:
-        raise ValueError("Profile name cannot be empty")
+        raise RuntimeProfileValidationError("Profile name cannot be empty")
     return normalized
 
 
@@ -146,7 +148,7 @@ class RuntimeProfileCreation:
             RuntimeProfileScope.ORGANIZATION,
             RuntimeProfileScope.PERSONAL,
         }:
-            raise ValueError(
+            raise RuntimeProfileValidationError(
                 "Agent Host profile scope must be ORGANIZATION or PERSONAL"
             )
 
@@ -166,8 +168,8 @@ class RuntimeProfileCreation:
             config_options=config_options,
             model_name=default_model_name,
         )
-        profile = AgentRuntimeProfile(
-            id=str(uuid4()),
+        profile = checked_profile(
+            id=str(uuid7()),
             organization_id=organization_id,
             user_id=user_id if scope is RuntimeProfileScope.PERSONAL else None,
             harness_id=harness_id,
@@ -230,7 +232,9 @@ class RuntimeProfileCreation:
                     headers=normalized_headers,
                 )
         except discovery.ProviderKeyRejectedError as exc:
-            raise ValueError(discovery.key_rejected_message(normalized_name)) from exc
+            raise RuntimeProfileValidationError(
+                discovery.key_rejected_message(normalized_name)
+            ) from exc
         catalog = discovery._provider_model_catalog(
             discovered_models=discovered_models,
             fallback_model_names=model_names or [],
@@ -244,8 +248,8 @@ class RuntimeProfileCreation:
             requested_model_name=default_model_name,
             catalog=catalog,
         )
-        profile = AgentRuntimeProfile(
-            id=str(uuid4()),
+        profile = checked_profile(
+            id=str(uuid7()),
             organization_id=organization_id,
             scope=RuntimeProfileScope.ORGANIZATION,
             kind=RuntimeProfileKind.MODEL_PROVIDER,
@@ -305,7 +309,9 @@ class RuntimeProfileCreation:
                     )
                 )
         except discovery.ProviderKeyRejectedError as exc:
-            raise ValueError(discovery.key_rejected_message(normalized_name)) from exc
+            raise RuntimeProfileValidationError(
+                discovery.key_rejected_message(normalized_name)
+            ) from exc
         catalog = discovery._provider_model_catalog(
             discovered_models=discovered_models,
             fallback_model_names=model_names or [],
@@ -319,8 +325,8 @@ class RuntimeProfileCreation:
             requested_model_name=default_model_name,
             catalog=catalog,
         )
-        profile = AgentRuntimeProfile(
-            id=str(uuid4()),
+        profile = checked_profile(
+            id=str(uuid7()),
             organization_id=organization_id,
             scope=RuntimeProfileScope.ORGANIZATION,
             kind=RuntimeProfileKind.MODEL_PROVIDER,
@@ -355,7 +361,7 @@ class RuntimeProfileCreation:
         assert self.host_repository is not None
         harness = await self.host_repository.get_harness(harness_id=harness_id)
         if harness is None:
-            raise ValueError("Agent Host harness is not available")
+            raise RuntimeProfileValidationError("Agent Host harness is not available")
         if require_owner:
             host = await self.host_repository.get_for_user(
                 host_id=harness.host_id,
@@ -367,7 +373,9 @@ class RuntimeProfileCreation:
             # profile a colleague created, while dispatch imposes no such check.
             host = await self.host_repository.get(host_id=harness.host_id)
         if host is None or host.revoked_at is not None:
-            raise ValueError("Agent Host harness is not owned by the current user")
+            raise RuntimeProfileValidationError(
+                "Agent Host harness is not owned by the current user"
+            )
         # A paired computer belongs to the person who paired it, not to a
         # workspace: it runs on their machine, with their credentials. Sharing
         # it is the *profile's* decision - giving a profile ORGANIZATION scope
@@ -378,7 +386,11 @@ class RuntimeProfileCreation:
             effective_agent_host_status(host.status, host.last_seen_at)
             is not AgentHostStatus.ONLINE
         ):
-            raise ValueError("Agent Host is offline or not accepting new runs")
+            raise RuntimeProfileValidationError(
+                "Agent Host is offline or not accepting new runs"
+            )
         if harness.health != AgentHostHarnessHealth.READY.value:
-            raise ValueError(f"Agent Host harness is not ready: {harness.health}")
+            raise RuntimeProfileValidationError(
+                f"Agent Host harness is not ready: {harness.health}"
+            )
         return harness

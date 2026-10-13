@@ -52,3 +52,26 @@ def test_platform_adapters_reach_nothing_above_them(forbidden: str) -> None:
     a tool that checks a member's rights, then sends -- is a service, and
     living under `platforms/` hid an inverted dependency."""
     assert _violations("platforms", f"{_PACKAGE}.{forbidden}") == []
+
+
+def test_the_http_layer_goes_through_services_not_repositories() -> None:
+    """A route that builds a repository is a service with no name: its rules
+    cannot be reached by anything that is not that route."""
+    assert _violations("api", f"{_PACKAGE}.infrastructure.repositories") == []
+
+
+def test_services_build_no_sql_themselves() -> None:
+    """Queries live behind repository methods, where they are named and
+    reusable, not as `select(...)` inside a service."""
+    statements = {"select", "update", "delete", "insert"}
+    building: list[str] = []
+    for path in sorted((_MODULE / "services").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "sqlalchemy"
+                and statements & {alias.name for alias in node.names}
+            ):
+                building.append(str(path.relative_to(_MODULE)))
+    assert building == []

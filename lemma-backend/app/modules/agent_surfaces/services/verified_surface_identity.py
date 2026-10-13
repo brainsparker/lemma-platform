@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_identity_repository import (
+    VerifiedSurfaceIdentityRepository,
+)
+
 from uuid import UUID
-from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
     SurfacePlatform,
-)
-from app.modules.agent_surfaces.infrastructure.onboarding_models import (
-    VerifiedSurfaceIdentity,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     has_shared_system_bot,
@@ -35,11 +35,8 @@ async def resolve_shared_verified_identity(
         or event.platform.is_email
     ):
         return None
-    identity = await uow.session.scalar(
-        select(VerifiedSurfaceIdentity).where(
-            VerifiedSurfaceIdentity.binding_key
-            == platform_binding_key(event, installation_id)
-        )
+    identity = await VerifiedSurfaceIdentityRepository(uow).by_binding_key(
+        platform_binding_key(event, installation_id)
     )
     if identity is None:
         return None

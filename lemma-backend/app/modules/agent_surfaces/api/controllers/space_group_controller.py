@@ -29,9 +29,9 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.contracts.surfaces import account
 from app.modules.agent_surfaces.api.dependencies import get_surface_service
 from app.modules.agent_surfaces.api import group_public as public_api
+from app.modules.agent_surfaces.services.group_owner_notes import tell_previous_owner
 from app.modules.agent_surfaces.api.group_access import (
     GroupAccess,
-    tell_previous_owner,
 )
 from app.modules.agent_surfaces.api.surface_config_resolver import (
     require_surface_agent_action,
@@ -39,9 +39,6 @@ from app.modules.agent_surfaces.api.surface_config_resolver import (
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
 )
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
@@ -275,11 +272,7 @@ async def _readable_group(
 
 
 async def _surface(uow: UoWDep, surface_id: UUID) -> AgentSurfaceEntity:
-    from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (  # noqa: E501
-        SurfaceRepository,
-    )
-
-    surface = await SurfaceRepository(uow).get(surface_id)
+    surface = await SpaceGroups(uow).surface(surface_id)
     if surface is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Group not found")
     return surface
@@ -488,8 +481,8 @@ async def group_timeline(
     own access comes back withheld to everybody else: they may not be able to
     see what it was made from.
     """
-    group = await SurfaceGroupRepository(uow.session).get_by_id(group_id)
-    if group is None or group.pod_id != pod_id:
+    group = await SpaceGroups(uow).group_in_pod(pod_id=pod_id, group_id=group_id)
+    if group is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Group not found")
     await _require_on_group(
         uow,
@@ -563,13 +556,11 @@ async def update_group(
     takes_over = request.take_over or (
         bool(request.answers_outsiders) and not current.owner_in_pod
     )
-    groups = SurfaceGroupRepository(uow.session)
-    if takes_over:
-        await groups.set_owner(group.id, user.id)
-    if request.answers_outsiders is not None:
-        await groups.set_answers_outsiders(
-            group.id, answers_outsiders=request.answers_outsiders
-        )
+    await spaces.change(
+        group.id,
+        new_owner=user.id if takes_over else None,
+        answers_outsiders=request.answers_outsiders,
+    )
     if (
         current.owner_in_pod
         and group.owner_user_id not in (None, user.id)

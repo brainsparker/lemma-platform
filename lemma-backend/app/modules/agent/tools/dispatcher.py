@@ -26,6 +26,7 @@ from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.outsider_tools import outsider_may_call
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
+from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 
 logger = get_logger(__name__)
 
@@ -69,6 +70,7 @@ class AgentToolDispatcher:
         toolsets: list[object] | None = None,
         agent_run_id: UUID | None = None,
         include_final_answer: bool = False,
+        grants: AgentGrantSummary | None = None,
     ) -> list[ToolInfo]:
         async with AsyncExitStack() as exit_stack:
             prepared = await self._prepare(
@@ -79,6 +81,7 @@ class AgentToolDispatcher:
                 agent_run_id=agent_run_id,
                 exit_stack=exit_stack,
                 include_final_answer=include_final_answer,
+                grants=grants,
             )
             return [
                 ToolInfo(
@@ -104,6 +107,7 @@ class AgentToolDispatcher:
         include_final_answer: bool = False,
         tool_call_id: str | None = None,
         include_notification_tools: bool = False,
+        grants: AgentGrantSummary | None = None,
     ) -> object:
         async with AsyncExitStack() as exit_stack:
             prepared = await self._prepare(
@@ -115,6 +119,7 @@ class AgentToolDispatcher:
                 exit_stack=exit_stack,
                 include_final_answer=include_final_answer,
                 include_notification_tools=include_notification_tools,
+                grants=grants,
                 only=name,
             )
             tool = prepared.get(name)
@@ -144,6 +149,7 @@ class AgentToolDispatcher:
         toolsets: list[object] | None = None,
         include_final_answer: bool = False,
         include_notification_tools: bool = False,
+        grants: AgentGrantSummary | None = None,
         only: str | None = None,
     ) -> dict[str, PreparedTool]:
         """Every tool, or with ``only`` just the toolset that owns that name.
@@ -159,6 +165,9 @@ class AgentToolDispatcher:
                 agent=agent,
                 conversation=conversation,
                 include_final_answer=include_final_answer,
+                # Handed over by a caller that already holds them, so the
+                # assembler does not read the same grants again.
+                grants=grants,
                 # The whole reason a remote harness never saw `view_image`.
                 vision_mode=ctx.vision_mode,
                 # Only on the Agent Host bridge, which is what asks for

@@ -45,7 +45,7 @@ async def test_conversation_mcp_returns_is_error_on_tool_failure(monkeypatch, ex
     ctx = _ctx(conversation_id, pod_id, user_id)
 
     async def fake_load(self, *, conversation_id, agent_run_id):
-        return agent, conversation, ctx
+        return agent, conversation, ctx, None
 
     async def raising_call_tool(self, **kwargs):
         raise exc
@@ -73,7 +73,7 @@ async def test_conversation_mcp_reraises_control_flow(monkeypatch):
     ctx = _ctx(conversation_id, pod_id, user_id)
 
     async def fake_load(self, *, conversation_id, agent_run_id):
-        return agent, conversation, ctx
+        return agent, conversation, ctx, None
 
     async def raising_call_tool(self, **kwargs):
         raise ModelRetry("retry please")

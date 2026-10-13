@@ -153,24 +153,34 @@ async def authorized_conversation(
     pod_id: UUID,
     agent_name: str | None,
     action: str,
+    include_runs: bool = False,
+    require_grant: bool = True,
 ) -> Conversation:
+    """Resolve the agent the caller names, load the conversation, check both.
+
+    ``require_grant=False`` is for an agent working on its own conversation
+    tree: ownership is still checked, but the agent holds no grant on itself.
+    """
     agent_id = await resolve_expected_agent_id(
         agent_repository,
         pod_id=pod_id,
         agent_name=agent_name,
     )
     conversation = validate_conversation_access(
-        await conversation_repository.get_conversation(conversation_id),
+        await conversation_repository.get_conversation(
+            conversation_id, include_runs=include_runs
+        ),
         user_id=user_id,
         pod_id=pod_id,
         agent_id=agent_id,
     )
-    await require_agent_action(
-        user_id=user_id,
-        pod_id=pod_id,
-        agent_id=conversation.agent_id,
-        action=action,
-    )
+    if require_grant:
+        await require_agent_action(
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_id=conversation.agent_id,
+            action=action,
+        )
     return conversation
 
 

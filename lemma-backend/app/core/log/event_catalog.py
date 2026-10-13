@@ -115,6 +115,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.model_stream_budget.stream_abandoned.degraded': EventSpec('warning', frozenset({'elapsed_seconds', 'first_chunk', 'reason', 'url'})),
     'agent.module.system_lemma_models_will_be.observed': EventSpec('debug', frozenset()),
     'agent.module.system_models_cannot_back_a_spend_limit.degraded': EventSpec('warning', frozenset({'policy', 'unpriced_count', 'unpriced_models'})),
+    'agent.outsider_runtime.fallback_skipped.degraded': EventSpec('warning', frozenset({'error_code', 'profile_id'})),
     'agent.outsider_tool_gate.withheld.degraded': EventSpec('warning', frozenset({'tool_name'})),
     'agent.outsiders.unflagged_link.error': EventSpec('error', frozenset({'conversation_id'})),
     'agent.pause_resume.resume_refused_by_usage_limit.degraded': EventSpec('warning', frozenset({'agent_run_id', 'conversation_id'})),

@@ -96,14 +96,16 @@ async def _sent_while_working(conversation_id: UUID, run_id: UUID, text: str) ->
     return message.id
 
 
-async def _metadata(message_id: UUID) -> dict:
+async def _metadata(message_id: UUID) -> dict[str, object]:
     async with async_session_maker() as session:
         message = await session.get(MessageModel, message_id)
         assert message is not None
         return dict(message.message_metadata or {})
 
 
-async def _commands(run_id: UUID, kind: AgentHostCommandKind) -> list:
+async def _commands(
+    run_id: UUID, kind: AgentHostCommandKind
+) -> list[AgentHostCommandModel]:
     async with async_session_maker() as session:
         return list(
             (

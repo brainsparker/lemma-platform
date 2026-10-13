@@ -35,7 +35,7 @@ _ANSWER = "Tell them Friday, and leave the discount out."
 _SHOWN = "<div class='plan'>Friday rollout</div>"
 
 
-def _carries(messages: list[dict], needle: str) -> bool:
+def _carries(messages: list[dict[str, object]], needle: str) -> bool:
     return any(needle in str(message) for message in messages)
 
 

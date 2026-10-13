@@ -50,9 +50,19 @@ def _harness(
     )
 
 
-@pytest.mark.parametrize("status", [AgentHostStatus.ONLINE, AgentHostStatus.DRAINING])
-def test_a_host_heard_from_lately_takes_runs(status):
-    assert _host(status) is None
+def test_a_host_heard_from_lately_takes_runs():
+    assert _host(AgentHostStatus.ONLINE) is None
+
+
+def test_a_draining_host_takes_no_new_run():
+    """A host shut down cleanly reports DRAINING and stops taking work. A run
+    admitted to it waited out the whole host-wait timeout, then failed naming
+    neither the computer nor a fix."""
+    refusal = _host(AgentHostStatus.DRAINING)
+
+    assert refusal is not None
+    assert "Ada's MacBook is shutting down or paused" in refusal
+    assert "open Lemma on that computer" in refusal
 
 
 @pytest.mark.parametrize("seen_ago", [AGENT_HOST_OFFLINE_AFTER_SECONDS + 1, 3600, None])

@@ -23,9 +23,12 @@ from app.modules.agent.domain.agent_host import (
     effective_agent_host_status,
 )
 
-#: Host states that still take runs. A draining host finishes what it has and
-#: is expected back; refusing outright would fail runs a restart would carry.
-_ACCEPTING = frozenset({AgentHostStatus.ONLINE, AgentHostStatus.DRAINING})
+#: Host states that take a new run. Not DRAINING: a host shut down cleanly, or
+#: paused, reports that and stops taking work, so a run admitted to it waited
+#: out the whole host-wait timeout. Only a new run is refused here -- a run the
+#: host already has keeps its lease (``enqueue_run`` finds it before admission)
+#: and its host commands, and finishes or is carried over a restart as before.
+_ACCEPTING = frozenset({AgentHostStatus.ONLINE})
 
 #: Each agent's own sign-in command, typed in a terminal on the computer it is
 #: on. The same commands the workspace shows (``lemma-frontend``
@@ -61,6 +64,11 @@ def host_refusal(
         )
     if effective is AgentHostStatus.REVOKED:
         return f"{host_name} was removed from Lemma, so it cannot run agents."
+    if effective is AgentHostStatus.DRAINING:
+        return (
+            f"{host_name} is shutting down or paused and isn't taking new work: "
+            "open Lemma on that computer, or resume it, then try again."
+        )
     return (
         f"{host_name} is not connected to Lemma, so nothing can run on it: open "
         "Lemma on that computer, or wake it, then try again."

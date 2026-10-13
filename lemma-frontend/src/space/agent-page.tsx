@@ -368,7 +368,7 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
 function Facts({ detail }: { detail: AgentDetail }) {
     const runtime = runtimeLine(detail);
     return (
-        <Rail title="Runs on">
+        <Rail title="Model">
             <p className="agentpage__fact">{runtime || "The default model here"}</p>
             {(detail.input || detail.output) && (
                 <dl className="agentpage__schema">

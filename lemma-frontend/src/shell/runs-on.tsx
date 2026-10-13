@@ -70,10 +70,9 @@ function rowsOf(runtimes: Runtime[]): { runtime: Runtime; choice: Choice; label:
     });
 }
 
-export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
-    const queryClient = useQueryClient();
-    const { open, setOpen, wrap, menuClass } = usePicker();
-
+/** What this teammate runs on, read once for the picker and for the line
+ *  about it on About's overview: the same three queries, the same sentence. */
+export function useRunsOn(podId: string, orgId: string) {
     const runtimes = useQuery({
         queryKey: ["runtimes", orgId],
         queryFn: () => source.listRuntimes(orgId),
@@ -89,28 +88,15 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
         queryFn: () => source.getPodRuntime(podId),
     });
 
-    const set = useMutation({
-        mutationFn: (choice: Choice | null) => source.setPodRuntime(podId, choice),
-        onSuccess: (_answer, choice) => {
-            queryClient.setQueryData(["pod-runtime", podId], choice);
-            void queryClient.invalidateQueries({ queryKey: ["pod-runtime", podId] });
-        },
-    });
-
     /* Retired runtimes are gone from the picker and stay readable in
        settings — offering one here would pin a teammate to something that
        cannot take a run. */
     const live = useMemo(() => (runtimes.data ?? []).filter((one) => !one.archived), [runtimes.data]);
-    const rows = useMemo(() => rowsOf(live), [live]);
 
     const choice = current.data ?? null;
     const chosen = choice ? live.find((one) => one.id === choice.runtimeId) : undefined;
     const inheritedName = describeChoice(live, inherited.data ?? null);
     const setup = runtimes.isSuccess ? modelSetupState(live, inherited.isSuccess ? inherited.data : undefined, choice) : null;
-
-    if (current.isError || runtimes.isError) {
-        return <p className="empty-row">Couldn’t load available runtimes.</p>;
-    }
 
     const said = choice
         ? describeChoice(live, choice) || "Selected runtime unavailable"
@@ -119,6 +105,28 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
             : inheritedName
                 ? "Organization default — " + inheritedName
                 : "Organization default";
+
+    return { runtimes, inherited, current, live, choice, chosen, inheritedName, setup, said };
+}
+
+export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
+    const queryClient = useQueryClient();
+    const { open, setOpen, wrap, menuClass } = usePicker();
+    const { runtimes, current, live, choice, chosen, inheritedName, setup, said } = useRunsOn(podId, orgId);
+
+    const set = useMutation({
+        mutationFn: (choice: Choice | null) => source.setPodRuntime(podId, choice),
+        onSuccess: (_answer, choice) => {
+            queryClient.setQueryData(["pod-runtime", podId], choice);
+            void queryClient.invalidateQueries({ queryKey: ["pod-runtime", podId] });
+        },
+    });
+
+    const rows = useMemo(() => rowsOf(live), [live]);
+
+    if (current.isError || runtimes.isError) {
+        return <p className="empty-row">Couldn’t load available runtimes.</p>;
+    }
 
     return (
         <div className="pick" ref={wrap}>

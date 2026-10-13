@@ -56,6 +56,7 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
             mode=WorkflowMode(model.mode),
             is_active=model.is_active,
             visibility=model.visibility,
+            max_concurrent_runs=model.max_concurrent_runs,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )
@@ -81,6 +82,7 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
             "mode": entity.mode.value,
             "is_active": entity.is_active,
             "visibility": entity.visibility,
+            "max_concurrent_runs": entity.max_concurrent_runs,
         }
 
     async def create(self, flow: WorkflowEntity) -> WorkflowEntity:

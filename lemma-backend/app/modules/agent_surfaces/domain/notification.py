@@ -79,6 +79,10 @@ class NotificationDeliveryStatus(StrEnum):
     """
 
     PENDING = "PENDING"
+    # Handed to a platform, outcome not yet recorded. Written before the send,
+    # so a row still in it after the send is one whose send may have landed --
+    # and a retry with the same key must not post it again blindly.
+    SENDING = "SENDING"
     DELIVERED = "DELIVERED"
     # No channel could carry it. Not an error: the in-app inbox still has it.
     UNDELIVERABLE = "UNDELIVERABLE"
@@ -170,6 +174,17 @@ class NotificationEntity(AggregateRoot):
         self.delivery_platform = platform
         self.delivery_error = None
         self.delivered_at = datetime.now(timezone.utc)
+
+    def mark_sending(self, *, surface_id: UUID, platform: str) -> None:
+        """Record which channel is about to carry it, before the platform call."""
+        self.delivery_status = NotificationDeliveryStatus.SENDING
+        self.delivery_surface_id = surface_id
+        self.delivery_platform = platform
+
+    @property
+    def send_outcome_unknown(self) -> bool:
+        """A send was started and never recorded as finished either way."""
+        return self.delivery_status is NotificationDeliveryStatus.SENDING
 
     def mark_undeliverable(self, reason: str) -> None:
         """No channel could carry it. The row and the inbox entry still stand."""

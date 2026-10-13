@@ -540,6 +540,10 @@ class AgentRunStartResult(BaseModel):
     conversation_id: UUID
     agent_run_id: UUID
     started_new_run: bool
+    #: This send was already received -- same client message id, or the same
+    #: words from the same person moments ago -- so nothing new was stored and
+    #: ``agent_run_id`` is the run already answering it.
+    deduplicated: bool = False
 
 
 def to_json_value(value: object) -> JsonValue:

@@ -199,6 +199,14 @@ host re-probes and republishes now instead of on its own 15-minute cycle.
 Settings → This Mac → Coding agents lists what was found, with each agent's
 release and its update command.
 
+A run is refused before it is queued, with a sentence naming the agent, the
+computer and the fix (`domain/agent_host_readiness.py`), when the computer has
+not been heard from within 90 seconds, when the agent's last report is past
+its `stale_after`, or when that report is anything but READY -- for a
+signed-out agent, its own sign-in command and **Check again**. Each publish
+carries every agent the host's manifest knows, so an agent missing from one is
+gone from that computer and is marked DISABLED.
+
 locald merges the process and connection planes into `agent-host.status` and the
 `agent_host` key of `control.snapshot`, caching the journal read for two seconds
 so a polling page cannot fork the sidecar on every tick.
@@ -402,7 +410,7 @@ either mode.
 
 | Agent | How | Left out | Still loaded |
 |---|---|---|---|
-| Claude Code | `session/new` and `session/load` `_meta`, read by `claude-agent-acp`: `claudeCode.options` `settingSources: ["project", "local"]`, `strictMcpConfig`, `plugins: []`, `env.CLAUDE_CODE_DISABLE_AUTO_MEMORY`, and `settings` (flag settings) carrying only the sign-in keys of `~/.claude/settings.json` | `~/.claude/CLAUDE.md`, skills, agents, commands, output styles, plugins, hooks and settings; the person's MCP servers (`~/.claude.json`) and claude.ai connectors; auto-memory | the sign-in (keychain or `~/.claude/.credentials.json`), and `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`, `forceLoginMethod`, `forceLoginOrgUUID` and the provider variables of `env` (`ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `AWS_*`, `GOOGLE_*`, proxies) from its settings; Claude Code's bundled skills; `claude-agent-acp` itself still reads `~/.claude/settings.json` for `permissions.defaultMode`, `availableModels` and `modelOverrides` |
+| Claude Code | `session/new` and `session/load` `_meta`, read by `claude-agent-acp`: `claudeCode.options` `settingSources: ["project", "local"]`, `strictMcpConfig`, `plugins: []`, `env.CLAUDE_CODE_DISABLE_AUTO_MEMORY`, and `settings` (flag settings) carrying only the sign-in keys and the permission rules of `~/.claude/settings.json` | `~/.claude/CLAUDE.md`, skills, agents, commands, output styles, plugins, hooks and settings, including `permissions.additionalDirectories`; the person's MCP servers (`~/.claude.json`) and claude.ai connectors; auto-memory | the sign-in (keychain or `~/.claude/.credentials.json`), and `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`, `forceLoginMethod`, `forceLoginOrgUUID` and the provider variables of `env` (`ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `AWS_*`, `GOOGLE_*`, proxies) from its settings; `permissions.allow`, `deny` and `ask` (but not a rule with a path relative to `~/.claude`, which would be read against another folder); Claude Code's bundled skills; `claude-agent-acp` itself still reads `~/.claude/settings.json` for `permissions.defaultMode`, `availableModels` and `modelOverrides` |
 | Codex | nothing: the person's own `CODEX_HOME` and setup, unchanged. The only override is `web_search: "disabled"` in `CODEX_CONFIG` (merged into the pinned adapter's value) when the run has Lemma's own web search, so the agent does not hold two | -- (Codex's own web search, only when Lemma's is there) | everything: the sign-in, `~/.codex/AGENTS.md`, skills, hooks, `rules/`, the person's MCP servers and the rest of `config.toml`; Lemma's MCP server and instructions on top |
 | OpenCode | nothing: the person's own setup, unchanged. The only override is `OPENCODE_CONFIG_CONTENT` `{"permission": {"webfetch": "deny"}}` when the run has Lemma's own page fetch | -- (OpenCode's own `webfetch`, only when Lemma's is there) | everything: `~/.config/opencode` (`AGENTS.md`, skills, `opencode.json`'s MCP servers), and the skills it borrows from `~/.claude` and `~/.agents`; Lemma's MCP server and instructions on top |
 | Cursor | nothing | -- | everything (`~/.cursor/cli-config.json`, `~/.cursor/mcp.json`, the account's user rules). `cursor-agent` documents one knob, `CURSOR_CONFIG_DIR`, which moves `cli-config.json` and reportedly the sign-in with it; it offers no switch for rules or MCP servers that spares the login, and until one is verified against a signed-in `cursor-agent` Cursor is left as it is |
@@ -454,7 +462,22 @@ tells the agent to use Lemma's:
   shell runs is the release its server is, signed in as the run through the
   `LEMMA_*` environment (with `LEMMA_CONVERSATION_ID`). The host accepts the
   folder by the rule host execution uses
-  ([§6](desktop-host-execution.md#6-the-seatbelt-profile)).
+  ([§6](desktop-host-execution.md#6-the-seatbelt-profile)). Claude Code is
+  also given `allowedTools` `Bash(<bin>/lemma:*)` and `Bash(lemma:*)`, so the
+  CLI never raises a permission request: it is signed in as the run and can
+  do only what the run's Lemma tools can, which the host already answers
+  without a person. Each rule names that one executable, never a prefix of
+  the command text, and Claude Code refuses a compound command unless every
+  part is allowed; the bare name is the same binary because its `bin/` is
+  first on the agent's `PATH`.
+- **The person's own permission rules.** Leaving `~/.claude` out also left
+  out the person's `permissions.allow`, so a command they had told Claude
+  Code never to ask about asked in every Lemma run. `allow`, `deny` and `ask`
+  come back as flag settings (`claude_permission_rules`); `deny` and `ask`
+  travel with `allow` because they override it, and carrying the allow alone
+  would widen it. Nothing else of the block does: `defaultMode` could be
+  `bypassPermissions`, and `additionalDirectories`, hooks and MCP servers
+  change what the agent can reach rather than whether it asks.
 
 `desktop/agent-host/tests/acp_session_options_e2e.rs` holds the driver to
 delivering each of these, against a scripted agent that records what it is
@@ -577,6 +600,15 @@ guarantee:
   rewound a refused run for replay, is followed by another without waiting for
   a new event. Connecting kicks delivery once, so a run that finished while
   the host was offline is delivered in full, terminal event included.
+- **Worker restarts.** The worker reading a run's stream records on the run's
+  lease the last entry whose messages it has persisted
+  (`consumed_stream_id`), at a point where nothing it read is still waiting to
+  become a message. A worker that reclaims the run after a deploy resumes
+  there, with the tool calls already on the record restored, instead of
+  dispatching again and re-reading the stream from its start
+  (`harnesses/agent_host/stream_resume.py`). The stream is trimmed only below
+  that cursor, never by length, and each event's payload is capped at 8 MiB
+  at intake.
 - **Control updates** are idempotent and stale ones are ignored.
   `control_ok.refused` names any update Lemma could not parse, and it is the
   only way one is refused. Lemma applies each update separately, so one bad
@@ -594,9 +626,13 @@ guarantee:
   every retry of that call, on any link. Lemma claims `(run_id, request_id)` in
   Redis (`SET NX`); the first arrival executes the call in a task the link does
   not own, so a socket that drops mid-call does not cancel it, and its outcome
-  -- the MCP result, or the failure -- is kept for an hour. A duplicate that
+  -- the MCP result, or the failure -- is kept for ten minutes (a result over
+  256 KiB is not kept: a retry is told the call finished). A duplicate that
   arrives while it runs waits for that outcome; one that arrives after is
-  answered from it. Nothing is executed twice
+  answered from it. The executing replica keeps a heartbeat beside the claim,
+  so a duplicate of a call whose replica died is told at once that it may have
+  run, rather than waiting for an outcome nobody will record. Nothing is
+  executed twice
   (`agent_host_link_tool_calls.py`). `welcome` says so with
   `idempotent_tool_calls: true`, and a host resends a `tools/call` after a drop
   only to a server that said it. A call without a `request_id`, from an older
@@ -612,6 +648,20 @@ guarantee:
   never stalls the runs still working. A wait whose run has ended is answered
   `TERMINAL_RUN`, not held for its full half hour. The bridge no longer polls
   every 2 seconds.
+- **The parked window.** A parked question, approval or ACP permission request
+  holds a run that is still RUNNING, and the worker job reading it. Pauses
+  never expire, so past `AGENT_HOST_PARKED_WINDOW_SECONDS` (10 minutes) the
+  worker marks the run (`suspended_while_parked`) and sends the ordinary
+  `CANCEL_RUN`; the host ends the ACP turn as it does for Stop, and the
+  terminal it reports is read as WAITING (`harnesses/agent_host/parked_window.py`).
+  Nothing on the wire changed: the bridge's wait ends with its run and hands
+  the agent the unchanged "waiting" result, never a denial, and the host
+  resolves a held permission request as the cancelled turn's. The pause stays
+  listed, and deciding it resumes a new run that carries the decision. A
+  permission request cannot be answered in the turn that asked, so its
+  decision tells the resumed agent that nothing ran and to do it again if it
+  is still needed -- the host asks once more. An answer inside the window is
+  delivered into the turn, as before.
 - **Steering.** A message the person sends while a run is working reaches a
   harness that published the `steering` capability as a `STEER_RUN` command,
   fenced on the run's lease epoch like every run command. The run's turn sends

@@ -1,32 +1,25 @@
-"""Ending a model response that has stopped making progress.
+"""Ending a model response that has stopped making progress, or run too long.
 
 The provider client's read timeout is *per chunk*: httpx resets it every time
 bytes arrive, which is the right shape for "the provider has gone away" and the
 reason a legitimately long answer can stream for minutes without tripping it.
 
-It cannot see the other failure, and that is the one production hit. A provider
-that keeps sending *something* — a token every half-second, a keep-alive frame —
-never trips a per-chunk timeout however long it goes on. Measured on dev: two
-consecutive requests took 85s and 185s to deliver 71 and 325 tokens, roughly one
-token per second, while fifteen other requests on the same client finished in
-0.6-9.0s at forty to ninety tokens per second. Nothing timed out, nothing
-retried, and the person's HTTP request stayed open the whole time holding the
-conversation's one active run slot.
+It cannot see the other failure. A provider that keeps sending *something* -- a
+token every few seconds, a keep-alive frame, a long stream of reasoning -- never
+trips a per-chunk timeout however long it goes on, and meanwhile the person's
+conversation holds its one active run slot.
 
 So this bounds the two things a per-chunk timeout structurally cannot:
 
 * how long the provider may take to send the *first* body chunk, which is where
-  a request that was accepted but never really started shows itself, and
-* how long one exchange may run in total, which is the only thing that catches
-  a trickle.
-
-Both raise :class:`httpx.ReadTimeout`. That is not decoration: it is an
-``httpx.TransportError``, so ``is_retryable_stream_error`` already returns True
-for it and ``drive_with_retry`` re-enters the run from the snapshot taken before
-the failing request — re-asking only that request, replaying completed tool
-results rather than re-running them. Raising the transport's own error is what
-lets an existing, tested recovery path handle a new failure with no changes to
-it.
+  a request that was accepted but never really started shows itself. That one
+  raises :class:`httpx.ReadTimeout`, a transport error the harness already
+  retries from the snapshot taken before the failing request.
+* how long one exchange may run in total, counted from the moment the request
+  is sent. That raises :class:`ModelResponseBudgetExceeded`, which is *not* a
+  dropped connection: the same request sent again takes the same time, so the
+  harness retries it at most once and with a smaller answer budget, and tells
+  the reader the model took too long rather than that the connection dropped.
 
 The stream is closed on the way out rather than abandoned, so a provider that
 has stopped making progress does not keep a pooled connection with it.
@@ -41,6 +34,9 @@ from collections.abc import AsyncIterator
 import httpx
 
 from app.core.log.log import get_logger
+from app.modules.agent.infrastructure.transport_errors import (
+    ModelResponseBudgetExceeded,
+)
 
 logger = get_logger(__name__)
 
@@ -69,54 +65,65 @@ class _BudgetedByteStream(httpx.AsyncByteStream):
         request: httpx.Request,
         first_chunk_seconds: float | None,
         total_seconds: float | None,
+        sent_at: float | None = None,
     ) -> None:
         self._stream = stream
         self._request = request
-        self._first_chunk_seconds = first_chunk_seconds
-        self._total_seconds = total_seconds
-
-    def _budget(self, *, started: float, first_chunk: bool) -> float | None:
-        """How long the next chunk may take. ``None`` means "unbounded"."""
-        budgets: list[float] = []
-        if first_chunk and not _disabled(self._first_chunk_seconds):
-            budgets.append(float(self._first_chunk_seconds))  # type: ignore[arg-type]
-        if not _disabled(self._total_seconds):
-            elapsed = time.monotonic() - started
-            budgets.append(float(self._total_seconds) - elapsed)  # type: ignore[arg-type]
-        return min(budgets) if budgets else None
+        self._first_chunk_seconds = (
+            None if _disabled(first_chunk_seconds) else first_chunk_seconds
+        )
+        self._total_seconds = None if _disabled(total_seconds) else total_seconds
+        # When the request went out. The whole-exchange budget counts from here,
+        # so the time a provider spends before sending headers is inside the
+        # budget rather than on top of it.
+        self._sent_at = sent_at
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        started = time.monotonic()
+        sent_at = self._sent_at if self._sent_at is not None else time.monotonic()
         iterator = self._stream.__aiter__()
         first_chunk = True
         while True:
-            budget = self._budget(started=started, first_chunk=first_chunk)
+            total_left = (
+                None
+                if self._total_seconds is None
+                else self._total_seconds - (time.monotonic() - sent_at)
+            )
+            first_chunk_left = self._first_chunk_seconds if first_chunk else None
+            limits = [
+                left for left in (total_left, first_chunk_left) if left is not None
+            ]
             try:
-                if budget is None:
+                if not limits:
                     chunk = await iterator.__anext__()
                 else:
                     # Negative budgets are possible when the total elapsed while
                     # the consumer held the last chunk; asyncio.timeout fires
                     # immediately on those, which is the intended answer.
-                    async with asyncio.timeout(budget):
+                    async with asyncio.timeout(min(limits)):
                         chunk = await iterator.__anext__()
             except StopAsyncIteration:
                 return
             except TimeoutError as exc:
+                over_total = total_left is not None and (
+                    first_chunk_left is None or total_left <= first_chunk_left
+                )
                 raise await self._expired(
-                    started=started, first_chunk=first_chunk
+                    sent_at=sent_at, first_chunk=first_chunk, over_total=over_total
                 ) from exc
             first_chunk = False
             yield chunk
 
-    async def _expired(self, *, started: float, first_chunk: bool) -> httpx.ReadTimeout:
+    async def _expired(
+        self, *, sent_at: float, first_chunk: bool, over_total: bool
+    ) -> httpx.ReadTimeout:
         """Close the connection, say why, and build the error to raise."""
-        elapsed = time.monotonic() - started
-        reason = (
-            "the provider sent no response body"
-            if first_chunk
-            else "the provider stopped making progress"
-        )
+        elapsed = time.monotonic() - sent_at
+        if over_total:
+            reason = "the response ran past its time budget"
+        elif first_chunk:
+            reason = "the provider sent no response body"
+        else:
+            reason = "the provider stopped making progress"
         # Closed rather than left to the pool: a stream abandoned mid-body would
         # otherwise hold a connection open for a provider we have just given up
         # on, which is the state this whole module exists to end.
@@ -128,10 +135,15 @@ class _BudgetedByteStream(httpx.AsyncByteStream):
             first_chunk=first_chunk,
             url=str(self._request.url),
         )
-        return httpx.ReadTimeout(
-            f"Model stream abandoned after {elapsed:.1f}s: {reason}.",
-            request=self._request,
-        )
+        message = f"Model stream abandoned after {elapsed:.1f}s: {reason}."
+        if over_total and self._total_seconds is not None:
+            return ModelResponseBudgetExceeded(
+                message,
+                request=self._request,
+                elapsed_seconds=elapsed,
+                budget_seconds=self._total_seconds,
+            )
+        return httpx.ReadTimeout(message, request=self._request)
 
     async def aclose(self) -> None:
         await self._stream.aclose()
@@ -162,6 +174,7 @@ class ModelStreamBudgetTransport(httpx.AsyncBaseTransport):
         return self._wrapped
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        sent_at = time.monotonic()
         response = await self._wrapped.handle_async_request(request)
         if _disabled(self._first_chunk_seconds) and _disabled(self._total_seconds):
             return response
@@ -170,6 +183,7 @@ class ModelStreamBudgetTransport(httpx.AsyncBaseTransport):
             request=request,
             first_chunk_seconds=self._first_chunk_seconds,
             total_seconds=self._total_seconds,
+            sent_at=sent_at,
         )
         return response
 
@@ -183,6 +197,7 @@ def budgeted_stream(
     request: httpx.Request,
     first_chunk_seconds: float | None,
     total_seconds: float | None,
+    sent_at: float | None = None,
 ) -> httpx.AsyncByteStream:
     """A response body that fails rather than trickling forever."""
     return _BudgetedByteStream(
@@ -190,4 +205,5 @@ def budgeted_stream(
         request=request,
         first_chunk_seconds=first_chunk_seconds,
         total_seconds=total_seconds,
+        sent_at=sent_at,
     )

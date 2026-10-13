@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, literal, or_, select, tuple_
 from sqlalchemy.orm import load_only
 
 from app.core.domain.message_bus import MessageBus
@@ -40,8 +40,10 @@ def _expired_run_error(run, *, now: datetime) -> str:
     started = getattr(run, "started_at", None)
     deadline = getattr(run, "deadline_at", None)
     if started is None or deadline is None:
+        # A PENDING run's deadline is only its deadline to start.
         return (
-            "Function execution deadline exceeded; the runtime never reported a result"
+            "Function never started before its start deadline. Nothing ran, so "
+            "it is safe to retry."
         )
     budget = round((deadline - started).total_seconds())
     ran_for = round((now - started).total_seconds())
@@ -50,6 +52,18 @@ def _expired_run_error(run, *, now: datetime) -> str:
         f"against a {budget}s budget. The run was ended by the platform sweep, "
         "so either the function is still working or the runtime never reported "
         "back."
+    )
+
+
+def _after_run(run_id: UUID):
+    """Keyset condition: runs ordered after ``run_id`` by (created_at, id)."""
+    after_created_at = (
+        select(FunctionRunModel.created_at)
+        .where(FunctionRunModel.id == run_id)
+        .scalar_subquery()
+    )
+    return tuple_(FunctionRunModel.created_at, FunctionRunModel.id) > tuple_(
+        after_created_at, literal(run_id, FunctionRunModel.id.type)
     )
 
 
@@ -184,8 +198,7 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
             # the sweeper finding a run whose result never came back at all.
             # The two read identically in a run list and have opposite
             # remedies — make the function faster, versus find out why the
-            # runtime never reported — so 41 failures in one afternoon said
-            # "timed out" and left the reader to guess which kind.
+            # runtime never reported — so they must not share a sentence.
             run.error = _expired_run_error(run, now=now)
             run.completed_at = now
             self.uow.collect_events(
@@ -245,7 +258,12 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         return int(getattr(result, "rowcount", 0) or 0)
 
     async def list_pending_async_runs(
-        self, *, now: datetime, min_age_seconds: int, limit: int = 100
+        self,
+        *,
+        now: datetime,
+        min_age_seconds: int,
+        limit: int = 100,
+        after: UUID | None = None,
     ) -> list[UUID]:
         """Return asynchronous runs whose one execution was never queued.
 
@@ -255,6 +273,9 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         one is harmless (Streaq deduplicates the deterministic task identity)
         but claiming one is not, which is what ``min_age_seconds`` is for; the
         argument for its value lives on the constant it is passed from.
+
+        ``after`` is the last run of the previous page. Republishing leaves a
+        run PENDING, so without it every page would be the same first page.
         """
 
         statement = (
@@ -269,6 +290,8 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
             .order_by(FunctionRunModel.created_at, FunctionRunModel.id)
             .limit(limit)
         )
+        if after is not None:
+            statement = statement.where(_after_run(after))
         return list((await self.session.scalars(statement)).all())
 
     async def list_runs_by_function(

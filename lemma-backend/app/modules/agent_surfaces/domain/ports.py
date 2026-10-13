@@ -149,6 +149,7 @@ class SurfaceInstallationRepositoryPort(Protocol):
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
         surface_identity_id: str | None = None,
+        limit: int | None = None,
     ) -> list[AgentSurfaceEntity]: ...
 
     async def list_active_native_receiver_surfaces(
@@ -343,15 +344,6 @@ class SurfaceUserDirectoryPort(Protocol):
 
     async def user_id_by_email(self, email: str) -> UUID | None:
         """The live user with this address, or nobody."""
-        raise NotImplementedError
-
-    async def user_id_by_telegram_username(self, username: str) -> UUID | None:
-        """The live user holding this handle, or nobody.
-
-        A handle freed by a deactivated account must answer nobody: it can be
-        taken by someone else, and a surface resolving it is choosing whose
-        authority a run executes with.
-        """
         raise NotImplementedError
 
     async def user_ids_by_mobile_numbers(

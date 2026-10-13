@@ -159,8 +159,6 @@ class TelegramManagedBotSetup(BaseModel):
     suggested_bot_username: str
     status: TelegramManagedBotSetupStatus = TelegramManagedBotSetupStatus.PENDING
     telegram_user_id: int | None = None
-    telegram_username: str | None = None
-    telegram_display_name: str | None = None
     account_id: UUID | None = None
     surface_id: UUID | None = None
     bot_id: int | None = None

@@ -25,6 +25,9 @@ from app.modules.agent.infrastructure.agent_host.event_stream import (
 from app.modules.agent.infrastructure.harnesses.agent_host import (
     harness as harness_module,
 )
+from app.modules.agent.infrastructure.harnesses.agent_host import (
+    harness_events as harness_events_module,
+)
 from app.modules.agent.infrastructure.harnesses.agent_host.harness import RemoteHarness
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
@@ -350,7 +353,7 @@ class TestATurnEndedForASleepingAgent:
         )
         _stub_dispatch(harness, monkeypatch)
         monkeypatch.setattr(
-            harness_module,
+            harness_events_module,
             "run_suspended_on",
             _sleeping_since(tool_call_id="lemma-mcp-1"),
         )
@@ -374,7 +377,11 @@ class TestATurnEndedForASleepingAgent:
             stream_block_ms=1,
         )
         _stub_dispatch(harness, monkeypatch)
-        monkeypatch.setattr(harness_module, "run_suspended_on", _awake())
+        monkeypatch.setattr(harness_events_module, "run_suspended_on", _awake())
+        # Nor ended by Lemma for a pause it sat parked on past its window.
+        monkeypatch.setattr(
+            harness_events_module, "run_suspended_while_parked", _awake()
+        )
 
         events = [event async for event in await _drive(harness, agent_run_id)]
 
@@ -398,7 +405,9 @@ class TestATurnEndedForASleepingAgent:
         )
         _stub_dispatch(harness, monkeypatch)
         monkeypatch.setattr(
-            harness_module, "run_suspended_on", _sleeping_since(tool_call_id="x")
+            harness_events_module,
+            "run_suspended_on",
+            _sleeping_since(tool_call_id="x"),
         )
 
         events = [event async for event in await _drive(harness, agent_run_id)]

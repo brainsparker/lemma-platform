@@ -5,6 +5,7 @@ class NotificationDeliveryStatus(str, Enum):
     DELIVERED = "DELIVERED"
     FAILED = "FAILED"
     PENDING = "PENDING"
+    SENDING = "SENDING"
     UNDELIVERABLE = "UNDELIVERABLE"
 
     def __str__(self) -> str:

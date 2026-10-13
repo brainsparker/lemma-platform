@@ -380,12 +380,14 @@ async def test_progress_observer_delivers_retryable_telegram_error():
     )
     await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
 
+    # Structured data is not a sentence written for a person: the plain
+    # apology, with what to do next on Telegram.
     assert service.messages == [
         {
             "conversation_id": conversation.id,
             "message": (
-                "I couldn’t finish that request. "
-                "Try it again without resending your message."
+                "I couldn’t finish that request.\n\n"
+                "Tap Try again, or reply “retry”, and I’ll run it again."
             ),
             "metadata": {"retry_action": True},
         }
@@ -406,8 +408,8 @@ async def test_progress_observer_delivers_preflight_telegram_error():
         {
             "conversation_id": conversation.id,
             "message": (
-                "I couldn’t finish that request. "
-                "Try it again without resending your message."
+                "I couldn’t finish that request.\n\n"
+                "Tap Try again, or reply “retry”, and I’ll run it again."
             ),
             "metadata": {"retry_action": True},
         }

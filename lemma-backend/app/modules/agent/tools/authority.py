@@ -77,14 +77,27 @@ async def tool_authorization_context(
         )
     return await authorization.build_delegated_workload_context(
         user_id=deps.user_id,
-        principal_type="AGENT",
+        principal_type=workload_principal_type(deps),
         principal_id=getattr(deps, "workload_id", None) or DEFAULT_POD_AGENT_ID,
         pod_id=deps.pod_id,
         is_default_pod_agent=deps.is_pod_default_agent,
+        delegation_scope=getattr(deps, "delegation_scope", None),
         delegation_actor_name=deps.agent_name,
         # Session approvals (APPROVE_FOR_SESSION) are keyed by conversation.
         delegation_session_id=str(deps.conversation_id),
     )
+
+
+def workload_principal_type(deps: AgentContext) -> str:
+    """``FUNCTION`` for a function's own delegated token, else ``AGENT``.
+
+    Only the pod MCP mount builds a function's tool context: a function calling
+    pod tools with its token must get the function's grants, not be read as an
+    agent -- or, worse, as the pod's assistant acting with the person's roles.
+    """
+    if getattr(deps, "workload_type", None) == "function":
+        return "FUNCTION"
+    return "AGENT"
 
 
 def workload_actor_id(deps: AgentContext) -> str:

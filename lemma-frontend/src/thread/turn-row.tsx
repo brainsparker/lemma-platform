@@ -229,6 +229,7 @@ export const TurnRow = memo(function TurnRow({
     outsiders,
     dockedId,
     runEnded,
+    resumesOnAnswer,
     onOpenApp,
     onOpenFile,
     onOpenTable,
@@ -246,6 +247,8 @@ export const TurnRow = memo(function TurnRow({
     outsiders?: string;
     dockedId?: string | null;
     runEnded: boolean;
+    /** The conversation is waiting on its pauses; see `InteractionCard`. */
+    resumesOnAnswer?: boolean;
     onOpenApp?: (name: string) => void;
     onOpenFile?: (path: string) => void;
     onOpenTable?: (name: string) => void;
@@ -344,6 +347,7 @@ export const TurnRow = memo(function TurnRow({
                                     teammate={teammate.name}
                                     onResolve={onResolve}
                                     runEnded={runEnded}
+                                    resumesOnAnswer={resumesOnAnswer}
                                 />
                             </div>
                         );

@@ -12,6 +12,7 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.telegram.membership import (
     joined_group_event,
 )
+from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
@@ -22,13 +23,23 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
+    CallbackTokenUnreadable,
     get_callback_token,
 )
+from app.core.log.log import get_logger
+from app.modules.agent_surfaces.platforms.telegram.client import TelegramClient
+from app.modules.agent_surfaces.platforms.telegram.message_experience import (
+    retire_decision_card as retire_telegram_card,
+)
 from app.modules.agent_surfaces.platforms.telegram.parser import TelegramMessageParser
+from app.modules.agent_surfaces.platforms.telegram.choice_cards import (
+    OTHER_CALLBACK_VALUE,
+)
 from app.modules.agent_surfaces.platforms.telegram.service import (
-    _OTHER_CALLBACK_VALUE,
     TelegramPlatformService,
 )
+
+logger = get_logger(__name__)
 
 _CONTACT_REQUEST_MARKUP = {
     "keyboard": [
@@ -87,7 +98,7 @@ def _interaction_from_token(
     if decision:
         return ParsedSurfaceInteraction(approval_decision=decision, **origin)
     value = stored.get("value")
-    if value == _OTHER_CALLBACK_VALUE:
+    if value == OTHER_CALLBACK_VALUE:
         return ParsedSurfaceInteraction(interaction_state="other", **origin)
     if not str(stored.get("header") or "").strip():
         return ParsedSurfaceInteraction(interaction_state="expired", **origin)
@@ -192,10 +203,16 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         if not isinstance(callback_query, dict):
             return None
         token = str(callback_query.get("data") or "").strip()
-        return _interaction_from_token(
-            await get_callback_token(token),
-            _tap_origin(payload, callback_query),
-        )
+        origin = _tap_origin(payload, callback_query)
+        try:
+            stored = await get_callback_token(token)
+        except CallbackTokenUnreadable:
+            logger.warning(
+                "agent_surfaces.telegram.callback_token_unreadable.degraded",
+                exc_info=True,
+            )
+            return ParsedSurfaceInteraction(interaction_state="unreadable", **origin)
+        return _interaction_from_token(stored, origin)
 
     async def acknowledge_interaction(
         self,
@@ -212,6 +229,11 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
             show_alert=show_alert,
             clear_actions=clear_actions,
         )
+
+    async def retire_decision_card(
+        self, *, credentials: dict[str, object], handle: DecisionCardHandle
+    ) -> None:
+        await retire_telegram_card(TelegramClient.from_credentials(credentials), handle)
 
     async def add_processing_indicator(
         self,

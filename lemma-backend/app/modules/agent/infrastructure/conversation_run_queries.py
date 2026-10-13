@@ -25,16 +25,22 @@ from app.modules.agent.domain.entities import (
     MessageRole,
     RuntimeHistoryWindow,
 )
-from app.modules.agent.domain.queued_messages import STEERED_INTO_RUN
+from app.modules.agent.domain.queued_messages import (
+    CLIENT_MESSAGE_ID,
+    STEERED_INTO_RUN,
+    WAITING_ON_ANSWER,
+)
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ACTIVE_AGENT_RUN_STATUSES,
+    ConversationStatus,
 )
 from app.modules.agent.infrastructure.runtime_history_queries import (
     RuntimeHistoryQueries,
 )
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
+    ConversationModel,
     MessageModel,
 )
 from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
@@ -311,7 +317,11 @@ class ConversationRunQueriesMixin:
         return bool(row.total) and not row.non_user
 
     async def count_queued_user_messages(
-        self, agent_run_id: UUID, *, notes: bool | None = None
+        self,
+        agent_run_id: UUID,
+        *,
+        notes: bool | None = None,
+        after_sequence: int | None = None,
     ) -> int:
         """How many of this run's queued messages are still unanswered.
 
@@ -326,13 +336,17 @@ class ConversationRunQueriesMixin:
         return int(
             await self.session.scalar(
                 select(func.count()).where(
-                    *unclaimed_queued_messages(agent_run_id, notes=notes)
+                    *unclaimed_queued_messages(
+                        agent_run_id, notes=notes, after_sequence=after_sequence
+                    )
                 )
             )
             or 0
         )
 
-    async def earliest_queued_is_note(self, agent_run_id: UUID) -> bool | None:
+    async def earliest_queued_is_note(
+        self, agent_run_id: UUID, *, after_sequence: int | None = None
+    ) -> bool | None:
         """Whether the oldest unanswered message queued behind this run is a
         private note; None when nothing is queued. A follow-up turn answers one
         kind, and the oldest message decides which goes first."""
@@ -343,7 +357,9 @@ class ConversationRunQueriesMixin:
                     False,
                 )
             )
-            .where(*unclaimed_queued_messages(agent_run_id))
+            .where(
+                *unclaimed_queued_messages(agent_run_id, after_sequence=after_sequence)
+            )
             .order_by(MessageModel.sequence)
             .limit(1)
         )
@@ -357,6 +373,7 @@ class ConversationRunQueriesMixin:
         message_ids: list[UUID] | None = None,
         notes: bool | None = None,
         as_run: bool = False,
+        after_sequence: int | None = None,
     ) -> list[MessageEntity]:
         """Take the messages that arrived mid-run, and mark them taken.
 
@@ -383,7 +400,10 @@ class ConversationRunQueriesMixin:
                 update(MessageModel)
                 .where(
                     *unclaimed_queued_messages(
-                        agent_run_id, notes=notes, as_run=as_run
+                        agent_run_id,
+                        notes=notes,
+                        as_run=as_run,
+                        after_sequence=after_sequence,
                     ),
                     *(
                         (MessageModel.id.in_(message_ids),)
@@ -401,6 +421,71 @@ class ConversationRunQueriesMixin:
             )
         ).scalars()
         return in_order(rows)
+
+    async def mark_queued_waiting_on_answer(
+        self, agent_run_id: UUID
+    ) -> list[MessageEntity]:
+        """Mark what is queued behind a run that ended on a question.
+
+        Nothing answers those until the person answers the question, and
+        without a mark they were drawn as plain sent messages with no reply
+        coming. Returned so the caller can redraw them.
+        """
+        rows = (
+            await self.session.execute(
+                update(MessageModel)
+                .where(
+                    *unclaimed_queued_messages(agent_run_id),
+                    MessageModel.message_metadata[WAITING_ON_ANSWER].astext.is_(None),
+                )
+                .values(
+                    message_metadata=stamp(**{WAITING_ON_ANSWER: str(agent_run_id)})
+                )
+                .returning(MessageModel)
+                .execution_options(synchronize_session=False)
+            )
+        ).scalars()
+        return in_order(rows)
+
+    async def find_user_message_by_client_id(
+        self, *, conversation_id: UUID, client_message_id: str
+    ) -> MessageEntity | None:
+        """The message an earlier send with this client id stored, if any.
+
+        Scoped to one conversation, so it reads that conversation's messages by
+        their conversation index. The caller holds the conversation lock, which
+        is what makes "look, then store" one step for two copies of a send.
+        """
+        metadata = MessageModel.message_metadata
+        row = await self.session.scalar(
+            select(MessageModel).where(
+                MessageModel.conversation_id == conversation_id,
+                metadata.has_key(CLIENT_MESSAGE_ID),
+                metadata[CLIENT_MESSAGE_ID].astext == client_message_id,
+            )
+        )
+        return row.to_entity() if row is not None else None
+
+    async def latest_message_sequence(self, conversation_id: UUID) -> int:
+        """The sequence the newest message holds; -1 for an empty conversation."""
+        return int(
+            await self.session.scalar(
+                select(func.coalesce(func.max(MessageModel.sequence), -1)).where(
+                    MessageModel.conversation_id == conversation_id
+                )
+            )
+        )
+
+    async def get_conversation_status(
+        self, conversation_id: UUID
+    ) -> ConversationStatus | None:
+        """The status as stored now, never a copy this session already holds."""
+        status = await self.session.scalar(
+            select(ConversationModel.status).where(
+                ConversationModel.id == conversation_id
+            )
+        )
+        return ConversationStatus(status) if status is not None else None
 
     async def get_latest_agent_run_for_conversation(
         self,

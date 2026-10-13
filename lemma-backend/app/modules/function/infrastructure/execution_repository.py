@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hmac
 from uuid import UUID
 
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.function.config import execution_budget_seconds
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenKey,
 )
@@ -19,6 +20,7 @@ from app.modules.function.domain.entities import (
     FunctionRunRuntimeContext,
     FunctionRunStatus,
     FunctionSessionPrincipal,
+    FunctionType,
 )
 from app.modules.function.domain.events import (
     FunctionRunCompletedEvent,
@@ -102,6 +104,10 @@ class FunctionExecutionRepository:
 
         run.status = FunctionRunStatus.RUNNING
         run.started_at = timestamp
+        # The execution budget starts now, not when the run was created: time
+        # spent queued, waiting for a pod slot, or on a cold start is not the
+        # function's to lose.
+        run.deadline_at = timestamp + timedelta(seconds=dispatch.execution_seconds)
         self.uow.collect_events(
             [
                 FunctionRunStartedEvent(
@@ -277,6 +283,42 @@ class FunctionExecutionRepository:
             error=error,
         )
 
+    async def fail_in_flight_on_pod(
+        self,
+        pod_id: UUID,
+        *,
+        started_before: datetime,
+        error: str,
+        limit: int,
+    ) -> list[UUID]:
+        """Fail up to ``limit`` asynchronous runs a destroyed pod sandbox was
+        executing, oldest first.
+
+        Only job-backed runs: a synchronous one holds its own connection to
+        the sandbox and fails through it. Rows another transaction holds are
+        skipped -- that holder is settling the run already.
+        """
+        runs = (
+            await self.session.scalars(
+                select(FunctionRunModel)
+                .join(FunctionModel, FunctionModel.id == FunctionRunModel.function_id)
+                .where(
+                    FunctionModel.pod_id == pod_id,
+                    FunctionRunModel.status == FunctionRunStatus.RUNNING,
+                    FunctionRunModel.job_id.is_not(None),
+                    FunctionRunModel.started_at <= started_before,
+                )
+                .order_by(FunctionRunModel.started_at, FunctionRunModel.id)
+                .limit(limit)
+                .with_for_update(of=FunctionRunModel, skip_locked=True)
+            )
+        ).all()
+        for run in runs:
+            self._mark_finished(run, run_status=FunctionRunStatus.FAILED, error=error)
+        if runs:
+            await self.session.flush()
+        return [run.id for run in runs]
+
     async def _finish_without_result(
         self,
         run_id: UUID,
@@ -294,6 +336,17 @@ class FunctionExecutionRepository:
         if run.status in TERMINAL_RUN_STATES:
             return run.to_entity()
 
+        self._mark_finished(run, run_status=run_status, error=error)
+        await self.session.flush()
+        return run.to_entity()
+
+    def _mark_finished(
+        self,
+        run: FunctionRunModel,
+        *,
+        run_status: FunctionRunStatus,
+        error: str,
+    ) -> None:
         timestamp = datetime.now(timezone.utc)
         run.status = run_status
         run.error = error
@@ -309,8 +362,6 @@ class FunctionExecutionRepository:
                 )
             ]
         )
-        await self.session.flush()
-        return run.to_entity()
 
     async def _run_and_function(
         self,
@@ -351,6 +402,9 @@ class FunctionExecutionRepository:
             config=function.config,
             mode=mode,
             deadline_at=run.deadline_at,
+            execution_seconds=execution_budget_seconds(
+                is_job=function.type == FunctionType.JOB
+            ),
             revision_hash=run.revision_hash,
             input_data=run.input_data or {},
         )

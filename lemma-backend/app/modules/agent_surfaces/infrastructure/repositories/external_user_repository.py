@@ -152,6 +152,7 @@ class ExternalSurfaceUserRepository:
         raw_profile: dict | None,
         resolved_user_id=None,
     ) -> ExternalSurfaceUserEntity:
+        """Write what is known about a sender, and who they are once proven."""
         existing = await self.get_by_identity(
             platform=platform,
             tenant_id=tenant_id,

@@ -12,8 +12,12 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
     AgentRunStatus,
 )
-from app.modules.agent.services.conversation_access import authorized_conversation
+from app.modules.agent.services.conversation_access import (
+    authorized_conversation,
+    resolve_agent,
+)
 from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.runtime_availability import turn_runtime
 
 
 class ConversationRetryService(ConversationService):
@@ -65,15 +69,31 @@ class ConversationRetryService(ConversationService):
         ):
             raise ConversationStateError("The failed run cannot be retried safely")
 
+        # The runtime the conversation is set to now, not the failed run's: a
+        # run that died on a retired model would die the same way again, and
+        # the usual fix is to re-point the teammate at another model first.
+        runtime = await turn_runtime(
+            self.uow,
+            conversation,
+            await resolve_agent(
+                conversation, user_id=user_id, agent_repository=self.agent_repository
+            ),
+        )
+        await self.turns.runtime_check(
+            self.uow,
+            runtime,
+            organization_id=conversation.organization_id,
+            user_id=user_id,
+        )
         await self.turns.assert_usage_preflight_allowed(
             organization_id=conversation.organization_id,
             user_id=user_id,
-            agent_runtime=failed_run.agent_runtime,
+            agent_runtime=runtime,
         )
         retry_run = await self.conversation_repository.create_agent_run(
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
-            agent_runtime=failed_run.agent_runtime,
+            agent_runtime=runtime,
             metadata={
                 "source": "manual_retry",
                 "retried_agent_run_id": str(failed_run.id),

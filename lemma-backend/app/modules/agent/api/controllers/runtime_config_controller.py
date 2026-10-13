@@ -260,6 +260,7 @@ async def create_runtime_profile(
                 default_model_name=data.default_model_name,
                 model_names=data.model_names,
                 vision_model_names=data.vision_model_names,
+                reasoning_model_names=data.reasoning_model_names,
                 headers=data.headers,
                 model_settings=data.model_settings,
             )
@@ -272,6 +273,7 @@ async def create_runtime_profile(
                 description=data.description,
                 default_model_name=data.default_model_name,
                 model_names=data.model_names,
+                reasoning_model_names=data.reasoning_model_names,
                 headers=data.headers,
                 model_settings=data.model_settings,
             )
@@ -335,6 +337,22 @@ async def get_runtime_profile(
     )
 
 
+#: Edit fields with nothing to clear to. Every field of the edit is nullable on
+#: the wire, so a client can send null for any of them; for these it means the
+#: same as leaving the field out. Before, it reached code that only takes a
+#: value and answered 500. A null description, key, address or settings object
+#: still clears it, where the profile allows that.
+_NULL_LEAVES_UNCHANGED = frozenset(
+    {
+        "name",
+        "model_names",
+        "reasoning_model_names",
+        "config_selections",
+        "host_wait_timeout_seconds",
+    }
+)
+
+
 @router.patch(
     "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}",
     response_model=AgentRuntimeProfileResponse,
@@ -363,7 +381,11 @@ async def update_runtime_profile(
     # "set this to null" - the distinction that keeps a rename from wiping a
     # stored API key.
     supplied = data.model_fields_set - {"source", "refresh_models"}
-    changes = {field: getattr(data, field) for field in supplied}
+    changes = {
+        field: getattr(data, field)
+        for field in supplied
+        if not (field in _NULL_LEAVES_UNCHANGED and getattr(data, field) is None)
+    }
     common = {
         "profile_id": profile_id,
         "organization_id": organization_id,

@@ -2495,6 +2495,19 @@ samp,
 .chats-page__title {
     color: var(--ink);
 }
+/* The same amber `--warn` the inbox's ages use, measured there for AA at this
+   size; a pill rather than a dot so it reads without a legend. */
+.chats-page__waiting {
+    display: inline-block;
+    margin-left: 10px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--wash-b);
+    font-size: 12px;
+    color: var(--warn);
+    vertical-align: 1px;
+    white-space: nowrap;
+}
 .chats-page__origin {
     display: inline-flex;
     align-items: center;

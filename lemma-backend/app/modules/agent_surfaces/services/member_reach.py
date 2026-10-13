@@ -40,6 +40,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_re
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
+    reply_window_open,
 )
 
 logger = get_logger(__name__)
@@ -101,6 +102,15 @@ class MemberReach:
                 surface_id=surface.id, external_user_id=ext.external_user_id
             )
             if link is not None:
+                if not reply_window_open(
+                    platform=surface.surface_type,
+                    last_inbound_at=link.last_inbound_at,
+                ):
+                    # Meta accepts the send with a 200 and drops it later, so
+                    # outside the window the honest answer is a refusal now.
+                    # Only an approved template may go then, and Lemma has no
+                    # template sending.
+                    return UndeliverableReason.REPLY_WINDOW_CLOSED
                 sent = await self.egress.send_agent_message_for_conversation(
                     conversation_id=link.conversation_id, message=message
                 )

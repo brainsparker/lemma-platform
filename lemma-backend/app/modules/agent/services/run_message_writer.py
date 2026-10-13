@@ -23,6 +23,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.text.thinking_tags import has_thinking_tokens, split_thinking_segments
 from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     ConversationStatus,
@@ -148,11 +149,59 @@ class RunMessageWriter:
             )
             if existing is not None:
                 return existing
+            draft = await self._unique_pause_id(
+                repository,
+                conversation_id=conversation_id,
+                agent_run_id=agent_run_id,
+                draft=draft,
+            )
             return await repository.append_message(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 draft=draft,
             )
+
+    @staticmethod
+    async def _unique_pause_id(
+        repository: ConversationRepository,
+        *,
+        conversation_id: UUID,
+        agent_run_id: UUID,
+        draft: MessageDraft,
+    ) -> MessageDraft:
+        """A pausing call whose id an earlier run already used, renamed.
+
+        A pause is addressed by its tool call id for as long as it is open --
+        the card, the decision row, the return -- and those lookups are per
+        conversation. The model's provider picks the id, and one that numbers
+        its calls (``call_0``) hands a later run the id of a question already
+        answered: the new card vanished behind the old return, and a decision
+        adopted the old one. So a clash is renamed here, once, the way calls
+        recorded over MCP already get an id of Lemma's own. The pause is
+        resolved and replayed under the stored id; only this run's in-memory
+        state knew the provider's, and the pump translates its WAITING event.
+
+        Not ``wait_for``: its wait row keeps the id the tool was called with,
+        and the wake writes the return under that.
+        """
+        if (
+            draft.kind is not MessageKind.TOOL_CALL
+            or draft.tool_name not in USER_PAUSING_TOOL_NAMES
+            or not draft.tool_call_id
+        ):
+            return draft
+        earlier = await repository.get_tool_call(
+            conversation_id=conversation_id, tool_call_id=draft.tool_call_id
+        )
+        if earlier is None or earlier.agent_run_id == agent_run_id:
+            return draft
+        renamed = f"{draft.tool_call_id}-{agent_run_id.hex[-12:]}"
+        logger.info(
+            "agent.run_message_writer.pause_id_renamed.observed",
+            conversation_id=str(conversation_id),
+            agent_run_id=str(agent_run_id),
+        )
+        return draft.model_copy(update={"tool_call_id": renamed})
 
     @staticmethod
     async def _answered_already(

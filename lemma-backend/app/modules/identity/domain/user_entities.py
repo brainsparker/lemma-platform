@@ -29,7 +29,6 @@ class UserEntity(AggregateRoot):
     last_name: str | None = None
     mobile_number: str | None = None
     mobile_verified_at: datetime | None = None
-    telegram_username: str | None = None
     country: str | None = None
     timezone: str | None = None
     date_of_birth: date | None = None
@@ -58,7 +57,6 @@ class UserEntity(AggregateRoot):
             "first_name",
             "last_name",
             "mobile_number",
-            "telegram_username",
             "country",
             "timezone",
             "date_of_birth",

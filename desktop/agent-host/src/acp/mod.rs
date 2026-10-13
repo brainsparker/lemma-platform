@@ -40,7 +40,7 @@ mod session_setup;
 mod steering;
 mod supervision;
 
-pub(crate) use claude_settings::{claude_config_dir, claude_sign_in};
+pub(crate) use claude_settings::{claude_config_dir, claude_permission_rules, claude_sign_in};
 pub use driver::*;
 pub(crate) use options::*;
 pub use outcome::*;

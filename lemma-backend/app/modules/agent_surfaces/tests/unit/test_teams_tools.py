@@ -189,7 +189,7 @@ async def test_teams_get_recent_channel_messages_resolves_graph_team_id(
             external_thread_id="thread-1",
             surface_metadata=TeamsSurfaceEventMetadata(
                 team_id="19:team@thread.tacv2",
-                service_url="https://smba.example.test/teams",
+                service_url="https://smba.trafficmanager.net/teams",
             ),
         )
     )
@@ -271,7 +271,7 @@ async def test_teams_fetch_recent_context_maps_graph_messages(monkeypatch):
         message_text="@lemma help",
         metadata={
             "team_id": "19:team@thread.tacv2",
-            "service_url": "https://smba.example.test/teams",
+            "service_url": "https://smba.trafficmanager.net/teams",
         },
     )
 
@@ -351,7 +351,7 @@ async def test_teams_get_recent_thread_messages_include_files(
             external_thread_id="thread-1",
             surface_metadata=TeamsSurfaceEventMetadata(
                 team_id="19:team@thread.tacv2",
-                service_url="https://smba.example.test/teams",
+                service_url="https://smba.trafficmanager.net/teams",
             ),
         )
     )

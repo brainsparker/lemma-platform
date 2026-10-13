@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from enum import Enum
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 from pydantic import (
@@ -16,6 +18,12 @@ from pydantic import (
     model_validator,
 )
 
+# Re-exported: the portable settings are a core type because workflow steps
+# carry them too, but they are read here, beside the catalog that gates them.
+from app.core.domain.generation import (
+    GenerationSettings as GenerationSettings,
+    ReasoningEffort as ReasoningEffort,
+)
 from app.modules.agent.domain.value_objects import HarnessKind, JsonObject
 
 
@@ -96,6 +104,10 @@ class RuntimeModelCatalogEntry(BaseModel):
     display_name: str | None = None
     provider_model_name: str = Field(min_length=1)
     capabilities: list[RuntimeModelCapability] = Field(default_factory=list)
+    # The lowest layer of a run's generation settings: what this model wants
+    # unless the profile, agent or step says otherwise. Portable
+    # ``GenerationSettings`` keys, plus any pydantic-ai wire key passed through
+    # as written -- see ``services/generation_settings``.
     default_model_settings: JsonObject = Field(default_factory=dict)
     metadata: JsonObject = Field(default_factory=dict)
 
@@ -106,6 +118,25 @@ class RuntimeModelCatalogEntry(BaseModel):
         if not normalized:
             raise ValueError("value cannot be empty")
         return normalized
+
+    @field_validator("default_model_settings")
+    @classmethod
+    def portable_defaults_are_valid(cls, value: JsonObject) -> JsonObject:
+        # Checked where it is written, not at the run that reads it: a bad
+        # value here would otherwise fail every run on this model.
+        GenerationSettings.model_validate(
+            {
+                key: item
+                for key, item in value.items()
+                if key in GenerationSettings.model_fields and item is not None
+            }
+        )
+        return value
+
+    @property
+    def reasons(self) -> bool:
+        """Whether this model takes a reasoning effort or thinking budget."""
+        return RuntimeModelCapability.REASONING in self.capabilities
 
 
 class ApiKeyRuntimeCredentials(BaseModel):
@@ -209,7 +240,9 @@ class AgentRuntimeProfile(BaseModel):
     description: str | None = None
     default_model_name: str | None = None
     model_catalog: list[RuntimeModelCatalogEntry] = Field(default_factory=list)
-    config: RuntimeProfileConfig = Field(default_factory=dict)
+    # Out of the repr: custom headers live here, unmasked, and a profile is
+    # exactly the kind of object that ends up in a log line or a traceback.
+    config: RuntimeProfileConfig = Field(default_factory=dict, repr=False)
     credentials: RuntimeCredentials | None = None
     status: RuntimeProfileStatus = RuntimeProfileStatus.ACTIVE
     metadata: JsonObject = Field(default_factory=dict)
@@ -288,8 +321,12 @@ class AgentRuntimeProfile(BaseModel):
             # selected value. Guarded on the parsed type, so a legacy row whose
             # config stayed a raw dict is still redacted.
             data["config"] = data.get("config", {})
-        else:
+        elif self.kind is RuntimeProfileKind.HARNESS:
+            # A legacy harness row whose config stayed a raw dict: no known
+            # shape to allowlist, so the key-name redaction still applies.
             data["config"] = _redact_public_secrets(data.get("config", {}))
+        else:
+            data["config"] = public_provider_config(data.get("config", {}))
         data["has_credentials"] = self.has_credentials
         data["derived_harness_kind"] = self.derived_harness_kind().value
         return data
@@ -304,7 +341,105 @@ class AgentRuntimeProfile(BaseModel):
             raise ValueError("default_model_name must match a model catalog name")
 
 
-_REDACTED_VALUE = "<redacted>"
+def with_reasoning_declared(
+    catalog: list[RuntimeModelCatalogEntry], reasoning_model_names: Collection[str]
+) -> list[RuntimeModelCatalogEntry]:
+    """``catalog`` with exactly the named models marked ``REASONING``.
+
+    Declared by the person adding the provider, as with vision: a
+    ``/models`` listing does not say which models reason, and the mark is what
+    lets a reasoning effort reach the wire at all.
+    """
+    names = {name.strip() for name in reasoning_model_names if name.strip()}
+    declared: list[RuntimeModelCatalogEntry] = []
+    for entry in catalog:
+        others = [
+            capability
+            for capability in entry.capabilities
+            if capability is not RuntimeModelCapability.REASONING
+        ]
+        capabilities = (
+            [*others, RuntimeModelCapability.REASONING]
+            if entry.name in names
+            else others
+        )
+        declared.append(entry.model_copy(update={"capabilities": capabilities}))
+    return declared
+
+
+def declared_reasoning_models(catalog: list[RuntimeModelCatalogEntry]) -> set[str]:
+    return {entry.name for entry in catalog if entry.reasons}
+
+
+REDACTED_VALUE = "<redacted>"
+
+# What any member may read of a provider's config. An allowlist, because the
+# key-name denylist it replaces passed every secret whose name it did not
+# guess -- a key in a base URL's query, a password in its userinfo, a gateway
+# subscription header -- while masking `max_tokens` for containing "token".
+_PUBLIC_URL_KEYS = ("base_url", "azure_endpoint")
+_PUBLIC_PLAIN_KEYS = ("azure_version", "deployment_id", "project_id", "location")
+
+
+def public_url(url: str) -> str:
+    """``url`` with its userinfo, query and fragment removed."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    netloc = f"{host}:{port}" if port is not None else host
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
+def public_provider_config(config: Mapping[str, object]) -> JsonObject:
+    """A provider config as anyone in the organization may see it.
+
+    Header values are write-only, like the API key: they are as often a
+    credential, so only their names are shown. ``model_settings`` is tuning,
+    not a secret store, and is returned as stored -- a masked value read back
+    and saved again would break every run on the profile.
+    """
+    public: JsonObject = {}
+    for key in _PUBLIC_URL_KEYS:
+        if key in config:
+            value = config[key]
+            public[key] = public_url(str(value)) if value else value
+    for key in _PUBLIC_PLAIN_KEYS:
+        if key in config:
+            public[key] = config[key]
+    headers = config.get("headers")
+    if isinstance(headers, Mapping):
+        public["header_names"] = sorted(str(name) for name in headers)
+    model_settings = config.get("model_settings")
+    if isinstance(model_settings, Mapping):
+        public["model_settings"] = dict(model_settings)
+    return public
+
+
+def refuse_redacted_values(value: object, *, field: str) -> None:
+    """Refuse a write carrying the mask an older listing showed for a secret.
+
+    A client that prefilled an edit from that listing sends the mask back, and
+    saving it would replace a working value with the literal string.
+    """
+    if isinstance(value, str):
+        if value == REDACTED_VALUE:
+            raise ValueError(
+                f"{field} contains {REDACTED_VALUE!r}; send the real value or "
+                "leave the field out to keep the stored one"
+            )
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            refuse_redacted_values(item, field=field)
+    elif isinstance(value, list):
+        for item in value:
+            refuse_redacted_values(item, field=field)
+
+
 _SENSITIVE_KEY_PARTS = (
     "api_key",
     "apikey",
@@ -325,7 +460,7 @@ def _redact_public_secrets(value: Any) -> Any:
         for key, item in value.items():
             key_text = str(key)
             if _is_sensitive_key(key_text):
-                redacted[key_text] = _REDACTED_VALUE
+                redacted[key_text] = REDACTED_VALUE
             else:
                 redacted[key_text] = _redact_public_secrets(item)
         return redacted

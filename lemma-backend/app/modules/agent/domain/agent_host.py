@@ -402,6 +402,8 @@ class AgentHostRunSpec(BaseModel):
         max_length=4096,
         description="Saved conversation cwd under /workspace; the host maps its suffix under ~/lemma.",
     )
+    # Declared on both sides of the wire and read by neither; dispatch leaves it
+    # empty (`dispatch.run_spec_from`), because the spec rests on the host.
     context: JsonObject = Field(default_factory=dict)
     run_deadline: datetime
     system_prompt_delivery: str | None = Field(

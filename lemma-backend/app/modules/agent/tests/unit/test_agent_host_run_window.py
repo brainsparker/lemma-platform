@@ -35,6 +35,13 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     credential_bounded_timeout,
     credential_exhausted,
     credential_refresh_due,
+    failure_events,
+)
+from app.modules.agent.domain.agent_host import AgentHostEventType
+from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
+from app.modules.agent.infrastructure.harnesses.agent_host.events import (
+    AgentHostEventEnvelope,
+    AgentHostEventNormalizer,
 )
 from app.modules.agent.infrastructure.harnesses.remote_payload import token_expires_at
 
@@ -271,3 +278,53 @@ class TestTokenExpiryIsPublished:
 
     def test_a_payload_without_the_field_reads_as_unbounded(self) -> None:
         assert token_expires_at({}) is None
+
+
+class TestARunLemmaGivesUpOnKeepsWhatWasWritten:
+    """The deadline, a lost event stream and a spent credential all end a run
+    from this side, without the host's terminal event. Whatever the agent had
+    written since its last tool call -- on a long run, usually the report --
+    lived only in the normalizer, and those paths dropped it."""
+
+    def _normalizer_mid_report(self) -> AgentHostEventNormalizer:
+        normalizer = AgentHostEventNormalizer(
+            agent_run_id=uuid7(), model_name="test-model", harness_key="codex"
+        )
+        for sequence, event_type, payload in (
+            (1, AgentHostEventType.AGENT_THOUGHT_CHUNK, {"text": "Summing up."}),
+            (2, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "## Findings\n"}),
+            (3, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "All three pass."}),
+        ):
+            normalizer.normalize(
+                AgentHostEventEnvelope(
+                    sequence=sequence,
+                    type=event_type.value,
+                    object_id=f"segment-{sequence}",
+                    payload=payload,
+                )
+            )
+        return normalizer
+
+    def test_the_text_and_the_thought_survive_and_the_run_still_fails(self) -> None:
+        normalizer = self._normalizer_mid_report()
+
+        events = failure_events(normalizer, normalizer.agent_run_id, DEADLINE_MESSAGE)
+
+        messages = [e.data for e in events if e.type is AgentEventType.MESSAGE]
+        texts = [m.text for m in messages if m.kind is MessageKind.TEXT]
+        thoughts = [m.text for m in messages if m.kind is MessageKind.THINKING]
+        assert texts == ["## Findings\nAll three pass."]
+        assert thoughts == ["Summing up."]
+        assert events[-1].type is AgentEventType.ERROR
+        assert events[-1].data == DEADLINE_MESSAGE
+
+    def test_a_failed_run_claims_no_answer(self) -> None:
+        normalizer = self._normalizer_mid_report()
+
+        events = failure_events(normalizer, normalizer.agent_run_id, DEADLINE_MESSAGE)
+
+        assert not any(
+            (e.data.metadata or {}).get("is_final_answer")
+            for e in events
+            if e.type is AgentEventType.MESSAGE
+        )

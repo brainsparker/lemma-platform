@@ -82,6 +82,10 @@ class RunEventPump:
         # constructed per run (`handlers.process_agent_run`), so this needs no
         # keying by run id.
         self._token_splitter = ThinkingStreamSplitter()
+        # Provider tool call id -> the id it was stored under, for the pauses
+        # `RunMessageWriter` had to rename. The WAITING event that follows a
+        # pause still carries the provider's, and a surface answers by it.
+        self._stored_ids: dict[str, str] = {}
 
     async def handle(
         self,
@@ -114,15 +118,7 @@ class RunEventPump:
             return False
 
         if event.type == AgentEventType.MESSAGE:
-            saved_message = await self.message_writer.persist(
-                conversation_id=run.conversation_id,
-                agent_run_id=run.agent_run_id,
-                data=event.data,
-            )
-            await publish_conversation_event(
-                run.conversation_id,
-                message_payload(run.agent_run_id, message_to_payload(saved_message)),
-            )
+            await self._persist_message(event, run)
             return False
 
         if event.type == AgentEventType.STATUS:
@@ -219,7 +215,8 @@ class RunEventPump:
             # applied only at the database would still hand the model's
             # reasoning back as the run's answer.
             should_stop = False
-            for event in _split_message_event(raw_event):
+            for split in _split_message_event(raw_event):
+                event = self._addressed_as_stored(split)
                 await notify_event(observer, event, conversation, ctx, run.agent_run_id)
                 if event.type == AgentEventType.USAGE:
                     outcome.usage_data = _usage_from_event(event) or outcome.usage_data
@@ -257,6 +254,29 @@ class RunEventPump:
             output_data=outcome.output_data,
             usage_data=outcome.usage_data,
         )
+
+    async def _persist_message(self, event: AgentEvent, run: RunIdentity) -> None:
+        saved_message = await self.message_writer.persist(
+            conversation_id=run.conversation_id,
+            agent_run_id=run.agent_run_id,
+            data=event.data,
+        )
+        sent_as = getattr(event.data, "tool_call_id", None)
+        if sent_as and saved_message.tool_call_id not in (None, sent_as):
+            self._stored_ids[sent_as] = saved_message.tool_call_id
+        await publish_conversation_event(
+            run.conversation_id,
+            message_payload(run.agent_run_id, message_to_payload(saved_message)),
+        )
+
+    def _addressed_as_stored(self, event: AgentEvent) -> AgentEvent:
+        """A WAITING event naming its pause by the id the pause is stored under."""
+        if event.type is not AgentEventType.WAITING or not isinstance(event.data, dict):
+            return event
+        stored = self._stored_ids.get(str(event.data.get("tool_call_id")))
+        if stored is None:
+            return event
+        return event.model_copy(update={"data": {**event.data, "tool_call_id": stored}})
 
     def _classify_token(self, kind: str, text: str) -> list[tuple[str, str]]:
         """Re-tag reasoning a model wrote into the text stream.

@@ -19,6 +19,9 @@ export interface RuntimeModel {
     /** The short, readable end of the name — `anthropic/models/sonnet` is
      *  `sonnet`. The full name is what gets sent; this is what gets read. */
     label: string;
+    /** Declares `REASONING`: takes a reasoning effort. Only then is one sent,
+     *  so only then is one worth offering. */
+    reasons?: boolean;
 }
 
 /** A row in the ledger: something a conversation can actually run on. */
@@ -289,10 +292,11 @@ export function shortModel(name: string): string {
 }
 
 function readModel(raw: unknown): RuntimeModel | null {
-    const entry = (raw ?? {}) as { name?: string; display_name?: string | null };
+    const entry = (raw ?? {}) as { name?: string; display_name?: string | null; capabilities?: unknown };
     const name = asString(entry.name);
     if (!name) return null;
-    return { name, label: asString(entry.display_name) || shortModel(name) };
+    const reasons = Array.isArray(entry.capabilities) && entry.capabilities.includes("REASONING");
+    return { name, label: asString(entry.display_name) || shortModel(name), ...(reasons ? { reasons } : {}) };
 }
 
 const SCOPES: Record<string, Runtime["scope"]> = {

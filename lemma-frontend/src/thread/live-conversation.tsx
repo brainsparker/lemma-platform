@@ -909,6 +909,7 @@ export function LiveConversation({
                 /* Not while the status is still unknown, which reads as idle
                    for a moment after load and would flash "Expired". */
                 runEnded={session.status !== undefined && state !== "running"}
+                resumesOnAnswer={state === "waiting"}
                 signIn={signingIn}
                 conversationId={session.conversationId}
                 crowded={crowded}
@@ -960,7 +961,9 @@ export function LiveConversation({
                 queuedNote={
                     queued.length === 0
                         ? undefined
-                        : teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " as soon as the work in progress allows"
+                        : queued.some(one => one.waitingOnAnswer)
+                          ? "Waiting on your answer: " + teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " once you reply to its question"
+                          : teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " as soon as the work in progress allows"
                 }
                 onWithdraw={withdrawStable}
                 fill={refill ?? fill}

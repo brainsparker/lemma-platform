@@ -11724,6 +11724,20 @@ var LemmaClient = (() => {
 
   // src/namespaces/conversations.ts
   var POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT";
+  function newClientMessageId() {
+    const crypto = globalThis.crypto;
+    if (crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+  function withClientMessageId(payload) {
+    var _a;
+    if (payload.client_message_id) return payload;
+    const carried = (_a = payload.metadata) == null ? void 0 : _a.client_message_id;
+    return {
+      ...payload,
+      client_message_id: typeof carried === "string" && carried ? carried : newClientMessageId()
+    };
+  }
   function normalizeConversation(conversation) {
     var _a, _b, _c, _d, _e;
     if (!conversation) return conversation;
@@ -11776,7 +11790,7 @@ var LemmaClient = (() => {
         send: (conversationId, payload, options = {}) => {
           const podId = this.requirePodId(options.pod_id);
           return this.http.request("POST", `/pods/${podId}/conversations/${conversationId}/messages`, {
-            body: payload
+            body: withClientMessageId(payload)
           });
         }
       });
@@ -11960,7 +11974,7 @@ var LemmaClient = (() => {
       const podId = this.requirePodId(options.pod_id);
       return this.http.stream(`/pods/${podId}/conversations/${conversationId}/messages`, {
         method: "POST",
-        body: payload,
+        body: withClientMessageId(payload),
         signal: options.signal,
         headers: {
           "Content-Type": "application/json",
@@ -11974,7 +11988,7 @@ var LemmaClient = (() => {
         "POST",
         `/pods/${podId}/conversations/${conversationId}/messages/append`,
         {
-          body: payload,
+          body: withClientMessageId(payload),
           signal: options.signal
         }
       );
@@ -12017,6 +12031,21 @@ var LemmaClient = (() => {
       return this.http.request("POST", `/pods/${podId}/conversations/${conversationId}/stop`, {
         body: {}
       }).then(normalizeConversation);
+    }
+    /**
+     * Questions, approvals and Agent Host permission requests waiting on the
+     * caller, across their own conversations in the pod, longest-waiting first.
+     * Answer one with `approvals.resolve`, passing its `tool_call_id` as the
+     * approval id. Mirrors the Python SDK's `pending_interactions`.
+     */
+    pendingInteractions(options = {}) {
+      var _a;
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "GET",
+        `/pods/${podId}/conversations/pending-interactions`,
+        { params: { limit: (_a = options.limit) != null ? _a : 50, page_token: options.page_token } }
+      );
     }
   };
 
@@ -18756,6 +18785,27 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Retry Workflow Run
+     * Resume a failed run from the node that failed, keeping every earlier node's output -- an agent step's answer is not produced again. Allowed when the failed node is a function, decision, loop or wait-until node; any other run, or one that has not failed, returns 409.
+     * @param podId
+     * @param runId
+     * @returns WorkflowRunResponse Successful Response
+     * @throws ApiError
+     */
+    static workflowRunRetry(podId, runId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/workflow-runs/{run_id}/retry",
+        path: {
+          "pod_id": podId,
+          "run_id": runId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Stream Workflow Run
      * Server-sent events carrying the run's state as it advances. The first frame is the current run, so a client needs no separate GET; each later frame is the whole run again rather than a diff, which makes reconnecting a matter of replacing state. A `completed` frame is sent when the run reaches a terminal status, after which the stream closes. Polling remains a valid fallback.
      * @param podId
@@ -18963,19 +19013,23 @@ var LemmaClient = (() => {
     }
     /**
      * Create Workflow Run
-     * Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint.
+     * Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same workflow, returns the run it already created.
      * @param podId
      * @param workflowName
+     * @param idempotencyKey
      * @returns WorkflowRunResponse Successful Response
      * @throws ApiError
      */
-    static workflowRunCreate(podId, workflowName) {
+    static workflowRunCreate(podId, workflowName, idempotencyKey) {
       return request(OpenAPI, {
         method: "POST",
         url: "/pods/{pod_id}/workflows/{workflow_name}/runs",
         path: {
           "pod_id": podId,
           "workflow_name": workflowName
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
         },
         errors: {
           422: `Validation Error`
@@ -19054,7 +19108,13 @@ var LemmaClient = (() => {
         /** Submit the form a run is waiting on. node_id must match active_wait.node_id. */
         submitForm: (runId, payload, podId = this.podId()) => this.client.request(() => WorkflowsService.workflowRunFormSubmit(podId, runId, payload)),
         visualize: (runId, podId = this.podId()) => this.client.request(() => WorkflowsService.workflowRunVisualize(podId, runId)),
-        cancel: (runId, podId = this.podId()) => this.client.request(() => WorkflowsService.workflowRunCancel(podId, runId))
+        cancel: (runId, podId = this.podId()) => this.client.request(() => WorkflowsService.workflowRunCancel(podId, runId)),
+        /**
+         * Resume a failed run from the node that failed, keeping every earlier
+         * node's output. Refused (409) unless that node is a function, decision,
+         * loop or wait-until node.
+         */
+        retry: (runId, podId = this.podId()) => this.http.request("POST", `/pods/${podId}/workflow-runs/${runId}/retry`)
       });
     }
     list(options = {}) {

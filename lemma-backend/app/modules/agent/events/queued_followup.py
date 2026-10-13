@@ -13,8 +13,9 @@ answer that will otherwise never come.
 
 Hung off `agent.run.completed` rather than off the end of the runner because
 every way a run can end publishes that event: a normal finish, a failure, and
-the cron that reconciles runs whose worker died. A run stopped on purpose is the
-one exclusion, and it is made here.
+the cron that reconciles runs whose worker died. A run stopped on purpose
+answers only what was said after Stop, and a run that ended on a question
+resumes if the question was answered before it finished ending.
 
 Lives in the events layer because it is composition — it builds a service out of
 a worker's unit of work — and because `handlers` is against the file-size
@@ -31,7 +32,6 @@ from app.core.authorization.scope import context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.events import AgentRunCompletedEvent
-from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
@@ -60,10 +60,8 @@ async def start_followup_run_for_queued_messages(
     exhausted, a run already active again) must not poison the completion event,
     which is redelivered until it is acked.
     """
-    if event.status == AgentRunStatus.STOPPED:
-        # The person pressed stop. Starting the next turn is the opposite of
-        # what they asked for, whatever is sitting behind it.
-        return None
+    # A stopped run is not skipped here: what was said *after* Stop is still
+    # owed an answer, and `start_queued_followup` keeps to exactly that.
     try:
         async with uow_factory() as uow:
             conversation_repository = ConversationRepository(uow)
@@ -93,10 +91,10 @@ async def start_followup_run_for_queued_messages(
                 )
         if started is None:
             return None
-        followup_run_id, superseded = started
+        followup_run_id, owed_frames = started
         # Outside the unit of work, as the stop path publishes: a session holds
         # a pooled connection until it closes, and these are Redis round trips.
-        for message in superseded:
+        for message in owed_frames:
             await publish_conversation_event(
                 event.conversation_id,
                 message_payload(message.agent_run_id, message_to_payload(message)),

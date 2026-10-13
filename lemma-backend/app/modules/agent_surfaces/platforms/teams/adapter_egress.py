@@ -29,7 +29,11 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
-from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
+from app.modules.agent_surfaces.platforms.delivery import (
+    RetryPolicy,
+    note_partial_delivery,
+    with_retry,
+)
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.teams import client
@@ -37,6 +41,7 @@ from app.modules.agent_surfaces.platforms.teams.cards import (
     _teams_approval_card,
     _teams_display_resource_card,
     _teams_question_card,
+    teams_retry_card,
 )
 
 logger = get_logger(__name__)
@@ -124,10 +129,18 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                         "content": card,
                     }
                 ]
+            if index == len(chunks) - 1 and (metadata or {}).get("retry_action"):
+                body["attachments"] = [
+                    {
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "content": teams_retry_card(event.external_thread_id),
+                    }
+                ]
             try:
                 await self._post_activity(url, token=token, body=body)
             except PLATFORM_TRANSPORT_ERRORS:
                 if index:
+                    note_partial_delivery()
                     logger.warning(
                         "agent_surfaces.adapter.teams_message_partially_delivered.degraded",
                         sent_chunks=index,

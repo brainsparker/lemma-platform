@@ -39,9 +39,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.log.log import get_logger
-from app.modules.agent.domain.agent_host import (
-    AgentHostHarnessHealth,
-)
+from app.modules.agent.domain.agent_host_readiness import health_refusal
 from app.modules.agent.domain.agent_host_selections import (
     carry_agent_host_model,
     carry_agent_host_selections,
@@ -116,11 +114,17 @@ def _refusal_for(
         )
     if harness is None or harness.host_id != command.host_id:
         return "This agent is no longer registered on that computer"
-    if harness.health != AgentHostHarnessHealth.READY.value:
-        # Re-aiming at a harness that cannot take work only moves the failure
-        # later, and loses the reason on the way. `AUTH_REQUIRED` in particular
-        # is a sentence the user can act on.
-        return f"{harness.display_name} is not ready: {harness.health}"
+    # Re-aiming at a harness that cannot take work only moves the failure
+    # later, and loses the reason on the way. `AUTH_REQUIRED` in particular
+    # is a sentence the user can act on. A host is paired to one person and
+    # runs only their runs, so the computer is the reader's own.
+    unready = health_refusal(
+        agent=f"{harness.display_name} on your computer",
+        harness_key=harness.harness_key,
+        health=harness.health,
+    )
+    if unready is not None:
+        return unready
     if harness.config_revision == payload.get("profile_revision"):
         # We already told the host this revision and it refused, so the two
         # records genuinely disagree -- and requeuing an identical payload is

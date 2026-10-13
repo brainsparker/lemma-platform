@@ -273,13 +273,21 @@ class AgentHostLinkStore:
     async def publish_harnesses(
         self, *, host_id: UUID, snapshots: list[AgentHostHarnessSnapshot]
     ) -> list[AgentHostHarnessRecord]:
-        """Replace this host's harness snapshots with the reported set."""
+        """Replace this host's harness snapshots with the reported set.
+
+        Rows are kept (runs and profiles point at them), so an agent the report
+        leaves out is marked DISABLED rather than deleted.
+        """
         async with self._uow_factory() as uow:
             repository = AgentHostRepository(uow)
             published = [
                 await repository.publish_harness(host_id=host_id, snapshot=snapshot)
                 for snapshot in snapshots
             ]
+            await repository.disable_unreported_harnesses(
+                host_id=host_id,
+                reported_keys={snapshot.harness_key for snapshot in snapshots},
+            )
             records = [
                 AgentHostHarnessRecord.model_validate(harness) for harness in published
             ]

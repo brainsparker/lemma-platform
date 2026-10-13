@@ -4,8 +4,7 @@ Two different failures used to read almost identically in a run list. The
 dispatcher's own inline timeout says "Function execution timed out (deadline
 exceeded)"; the once-a-minute sweep said "Function execution deadline exceeded".
 Their remedies are opposite — make the function faster, versus find out why the
-runtime never reported — and 41 failures in one afternoon left the reader to
-guess which kind they had.
+runtime never reported — and a reader could not tell which kind they had.
 """
 
 from __future__ import annotations
@@ -60,10 +59,16 @@ def test_it_is_distinguishable_from_the_dispatchers_inline_timeout() -> None:
     assert swept != "Function execution deadline exceeded"
 
 
-def test_a_run_with_no_timestamps_still_gets_a_usable_reason() -> None:
+def test_a_run_that_never_started_says_so_and_that_retrying_is_safe() -> None:
+    """A PENDING run swept at its deadline did nothing; its deadline was only
+    when it had to start by, so it is not an execution timeout."""
     message = _expired_run_error(
-        SimpleNamespace(started_at=None, deadline_at=None),
+        SimpleNamespace(
+            started_at=None,
+            deadline_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        ),
         now=datetime.now(timezone.utc),
     )
 
-    assert "never reported" in message
+    assert message.startswith("Function never started")
+    assert "safe to retry" in message

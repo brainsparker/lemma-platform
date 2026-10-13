@@ -123,7 +123,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
                                 {editing ? (
                                     <section className="agentpage__card">
                                         <h2>Edit {detail.label}</h2>
-                                        <Editor key={detail.name} podId={pod.id} detail={detail} onDone={() => setEditing(false)} />
+                                        <Editor key={detail.name} podId={pod.id} orgId={pod.orgId} detail={detail} onDone={() => setEditing(false)} />
                                     </section>
                                 ) : (
                                     <>

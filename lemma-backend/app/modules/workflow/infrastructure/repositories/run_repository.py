@@ -4,7 +4,7 @@ from uuid import UUID
 from collections.abc import Sequence
 from typing import List, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
@@ -14,7 +14,11 @@ from app.modules.workflow.domain.run import (
     WorkflowRunEntity,
     WorkflowRunStatus,
 )
-from app.modules.workflow.infrastructure.models import WorkflowRunModel
+from app.modules.workflow.domain.wait import WorkflowRunWaitStatus, WorkflowRunWaitType
+from app.modules.workflow.infrastructure.models import (
+    WorkflowRunModel,
+    WorkflowRunWaitModel,
+)
 
 
 class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
@@ -274,3 +278,27 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
         )
         result = await self.session.execute(stmt)
         return {row[0]: row[1] or {} for row in result.all()}
+
+    async def count_admitted(
+        self, flow_id: UUID, *, excluding: UUID | None = None
+    ) -> int:
+        """Runs of a workflow in progress, not counting any still queued to start."""
+        queued = select(WorkflowRunWaitModel.run_id).where(
+            WorkflowRunWaitModel.flow_id == flow_id,
+            WorkflowRunWaitModel.wait_type == WorkflowRunWaitType.QUEUED.value,
+            WorkflowRunWaitModel.status == WorkflowRunWaitStatus.ACTIVE.value,
+        )
+        stmt = (
+            select(func.count())
+            .select_from(WorkflowRunModel)
+            .where(
+                WorkflowRunModel.flow_id == flow_id,
+                WorkflowRunModel.status.in_(
+                    [WorkflowRunStatus.RUNNING.value, WorkflowRunStatus.WAITING.value]
+                ),
+                WorkflowRunModel.id.not_in(queued),
+            )
+        )
+        if excluding is not None:
+            stmt = stmt.where(WorkflowRunModel.id != excluding)
+        return int((await self.session.execute(stmt)).scalar_one())

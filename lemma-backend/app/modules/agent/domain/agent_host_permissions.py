@@ -68,24 +68,39 @@ class AgentHostPermissionRequest:
         ACP agent expects when a request goes unapproved. APPROVE_FOR_SESSION
         maps to the agent's own "always" option when it offered one, so the
         agent stops asking for that action for the rest of its session.
+
+        A one-time approval never selects "always". The host caches that
+        answer for the rest of the session, so picking it when the agent
+        offered nothing narrower turned a single yes into a standing one; it
+        denies instead (``refuses_a_one_time_approval``).
         """
         if decision == AgentRunApprovalDecision.DENY:
             return None
         allowed = [
             option for option in self.options if option.kind not in _REJECT_KINDS
         ]
+        if decision != AgentRunApprovalDecision.APPROVE_FOR_SESSION:
+            allowed = [option for option in allowed if option.kind != _ALLOW_ALWAYS]
         if not allowed:
             return None
         preferred = (
             (_ALLOW_ALWAYS, _ALLOW_ONCE)
             if decision == AgentRunApprovalDecision.APPROVE_FOR_SESSION
-            else (_ALLOW_ONCE, _ALLOW_ALWAYS)
+            else (_ALLOW_ONCE,)
         )
         for kind in preferred:
             for option in allowed:
                 if option.kind == kind:
                     return option.option_id
         return allowed[0].option_id
+
+    def refuses_a_one_time_approval(self, decision: AgentRunApprovalDecision) -> bool:
+        """An approval for once that was denied because only "always" was offered."""
+        return (
+            decision == AgentRunApprovalDecision.APPROVE_ONCE
+            and self.option_for(decision) is None
+            and any(option.kind == _ALLOW_ALWAYS for option in self.options)
+        )
 
 
 def permission_approval_tool_call_id(request_id: str) -> str:

@@ -207,11 +207,14 @@ class SurfaceProgress:
         metadata: dict[str, Any] | None = None,
     ) -> bool:
         """The platform's own "working on it" affordance, where it has one."""
-        target = await self.delivery.resolve_egress_target(conversation_id)
-        if target is None:
-            return False
-        indicator_metadata = await self.delivery.egress_metadata(target, metadata)
         try:
+            # The target and metadata reads are inside the guard too: a
+            # database error there escaped `on_run_started` exactly as a
+            # platform error used to.
+            target = await self.delivery.resolve_egress_target(conversation_id)
+            if target is None:
+                return False
+            indicator_metadata = await self.delivery.egress_metadata(target, metadata)
             # No connection held for the platform call; see `connection_released`.
             async with connection_released(self.delivery.uow.session):
                 await target.adapter.add_processing_indicator(
@@ -219,7 +222,7 @@ class SurfaceProgress:
                     event=target.event,
                     metadata=indicator_metadata,
                 )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except _PROGRESS_ERRORS:
             # The only verb here that was not best-effort, and the one that
             # could least afford it. `on_run_started` awaits this, and
             # `notify_run_started` turns any escape into "the observer never
@@ -233,9 +236,8 @@ class SurfaceProgress:
             # loop stops on the first `False`, so a dead platform produces two
             # of these per run rather than one every twenty seconds.
             #
-            # The platform family rather than `Exception`: this is one HTTP call
-            # to one adapter. The two verbs above catch broadly only because
-            # they predate the family existing. Anything outside it -- a
+            # The platform and database families rather than `Exception`: one
+            # target read and one HTTP call. Anything outside them -- a
             # `KeyError` on a credential dict, say -- is a bug in our own code
             # and should still be loud.
             logger.warning(

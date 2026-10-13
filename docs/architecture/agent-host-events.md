@@ -316,7 +316,9 @@ labels it with that option's name), and says when the request runs out. The
 host denies an unanswered request itself after 30 minutes
 (`PERMISSION_DECISION_TIMEOUT`), so a card past that point, or one whose run
 has ended, reads "Expired — the agent continued without it" instead of
-offering buttons.
+offering buttons. Lemma ends a turn parked on a request well before that, at
+its parked window (see [the link](agent-host.md#delivery)); that card stays
+open, and its decision resumes a new run instead of reaching the host.
 
 A request that gates one of Lemma's own MCP tools never reaches Lemma. The host
 answers it itself, because Lemma already authorizes those tools on every

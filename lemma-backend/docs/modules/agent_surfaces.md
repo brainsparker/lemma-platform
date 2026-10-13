@@ -175,8 +175,18 @@ observer renders them on the surface and a submission resumes the run.
   is the sender's own, in the route's pod and with the route's agent, is taken;
   the reset window still applies. Channel and email threads are never adopted.
 - **A sender is a user only on proof.** A chat sender resolves to a Lemma user by
-  the profile email or Telegram handle, or by a mobile number already
-  *verified* on the profile. A number a profile merely lists does not match by
+  the profile email the platform's API returns, or by a mobile number already
+  *verified* on the profile (WhatsApp's signed sender, a Telegram contact the
+  sender shares about themselves). A Telegram handle is matched on not at all,
+  and a profile holds none: anyone can claim a free handle, and one given up on
+  Telegram is taken by a stranger. An unresolved Telegram sender is asked to
+  share their own contact; proven, the account stays resolved whatever their
+  handle later says. A managed bot's creator is not bound by opening the setup
+  link -- a link can leak -- and is recognised the same way, by a contact share
+  in the new bot. Someone with no verified number cannot be recognised on a
+  pod's own bot: they verify their number in account settings first, or sign up
+  through the shared bot, whose email-code step verifies the contact they
+  share. A number a profile merely lists does not match by
   default: it would hand the number's real owner's messages -- and the agent's
   replies, sent from the shared number -- to whoever typed it. That sender goes
   through signup instead. A deployment can accept that risk with

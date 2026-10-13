@@ -526,9 +526,13 @@ async def _default_agent_brief(
     conversation = Conversation(
         user_id=UUID(user_id), pod_id=UUID(pod_id), type=type, metadata=metadata or {}
     )
-    return await AgentContextBriefBuilder(uow_factory).build(
+    brief = await AgentContextBriefBuilder(uow_factory).build(
         agent=agent,
         conversation=conversation,
         user_id=UUID(user_id),
         pod_id=UUID(pod_id),
     )
+    # Which pods may be asked depends on the conversation, so it rides in the
+    # per-run part; the stable part is cached across conversations.
+    assert "## Other pods you can ask" not in brief.stable
+    return brief.per_run

@@ -84,6 +84,9 @@ def _routers():
     from app.modules.agent.api.controllers.conversation_queue_controller import (
         router as conversation_queue,
     )
+    from app.modules.agent.api.controllers.conversation_pending_controller import (
+        router as conversation_pending,
+    )
     from app.modules.agent.api.controllers.askable_pods_controller import (
         router as askable_pods,
     )
@@ -105,6 +108,8 @@ def _routers():
         runtime_config,
         runtime_default,
         tool,
+        # Ahead of `conversation`, whose `/{conversation_id}` would claim it.
+        conversation_pending,
         conversation,
         conversation_queue,
         askable_pods,

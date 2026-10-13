@@ -17,7 +17,11 @@ from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
     get_channel_service,
 )
-from app.modules.agent.domain.value_objects import JsonObject
+from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
+from app.modules.agent.domain.value_objects import (
+    ConversationAgentSelection,
+    JsonObject,
+)
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
@@ -192,3 +196,18 @@ async def with_keepalive(
         # which runs at an unrelated moment and, for a subscription iterator,
         # after the client has already gone.
         await chunks.aclose()
+
+
+def parse_conversation_agent_selection(
+    agent_name: str | None,
+) -> ConversationAgentSelection[str]:
+    if agent_name is None:
+        return ConversationAgentSelection.all()
+    if not agent_name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="agent_name cannot be empty",
+        )
+    if agent_name in POD_DEFAULT_AGENT_SELECTOR_ALIASES:
+        return ConversationAgentSelection.pod_default()
+    return ConversationAgentSelection.named(agent_name)

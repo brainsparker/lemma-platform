@@ -155,21 +155,6 @@ async def _save_waiting_setup(
     telegram_user_id: int,
 ) -> bool:
     setup.telegram_user_id = telegram_user_id
-    from_user = message.get("from") or {}
-    setup.telegram_username = (
-        str(from_user.get("username") or "").strip().lstrip("@") or None
-    )
-    setup.telegram_display_name = (
-        " ".join(
-            part
-            for part in (
-                str(from_user.get("first_name") or "").strip(),
-                str(from_user.get("last_name") or "").strip(),
-            )
-            if part
-        )
-        or setup.telegram_username
-    )
     setup.status = TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM
     saved = await runtime._store.save_if_status(
         setup,

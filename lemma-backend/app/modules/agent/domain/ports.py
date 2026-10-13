@@ -22,6 +22,10 @@ from app.modules.agent.domain.run_projections import (
     StrandedConversationRef,
 )
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.pending_interactions import (
+    PendingInteraction,
+    PendingInteractionCursor,
+)
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentRunApprovalDecision,
@@ -178,6 +182,10 @@ class ConversationRepository(Protocol):
         self, *, conversation_id: UUID, user_id: UUID, pod_id: UUID
     ) -> ConversationListCursor | None: ...
 
+    async def find_spawned_child(
+        self, *, parent_id: UUID, parent_run_id: UUID, spawn_key: str
+    ) -> Conversation | None: ...
+
     async def list_children(
         self,
         *,
@@ -246,10 +254,16 @@ class ConversationRepository(Protocol):
     async def run_has_only_user_messages(self, agent_run_id: UUID) -> bool: ...
 
     async def count_queued_user_messages(
-        self, agent_run_id: UUID, *, notes: bool | None = None
+        self,
+        agent_run_id: UUID,
+        *,
+        notes: bool | None = None,
+        after_sequence: int | None = None,
     ) -> int: ...
 
-    async def earliest_queued_is_note(self, agent_run_id: UUID) -> bool | None: ...
+    async def earliest_queued_is_note(
+        self, agent_run_id: UUID, *, after_sequence: int | None = None
+    ) -> bool | None: ...
 
     async def claim_queued_user_messages(
         self,
@@ -259,7 +273,22 @@ class ConversationRepository(Protocol):
         message_ids: list[UUID] | None = None,
         notes: bool | None = None,
         as_run: bool = False,
+        after_sequence: int | None = None,
     ) -> list[Message]: ...
+
+    async def mark_queued_waiting_on_answer(
+        self, agent_run_id: UUID
+    ) -> list[Message]: ...
+
+    async def find_user_message_by_client_id(
+        self, *, conversation_id: UUID, client_message_id: str
+    ) -> Message | None: ...
+
+    async def latest_message_sequence(self, conversation_id: UUID) -> int: ...
+
+    async def get_conversation_status(
+        self, conversation_id: UUID
+    ) -> ConversationStatus | None: ...
 
     async def list_agent_runs_with_messages(
         self,
@@ -321,6 +350,7 @@ class ConversationRepository(Protocol):
         error_code: str | None = None,
         error_reason: str | None = None,
         output_data: JsonValue | None = None,
+        stamp: JsonObject | None = None,
     ) -> AgentRunFinishResult | None: ...
 
     async def record_approval_decision(
@@ -400,5 +430,32 @@ class ConversationRepository(Protocol):
         pausing_tool_names: Sequence[str],
         limit: int | None = None,
     ) -> list[Message]: ...
+
+    async def list_pending_interactions(
+        self,
+        *,
+        user_id: UUID,
+        pod_id: UUID,
+        cursor: PendingInteractionCursor | None = None,
+        limit: int = 50,
+    ) -> tuple[list[PendingInteraction], PendingInteractionCursor | None]: ...
+
+    async def conversations_with_pending_interaction(
+        self, conversation_ids: Sequence[UUID]
+    ) -> set[UUID]: ...
+    async def pausing_calls_decided_awaiting_a_return(
+        self,
+        *,
+        conversation_id: UUID,
+        pausing_tool_names: Sequence[str],
+    ) -> list[Message]: ...
+
+    async def pausing_call_ids_of_run(
+        self,
+        *,
+        conversation_id: UUID,
+        agent_run_id: UUID,
+        pausing_tool_names: Sequence[str],
+    ) -> list[str]: ...
 
     def collect_events(self, events: Sequence[AgentDomainEvent]) -> None: ...

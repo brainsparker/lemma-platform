@@ -724,6 +724,12 @@ def _environment(
             [{"slug_prefix": SPEND_CAP_PROBE_SLUG_PREFIX, "monthly_limit_usd": 0}]
         ),
         "AUTH_ALTCHA_ENABLED": "false",
+        # A Telegram handle is not proof of anything, so a scenario's person
+        # proves their Telegram account by sharing their contact, matched to
+        # the number on their profile. Nothing here can verify a number (that
+        # takes a real WhatsApp or Telegram login), so the stack accepts the
+        # one unverified number a profile claims -- Lemma Desktop's setting.
+        "SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH": "true",
         # The one substitution the stack makes, and it is deliberate: agent runs
         # use a deterministic scripted model rather than a real provider. It is a
         # supported setting (`e2e_llm_mode`), not a patched-in fake, so the code

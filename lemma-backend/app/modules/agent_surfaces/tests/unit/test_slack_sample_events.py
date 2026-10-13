@@ -101,6 +101,7 @@ def _conversation_operations(monkeypatch, *, conversation):
         # A real run id, because the caller checks whether one was started.
         start_surface_turn=AsyncMock(return_value=uuid4()),
         pending_interaction=AsyncMock(return_value=None),
+        undecided_pauses=AsyncMock(return_value=[]),
         conversation_metadata_value=AsyncMock(return_value=None),
         set_conversation_metadata_value=AsyncMock(),
         surface_agent_identity=AsyncMock(

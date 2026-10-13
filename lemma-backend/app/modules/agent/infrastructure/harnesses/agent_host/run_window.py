@@ -83,6 +83,10 @@ class DispatchedRun:
     # The harness advertised ACP steering, so messages sent mid-turn go to the
     # host as they arrive rather than waiting for the follow-up turn.
     steerable: bool = False
+    # Where to start reading the run's event stream, and whether this worker
+    # is picking up a dispatch another one made (``stream_resume``).
+    stream_cursor: str = "0-0"
+    resumed: bool = False
 
     @property
     def deadline_message(self) -> str:
@@ -187,9 +191,20 @@ def failure_events(
     agent_run_id: UUID,
     message: str,
 ) -> list[AgentEvent]:
-    """Close whatever the run left open, then fail it."""
+    """Keep what the agent wrote, close whatever it left open, then fail it.
+
+    Everything the agent said and thought since its last tool call lives only
+    in the normalizer until a flush, and on a long run that stretch is usually
+    the report. Flushed as ordinary, non-final messages: the run is failing, so
+    nothing here may claim to be its answer, and the recorded final answer is
+    deliberately not adopted (``adopt_recorded_final_answer``).
+    """
     terminal = error_event(agent_run_id, message)
-    return [*normalizer.close_outstanding(terminal), terminal]
+    return [
+        *normalizer.flush_messages(final=False),
+        *normalizer.close_outstanding(terminal),
+        terminal,
+    ]
 
 
 def terminal_checkpoint_state(

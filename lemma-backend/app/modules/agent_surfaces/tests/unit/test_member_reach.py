@@ -49,7 +49,9 @@ async def test_send_to_member_reuses_existing_thread():
     reach.external_user_repository = AsyncMock(
         list_by_resolved_users=AsyncMock(
             return_value=[
-                SimpleNamespace(external_user_id=link.external_user_id, tenant_id=None)
+                SimpleNamespace(
+                    external_user_id=link.external_user_id, tenant_id="T123"
+                )
             ]
         )
     )
@@ -232,7 +234,9 @@ async def test_send_to_member_says_they_have_never_written_in():
     )
     reach.external_user_repository = AsyncMock(
         list_by_resolved_users=AsyncMock(
-            return_value=[SimpleNamespace(external_user_id="U-MEMBER", tenant_id=None)]
+            return_value=[
+                SimpleNamespace(external_user_id="U-MEMBER", tenant_id="T123")
+            ]
         )
     )
     reach.conversation_link_repository.get_latest_by_surface_and_external_user = (

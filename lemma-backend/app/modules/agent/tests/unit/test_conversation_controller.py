@@ -616,14 +616,14 @@ class TestTheStreamSaysWhetherTheMessageStartedARun:
         payload = await self._first_frame(monkeypatch, started_new_run=True)
 
         assert payload["type"] == "status"
-        assert payload["data"] == {"started_new_run": True}
+        assert payload["data"] == {"started_new_run": True, "deduplicated": False}
 
     @pytest.mark.asyncio
     async def test_a_message_that_joined_one_says_so(self, monkeypatch) -> None:
         payload = await self._first_frame(monkeypatch, started_new_run=False)
 
         assert payload["type"] == "status"
-        assert payload["data"] == {"started_new_run": False}
+        assert payload["data"] == {"started_new_run": False, "deduplicated": False}
 
 
 class TestASilentStreamStillSendsSomething:

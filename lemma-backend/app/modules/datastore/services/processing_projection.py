@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.document_processing import DocumentExtraction
 from app.modules.datastore.domain.errors import DatastoreDomainError
@@ -111,4 +112,6 @@ async def write_converted_projection(
             }
         )
 
-    await storage.upload_file(keys.manifest, json.dumps(manifest).encode("utf-8"))
+    # One entry per page and image: a long document's manifest is not small.
+    encoded = await run_blocking(json.dumps, manifest)
+    await storage.upload_file(keys.manifest, encoded.encode("utf-8"))

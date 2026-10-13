@@ -9,6 +9,7 @@ line saying why the buttons went.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import TypedDict
 
 from slack_sdk.web.async_client import AsyncWebClient
 
@@ -33,21 +34,28 @@ def without_controls(blocks: object) -> list[dict[str, object]]:
     ]
 
 
-def retired_card(
-    handle: DecisionCardHandle, reason: CardRetirement
-) -> dict[str, object]:
+class RetiredCard(TypedDict):
+    """The ``chat.update`` arguments that rewrite a card."""
+
+    channel: str
+    ts: str
+    text: str
+    blocks: list[dict[str, object]]
+
+
+def retired_card(handle: DecisionCardHandle, reason: CardRetirement) -> RetiredCard:
     """The ``chat.update`` arguments that rewrite the card without controls."""
     note: dict[str, object] = {
         "type": "context",
         "elements": [{"type": "mrkdwn", "text": f"_{reason.note}_"}],
     }
-    return {
-        "channel": handle.channel,
-        "ts": handle.message_id,
+    return RetiredCard(
+        channel=handle.channel,
+        ts=handle.message_id,
         # A notification preview and a client without blocks show this.
-        "text": reason.note,
-        "blocks": [*handle.blocks, note],
-    }
+        text=reason.note,
+        blocks=[*handle.blocks, note],
+    )
 
 
 async def remember_slack_card(

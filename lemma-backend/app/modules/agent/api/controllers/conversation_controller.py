@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -17,7 +18,6 @@ from app.core.authorization.dependencies import (
 from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.entities import AgentRun
 from app.modules.agent.domain.server_metadata import client_metadata
 from app.modules.agent.services.runtime_availability import check_runtime_for_pod
 from app.modules.agent.api.controllers.conversation_streaming import (
@@ -60,11 +60,8 @@ from app.modules.agent.domain.errors import (
     AgentNotFoundError,
     ConversationNotFoundError,
 )
-from app.modules.agent.domain.value_objects import (
-    AgentRunStartResult,
-    ConversationStatus,
-    ConversationType,
-)
+from app.modules.agent.domain.value_objects import ConversationStatus, ConversationType
+from app.modules.agent.services.conversation_service import ConversationService
 
 logger = get_logger(__name__)
 
@@ -387,38 +384,28 @@ async def send_message(
     # PodContextDep: a StreamingResponse keeps those (and their pooled
     # connection) alive for the whole SSE stream. Here the connection is
     # released the moment send_from_lemma commits, before streaming.
-    async def start_run() -> AgentRunStartResult:
+    @asynccontextmanager
+    async def conversations() -> AsyncIterator[ConversationService]:
         async with pod_context_scope(
             uow_factory, request=request, user_id=user.id, pod_id=pod_id
         ) as scope:
             assert_pod_membership(scope.ctx, "use conversations in this pod")
-            service = _build_conversation_service(scope.uow)
-            return await service.send_from_lemma(
-                conversation_id=conversation_id,
-                user_id=user.id,
-                content=data.content,
-                pod_id=pod_id,
-                message_metadata=data.metadata,
-                client_message_id=data.client_message_id,
-            )
-
-    async def load_run(agent_run_id: UUID) -> AgentRun:
-        async with pod_context_scope(
-            uow_factory, request=request, user_id=user.id, pod_id=pod_id
-        ) as scope:
-            return await load_authorized_agent_run(
-                _build_conversation_service(scope.uow),
-                conversation_id=conversation_id,
-                agent_run_id=agent_run_id,
-                user_id=user.id,
-                pod_id=pod_id,
-            )
+            yield _build_conversation_service(scope.uow)
 
     return await start_and_stream_run(
         channel_service=channel_service,
+        conversations=conversations,
         conversation_id=conversation_id,
-        start_run=start_run,
-        load_run=load_run,
+        user_id=user.id,
+        pod_id=pod_id,
+        start_run=lambda service: service.send_from_lemma(
+            conversation_id=conversation_id,
+            user_id=user.id,
+            content=data.content,
+            pod_id=pod_id,
+            message_metadata=data.metadata,
+            client_message_id=data.client_message_id,
+        ),
     )
 
 

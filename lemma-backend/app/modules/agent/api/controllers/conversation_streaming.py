@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from uuid import UUID
 
 import anyio
@@ -31,10 +32,33 @@ logger = get_logger(__name__)
 async def start_and_stream_run(
     *,
     channel_service: ChannelServiceDep,
+    conversations: Callable[[], AbstractAsyncContextManager[ConversationService]],
     conversation_id: UUID,
-    start_run: Callable[[], Awaitable[AgentRunStartResult]],
-    load_run: Callable[[UUID], Awaitable[AgentRun]],
+    user_id: UUID,
+    pod_id: UUID,
+    start_run: Callable[[ConversationService], Awaitable[AgentRunStartResult]],
 ) -> StreamingResponse:
+    """Send, then stream the run the send started or joined.
+
+    ``conversations`` opens a short-lived service: the auth context is built
+    there, not in a request-scoped dependency, because a StreamingResponse
+    keeps those (and their pooled connection) alive for the whole stream.
+    """
+
+    async def send() -> AgentRunStartResult:
+        async with conversations() as service:
+            return await start_run(service)
+
+    async def load_run(agent_run_id: UUID) -> AgentRun:
+        async with conversations() as service:
+            return await load_authorized_agent_run(
+                service,
+                conversation_id=conversation_id,
+                agent_run_id=agent_run_id,
+                user_id=user_id,
+                pod_id=pod_id,
+            )
+
     async def close_subscription(
         exc_type=None,
         exc=None,
@@ -52,7 +76,7 @@ async def start_and_stream_run(
     subscription = channel_service.subscribe([conversation_channel(conversation_id)])
     iterator = await subscription.__aenter__()
     try:
-        result = await start_run()
+        result = await send()
     except (AgentNotFoundError, ConversationNotFoundError) as exc:
         await close_subscription(type(exc), exc, exc.__traceback__)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc

@@ -429,3 +429,84 @@ async def test_a_profile_is_tested_with_and_refused_on_its_saved_settings(
     # The profile's default model is the reasoning one, so the effort goes too.
     assert sent["model"] == _REASONER
     assert sent["reasoning_effort"] == "minimal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_settings",
+    [{"temperature": "hot"}, {"max_tokens": "unlimited"}],
+    ids=["portable-field", "wire-switch"],
+)
+async def test_settings_no_run_could_use_are_refused_on_create_and_on_edit(
+    authenticated_client: AsyncClient,
+    fixed_test_org: dict,
+    provider: _Provider,
+    model_settings: dict[str, object],
+) -> None:
+    """A portable field and a raw wire switch are both checked before saving:
+    a value saved unchecked failed every run on the profile instead."""
+    org_id = fixed_test_org["id"]
+    profiles = f"/organizations/{org_id}/agent-runtime/profiles"
+
+    created = await authenticated_client.post(
+        profiles,
+        json={
+            "source": "OPENAI_COMPATIBLE",
+            "name": f"Refused settings {uuid4().hex[:8]}",
+            "base_url": provider.base_url,
+            "api_key": "sk-e2e-not-real",
+            "model_settings": model_settings,
+        },
+    )
+    assert created.status_code == 400, created.text
+
+    profile_id = await _profile(authenticated_client, org_id, provider.base_url)
+    edited = await authenticated_client.patch(
+        f"{profiles}/{profile_id}",
+        json={"source": "OPENAI_COMPATIBLE", "model_settings": model_settings},
+    )
+    assert edited.status_code == 400, edited.text
+    stored = await authenticated_client.get(f"{profiles}/{profile_id}")
+    assert stored.status_code == 200, stored.text
+    assert not stored.json().get("model_settings"), stored.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field",
+    [
+        "name",
+        "description",
+        "base_url",
+        "api_key",
+        "default_model_name",
+        "model_names",
+        "model_settings",
+        "reasoning_model_names",
+    ],
+)
+async def test_a_null_in_a_profile_edit_is_answered_not_a_server_error(
+    authenticated_client: AsyncClient,
+    fixed_test_org: dict,
+    provider: _Provider,
+    field: str,
+) -> None:
+    """Every field of the edit is nullable on the wire. A null name or model
+    list reached code that only takes a value and answered 500."""
+    org_id = fixed_test_org["id"]
+    profile_id = await _profile(authenticated_client, org_id, provider.base_url)
+    path = f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}"
+    before = await authenticated_client.get(path)
+    assert before.status_code == 200, before.text
+
+    edited = await authenticated_client.patch(
+        path, json={"source": "OPENAI_COMPATIBLE", field: None}
+    )
+
+    assert edited.status_code < 500, edited.text
+    if field in {"name", "model_names", "reasoning_model_names"}:
+        # Nothing to clear them to: null leaves them as they were.
+        assert edited.status_code == 200, edited.text
+        after = (await authenticated_client.get(path)).json()
+        assert after["name"] == before.json()["name"]
+        assert after["model_catalog"] == before.json()["model_catalog"]

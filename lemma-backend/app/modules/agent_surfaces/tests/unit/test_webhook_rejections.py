@@ -38,8 +38,8 @@ from app.modules.agent_surfaces.services.webhook_security_service import (
 
 pytestmark = pytest.mark.asyncio
 
-_TELEGRAM_SECRET = "telegram-" + "webhook-secret"
-_SLACK_SECRET = "slack-" + "signing-secret"
+_TELEGRAM_SECRET = "telegram-webhook-secret"
+_SLACK_SECRET = "slack-signing-secret"
 _BODY = b'{"type":"event_callback","event":{"type":"message","text":"hi"}}'
 
 
@@ -47,8 +47,12 @@ _BODY = b'{"type":"event_callback","event":{"type":"message","text":"hi"}}'
 def _verification_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(core_settings, "environment", "production")
-    monkeypatch.setattr(surface_settings, "telegram_webhook_secret", _TELEGRAM_SECRET)
-    monkeypatch.setattr(surface_settings, "slack_signing_secret", _SLACK_SECRET)
+    monkeypatch.setattr(
+        surface_settings, "telegram_webhook_secret", "telegram-webhook-secret"
+    )
+    monkeypatch.setattr(
+        surface_settings, "slack_signing_secret", "slack-signing-secret"
+    )
 
 
 def _telegram_surface(secret: str | None) -> AgentSurfaceEntity:

@@ -24,13 +24,13 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
 
 pytestmark = pytest.mark.e2e
 
-_SECRET = "native-" + "secret"
+_SECRET = "native-secret"
 
 
 @pytest.fixture(autouse=True)
 def _verification_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
-    monkeypatch.setattr(surface_settings, "telegram_webhook_secret", _SECRET)
+    monkeypatch.setattr(surface_settings, "telegram_webhook_secret", "native-secret")
 
 
 def _update(message_id: int) -> bytes:

@@ -169,6 +169,18 @@ class PlatformCapabilities:
     # for it, so its messages go to that pod's surface and no other, whichever
     # pods on the shared number the sender is in.
     bot_creates_groups: bool = False
+    # Can a private chat keep being the same chat while the address it is
+    # delivered on changes? True only for WhatsApp, where the channel and thread
+    # ids embed the pooled number the message arrived on, and a reassigned
+    # number must not cut a person off from their conversation. Everywhere else
+    # a new address is a new thread on purpose -- each top-level Slack DM has
+    # its own `ts` -- and adopting the person's last link there collapsed every
+    # DM thread into one and moved replies between them.
+    dm_address_may_move: bool = False
+    # Can a failure notice carry a "Try again" control that re-runs the failed
+    # request (``retry_action`` in the message metadata)? Where it cannot, the
+    # notice asks for a typed "retry", which works on every platform.
+    supports_native_retry: bool = False
 
     @property
     def delivery_cardinality(self) -> DeliveryCardinality:
@@ -268,6 +280,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_SLACK_FORMATTING,
         soft_char_limit=3000,
         progress_style=ProgressStyle.STREAM,
+        supports_native_retry=True,
     ),
     "TEAMS": PlatformCapabilities(
         platform="TEAMS",
@@ -286,6 +299,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_TEAMS_FORMATTING,
         soft_char_limit=4000,
         progress_style=ProgressStyle.EDIT,
+        supports_native_retry=True,
     ),
     "WHATSAPP": PlatformCapabilities(
         platform="WHATSAPP",
@@ -307,6 +321,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # in the person's chat. Rationed hard by the observer: a plan when the
         # agent has one, otherwise a single "still going" on a long run.
         progress_style=ProgressStyle.POST,
+        supports_native_retry=True,
         # Meta closes free-form messaging 24h after the person's last message.
         # A notification past that window needs an approved template, which we
         # do not have, so delivery falls through to the next channel.
@@ -330,6 +345,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # holding none is back on the single number in settings, where the old
         # once-per-organization rule is exactly right. See the field.
         system_identity_may_be_absent=True,
+        dm_address_may_move=True,
     ),
     "TELEGRAM": PlatformCapabilities(
         platform="TELEGRAM",
@@ -354,6 +370,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         has_shared_system_bot=True,
         supports_native_voice=True,
         progress_style=ProgressStyle.EDIT,
+        supports_native_retry=True,
         # A DM's live update is a thinking chip — one line, newlines collapsed.
         # A group's is a plain edited message, which would hold a checklist, but
         # a platform showing two different shapes of the same update is worth
@@ -390,6 +407,12 @@ def bot_creates_groups_on(platform: str | None) -> bool:
     """Is every group this platform's bot is in one it created? (WhatsApp)"""
     capabilities = get_platform_capabilities(platform)
     return capabilities is not None and capabilities.bot_creates_groups
+
+
+def dm_address_may_move(platform: str | None) -> bool:
+    """May a private chat here continue at a new delivery address?"""
+    capabilities = get_platform_capabilities(platform)
+    return capabilities is not None and capabilities.dm_address_may_move
 
 
 def has_shared_system_bot(platform: str | None) -> bool:

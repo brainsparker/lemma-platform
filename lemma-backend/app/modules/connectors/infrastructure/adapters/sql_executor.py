@@ -126,6 +126,35 @@ def _resolve_row_cap(connection_config: dict[str, Any]) -> int:
     return min(requested, _MAX_ROW_CAP)
 
 
+# What a column will accept, not only what it is called. `data_type` alone
+# reported `character varying` with no length and a PostgreSQL enum as
+# `USER-DEFINED` with no labels, and said nothing of CHECK constraints -- so an
+# agent wrote values the database then refused, and learned the rule only from
+# the error. The enum's own type name stands in for `USER-DEFINED`; NOT NULL,
+# which the catalog also lists as a check, is already `is_nullable`.
+_DESCRIBE_COLUMNS = (
+    "SELECT c.table_schema, c.column_name, "
+    "CASE WHEN c.data_type = 'USER-DEFINED' THEN c.udt_name "
+    "ELSE c.data_type END AS data_type, "
+    "c.character_maximum_length, c.numeric_precision, c.numeric_scale, "
+    "c.is_nullable, c.column_default, "
+    "(SELECT json_agg(e.enumlabel::text ORDER BY e.enumsortorder)::text "
+    " FROM pg_catalog.pg_type t "
+    " JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace "
+    " JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid "
+    " WHERE t.typname = c.udt_name AND n.nspname = c.udt_schema) AS enum_labels, "
+    "(SELECT json_agg(cc.check_clause::text ORDER BY cc.constraint_name)::text "
+    " FROM information_schema.constraint_column_usage u "
+    " JOIN information_schema.check_constraints cc "
+    "   ON cc.constraint_schema = u.constraint_schema "
+    "  AND cc.constraint_name = u.constraint_name "
+    " WHERE u.table_schema = c.table_schema AND u.table_name = c.table_name "
+    "   AND u.column_name = c.column_name "
+    "   AND cc.check_clause NOT LIKE '%IS NOT NULL') AS check_constraints "
+    "FROM information_schema.columns c WHERE c.table_name = :table "
+)
+
+
 class SqlExecutor:
     """Runs read-only queries against a tenant's own database.
 
@@ -221,10 +250,9 @@ class SqlExecutor:
         # Without a schema this describes every same-named table across schemas;
         # the schema column in the projection is what disambiguates them.
         sql = (
-            "SELECT table_schema, column_name, data_type, is_nullable, column_default "
-            "FROM information_schema.columns WHERE table_name = :table "
-            + ("AND table_schema = :schema " if schema else "")
-            + "ORDER BY table_schema, ordinal_position"
+            _DESCRIBE_COLUMNS
+            + ("AND c.table_schema = :schema " if schema else "")
+            + "ORDER BY c.table_schema, c.ordinal_position"
         )
         params = {"table": table} | ({"schema": schema} if schema else {})
         return sql, params

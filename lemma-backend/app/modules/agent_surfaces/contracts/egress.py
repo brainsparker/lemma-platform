@@ -30,10 +30,13 @@ from pydantic_ai.toolsets import AbstractToolset
 from app.modules.agent.contracts import ConversationContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.agent.contracts import Conversation, DisplayResourceRequest
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     SurfaceEventMetadata,
 )
+
+logger = get_logger(__name__)
 
 
 async def hold_display_for_one_reply(
@@ -111,6 +114,47 @@ async def deliver_voice_note(*, conversation_id: UUID, file_path: str) -> bool:
     )
 
 
+#: Said when the worker job carrying out an approved action failed. It may have
+#: got partway, so the person is asked to look before asking again rather than
+#: being invited to approve it a second time.
+APPROVED_ACTION_FAILED_NOTICE = (
+    "Something went wrong while carrying out what you approved, so it may not "
+    "have happened. Check before asking me to try again."
+)
+
+
+async def report_approved_action_failed(
+    *, uow_factory: UnitOfWorkFactory, conversation_id: UUID
+) -> bool:
+    """Tell the conversation's platform that an approved action may not have run.
+
+    The tap that approved it was already answered "Approved — running it now",
+    so a job failing afterwards is otherwise a promise nobody hears broken.
+    False when the conversation is not on a platform, or the notice could not
+    be sent. Never raises: the caller is already handling a failure, and this
+    must not replace it with its own.
+    """
+    from redis.exceptions import RedisError
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.modules.agent_surfaces.composition import build_surface_egress
+    from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+
+    try:
+        async with uow_factory() as uow:
+            return await build_surface_egress(uow).send_agent_message_for_conversation(
+                conversation_id=conversation_id,
+                message=APPROVED_ACTION_FAILED_NOTICE,
+            )
+    except (SQLAlchemyError, RedisError, *PLATFORM_TRANSPORT_ERRORS):
+        logger.warning(
+            "agent_surfaces.egress.approval_failure_notice_failed.degraded",
+            conversation_id=str(conversation_id),
+            exc_info=True,
+        )
+        return False
+
+
 def build_progress_observer(
     *, uow_factory: UnitOfWorkFactory
 ) -> SurfaceAgentRunProgressObserver:
@@ -139,10 +183,12 @@ def build_progress_observer(
 
 
 __all__ = [
+    "APPROVED_ACTION_FAILED_NOTICE",
     "build_progress_observer",
     "build_surface_toolsets",
     "deliver_display_resource",
     "deliver_voice_note",
     "hold_display_for_one_reply",
     "parse_surface_event_metadata",
+    "report_approved_action_failed",
 ]

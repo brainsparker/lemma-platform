@@ -21,8 +21,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.core.authorization.context import ResourceRef, ResourceType
+from app.core.authorization.context import ActorType, ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
+from app.core.domain.errors import DomainError
 from app.core.authorization.delegation import (
     effective_agent_id,
     is_pod_default_agent,
@@ -195,10 +196,24 @@ async def require_agent_actions(
     agent_id: UUID | None,
     actions: Sequence[str],
 ) -> None:
-    _ = user_id
     ctx = get_current_context()
     if ctx is None:
         raise RuntimeError("Context is required for conversation authorization")
+    # The check below runs against the ambient context, so it says nothing
+    # about `user_id` unless that context is the same person's -- their own, or
+    # a workload acting for them. A worker or delegated path whose context is
+    # somebody else's would otherwise authorize the wrong subject silently.
+    # Another pod asking over a link is nobody's: the conversation it opens is
+    # its steward's, and what it may do there is the link's grant, checked below.
+    if ctx.actor_type != ActorType.POD and user_id not in {
+        ctx.user_id,
+        ctx.delegated_by_user_id,
+    }:
+        raise DomainError(
+            "The request's identity does not match the conversation's user",
+            code="CONTEXT_USER_MISMATCH",
+            status_code=403,
+        )
     # The assistant authorizes against the *pod*, and keeps doing so now that
     # it has a row. Both arms would name the same id -- the row's id is the
     # pod's -- but the resource *type* is not cosmetic: grants match on

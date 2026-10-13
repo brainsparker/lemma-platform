@@ -39,12 +39,25 @@ class HarnessOptions[DepsT = object]:
     usage_limits: UsageLimits | None = None
     output_type: OutputSpec[object] | None = None
     model_settings: JsonObject | None = None
+    #: Request parameters for the history-compaction call: the run's own,
+    #: turned down to low effort and a summary-sized output cap. See
+    #: ``services/generation_settings.compaction_generation_settings``. None
+    #: when nothing resolved them; the summary then gets only its cap.
+    compaction_model_settings: JsonObject | None = None
+    #: A light reasoning effort as this model takes one, laid over the run's
+    #: settings when an over-long answer is asked for again: empty unless the
+    #: model declares REASONING. See ``run_input_settings.shorter_answer_settings``.
+    lighter_reasoning_settings: JsonObject | None = None
     history_summarization_enabled: bool = True
     history_summarization_token_limit: int = DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT
     history_summarization_keep_messages: int = (
         DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES
     )
     history_hard_token_ceiling: int = DEFAULT_HISTORY_HARD_TOKEN_CEILING
+    #: The model's whole window, which a request's reply budget is fitted into
+    #: once its instructions, tools and history are known. 0 leaves the reply
+    #: budget as the settings give it.
+    context_window: int = 0
     should_stop: Callable[[], Awaitable[bool]] | None = None
     # What this run may spend before it pauses to ask whether to carry on. None
     # leaves it uncapped, which is what every caller did before budgets existed

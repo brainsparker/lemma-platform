@@ -1755,7 +1755,7 @@ export const liveSource: PodSource = {
  *  Shared by the list reads and by a conversation created here, which goes
  *  into the history the moment it exists rather than after a refetch. */
 export function conversationRefOf(conversation: unknown): ConversationRef {
-    const row = conversation as { id: string; title?: string | null; type?: string; updated_at?: string; last_activity_at?: string | null; created_at?: string; metadata?: Record<string, unknown> | null; agent_id?: string | null };
+    const row = conversation as { id: string; title?: string | null; type?: string; updated_at?: string; last_activity_at?: string | null; created_at?: string; metadata?: Record<string, unknown> | null; agent_id?: string | null; status?: string | null; has_pending_interaction?: boolean };
     const bound = row.metadata?.[RESOURCE_KEY];
     /* The list is ordered by last activity, so the time beside a row
        is that — not `updated_at`, which a rename also moves and
@@ -1769,5 +1769,7 @@ export function conversationRefOf(conversation: unknown): ConversationRef {
         boundTo: typeof bound === "string" ? bound : null,
         origin: originOf(row.metadata, row.type),
         agentId: row.agent_id ?? null,
+        status: row.status ?? null,
+        waitingOnYou: row.has_pending_interaction === true,
     };
 }

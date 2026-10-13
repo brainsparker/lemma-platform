@@ -49,7 +49,7 @@ class _SlackResponse:
         return f"<SlackResponse status={self.status_code}>"
 
 
-def _rate_limited(retry_after: str = "3") -> SlackApiError:
+def _rate_limited(retry_after: str = "0.01") -> SlackApiError:
     return SlackApiError(
         "ratelimited", _SlackResponse(429, {"Retry-After": retry_after})
     )
@@ -74,7 +74,7 @@ def _teams_event() -> ParsedInboundSurfaceEvent:
         message_text="hi",
         reply_target={
             "conversation_id": "19:conv",
-            "service_url": "https://smba.example.test/teams",
+            "service_url": "https://smba.trafficmanager.net/teams",
         },
     )
 
@@ -92,10 +92,17 @@ def test_classify_slack_error():
         classify_slack_error(SlackApiError("channel_not_found", _SlackResponse(400)))
         is DeliveryClassification.PERMANENT
     )
+    # Retried only when the post provably never left: a connection never made.
     assert (
-        classify_slack_error(aiohttp.ClientConnectionError("boom"))
+        classify_slack_error(aiohttp.ConnectionTimeoutError())
         is DeliveryClassification.TRANSIENT
     )
+    # A timeout or a dropped connection after it went out may have posted it.
+    assert (
+        classify_slack_error(aiohttp.ServerDisconnectedError())
+        is DeliveryClassification.PERMANENT
+    )
+    assert classify_slack_error(TimeoutError()) is DeliveryClassification.PERMANENT
     assert classify_slack_error(ValueError("x")) is DeliveryClassification.PERMANENT
 
 
@@ -120,8 +127,12 @@ def test_classify_teams_error():
     assert classify_teams_error(_teams_error(502)) is DeliveryClassification.TRANSIENT
     assert classify_teams_error(_teams_error(403)) is DeliveryClassification.PERMANENT
     assert (
-        classify_teams_error(aiohttp.ClientConnectionError("boom"))
+        classify_teams_error(aiohttp.ConnectionTimeoutError())
         is DeliveryClassification.TRANSIENT
+    )
+    assert (
+        classify_teams_error(aiohttp.ServerDisconnectedError())
+        is DeliveryClassification.PERMANENT
     )
     assert classify_teams_error(ValueError("x")) is DeliveryClassification.PERMANENT
 

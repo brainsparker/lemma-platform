@@ -22,7 +22,7 @@ from typing import Any
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,9 @@ from app.modules.agent_surfaces.domain.notification import (
 from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurfaceConversationLinkModel,
     NotificationModel,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.dm_link_queries import (
+    DmLinkQueries,
 )
 
 
@@ -66,7 +69,7 @@ def _thread_lock_key(
     return int.from_bytes(digest, byteorder="big", signed=True)
 
 
-class SurfaceConversationLinkRepository:
+class SurfaceConversationLinkRepository(DmLinkQueries):
     """Repository for external platform threads mapped to agent conversations."""
 
     def __init__(self, uow: IUnitOfWork):
@@ -169,86 +172,6 @@ class SurfaceConversationLinkRepository:
             1
         )
         return await self.session.scalar(stmt)
-
-    async def find_latest_dm_link_for_person(
-        self,
-        *,
-        platform: str,
-        external_user_id: str,
-        surface_ids: Collection[UUID],
-    ) -> AgentSurfaceConversationLink | None:
-        """This person's most recent private-chat link on any of these surfaces.
-
-        The exact-thread reads above key on a delivery address -- the surface, the
-        channel and the thread id -- and for a private chat the address is not what
-        makes it the same conversation. On WhatsApp it embeds the number the
-        message arrived on, so a reassigned number or a different serving surface
-        reads as a chat nobody has spoken in. This is the person-level answer to
-        "is there already a conversation here", and it is asked only after the
-        exact one has missed.
-
-        ``surface_ids`` is required, and is what keeps this read on
-        ``ix_agent_surface_link_surface_member`` (surface, person, recency):
-        without a surface list the same question would scan every link of the
-        platform. Ordered by inbound recency for the reason
-        ``list_latest_by_surface_and_external_users`` gives.
-        """
-        person = {"platform": platform, "external_user_id": external_user_id}
-        links = await self.latest_dm_links_for_person(**person, surface_ids=surface_ids)
-        return links[0] if links else None
-
-    async def latest_dm_links_for_person(
-        self,
-        *,
-        platform: str,
-        external_user_id: str,
-        surface_ids: Collection[UUID],
-        limit: int = 1,
-    ) -> list[AgentSurfaceConversationLink]:
-        """The above, several deep, for a caller that wants one pod's chat."""
-        if not surface_ids:
-            return []
-        recency = func.coalesce(
-            AgentSurfaceConversationLinkModel.last_inbound_at,
-            AgentSurfaceConversationLinkModel.updated_at,
-        )
-        stmt = (
-            select(AgentSurfaceConversationLinkModel)
-            .where(
-                AgentSurfaceConversationLinkModel.platform == platform,
-                AgentSurfaceConversationLinkModel.external_user_id == external_user_id,
-                AgentSurfaceConversationLinkModel.conversation_kind == "DM",
-                AgentSurfaceConversationLinkModel.surface_id.in_(list(surface_ids)),
-            )
-            .order_by(recency.desc())
-            .limit(limit)
-        )
-        models = (await self.session.execute(stmt)).scalars().all()
-        return [model.to_entity() for model in models]
-
-    async def rebind_thread_address(
-        self,
-        *,
-        link_id: UUID,
-        surface_id: UUID,
-        external_channel_id: str | None,
-        external_thread_id: str,
-    ) -> AgentSurfaceConversationLink | None:
-        """Point an existing link at the address its chat is now delivered on.
-
-        The conversation, the person and the agent are untouched: only where the
-        chat is reached changes. The caller holds the thread lock for the new
-        address and has read that nothing lives there, so the unique index cannot
-        be met.
-        """
-        model = await self.session.get(AgentSurfaceConversationLinkModel, link_id)
-        if model is None:
-            return None
-        model.surface_id = surface_id
-        model.external_channel_id = external_channel_id
-        model.external_thread_id = external_thread_id
-        await self.session.flush()
-        return model.to_entity()
 
     async def get_latest_by_surface_and_external_user(
         self,
@@ -575,6 +498,7 @@ class SurfaceConversationLinkRepository:
         self,
         *,
         link_id: UUID,
+        expected_conversation_id: UUID,
         conversation_id: UUID,
         last_event: dict[str, Any],
         last_message_id: str | None,
@@ -582,17 +506,36 @@ class SurfaceConversationLinkRepository:
         conversation_kind: str | None = None,
         route_key: str | None = None,
     ) -> AgentSurfaceConversationLink | None:
-        model = await self.session.get(AgentSurfaceConversationLinkModel, link_id)
-        if model is None:
-            return None
-        model.conversation_id = conversation_id
-        model.last_event = last_event
-        model.last_message_id = last_message_id
-        model.routed_agent_id = routed_agent_id
+        """Point the link at a fresh conversation, if it still names the old one.
+
+        Compare-and-set in the database, on the conversation the caller read:
+        a writer that got there first -- another inbound, or a notification
+        repointing a cold thread -- has already moved the link, and writing
+        over it would split one thread across two conversations. Losing
+        returns None.
+        """
+        values: dict[str, object] = {
+            "conversation_id": conversation_id,
+            "last_event": last_event,
+            "last_message_id": last_message_id,
+            "routed_agent_id": routed_agent_id,
+            "route_key": route_key,
+            # See ``update_last_event``: this is an inbound writer.
+            "last_inbound_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
         if conversation_kind is not None:
-            model.conversation_kind = conversation_kind
-        model.route_key = route_key
-        # See ``update_last_event``: this is an inbound writer.
-        model.last_inbound_at = datetime.now(timezone.utc)
-        await self.session.flush()
-        return model.to_entity()
+            values["conversation_kind"] = conversation_kind
+        stmt = (
+            update(AgentSurfaceConversationLinkModel)
+            .where(
+                AgentSurfaceConversationLinkModel.id == link_id,
+                AgentSurfaceConversationLinkModel.conversation_id
+                == expected_conversation_id,
+            )
+            .values(**values)
+            .returning(AgentSurfaceConversationLinkModel)
+            .execution_options(populate_existing=True)
+        )
+        model = (await self.session.execute(stmt)).scalar_one_or_none()
+        return model.to_entity() if model else None

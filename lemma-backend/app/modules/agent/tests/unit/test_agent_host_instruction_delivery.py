@@ -47,8 +47,11 @@ class _Repository:
 
     def __init__(self, stored: object = None) -> None:
         self.stored = stored
+        self.locked_reads = 0
 
-    async def get_conversation_metadata_key(self, *_args, **_kwargs) -> object:
+    async def get_conversation_metadata_key(self, *_args, **kwargs) -> object:
+        if kwargs.get("for_update"):
+            self.locked_reads += 1
         return self.stored
 
     async def set_conversation_metadata_key(
@@ -292,3 +295,26 @@ class TestASessionIdIsNotProofThePromptLanded:
             harness_id=harness_id,
             digest="abc",
         )
+
+
+@pytest.mark.anyio
+async def test_a_heartbeat_that_changes_nothing_takes_no_lock(
+    repository: _Repository,
+) -> None:
+    """The host resends its session id on every heartbeat. Locking the
+    conversation's metadata to learn nothing had changed contended with message
+    appends on exactly the busiest conversations."""
+    conversation_id, harness_id = uuid4(), uuid4()
+    run_id = uuid7()
+    uow = TestASessionIdIsNotProofThePromptLanded._uow(conversation_id, harness_id)
+
+    assert await memory.remember_provider_session(uow, _checkpoint(run_id, "sess-1"))
+    locked_by_the_first = repository.locked_reads
+
+    for _ in range(3):
+        assert not await memory.remember_provider_session(
+            uow, _checkpoint(run_id, "sess-1")
+        )
+
+    assert locked_by_the_first == 1
+    assert repository.locked_reads == locked_by_the_first

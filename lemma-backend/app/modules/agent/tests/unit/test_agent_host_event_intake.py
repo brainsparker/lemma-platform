@@ -36,8 +36,12 @@ from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
 from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
 )
+from app.modules.agent.infrastructure.agent_host.event_intake import (
+    bounded_event_payload,
+)
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostProtocolViolation,
+    AgentHostSequenceGap,
 )
 
 
@@ -202,3 +206,50 @@ class TestConcurrentBatches:
             2,
             3,
         ]
+
+
+class TestTrimmingFollowsTheConsumer:
+    """The stream used to be capped by length, and a run left without a
+    consumer for a few minutes -- a deploy -- lost its oldest unread events.
+    It is trimmed only below what the consumer has persisted now."""
+
+    async def test_a_trim_keeps_the_cursor_and_everything_after_it(
+        self, stream
+    ) -> None:
+        run_id, host_id = uuid7(), uuid7()
+        repo = _repo(_Lease(run_id, host_id), stream)
+        await repo.append_events(host_id=host_id, batch=_batch(run_id, [1, 2, 3, 4]))
+        read = await stream.read(run_id=run_id)
+
+        await stream.trim_consumed(run_id=run_id, cursor=read[1].stream_id)
+
+        kept = await stream.read(run_id=run_id)
+        assert [event.sequence for event in kept] == [2, 3, 4]
+
+    async def test_a_trim_to_the_newest_entry_is_not_a_lost_stream(
+        self, stream
+    ) -> None:
+        """An empty stream reads to the append script as one Redis lost, and it
+        would then accept a gap. The cursor's own entry is never trimmed."""
+        run_id, host_id = uuid7(), uuid7()
+        repo = _repo(_Lease(run_id, host_id), stream)
+        await repo.append_events(host_id=host_id, batch=_batch(run_id, [1, 2]))
+        read = await stream.read(run_id=run_id)
+
+        await stream.trim_consumed(run_id=run_id, cursor=read[-1].stream_id)
+
+        with pytest.raises(AgentHostSequenceGap):
+            await repo.append_events(host_id=host_id, batch=_batch(run_id, [5]))
+
+
+def test_an_oversized_event_keeps_its_small_fields():
+    """Refusing the batch would have the host resend it forever; dropping the
+    event would leave a gap the stream then refuses."""
+    payload = {"status": "completed", "output": "x" * 2_000, "error": None}
+
+    bounded = bounded_event_payload(payload, limit=500)
+
+    assert bounded["status"] == "completed"
+    assert bounded["error"] is None
+    assert "omitted" in bounded["output"]
+    assert bounded_event_payload({"text": "small"}, limit=500) == {"text": "small"}

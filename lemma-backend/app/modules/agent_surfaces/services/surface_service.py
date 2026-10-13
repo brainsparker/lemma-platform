@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -191,6 +192,7 @@ class AgentSurfaceService(
                 )
             entity.surface_identity_email = surface_identity_email
         self._validate_runtime_supported(entity)
+        await self.activate_if_tenant_consented(entity)
         await ensure_one_surface_per_agent(
             entity, surface_repository=self.surface_repository
         )
@@ -201,10 +203,8 @@ class AgentSurfaceService(
             telegram_credentials = await self._prepare_telegram_webhook(entity)
         created = await self.surface_repository.create(entity)
         if telegram_credentials is not None:
-            await self._register_telegram_webhook(
-                credentials=telegram_credentials,
-                webhook_url=self._build_public_surface_webhook_url(created.id),
-                webhook_secret=created.webhook_secret or "",
+            created = await self._register_committed_telegram_webhook(
+                created, credentials=telegram_credentials, drop_pending_updates=True
             )
         await self._notify_receivers_after_commit(created.id)
         return created
@@ -353,10 +353,11 @@ class AgentSurfaceService(
 
         updated = await self.surface_repository.update(surface)
         if telegram_credentials is not None:
-            await self._register_telegram_webhook(
+            # Same bot, re-registered: its queue is the person's messages.
+            updated = await self._register_committed_telegram_webhook(
+                updated,
                 credentials=telegram_credentials,
-                webhook_url=self._build_public_surface_webhook_url(updated.id),
-                webhook_secret=updated.webhook_secret or "",
+                drop_pending_updates=telegram.binding_changed,
             )
         await self._notify_receivers_after_commit(updated.id)
         return updated

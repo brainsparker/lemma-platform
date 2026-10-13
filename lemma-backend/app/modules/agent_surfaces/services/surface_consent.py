@@ -189,12 +189,19 @@ class SurfaceConsentMixin:
         return reveal_secret(surface_settings.whatsapp_verify_token)
 
     async def _surface_admin_consent(
-        self, surface: AgentSurfaceEntity
+        self, surface: AgentSurfaceEntity, *, include_consent_url: bool
     ) -> dict[str, Any] | None:
-        """Teams admin-consent state, or None for platforms that never need it."""
+        """Teams admin-consent state, or None for platforms that never need it.
+
+        The consent URL carries a live nonce, and the callback it leads to is
+        unauthenticated: whoever holds it can mark the surface consented. So it
+        goes only to a reader who could change the surface anyway.
+        """
         if surface.surface_type is not SurfacePlatform.TEAMS:
             return None
-        info = await self.get_admin_consent_info(surface)
+        info = await self.get_admin_consent_info(
+            surface, include_consent_url=include_consent_url
+        )
         return {
             "required": True,
             "granted": info.get("status") is AgentSurfaceStatus.ACTIVE,
@@ -222,8 +229,15 @@ class SurfaceConsentMixin:
         return await self.surface_repository.update(surface)
 
     async def get_admin_consent_info(
-        self, surface: AgentSurfaceEntity
+        self, surface: AgentSurfaceEntity, *, include_consent_url: bool
     ) -> dict[str, Any]:
+        """Where this surface stands on admin consent. Reads only.
+
+        Activating a surface whose tenant had already consented happens when
+        it is created (`activate_if_tenant_consented`) or on the consent
+        callback, never on this read: it is reached by every pod member who
+        opens the setup panel.
+        """
         if surface.surface_type != SurfacePlatform.TEAMS:
             return {"status": surface.status}
 
@@ -234,17 +248,28 @@ class SurfaceConsentMixin:
         if surface.status is AgentSurfaceStatus.ACTIVE:
             return {"status": AgentSurfaceStatus.ACTIVE}
 
-        already_granted = await self._check_admin_consent_granted(tenant_id)
-        if already_granted:
-            surface.activate()
-            await self.surface_repository.update(surface)
-            return {"status": AgentSurfaceStatus.ACTIVE}
-
-        consent_url = await teams_consent.build_consent_url(surface.id, tenant_id)
+        consent_url = (
+            await teams_consent.build_consent_url(surface.id, tenant_id)
+            if include_consent_url
+            else None
+        )
         return {
             "status": AgentSurfaceStatus.PENDING_ADMIN_CONSENT,
             "consent_url": consent_url,
         }
+
+    async def activate_if_tenant_consented(self, surface: AgentSurfaceEntity) -> None:
+        """Start a new Teams surface active when its tenant already consented.
+
+        Consent is tenant-wide, so a tenant that consented for an earlier
+        surface does not go through the round trip again for this one.
+        """
+        if (
+            surface.surface_type is SurfacePlatform.TEAMS
+            and surface.external_tenant_id
+            and await self._check_admin_consent_granted(surface.external_tenant_id)
+        ):
+            surface.activate()
 
     async def _check_admin_consent_granted(self, tenant_id: str) -> bool:
         app_id = surface_settings.microsoft_bot_app_id

@@ -8,7 +8,10 @@ import pytest
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
-from app.modules.agent.domain.errors import ConversationStateError
+from app.modules.agent.domain.errors import (
+    ConversationStateError,
+    RuntimeUnavailableError,
+)
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentRuntimeConfig,
@@ -50,7 +53,26 @@ def _run(
     return run
 
 
-def _service(usage_service: object | None = None):
+class _RuntimeCheck:
+    """Records the runtime each retry was checked against, and can refuse it."""
+
+    def __init__(self, refusal: Exception | None = None) -> None:
+        self.checked: list[AgentRuntimeConfig] = []
+        self._refusal = refusal
+
+    async def __call__(self, _uow, runtime, *, organization_id, user_id) -> None:
+        self.checked.append(runtime)
+        if self._refusal is not None:
+            raise self._refusal
+
+
+_CURRENT_RUNTIME = AgentRuntimeConfig(profile_id="system:standard", model_name="now")
+
+
+def _service(
+    usage_service: object | None = None,
+    runtime_check: _RuntimeCheck | None = None,
+):
     repository = SimpleNamespace(
         get_conversation=AsyncMock(),
         lock_conversation=AsyncMock(),
@@ -58,14 +80,20 @@ def _service(usage_service: object | None = None):
         get_latest_agent_run_for_conversation=AsyncMock(),
         run_has_only_user_messages=AsyncMock(return_value=True),
         create_agent_run=AsyncMock(),
+        conversations_with_pending_interaction=AsyncMock(return_value=set()),
     )
     uow = SimpleNamespace(collect_events=MagicMock(), commit=AsyncMock())
     service = ConversationRetryService(
         uow=uow,
         conversation_repository=repository,
-        agent_repository=SimpleNamespace(),
+        agent_repository=SimpleNamespace(
+            get=AsyncMock(
+                return_value=SimpleNamespace(name="lem", kind=None, agent_runtime=None)
+            )
+        ),
         authorization_service=SimpleNamespace(),
         usage_service=usage_service,
+        turn_runtime_check=runtime_check or _RuntimeCheck(),
     )
     return service, repository, uow
 
@@ -101,14 +129,16 @@ def _usage_service(*, allowed: bool) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_retry_failed_run_reuses_runtime_without_appending_message(
+async def test_retry_runs_on_the_conversation_s_current_runtime_without_a_new_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service, repository, uow = _service()
+    check = _RuntimeCheck()
+    service, repository, uow = _service(runtime_check=check)
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
+        agent_runtime=_CURRENT_RUNTIME,
     )
     failed_run = _run(status=AgentRunStatus.FAILED)
     failed_run.conversation_id = conversation.id
@@ -129,12 +159,15 @@ async def test_retry_failed_run_reuses_runtime_without_appending_message(
     repository.create_agent_run.assert_awaited_once_with(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
-        agent_runtime=failed_run.agent_runtime,
+        agent_runtime=_CURRENT_RUNTIME,
         metadata={
             "source": "manual_retry",
             "retried_agent_run_id": str(failed_run.id),
         },
     )
+    # Re-pointing the teammate at another model is how a retired-model failure
+    # is fixed, so the retry must not replay the dead runtime.
+    assert check.checked == [_CURRENT_RUNTIME]
     uow.collect_events.assert_called_once()
     uow.commit.assert_awaited_once()
     # Asked about this one run, not handed every run of the conversation.
@@ -326,7 +359,12 @@ def _metered_retry_setup(
 ) -> tuple[ConversationRetryService, SimpleNamespace, AgentRun, Conversation]:
     usage_service = _usage_service(allowed=allowed)
     service, repository, _ = _service(usage_service)
-    conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        agent_runtime=_CURRENT_RUNTIME,
+    )
     # A "system:" profile is the metered one -- a user's own key is not counted,
     # so only this profile makes the preflight consult the usage service at all.
     failed_run = _run(status=AgentRunStatus.FAILED, profile_id="system:standard")
@@ -360,7 +398,7 @@ async def test_retry_failed_run_refuses_when_the_usage_limit_is_reached(
 
 
 @pytest.mark.asyncio
-async def test_retry_failed_run_asks_about_the_failed_run_s_own_runtime(
+async def test_retry_failed_run_asks_usage_about_the_runtime_it_will_run_on(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, repository, failed_run, conversation = _metered_retry_setup(
@@ -382,5 +420,29 @@ async def test_retry_failed_run_asks_about_the_failed_run_s_own_runtime(
     repository.create_agent_run.assert_awaited_once()
     assert (
         repository.create_agent_run.await_args.kwargs["agent_runtime"]
-        is failed_run.agent_runtime
+        == _CURRENT_RUNTIME
     )
+
+
+@pytest.mark.asyncio
+async def test_a_retry_on_a_model_that_is_gone_is_refused_before_a_run_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refusal = RuntimeUnavailableError("gone")
+    service, repository, uow = _service(runtime_check=_RuntimeCheck(refusal))
+    conversation = Conversation(
+        pod_id=uuid4(), user_id=uuid4(), agent_runtime=_CURRENT_RUNTIME
+    )
+    failed_run = _run(status=AgentRunStatus.FAILED)
+    repository.get_latest_agent_run_for_conversation.return_value = failed_run
+    _authorize(monkeypatch, conversation)
+
+    with pytest.raises(RuntimeUnavailableError):
+        await service.retry_failed_run(
+            conversation_id=conversation.id,
+            user_id=conversation.user_id,
+            pod_id=conversation.pod_id,
+        )
+
+    repository.create_agent_run.assert_not_awaited()
+    uow.commit.assert_not_awaited()

@@ -26,6 +26,7 @@ from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
 from app.modules.agent_surfaces.platforms.delivery import (
     DeliveryClassification,
     RetryPolicy,
+    classify_transport_failure,
     with_retry,
 )
 from app.core.net.capped_read import read_capped
@@ -429,9 +430,9 @@ def classify_whatsapp_error(exc: Exception) -> DeliveryClassification:
         if exc.status_code == 429 or exc.status_code >= 500:
             return DeliveryClassification.TRANSIENT
         return DeliveryClassification.PERMANENT
-    if isinstance(exc, httpx.RequestError):
-        return DeliveryClassification.TRANSIENT
-    return DeliveryClassification.PERMANENT
+    # Only message sends are retried through this, and a message send is not
+    # idempotent: a read timeout after it went out may have delivered it.
+    return classify_transport_failure(exc)
 
 
 def _body_excerpt(response: httpx.Response, *, limit: int = 500) -> str:

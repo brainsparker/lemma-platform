@@ -27,7 +27,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use super::{claude_config_dir, claude_sign_in};
+use super::{claude_config_dir, claude_permission_rules, claude_sign_in};
 use crate::protocol::RunSpec;
 
 /// The Lemma tool that stands in for an agent's own web search.
@@ -68,6 +68,7 @@ pub(crate) fn session_options(
             own_settings,
             &lemma_tools,
             claude_config_dir().as_deref(),
+            lemma_cli,
         ),
         "codex" => codex(adapter_environment, &lemma_tools),
         "opencode" => opencode(&lemma_tools),
@@ -112,15 +113,19 @@ impl LemmaTools {
 ///   their claude.ai connectors load. `plugins: []` adds none of the SDK's.
 ///   Auto-memory is Claude Code's store of what it learnt across sessions;
 ///   Lemma has its own. What the person's settings say about signing in (an
-///   `apiKeyHelper`, a Bedrock or Vertex environment) comes back as `settings`,
-///   the flag layer, which `settingSources` does not govern.
+///   `apiKeyHelper`, a Bedrock or Vertex environment) and their permission
+///   rules come back as `settings`, the flag layer, which `settingSources`
+///   does not govern (`claude_settings`).
 /// - `disallowedTools` merges with the adapter's own list, which already
 ///   removes `AskUserQuestion` (Lemma asks through `lemma_ask_user`).
+/// - `allowedTools` lets the run's own `lemma` CLI run without a permission
+///   request (`lemma_cli_rules`), whichever way the switch is set.
 fn claude_code(
     spec: &RunSpec,
     own_settings: bool,
     lemma_tools: &LemmaTools,
     claude_config: Option<&Path>,
+    lemma_cli: Option<&Path>,
 ) -> SessionOptions {
     let mut disallowed = vec![json!("mcp__claude-in-chrome")];
     if lemma_tools.web_search {
@@ -131,6 +136,9 @@ fn claude_code(
     }
     let mut claude_options = Map::new();
     claude_options.insert("disallowedTools".to_owned(), Value::Array(disallowed));
+    if let Some(bin) = lemma_cli {
+        claude_options.insert("allowedTools".to_owned(), json!(lemma_cli_rules(bin)));
+    }
     // Claude Code's own switch for its browser integration, which also reads
     // a preference `settingSources` does not govern.
     claude_options.insert("extraArgs".to_owned(), json!({ "no-chrome": null }));
@@ -142,8 +150,8 @@ fn claude_code(
             "env".to_owned(),
             json!({ "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1" }),
         );
-        if let Some(sign_in) = claude_config.and_then(claude_sign_in) {
-            claude_options.insert("settings".to_owned(), Value::Object(sign_in));
+        if let Some(settings) = claude_config.and_then(persons_flag_settings) {
+            claude_options.insert("settings".to_owned(), Value::Object(settings));
         }
     }
     let mut meta = Map::new();
@@ -160,6 +168,44 @@ fn claude_code(
         environment: BTreeMap::new(),
         system_prompt_in_meta: !instructions.is_empty(),
     }
+}
+
+/// What of the person's own Claude Code settings in `config` goes back in as
+/// flag settings: how it signs in, and their permission rules.
+fn persons_flag_settings(config: &Path) -> Option<Map<String, Value>> {
+    let mut settings = claude_sign_in(config).unwrap_or_default();
+    if let Some(rules) = claude_permission_rules(config) {
+        settings.insert("permissions".to_owned(), Value::Object(rules));
+    }
+    (!settings.is_empty()).then_some(settings)
+}
+
+/// The permission rules that let the run's own `lemma` CLI, in `bin`, run
+/// without asking anyone.
+///
+/// The CLI is signed in as the run (`LEMMA_*`), so it can do only what the
+/// run's own Lemma tools can, and those are already answered by the host
+/// without a person. Asking before each `lemma` command only stalled the runs
+/// nobody watches.
+///
+/// Each rule names one executable, and never a prefix of the command text: a
+/// prefix match is the shell-injection hole Lemma's own session approvals
+/// refuse (`approval_reconciliation.record_session_approvals` in the
+/// backend). Claude Code matches a `Bash(<command>:*)` rule on whole words, and
+/// a compound command (`lemma x; rm -rf ~`, `lemma x && curl ...`) or a
+/// substitution needs every part allowed on its own, so neither rule here
+/// lets anything but that one program run.
+///
+/// - `Bash(<bin>/lemma:*)` is the exact binary, by its full path.
+/// - `Bash(lemma:*)` is the same binary by name, the way Lemma's prompt tells
+///   the agent to run it: this session puts `bin` first on the agent's `PATH`
+///   (`session_options`), so the name resolves to that binary and to no other
+///   copy, wherever the person installed one.
+fn lemma_cli_rules(bin: &Path) -> Vec<String> {
+    vec![
+        format!("Bash({}:*)", bin.join("lemma").display()),
+        "Bash(lemma:*)".to_owned(),
+    ]
 }
 
 /// Codex, through `CODEX_CONFIG`: `codex-acp` sends it as config overrides on
@@ -348,15 +394,100 @@ mod tests {
             web_fetch: false,
         };
 
-        let isolated = claude_code(&spec, false, &tools, Some(&config));
+        let isolated = claude_code(&spec, false, &tools, Some(&config), None);
         let options = &isolated.meta.unwrap()["claudeCode"]["options"];
         assert_eq!(options["settings"], json!({ "apiKeyHelper": "key-helper" }));
         assert_eq!(options["plugins"], json!([]));
 
-        let own = claude_code(&spec, true, &tools, Some(&config));
+        let own = claude_code(&spec, true, &tools, Some(&config), None);
         let options = &own.meta.unwrap()["claudeCode"]["options"];
         assert!(options.get("settings").is_none(), "{options}");
         assert!(options.get("plugins").is_none(), "{options}");
+    }
+
+    fn empty_spec() -> RunSpec {
+        serde_json::from_value(json!({
+            "agent_run_id": uuid::Uuid::nil(),
+            "conversation_id": uuid::Uuid::nil(),
+            "harness_id": uuid::Uuid::nil(),
+            "profile_revision": "r",
+            "system_prompt": "",
+            "prompt": [],
+            "run_deadline": "2026-09-25T00:00:00Z",
+        }))
+        .unwrap()
+    }
+
+    /// Every `lemma` command used to raise a permission request, and a run
+    /// nobody watched waited out each one.
+    #[test]
+    fn claude_code_may_run_the_runs_own_lemma_cli_without_asking() {
+        let bin = Path::new("/Lemma/runtime/releases/7/backend/bin");
+        for own in [false, true] {
+            let options = claude_code(&empty_spec(), own, &no_web_tools(), None, Some(bin));
+            let options = &options.meta.unwrap()["claudeCode"]["options"];
+            // Joined the way the host joins it: Windows separates with `\`.
+            let exact = format!("Bash({}:*)", bin.join("lemma").display());
+            assert_eq!(
+                options["allowedTools"],
+                json!([exact, "Bash(lemma:*)"]),
+                "own_settings={own}"
+            );
+        }
+        // No CLI this Mac took for the run: nothing is allowed by name.
+        let options = claude_code(&empty_spec(), false, &no_web_tools(), None, None);
+        let options = &options.meta.unwrap()["claudeCode"]["options"];
+        assert!(options.get("allowedTools").is_none(), "{options}");
+    }
+
+    /// Leaving `~/.claude` out stripped the person's own allowlist; it comes
+    /// back as flag settings beside the sign-in, and nothing else of their
+    /// `permissions` does.
+    #[test]
+    fn claude_code_keeps_the_persons_own_permission_rules() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".claude");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("settings.json"),
+            r#"{
+                // Claude Code's settings may carry comments.
+                "apiKeyHelper": "key-helper",
+                "permissions": {
+                    "allow": ["Bash(npm run test:*)", "Edit(/notes/**)", "Read(//srv/**)"],
+                    "deny": ["Bash(git push:*)"],
+                    "defaultMode": "bypassPermissions",
+                    "additionalDirectories": ["/"]
+                },
+                "hooks": {"Stop": []},
+            }"#,
+        )
+        .unwrap();
+
+        let options = claude_code(
+            &empty_spec(),
+            false,
+            &no_web_tools(),
+            Some(&config),
+            Some(Path::new("/pack/bin")),
+        );
+        let options = &options.meta.unwrap()["claudeCode"]["options"];
+
+        assert_eq!(
+            options["settings"],
+            json!({
+                "apiKeyHelper": "key-helper",
+                "permissions": {
+                    // `/notes/**` is relative to `~/.claude`; read anywhere
+                    // else it would name another folder.
+                    "allow": ["Bash(npm run test:*)", "Read(//srv/**)"],
+                    "deny": ["Bash(git push:*)"],
+                },
+            })
+        );
+        // Lemma's own rule stays its own, apart from the person's.
+        let exact = format!("Bash({}:*)", Path::new("/pack/bin").join("lemma").display());
+        assert_eq!(options["allowedTools"], json!([exact, "Bash(lemma:*)"]));
     }
 
     #[test]

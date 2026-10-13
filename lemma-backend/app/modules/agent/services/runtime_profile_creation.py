@@ -33,6 +33,7 @@ from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_selections,
 )
 from app.modules.agent.domain.runtime_profiles import (
+    with_reasoning_declared,
     AnthropicCompatibleRuntimeConfig,
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
@@ -42,6 +43,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
+    refuse_redacted_values,
 )
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
@@ -52,6 +54,7 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
 from app.modules.agent.services import runtime_provider_discovery as discovery
+from app.modules.agent.services.generation_settings import validated_stored_settings
 from app.modules.agent.services.runtime_system_profiles import (
     agent_host_model_catalog,
 )
@@ -64,7 +67,17 @@ def normalize_profile_name(name: str) -> str:
     return normalized
 
 
+def normalize_model_settings(
+    model_settings: dict[str, object] | None,
+) -> dict[str, object]:
+    refuse_redacted_values(model_settings, field="model_settings")
+    # Refused here, not at the first run: a value no run can use used to be
+    # saved and then fail every run on the profile.
+    return validated_stored_settings(model_settings)
+
+
 def normalize_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    refuse_redacted_values(headers, field="headers")
     normalized: dict[str, str] = {}
     for key, value in (headers or {}).items():
         header_name = key.strip()
@@ -196,6 +209,7 @@ class RuntimeProfileCreation:
         default_model_name: str | None = None,
         model_names: list[str] | None = None,
         vision_model_names: list[str] | None = None,
+        reasoning_model_names: list[str] | None = None,
         headers: dict[str, str] | None = None,
         model_settings: dict[str, object] | None = None,
     ) -> AgentRuntimeProfile:
@@ -203,6 +217,7 @@ class RuntimeProfileCreation:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = normalize_profile_name(name)
         normalized_headers = normalize_headers(headers)
+        normalized_settings = normalize_model_settings(model_settings)
         # Nothing has been read or written yet, so the caller's connection goes
         # back for the provider round trip -- an HTTP call to a base URL the
         # caller supplied, which is as slow as whatever answers it. The writes
@@ -224,6 +239,7 @@ class RuntimeProfileCreation:
                 name.strip() for name in (vision_model_names or []) if name.strip()
             },
         )
+        catalog = with_reasoning_declared(catalog, reasoning_model_names or [])
         selected_default_model = discovery._select_provider_default_model(
             requested_model_name=default_model_name,
             catalog=catalog,
@@ -241,7 +257,7 @@ class RuntimeProfileCreation:
             config=OpenAICompatibleRuntimeConfig(
                 base_url=HttpUrl(base_url),
                 headers=normalized_headers,
-                model_settings=model_settings or {},
+                model_settings=normalized_settings,
             ),
             credentials=(
                 ApiKeyRuntimeCredentials(api_key=SecretStr(api_key.strip()))
@@ -266,6 +282,7 @@ class RuntimeProfileCreation:
         description: str | None = None,
         default_model_name: str | None = None,
         model_names: list[str] | None = None,
+        reasoning_model_names: list[str] | None = None,
         headers: dict[str, str] | None = None,
         model_settings: dict[str, object] | None = None,
     ) -> AgentRuntimeProfile:
@@ -273,6 +290,7 @@ class RuntimeProfileCreation:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = normalize_profile_name(name)
         normalized_headers = normalize_headers(headers)
+        normalized_settings = normalize_model_settings(model_settings)
         # Nothing has been read or written yet, so the caller's connection goes
         # back for the provider round trip -- an HTTP call to a base URL the
         # caller supplied, which is as slow as whatever answers it. The writes
@@ -296,6 +314,7 @@ class RuntimeProfileCreation:
             # an Anthropic-compatible profile keeps the vision tools.
             default_vision=True,
         )
+        catalog = with_reasoning_declared(catalog, reasoning_model_names or [])
         selected_default_model = discovery._select_provider_default_model(
             requested_model_name=default_model_name,
             catalog=catalog,
@@ -313,7 +332,7 @@ class RuntimeProfileCreation:
             config=AnthropicCompatibleRuntimeConfig(
                 base_url=HttpUrl(base_url) if base_url is not None else None,
                 headers=normalized_headers,
-                model_settings=model_settings or {},
+                model_settings=normalized_settings,
             ),
             credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key.strip())),
             status=RuntimeProfileStatus.ACTIVE,

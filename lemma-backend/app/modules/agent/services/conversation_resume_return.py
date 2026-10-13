@@ -27,6 +27,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.domain.outsiders import OUTSIDE_ANSWER_TOOL
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
@@ -45,9 +46,6 @@ from app.modules.agent.services.approval_reconciliation import (
     record_session_approvals,
 )
 from app.modules.agent.services.conversation_access import resolve_agent
-from app.modules.agent.services.pod_runtime_defaults import (
-    default_agent_runtime_for_pod,
-)
 from app.modules.agent.services.workspace_location import resolve_workspace_location
 
 logger = get_logger(__name__)
@@ -375,11 +373,7 @@ class ResumeToolReturnBuilder:
             user_id=user_id,
             agent_repository=self.agent_repository,
         )
-        selected_runtime = (
-            conversation.agent_runtime
-            or agent.agent_runtime
-            or await default_agent_runtime_for_pod(self.uow, pod_id=conversation.pod_id)
-        )
+        selected_runtime = await turn_runtime(self.uow, conversation, agent)
         async with uow_factory() as uow:
             profile_service = AgentRuntimeProfileService(
                 AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
@@ -413,8 +407,7 @@ class ResumeToolReturnBuilder:
             workload_id=agent.id,
             is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
             configured_accounts=configured_accounts,
-            runtime_profile=resolved.public_snapshot(),
-            runtime_credentials=resolved.credentials or {},
+            runtime_profile=resolved.runtime_snapshot().as_payload(),
             workspace_id=workspace_location.workspace_id,
             workspace_cwd=workspace_location.cwd,
             workspace_repo=workspace_location.repo,

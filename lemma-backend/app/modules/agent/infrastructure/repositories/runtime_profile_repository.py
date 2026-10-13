@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select
 
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.errors import OrganizationDefaultConflictError
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
+    RuntimeCredentials,
     RuntimeProfileStatus,
     reveal_credentials,
 )
@@ -20,9 +22,22 @@ from app.modules.agent.infrastructure.runtime_models import (
     AgentRuntimeProfileModel,
 )
 from app.modules.connectors.contracts import SecretEncryptionPort
+from app.modules.identity.contracts.profiles import user_profile
 
 
 logger = get_logger(__name__)
+
+#: The index that keeps at most one organization default (``runtime_models``).
+_ORGANIZATION_DEFAULT_INDEX = "uq_agent_runtime_profile_org_default"
+
+_CREDENTIALS: TypeAdapter[RuntimeCredentials | None] = TypeAdapter(
+    RuntimeCredentials | None
+)
+
+
+def _error_locations(error: ValidationError) -> list[str]:
+    return [".".join(str(part) for part in item["loc"]) for item in error.errors()]
+
 
 # Rows written for the retired local daemon still carry its per-tool protocols
 # (CODEX_APP_SERVER, CLAUDE_CODE, …). They can never execute again, and
@@ -58,9 +73,17 @@ class AgentRuntimeProfileRepository:
         return None
 
     def _to_entity(self, instance: AgentRuntimeProfileModel) -> AgentRuntimeProfile:
-        data = instance.to_entity().model_dump(mode="json")
-        data["credentials"] = self.encryption.decrypt_json(instance.credentials)
-        return AgentRuntimeProfile.model_validate(data)
+        # The row is validated before the decrypted key is anywhere near it, so
+        # a row that fails validation fails with nothing secret in its error.
+        # The key is then checked on its own and attached.
+        entity = AgentRuntimeProfile.model_validate(
+            instance.to_entity().model_dump(mode="json", exclude={"credentials"})
+        )
+        decrypted = self.encryption.decrypt_json(instance.credentials)
+        credentials = (
+            _CREDENTIALS.validate_python(decrypted) if decrypted is not None else None
+        )
+        return entity.model_copy(update={"credentials": credentials})
 
     def _apply_entity(
         self,
@@ -123,6 +146,8 @@ class AgentRuntimeProfileRepository:
         try:
             await self.session.flush()
         except IntegrityError as exc:
+            if _ORGANIZATION_DEFAULT_INDEX in str(exc.orig):
+                raise OrganizationDefaultConflictError() from exc
             raise RuntimeError(
                 f"Runtime profile named {name!r} already exists"
             ) from exc
@@ -200,6 +225,28 @@ class AgentRuntimeProfileRepository:
         result = await self.session.execute(stmt.limit(1))
         return result.scalar_one_or_none()
 
+    async def get_personal_by_id(
+        self, *, profile_id: str, organization_id: UUID
+    ) -> AgentRuntimeProfile | None:
+        """A member's active personal profile, whoever is asking.
+
+        Only for saying *whose* it is when someone else's turn reaches it; it
+        must never be what a run resolves to.
+        """
+        instance = await self._load(
+            profile_id=profile_id, organization_id=organization_id
+        )
+        if instance is None or instance.scope != RuntimeProfileScope.PERSONAL.value:
+            return None
+        return self._to_entity(instance)
+
+    async def owner_first_name(self, user_id: UUID) -> str | None:
+        """The name a teammate knows this profile's owner by, when there is one."""
+        profile = await user_profile(self.session, user_id)
+        if profile is None:
+            return None
+        return (profile.first_name or "").strip() or None
+
     async def get_visible(
         self,
         *,
@@ -235,12 +282,15 @@ class AgentRuntimeProfileRepository:
             try:
                 profiles.append(self._to_entity(instance))
             except ValidationError as error:
+                # Where it failed, never what it read: a validation error's
+                # message and traceback quote the input, and for this row the
+                # input can be a decrypted key.
                 logger.warning(
                     "agent.runtime_profile.unreadable.skipped",
                     profile_id=str(instance.id),
                     organization_id=str(organization_id),
-                    error=str(error),
-                    exc_info=True,
+                    error_type=type(error).__name__,
+                    error_locations=_error_locations(error),
                 )
         return profiles
 

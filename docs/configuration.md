@@ -728,6 +728,11 @@ LEMMA_OPENAI_DEFAULT_MODEL=
 # Comma-separated. The vision list marks which of them accept images.
 LEMMA_OPENAI_MODEL_NAMES=
 LEMMA_OPENAI_VISION_MODEL_NAMES=
+# Default reasoning effort for reasoning models: none | minimal | low | medium | high.
+# Empty keeps the provider's default. Sent only to the models in the reasoning
+# list -- every configured model when that list is empty and an effort is set.
+LEMMA_OPENAI_REASONING_EFFORT=
+LEMMA_OPENAI_REASONING_MODEL_NAMES=
 
 LEMMA_ANTHROPIC_API_KEY=
 LEMMA_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-5
@@ -742,6 +747,22 @@ WEB_SEARCH_PROVIDER=auto      # auto | duckduckgo | searxng | brave
 BRAVE_SEARCH_API_KEY=
 SEARXNG_URL=
 ```
+
+### Generation settings
+
+Reasoning effort, output cap, temperature, `top_p` and an Anthropic thinking
+budget are set in four places, each overriding the one before: the model's
+catalog entry (`default_model_settings`; for the system profile, the reasoning
+variables above), the runtime profile's `model_settings`, the agent
+(`agent_runtime.settings`), and a workflow agent step (`generation`). A field a
+layer leaves unset is inherited. The output cap is still clamped to the room
+the context window leaves.
+
+Reasoning effort is sent to an OpenAI-compatible model, and a thinking budget to
+an Anthropic-compatible one, only when the model's catalog entry declares the
+`REASONING` capability -- `reasoning_model_names` when a provider is added in
+Settings -> Models. A model that does not reason rejects the field. Agent Host
+runs drive their own model loop and ignore these settings.
 
 ### Decisions
 

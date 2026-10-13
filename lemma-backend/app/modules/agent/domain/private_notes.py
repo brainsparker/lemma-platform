@@ -26,6 +26,7 @@ and the run it starts is marked.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Literal
 
@@ -191,6 +192,33 @@ def privacy_of(run_metadata: Mapping[str, object] | None) -> JsonObject:
     if written_in := _written_in(run_metadata):
         marks[WRITTEN_IN_LEMMA_KEY] = written_in
     return marks
+
+
+#: How a label above opens, matched loosely: the labels are plain text, so a
+#: sender who writes one of these openings at the start of a line is imitating
+#: Lemma, whatever the spacing or case.
+_LABEL_OPENING = re.compile(
+    r"^(\s*)(\(\s*(?:a\s+(?:private\s+)?note\s+to\s+you|written\s+in\s+lemma))",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+#: Put in front of an imitated label, so it reads as what it is.
+SPOOFED_LABEL_MARK = "[not a Lemma label, written by the sender] "
+
+
+def defuse_lemma_labels(text: str) -> str:
+    """Mark any line of untrusted text that opens like one of the labels above.
+
+    The labels are what say a message came from a member in Lemma rather than
+    from the chat, and a private note is acted on with the member's authority.
+    Only a leading ``[platform | name]:`` set a stranger's message apart, so a
+    body that wrote the keeper's label on a line of its own read as the keeper
+    speaking. The text is kept -- it may be what they are asking about -- but
+    the line is marked as theirs.
+    """
+    return _LABEL_OPENING.sub(
+        lambda match: f"{match.group(1)}{SPOOFED_LABEL_MARK}{match.group(2)}", text
+    )
 
 
 def lemma_label(message_metadata: Mapping[str, object]) -> str | None:

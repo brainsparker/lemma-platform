@@ -101,6 +101,7 @@ def _slack_surface(*, bot_user_id: str | None) -> AgentSurfaceEntity:
         agent_id=uuid4(),
         surface_type=SurfacePlatform.SLACK,
         account_id=None,
+        external_workspace_id="T1",
         config=SurfaceConfig(channels=[SurfaceChannelRoute(channel_id="C1")]),
         is_active=True,
         surface_identity_id=bot_user_id,
@@ -112,6 +113,7 @@ def _slack_channel_event(
 ) -> ParsedInboundSurfaceEvent:
     return ParsedInboundSurfaceEvent(
         platform="SLACK",
+        tenant_id="T1",
         conversation_type=ConversationType.EXTERNAL_GROUP,
         external_channel_id="C1",
         external_thread_id="1700000000.000200",
@@ -171,6 +173,7 @@ def test_slack_app_mention_is_allowed_without_a_recorded_bot_id():
 def _slack_group_dm_event(*, mentioned: bool) -> ParsedInboundSurfaceEvent:
     return ParsedInboundSurfaceEvent(
         platform="SLACK",
+        tenant_id="T1",
         conversation_type=ConversationType.EXTERNAL_GROUP,
         # Not on the surface's allow-list: nobody can list a group DM there.
         external_channel_id="G-TRIO",

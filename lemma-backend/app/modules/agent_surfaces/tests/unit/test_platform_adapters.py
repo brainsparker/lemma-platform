@@ -184,7 +184,7 @@ async def test_teams_channel_reply_uses_reply_to_id_as_thread_id():
         "type": "message",
         "id": "msg-2",
         "text": "<at>LemmaChat</at> can you help?",
-        "serviceUrl": "https://smba.example.test/teams",
+        "serviceUrl": "https://smba.trafficmanager.net/teams",
         "from": {"id": "29:user", "aadObjectId": "aad-1", "name": "Rahul"},
         "conversation": {"id": "conv-1", "conversationType": "channel"},
         "recipient": {"id": "28:bot", "name": "LemmaChat"},
@@ -210,7 +210,7 @@ async def test_teams_channel_reply_uses_reply_to_id_as_thread_id():
     assert event.external_thread_id == "msg-1"
     assert event.mentioned_agent is True
     assert event.metadata["team_id"] == "19:team@thread.tacv2"
-    assert event.metadata["service_url"] == "https://smba.example.test/teams"
+    assert event.metadata["service_url"] == "https://smba.trafficmanager.net/teams"
     assert event.metadata["conversation_id"] == "conv-1"
     assert event.metadata["reply_to_id"] == "msg-2"
 
@@ -222,7 +222,7 @@ async def test_teams_dm_uses_conversation_id_as_thread_id():
         "type": "message",
         "id": "msg-1",
         "text": "hello from teams dm",
-        "serviceUrl": "https://smba.example.test/teams",
+        "serviceUrl": "https://smba.trafficmanager.net/teams",
         "from": {"id": "29:user", "aadObjectId": "aad-1", "name": "Rahul"},
         "conversation": {"id": "a:dm-conversation", "conversationType": "personal"},
         "recipient": {"id": "28:bot", "name": "LemmaChat"},
@@ -285,7 +285,7 @@ async def test_teams_send_message_declares_markdown_text_format(monkeypatch):
         message_text="hello",
         is_dm=True,
         reply_target={
-            "service_url": "https://smba.example.test/teams",
+            "service_url": "https://smba.trafficmanager.net/teams",
             "conversation_id": "a:dm-conversation",
             "reply_to_id": "msg-1",
         },
@@ -352,7 +352,7 @@ async def test_teams_send_display_resource_posts_adaptive_card(monkeypatch):
         message_text="hello",
         is_dm=True,
         reply_target={
-            "service_url": "https://smba.example.test/teams",
+            "service_url": "https://smba.trafficmanager.net/teams",
             "conversation_id": "a:dm-conversation",
             "reply_to_id": "msg-1",
         },
@@ -431,7 +431,7 @@ async def test_teams_end_progress_deletes_activity(monkeypatch):
         message_text="hello",
         is_dm=True,
         reply_target={
-            "service_url": "https://smba.example.test/teams",
+            "service_url": "https://smba.trafficmanager.net/teams",
             "conversation_id": "a:dm-conversation",
         },
     )
@@ -453,7 +453,7 @@ async def test_teams_adapter_extracts_file_only_message_attachments():
     payload = {
         "type": "message",
         "id": "msg-3",
-        "serviceUrl": "https://smba.example.test/teams",
+        "serviceUrl": "https://smba.trafficmanager.net/teams",
         "from": {"id": "29:user", "aadObjectId": "aad-1", "name": "Rahul"},
         "conversation": {"id": "a:dm-conversation", "conversationType": "personal"},
         "recipient": {"id": "28:bot", "name": "LemmaChat"},
@@ -497,7 +497,7 @@ async def test_teams_adapter_appends_attachment_details_to_text_message():
         "type": "message",
         "id": "msg-4",
         "text": "Lemma WHat does this image say? Describe it for me main andha hai.",
-        "serviceUrl": "https://smba.example.test/teams",
+        "serviceUrl": "https://smba.trafficmanager.net/teams",
         "from": {"id": "29:user", "aadObjectId": "aad-1", "name": "Rahul"},
         "conversation": {"id": "a:dm-conversation", "conversationType": "personal"},
         "recipient": {"id": "28:bot", "name": "LemmaChat"},
@@ -505,7 +505,7 @@ async def test_teams_adapter_appends_attachment_details_to_text_message():
         "attachments": [
             {
                 "contentType": "image/*",
-                "contentUrl": "https://smba.example.test/v3/attachments/image-1/views/original",
+                "contentUrl": "https://smba.trafficmanager.net/v3/attachments/image-1/views/original",
                 "name": "quote.png",
             }
         ],
@@ -518,13 +518,13 @@ async def test_teams_adapter_appends_attachment_details_to_text_message():
     assert "Files attached to this Teams message:" in event.message_text
     assert "quote.png | image/*" in event.message_text
     assert (
-        "download_url=https://smba.example.test/v3/attachments/image-1/views/original"
+        "download_url=https://smba.trafficmanager.net/v3/attachments/image-1/views/original"
         in event.message_text
     )
     assert event.metadata["attachments"] == [
         {
             "name": "quote.png",
-            "download_url": "https://smba.example.test/v3/attachments/image-1/views/original",
+            "download_url": "https://smba.trafficmanager.net/v3/attachments/image-1/views/original",
             "file_type": "png",
             "content_type": "image/*",
             "size": None,
@@ -539,7 +539,7 @@ async def test_teams_adapter_extracts_html_embedded_image_attachment():
         "type": "message",
         "id": "msg-5",
         "text": "Can you read this screenshot?",
-        "serviceUrl": "https://smba.example.test/teams",
+        "serviceUrl": "https://smba.trafficmanager.net/teams",
         "from": {"id": "29:user", "aadObjectId": "aad-1", "name": "Rahul"},
         "conversation": {"id": "a:dm-conversation", "conversationType": "personal"},
         "recipient": {"id": "28:bot", "name": "LemmaChat"},
@@ -547,7 +547,7 @@ async def test_teams_adapter_extracts_html_embedded_image_attachment():
         "attachments": [
             {
                 "contentType": "text/html",
-                "content": '<p><img alt="image" src="https://smba.example.test/v3/attachments/html-image/views/original" itemscope="png"></p>',
+                "content": '<p><img alt="image" src="https://smba.trafficmanager.net/v3/attachments/html-image/views/original" itemscope="png"></p>',
             }
         ],
     }
@@ -557,13 +557,13 @@ async def test_teams_adapter_extracts_html_embedded_image_attachment():
     assert event is not None
     assert "Files attached to this Teams message:" in event.message_text
     assert (
-        "download_url=https://smba.example.test/v3/attachments/html-image/views/original"
+        "download_url=https://smba.trafficmanager.net/v3/attachments/html-image/views/original"
         in event.message_text
     )
     assert event.metadata["attachments"] == [
         {
             "name": "original",
-            "download_url": "https://smba.example.test/v3/attachments/html-image/views/original",
+            "download_url": "https://smba.trafficmanager.net/v3/attachments/html-image/views/original",
             "file_type": "png",
             "content_type": "image/*",
             "size": None,
@@ -578,7 +578,7 @@ async def test_teams_adapter_extracts_generic_content_url_attachment():
         "type": "message",
         "id": "msg-6",
         "text": "Describe this image for me.",
-        "serviceUrl": "https://smba.example.test/teams",
+        "serviceUrl": "https://smba.trafficmanager.net/teams",
         "from": {"id": "29:user", "aadObjectId": "aad-1", "name": "Rahul"},
         "conversation": {"id": "a:dm-conversation", "conversationType": "personal"},
         "recipient": {"id": "28:bot", "name": "LemmaChat"},
@@ -618,8 +618,8 @@ async def test_teams_adapter_extracts_inline_image_from_message_html():
     payload = {
         "type": "message",
         "id": "msg-7",
-        "text": '<p>Lemma Brother describe this image for me.</p><p><img src="https://smba.example.test/v3/attachments/inline-image/views/original" /></p>',
-        "serviceUrl": "https://smba.example.test/teams",
+        "text": '<p>Lemma Brother describe this image for me.</p><p><img src="https://smba.trafficmanager.net/v3/attachments/inline-image/views/original" /></p>',
+        "serviceUrl": "https://smba.trafficmanager.net/teams",
         "from": {"id": "29:user", "aadObjectId": "aad-1", "name": "Rahul"},
         "conversation": {"id": "a:dm-conversation", "conversationType": "personal"},
         "recipient": {"id": "28:bot", "name": "LemmaChat"},
@@ -633,13 +633,13 @@ async def test_teams_adapter_extracts_inline_image_from_message_html():
     assert "Lemma Brother describe this image for me." in event.message_text
     assert "Files attached to this Teams message:" in event.message_text
     assert (
-        "download_url=https://smba.example.test/v3/attachments/inline-image/views/original"
+        "download_url=https://smba.trafficmanager.net/v3/attachments/inline-image/views/original"
         in event.message_text
     )
     assert event.metadata["attachments"] == [
         {
             "name": "original",
-            "download_url": "https://smba.example.test/v3/attachments/inline-image/views/original",
+            "download_url": "https://smba.trafficmanager.net/v3/attachments/inline-image/views/original",
             "file_type": "",
             "content_type": "image/*",
             "size": None,
@@ -666,7 +666,7 @@ async def test_teams_enrich_inbound_event_fetches_current_message_attachments_fr
         reply_target={
             "team_id": "19:team@thread.tacv2",
             "channel_id": "19:channel@thread.tacv2",
-            "service_url": "https://smba.example.test/teams",
+            "service_url": "https://smba.trafficmanager.net/teams",
         },
         metadata={
             "team_id": "19:team@thread.tacv2",

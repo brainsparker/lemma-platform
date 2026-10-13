@@ -461,6 +461,12 @@ export interface ConversationRef {
     /** Where it came from — a channel, a schedule, a workflow run, a doc — as
      *  the backend recorded it on the conversation. */
     origin?: import("@/thread/conversation-origin").ConversationOrigin;
+    /** The run state as the server last said it (`RUNNING`, `WAITING`, …). */
+    status?: string | null;
+    /** A question, an approval or a permission request in it is waiting on
+     *  you. Not the same as WAITING: a run can wait on a timer, and an agent
+     *  asking permission on your computer is still running. */
+    waitingOnYou?: boolean;
 }
 
 /** One page of a teammate's conversations, most recently active first.

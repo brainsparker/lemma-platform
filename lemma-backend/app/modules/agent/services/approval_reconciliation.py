@@ -20,6 +20,7 @@ from app.modules.agent.domain.agent_host_permissions import (
     AgentHostPermissionRequest,
     agent_host_permission_request,
 )
+from app.modules.agent.domain.pausing_tools import parked_suspension_of
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
@@ -27,6 +28,9 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.tool_errors import safe_error_text
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 RECONCILE_APPROVAL_JOB = "reconcile_agent_approval"
 
@@ -88,49 +92,42 @@ def should_defer_approved_tool(
     )
 
 
-async def dispatch_agent_host_permission(
+async def enqueue_agent_host_permission(
+    uow: SqlAlchemyUnitOfWork,
     *,
     request: AgentHostPermissionRequest,
     agent_run_id: UUID,
     decision: AgentRunApprovalDecision,
-) -> bool:
-    """Answer a permission request the Agent Host is holding open.
+) -> UUID | None:
+    """Queue the decision for the host, in the caller's transaction.
 
-    Returns whether the decision was *queued for* a live run. ``False`` means
-    the run already ended — the host's own request timeout has taken over and
+    Returns the host to wake once that transaction commits, or ``None`` when
+    the run already ended -- the host's own request timeout has taken over and
     there is nothing left to answer.
 
-    Nothing reads that return value any more: the only caller now schedules this
-    through ``uow.after_commit``, so it runs once the transcript is durable and
-    there is no longer a message to vary. It is kept because it is the honest
-    result of the call, and the reconcile path may want it.
+    In the caller's transaction, beside the tool return that records the
+    decision, so the two commit or roll back together. Queued after the commit
+    instead, a failure there left a transcript reading "Approved" over a
+    request the host never heard about and auto-denied half an hour later. It
+    costs one INSERT and a short lock on the run's lease row.
 
-    ``True`` is deliberately weaker than "the host applied it". Delivery is a
-    poll away and can still be missed if the machine never comes back, so the
-    command carries a TTL sized to the host's own permission window rather than
-    the default five minutes; nothing here waits for confirmation, and the
-    wording the agent sees must not claim any.
+    The command carries a TTL sized to the host's own permission window rather
+    than the default five minutes, because delivery is a push away and can
+    still be missed if the machine never comes back; nothing here waits for
+    the host to apply it, and the wording the agent sees must not claim so.
     """
     # Lazy: the dispatch repository pulls in the Agent Host infrastructure,
     # which imports back through the harnesses.
-    from app.modules.agent.infrastructure.agent_host.channels import poke_host
     from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
         AgentHostDispatchRepository,
     )
 
-    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        command = await AgentHostDispatchRepository(uow).enqueue_permission_decision(
-            run_id=agent_run_id,
-            request_id=request.request_id,
-            option_id=request.option_for(decision),
-        )
-        await uow.commit()
-    if command is None:
-        return False
-    # Without the poke the decision waits for the link's 5-second floor while
-    # a user watches an idle agent.
-    await poke_host(command.host_id)
-    return True
+    command = await AgentHostDispatchRepository(uow).enqueue_permission_decision(
+        run_id=agent_run_id,
+        request_id=request.request_id,
+        option_id=request.option_for(decision),
+    )
+    return command.host_id if command is not None else None
 
 
 async def record_session_approvals(
@@ -200,56 +197,110 @@ async def agent_host_permission_tool_return(
     decision: AgentRunApprovalDecision,
     response: JsonObject,
 ) -> JsonObject:
-    """Describe the decision to the agent, and hand it to the host after commit.
+    """Hand the decision to the host and describe it to the agent.
 
     Shaped as a ``request_approval`` return like every other approval, so the
-    conversation transcript reads the same however the pause arose.
-
-    The dispatch is deferred to ``after_commit`` and the message is written
-    optimistically. That is a deliberate trade, made knowingly: it used to await
-    the dispatch and branch on the result, which meant a Redis publish and a
-    second session ran inside the caller's open write transaction, holding a
-    pooled connection on a path a user is waiting on. Deferring costs the one
-    case where the host's run had already ended -- the agent now reads "queued"
-    rather than "the run ended before this reached it". Agent-host delivery is
-    asynchronous by nature and the wording never claimed delivery, so the
-    transcript stays truthful; the run-already-ended case is rare and is handled
-    anyway by `reconcile_agent_host_dispatch`, which cancels orphaned runs.
+    conversation transcript reads the same however the pause arose. The host
+    command is written in the caller's transaction (see
+    ``enqueue_agent_host_permission``); only the wake-up waits for the commit,
+    because a Redis publish has no business inside an open write transaction
+    and losing one costs at most the link's floor tick.
 
     ``executed`` stays False, unlike the ordinary request_approval path. It means
     "the wrapped tool ran", and on this path Lemma runs nothing: it queues a
-    decision for a machine that will collect it on its next poll, and the ACP
-    agent then proceeds, or does not, on its own. Reporting True would tell the
-    agent an action completed at a moment when the decision had not even been
-    handed over.
+    decision for a machine that will collect it, and the ACP agent then
+    proceeds, or does not, on its own.
     """
     # Lazy: the tool models import the tool registry, which imports back here.
     from app.modules.agent.tools.user_interaction.models import RequestApprovalResponse
 
-    uow.after_commit(
-        lambda: dispatch_agent_host_permission(
-            request=request,
-            agent_run_id=agent_run_id,
-            decision=decision,
-        )
+    host_id = await enqueue_agent_host_permission(
+        uow, request=request, agent_run_id=agent_run_id, decision=decision
     )
+    if host_id is not None:
+        uow.after_commit(lambda: _wake_host(host_id))
+    # Read only once the enqueue has had the lease lock: a turn being ended for
+    # its parked window commits its mark under that same lock.
+    suspended = host_id is None and await _turn_ended_while_parked(uow, agent_run_id)
 
-    approved = decision != AgentRunApprovalDecision.DENY
     content = RequestApprovalResponse(
         success=True,
-        message=(
-            "Approved. The decision is queued for the local agent, which "
-            "will pick it up on its next poll and decide what to do; "
-            "Lemma has not run anything."
-            if approved
-            else "Denied. The decision is queued for the local agent, "
-            "which was told not to use the tool."
+        message=_permission_decision_message(
+            request,
+            decision=decision,
+            delivered=host_id is not None,
+            suspended=suspended,
         ),
         decision=decision,
         executed=False,
         response=response,
     )
     return content.model_dump(mode="json")
+
+
+async def _wake_host(host_id: UUID) -> None:
+    # Lazy for the same reason as the repository above.
+    from app.modules.agent.infrastructure.agent_host.channels import poke_host
+
+    await poke_host(host_id)
+
+
+async def _turn_ended_while_parked(
+    uow: SqlAlchemyUnitOfWork, agent_run_id: UUID
+) -> bool:
+    """Whether Lemma ended this run's turn because the request sat unanswered."""
+    # Lazy for the same reason as the dispatch repository above.
+    from app.modules.agent.infrastructure.repositories import ConversationRepository
+
+    run = await ConversationRepository(uow).get_agent_run(agent_run_id)
+    return run is not None and parked_suspension_of(run.metadata) is not None
+
+
+def _permission_decision_message(
+    request: AgentHostPermissionRequest,
+    *,
+    decision: AgentRunApprovalDecision,
+    delivered: bool,
+    suspended: bool = False,
+) -> str:
+    """What the agent reads about a decision on its permission request."""
+    if suspended:
+        # Read by a resumed run, in a new turn. The ACP request it answers
+        # was dropped with the turn that asked it, and nothing carries an
+        # approval into the next one: the agent asks again, and is answered
+        # again, if it does the thing at all.
+        if decision == AgentRunApprovalDecision.DENY:
+            return (
+                "Denied. Your earlier turn was paused while this waited for the "
+                "person, so the request lapsed and nothing ran. Do not do it."
+            )
+        return (
+            "Approved. Your earlier turn was paused while this waited for the "
+            "person, so the request lapsed and nothing ran. If it is still "
+            "needed, do it again now; the person will be asked to allow it once "
+            "more."
+        )
+    if not delivered:
+        return (
+            "The local agent's run ended before this decision reached it, so "
+            "nothing was sent; Lemma has not run anything."
+        )
+    if request.refuses_a_one_time_approval(decision):
+        return (
+            "Not approved. The local agent offered only to allow this for the "
+            "rest of its session, which a one-time approval does not grant, so "
+            "it was told not to use the tool. Approve it for the session to let "
+            "it run."
+        )
+    if decision != AgentRunApprovalDecision.DENY:
+        return (
+            "Approved. The decision is queued for the local agent, which "
+            "will pick it up and decide what to do; Lemma has not run anything."
+        )
+    return (
+        "Denied. The decision is queued for the local agent, "
+        "which was told not to use the tool."
+    )
 
 
 async def execute_approved_tool_as_user(
@@ -287,6 +338,14 @@ async def execute_approved_tool_as_user(
             }
         return {"ok": True, "value": value}
     except Exception as exc:  # noqa: BLE001 - reported to the model, not fatal
+        # The model only ever sees the redacted line below, so without this an
+        # approved action that failed left nothing anyone could debug from.
+        logger.error(
+            "agent.approval.approved_tool_execution.failed",
+            tool_name=tool_name,
+            approval_id=approval_id,
+            exc_info=True,
+        )
         # Redacted, not `str(exc)`: this string is persisted as the approval's
         # tool return, replayed into the model on every later turn and read by
         # anyone with the conversation. An approved tool is the class of call

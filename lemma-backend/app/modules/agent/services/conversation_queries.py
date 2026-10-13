@@ -30,6 +30,10 @@ from app.modules.agent.domain.value_objects import (
     ConversationType,
 )
 from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pending_interactions import (
+    PendingInteraction,
+    PendingInteractionCursor,
+)
 from app.modules.agent.services.conversation_access import (
     authorized_conversation,
     require_agent_action,
@@ -86,7 +90,10 @@ class ConversationQueries:
             )
             if cursor is None:
                 raise BadRequestError("Invalid page_token")
-        return await self.conversation_repository.list_conversations(
+        (
+            conversations,
+            next_cursor,
+        ) = await self.conversation_repository.list_conversations(
             user_id=user_id,
             pod_id=pod_id,
             agent_selection=resolved_selection,
@@ -98,6 +105,43 @@ class ConversationQueries:
             search=search,
             cursor=cursor,
             limit=limit,
+        )
+        # One query for the page rather than one per row. Not inferable from
+        # the status: a WAITING conversation may be waiting on a timer, and an
+        # Agent Host permission request waits inside a RUNNING one.
+        waiting = (
+            await self.conversation_repository.conversations_with_pending_interaction(
+                [conversation.id for conversation in conversations]
+            )
+            if conversations
+            else set()
+        )
+        for conversation in conversations:
+            conversation.has_pending_interaction = conversation.id in waiting
+        return conversations, next_cursor
+
+    async def list_pending_interactions(
+        self,
+        *,
+        pod_id: UUID,
+        user_id: UUID,
+        cursor: PendingInteractionCursor | None = None,
+        limit: int = 50,
+    ) -> tuple[list[PendingInteraction], PendingInteractionCursor | None]:
+        """Every pause waiting on this person in this pod, longest-waiting first.
+
+        Authorized the way the pod-wide history list is, and scoped the same
+        way: to conversations the caller owns, so nobody's pause is listed to
+        anybody but the person it is waiting on.
+        """
+        await require_agent_action(
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_id=None,
+            action=Permissions.AGENT_READ,
+        )
+        return await self.conversation_repository.list_pending_interactions(
+            user_id=user_id, pod_id=pod_id, cursor=cursor, limit=limit
         )
 
     async def get_conversation(
@@ -136,6 +180,11 @@ class ConversationQueries:
             )
         conversation.last_run_retryable = await self._latest_run_is_retryable(
             conversation
+        )
+        conversation.has_pending_interaction = conversation.id in (
+            await self.conversation_repository.conversations_with_pending_interaction(
+                [conversation.id]
+            )
         )
         return conversation
 

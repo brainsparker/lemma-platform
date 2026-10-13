@@ -75,6 +75,15 @@ class SurfaceSettings(BaseSettings):
             "testing of Bot Framework/Graph token acquisition."
         ),
     )
+    microsoft_bot_service_extra_host: Optional[str] = Field(
+        default=None,
+        description=(
+            "One more host, besides Microsoft's Bot Framework endpoints, that a "
+            "Teams activity's serviceUrl may name and so receive the bot token. "
+            "For test doubles and gateways only; it joins the allow-list, it "
+            "does not replace it."
+        ),
+    )
     microsoft_bot_app_name: Optional[str] = Field(
         default=None,
         description=(

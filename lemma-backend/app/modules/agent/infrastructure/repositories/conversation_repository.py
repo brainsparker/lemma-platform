@@ -22,9 +22,8 @@ from app.modules.agent.domain.entities import (
     Message as MessageEntity,
 )
 from app.modules.agent.domain.value_objects import (
-    TERMINAL_AGENT_RUN_STATUSES,
-    AgentRuntimeConfig,
     AgentRunFinishResult,
+    AgentRuntimeConfig,
     AgentRunStatus,
     ConversationAgentSelection,
     ConversationListCursor,
@@ -57,9 +56,11 @@ from app.modules.agent.infrastructure.repositories.conversation_list_page import
     list_statement,
     page_by_activity,
 )
-from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
-    reconcile_conversation_to_terminal,
+from app.modules.agent.infrastructure.repositories.conversation_run_lifecycle import (
+    finish_agent_run as _finish_agent_run,
+    update_conversation_status as _write_conversation_status,
 )
+from app.modules.agent.domain.subagent_spawn import SPAWN_KEY
 from app.modules.agent.infrastructure.repositories.conversation_approval_queries import (
     ConversationApprovalQueriesMixin,
 )
@@ -312,6 +313,27 @@ class ConversationRepository(
             .with_for_update()
         )
 
+    async def find_spawned_child(
+        self, *, parent_id: UUID, parent_run_id: UUID, spawn_key: str
+    ) -> ConversationEntity | None:
+        """The child one parent run already spawned for this exact task.
+
+        ``ix_agent_conv_parent`` narrows it to the parent's children, of which
+        there are few; the metadata comparison is over those.
+        """
+        metadata = ConversationModel.conversation_metadata
+        model = await self.session.scalar(
+            select(ConversationModel)
+            .where(
+                ConversationModel.parent_id == parent_id,
+                metadata["parent_run_id"].astext == str(parent_run_id),
+                metadata[SPAWN_KEY].astext == spawn_key,
+            )
+            .order_by(ConversationModel.created_at)
+            .limit(1)
+        )
+        return model.to_entity() if model is not None else None
+
     async def list_children(
         self,
         *,
@@ -474,69 +496,19 @@ class ConversationRepository(
         error_code: str | None = None,
         error_reason: str | None = None,
         output_data: JsonValue | None = None,
+        stamp: JsonObject | None = None,
     ) -> AgentRunFinishResult | None:
-        result = await self.session.execute(
-            select(AgentRunModel).where(AgentRunModel.id == agent_run_id)
-        )
-        model = result.scalar_one_or_none()
-        if model is None:
-            return None
-
-        current_status = AgentRunStatus(model.status)
-        resolved_conversation_status = conversation_status or ConversationStatus(
-            current_status.value
-        )
-        if current_status in TERMINAL_AGENT_RUN_STATUSES:
-            # Nothing to end — but this used to report a `conversation_status`
-            # it had only *inferred* from the run row and never written, so a
-            # conversation out of step stayed that way. Nothing else recovers
-            # one: the orphan sweep keys on `agent_runs.status`, so a terminal
-            # run is invisible to it. This is the only place seeing both rows.
-            repaired = await reconcile_conversation_to_terminal(
-                self.session,
-                conversation_id=model.conversation_id,
-                status=resolved_conversation_status,
-            )
-            return AgentRunFinishResult(
-                status=current_status,
-                conversation_status=resolved_conversation_status,
-                updated=False,
-                conversation_repaired=repaired,
-            )
-
-        next_status = status
-        if (
-            current_status == AgentRunStatus.STOP_REQUESTED
-            and status in TERMINAL_AGENT_RUN_STATUSES
-        ):
-            # Stopped, not failed: it must not inherit a failure's message.
-            next_status, error = AgentRunStatus.STOPPED, None
-
-        model.status = next_status.value
-        model.error = error
-        metadata = dict(model.run_metadata or {})
-        metadata.pop("failure", None)
-        if next_status == AgentRunStatus.FAILED and error_code:
-            metadata["failure"] = {"code": error_code, "reason": error_reason}
-        model.run_metadata = metadata
-        if output_data is not None:
-            model.output_data = output_data
-        resolved_conversation_status = conversation_status or ConversationStatus(
-            next_status.value
-        )
-        await self._update_conversation_status(
-            conversation_id=model.conversation_id,
-            status=resolved_conversation_status,
+        """End a run once, whoever else is trying; see `conversation_run_lifecycle`."""
+        return await _finish_agent_run(
+            self.session,
+            agent_run_id=agent_run_id,
+            status=status,
+            conversation_status=conversation_status,
+            error=error,
+            error_code=error_code,
+            error_reason=error_reason,
             output_data=output_data,
-            touch_activity=True,
-        )
-        if next_status in TERMINAL_AGENT_RUN_STATUSES:
-            model.finished_at = datetime.now(timezone.utc)
-        await self.session.flush()
-        return AgentRunFinishResult(
-            status=next_status,
-            conversation_status=resolved_conversation_status,
-            updated=True,
+            stamp=stamp,
         )
 
     async def set_conversation_status(
@@ -552,8 +524,7 @@ class ConversationRepository(
         wait has to set the status directly.
         """
         await self._update_conversation_status(
-            conversation_id=conversation_id,
-            status=status,
+            conversation_id=conversation_id, status=status
         )
 
     async def _update_conversation_status(
@@ -564,13 +535,10 @@ class ConversationRepository(
         output_data: JsonValue | None = None,
         touch_activity: bool = False,
     ) -> None:
-        conversation = await self.session.get(ConversationModel, conversation_id)
-        if conversation is None:
-            return
-        conversation.status = status.value
-        # A run starting (every wake starts one) or ending is activity; a
-        # cancelled wait or a repaired status is not. Same UPDATE either way.
-        if touch_activity:
-            _touch_activity(conversation)
-        if output_data is not None or status == ConversationStatus.RUNNING:
-            conversation.output_data = output_data
+        await _write_conversation_status(
+            self.session,
+            conversation_id=conversation_id,
+            status=status,
+            output_data=output_data,
+            touch_activity=touch_activity,
+        )

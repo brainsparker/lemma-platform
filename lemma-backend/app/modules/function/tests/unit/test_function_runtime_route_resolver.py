@@ -44,6 +44,7 @@ def _dispatch(
         config={},
         mode=mode,
         deadline_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+        execution_seconds=60,
         revision_hash=f"sha256:{'a' * 64}",
         input_data={},
     )

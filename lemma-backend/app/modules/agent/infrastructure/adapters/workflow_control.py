@@ -17,6 +17,7 @@ import json
 from uuid import UUID
 
 from app.modules.pod.contracts.agent_access import pod_organization_id
+from app.core.domain.generation import GenerationSettings
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Conversation
@@ -84,6 +85,8 @@ class AgentControlAdapter(AgentPort):
         source: str = "WORKFLOW_RUN",
         conversation_metadata: dict[str, object] | None = None,
         instructions: str | None = None,
+        model_name: str | None = None,
+        generation: GenerationSettings | None = None,
     ) -> UUID:
         agent = await self.agent_repo.get_by_pod_and_name(
             pod_id=pod_id,
@@ -91,10 +94,19 @@ class AgentControlAdapter(AgentPort):
         )
         if agent is None:
             raise AgentNotFoundError("Workflow agent target was not found")
+        runtime_override = None
+        if model_name is not None or generation is not None:
+            base = agent.agent_runtime or await self._default_agent_runtime_for_pod(
+                pod_id=pod_id
+            )
+            runtime_override = base.with_overrides(
+                model_name=model_name, settings=generation
+            )
         return await self._start_conversation(
             agent_id=agent.id,
             agent_name=agent.name,
             agent_runtime=agent.agent_runtime,
+            runtime_override=runtime_override,
             input_data=input_data,
             pod_id=pod_id,
             user_id=user_id,
@@ -119,6 +131,7 @@ class AgentControlAdapter(AgentPort):
         source: str,
         conversation_metadata: dict[str, object] | None,
         instructions: str | None,
+        runtime_override: AgentRuntimeConfig | None = None,
     ) -> UUID:
         metadata: dict[str, object] = {
             **(conversation_metadata or {}),
@@ -147,6 +160,10 @@ class AgentControlAdapter(AgentPort):
             # task, and the default assistant, whose instruction is empty, gets
             # the only thing telling it why it woke up.
             "instructions": instructions,
+            # On the conversation, not only the first run: a step whose agent
+            # stops to ask somebody something resumes on a later run, and that
+            # run must still be on the step's model and settings.
+            "agent_runtime": runtime_override,
         }
         if conversation_id is not None:
             entity_values["id"] = conversation_id
@@ -163,8 +180,10 @@ class AgentControlAdapter(AgentPort):
         else:
             conversation = await self.conversation_repo.create_conversation(entity)
 
-        runtime = agent_runtime or await self._default_agent_runtime_for_pod(
-            pod_id=pod_id
+        runtime = (
+            runtime_override
+            or agent_runtime
+            or await self._default_agent_runtime_for_pod(pod_id=pod_id)
         )
         run = await self.conversation_repo.create_agent_run(
             conversation_id=conversation.id,
@@ -228,7 +247,11 @@ class AgentControlAdapter(AgentPort):
         )
 
     async def get_conversation_status(self, conversation_id: UUID) -> dict[str, object]:
-        conversation = await self.conversation_repo.get_conversation(conversation_id)
+        # With its latest run: `last_run_error` below is derived from it, and
+        # without it a failed step only ever said that the agent failed.
+        conversation = await self.conversation_repo.get_conversation(
+            conversation_id, include_runs=True
+        )
         if conversation is None or conversation.status is None:
             return {"status": "NOT_FOUND"}
         output = self._normalize_agent_output(conversation.output)

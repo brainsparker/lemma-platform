@@ -47,11 +47,13 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.api.dependencies import get_conversation_service
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.outsiders import (
     OUTSIDE_ANSWER_TOOL,
     Audience,
 )
+from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
 from app.modules.agent.domain.private_notes import answers_lemma_message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -315,6 +317,21 @@ async def pending_interaction(
     )
 
 
+async def undecided_pauses(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+) -> list[str]:
+    """Every pause nobody has decided yet, by tool call id, oldest first.
+
+    Exactly what starting a new turn denies on the person's behalf, so a
+    surface that reads it first knows which of its cards the turn cancels.
+    """
+    calls = await ConversationRepository(uow).pausing_calls_awaiting_a_decision(
+        conversation_id=conversation_id,
+        pausing_tool_names=USER_PAUSING_TOOL_NAMES,
+    )
+    return [call.tool_call_id for call in calls if call.tool_call_id]
+
+
 async def pending_question(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> PendingInteraction | None:
@@ -365,13 +382,21 @@ async def resolve_pending_interaction(
     decision: AgentRunApprovalDecision,
     response: dict[str, object] | None = None,
     defer_reconciliation: bool = True,
-) -> bool:
+) -> ApprovalResolution | None:
     """Record a person's decision and resume the run it paused.
 
-    ``False`` when the conversation is no longer there, and nothing was
+    ``None`` when the conversation is no longer there, and nothing was
     recorded. The caller must be able to tell that apart from a decision that
     landed: starting an ordinary turn instead supersedes the pause with an
     auto-denial, which is how an "approve" became a cancellation.
+
+    Otherwise the resolution, whose ``decision`` is the one that *stands* --
+    not necessarily the one passed in. A pause the person moved on from was
+    already denied on their behalf, and a tap on its card adopts that denial
+    rather than recording a second answer. A caller that reported the tap
+    alone would tell somebody who pressed Approve that it was done, when the
+    action never ran; ``status`` is ``"queued"`` when a worker job owns the
+    rest, so "done" is not yet true either.
 
     Skips the authorization the HTTP entry point does, exactly as the service
     method it replaces did: a surface has already matched the person who tapped
@@ -386,8 +411,8 @@ async def resolve_pending_interaction(
     """
     entity = await ConversationRepository(uow).get_conversation(conversation_id)
     if entity is None:
-        return False
-    await _service(uow).resolve_user_approval_internal(
+        return None
+    return await _service(uow).resolve_user_approval_internal(
         conversation=entity,
         approval_id=approval_id,
         user_id=user_id,
@@ -396,7 +421,6 @@ async def resolve_pending_interaction(
         response=response or {},
         defer_reconciliation=defer_reconciliation,
     )
-    return True
 
 
 async def retry_failed_run(
@@ -513,6 +537,9 @@ __all__ = [
     # Raised by `resolve_pending_interaction` when somebody other than the
     # owner tries to approve; a surface treats that as an ordinary message.
     "ApprovalNotOwnedError",
+    # What `resolve_pending_interaction` returns: the decision that stands and
+    # whether a worker job still owns the rest.
+    "ApprovalResolution",
     "PendingInteraction",
     "SurfaceAgentIdentity",
     "SurfaceConversation",
@@ -530,4 +557,5 @@ __all__ = [
     "start_surface_turn",
     "surface_agent_identity",
     "surface_conversation",
+    "undecided_pauses",
 ]

@@ -111,6 +111,7 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
                                 onClick={() => onOpen(row.id)} onKeyDown={event => { if (event.key === "Enter") onOpen(row.id); }}>
                                 <td>
                                     <span className="chats-page__title">{row.title}</span>
+                                    {row.waitingOnYou && <span className="chats-page__waiting">Needs you</span>}
                                     {row.agentId && botById.get(row.agentId) && (
                                         <span className="chats-page__bot">
                                             <AgentMark pod={pod} agent={botById.get(row.agentId)!} size={16} />

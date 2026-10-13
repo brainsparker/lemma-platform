@@ -2,6 +2,8 @@ import base64
 import binascii
 import json
 import time
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from uuid import UUID
 from fastapi import HTTPException
 from fastapi.security import HTTPBearer
@@ -17,6 +19,7 @@ from app.core.auth_exemptions import exemption_of, is_self_authenticated_websock
 from app.core.config import settings
 from app.core.authorization.delegation import (
     CLAIM_ACTOR_ID,
+    DelegationClaims,
     DelegationClaimsError,
     parse_delegation_claims,
 )
@@ -204,6 +207,108 @@ async def account_may_sign_in(user_id: UUID) -> bool:
     return state.is_verified or not settings.auth_email_verification_required
 
 
+class PrincipalRefused(Exception):
+    """A verified session that must still not be honoured.
+
+    Carries the code and message every entry point answers with, so the HTTP
+    dependency and the MCP mounts refuse a token for the same reasons.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+@dataclass(frozen=True, slots=True)
+class PrincipalLookups:
+    """The two reads :func:`resolve_delegated_principal` makes, as a seam."""
+
+    account_standing: Callable[[UUID], Awaitable[AccountStanding | None]]
+    delegation_revoked: Callable[[UUID], Awaitable[bool]]
+
+
+async def _revocation_of(actor_id: UUID) -> bool:
+    return await is_delegation_revoked(actor_id=actor_id)
+
+
+def _default_lookups() -> PrincipalLookups:
+    # Built per call from this module's globals, so replacing one of them on
+    # the module reaches every caller, the HTTP dependency included.
+    return PrincipalLookups(
+        account_standing=_get_local_auth_state,
+        delegation_revoked=_revocation_of,
+    )
+
+
+async def _require_standing(user_id: UUID, lookups: PrincipalLookups) -> None:
+    state = await lookups.account_standing(user_id)
+    if state is None or not state.is_active or state.is_deleted:
+        raise PrincipalRefused("ACCOUNT_INACTIVE", "This account is inactive.")
+    if settings.auth_email_verification_required and not state.is_verified:
+        raise PrincipalRefused(
+            "EMAIL_VERIFICATION_REQUIRED", "Verify your email before continuing."
+        )
+
+
+def _delegation_claims_of(payload: Mapping[str, object]) -> DelegationClaims | None:
+    if not settings.authz_delegated_tokens_enabled:
+        # A delegated token carries a workload's authority. Without the
+        # delegation layer to clamp it, honouring it would promote it to a full
+        # user session, so switching the flag off must refuse, not escalate.
+        if payload.get("isImpersonation") is True or payload.get(CLAIM_ACTOR_ID):
+            raise PrincipalRefused(
+                "IMPERSONATION_NOT_ALLOWED", "Delegated tokens are disabled."
+            )
+        return None
+    try:
+        return parse_delegation_claims(dict(payload))
+    except DelegationClaimsError as exc:
+        # Never read as "no claims": that is a plain user session, the widest
+        # standing a token can have.
+        raise PrincipalRefused("INVALID_DELEGATION_CLAIMS", str(exc)) from exc
+
+
+async def resolve_delegated_principal(
+    payload: Mapping[str, object],
+    *,
+    user_id: UUID,
+    pod_id: UUID | None = None,
+    lookups: PrincipalLookups | None = None,
+) -> DelegationClaims | None:
+    """Who a verified Lemma session acts as, or :class:`PrincipalRefused`.
+
+    ``None`` is the person themselves; claims are a workload acting for them,
+    which the caller must turn into that workload's context -- an agent's or a
+    function's -- never into the person's.
+
+    Every entry point that verifies a session goes through this. The pod MCP
+    mounts are ASGI apps the global dependency never runs on, and the copy of
+    these checks they used to keep honoured malformed, revoked, cross-pod and
+    flag-disabled delegated tokens as full user sessions. ``pod_id`` is the pod
+    the request is scoped to, when the caller already knows it.
+    """
+    found = lookups or _default_lookups()
+    await _require_standing(user_id, found)
+    claims = _delegation_claims_of(payload)
+    if claims is None:
+        return None
+    if claims.invoked_by_user_id != user_id:
+        raise PrincipalRefused(
+            "DELEGATION_USER_MISMATCH",
+            "Delegation invoked_by_user_id does not match the session user",
+        )
+    if pod_id is not None and claims.pod_id != pod_id:
+        raise PrincipalRefused("DELEGATED_POD_MISMATCH", "Delegated pod mismatch")
+    if await found.delegation_revoked(claims.actor_id):
+        # The workload lost its authority (e.g. it was deleted): refuse before
+        # the token expires on its own.
+        raise PrincipalRefused(
+            "DELEGATION_REVOKED", "Delegated workload has been revoked."
+        )
+    return claims
+
+
 # Define the security scheme for OpenAPI
 # auto_error=False allows us to handle the error manually and support exclusions
 bearer_scheme = HTTPBearer(auto_error=False, scheme_name="HTTPBearer")
@@ -256,30 +361,15 @@ async def verify_auth(connection: HTTPConnection):
             parsed_user_id = UUID(user_id)
             payload = session.get_access_token_payload() or {}
 
-            local_state = await _get_local_auth_state(parsed_user_id)
-            if (
-                local_state is None
-                or not local_state.is_active
-                or local_state.is_deleted
-            ):
+            try:
+                delegation_claims = await resolve_delegated_principal(
+                    payload, user_id=parsed_user_id
+                )
+            except PrincipalRefused as refused:
                 raise HTTPException(
                     status_code=403,
-                    detail={
-                        "code": "ACCOUNT_INACTIVE",
-                        "message": "This account is inactive.",
-                    },
-                )
-            if (
-                settings.auth_email_verification_required
-                and not local_state.is_verified
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "code": "EMAIL_VERIFICATION_REQUIRED",
-                        "message": "Verify your email before continuing.",
-                    },
-                )
+                    detail={"code": refused.code, "message": refused.message},
+                ) from refused
 
             connection.state.user = AuthenticatedPrincipal(id=parsed_user_id)
             connection.state.session = session
@@ -287,47 +377,7 @@ async def verify_auth(connection: HTTPConnection):
             # header check short-circuits before anything else runs.
             await maybe_record_app_session(connection, session, parsed_user_id)
             connection.state.auth_claims = payload
-            connection.state.delegation_claims = None
-            if settings.authz_delegated_tokens_enabled:
-                try:
-                    delegation_claims = parse_delegation_claims(payload)
-                except DelegationClaimsError as exc:
-                    raise HTTPException(
-                        status_code=403,
-                        detail={
-                            "code": "INVALID_DELEGATION_CLAIMS",
-                            "message": str(exc),
-                        },
-                    ) from exc
-
-                if delegation_claims is not None and await is_delegation_revoked(
-                    actor_id=delegation_claims.actor_id
-                ):
-                    # The workload this token delegates for lost its authority
-                    # (e.g. the agent/function was deleted). Reject before it
-                    # expires on its own.
-                    raise HTTPException(
-                        status_code=403,
-                        detail={
-                            "code": "DELEGATION_REVOKED",
-                            "message": "Delegated workload has been revoked.",
-                        },
-                    )
-
-                connection.state.delegation_claims = delegation_claims
-            elif payload.get("isImpersonation") is True or payload.get(CLAIM_ACTOR_ID):
-                # Delegation is disabled, but a delegated/impersonation token
-                # (minted with isImpersonation + delegation claims) carries the
-                # workload's authority. Without the delegation layer to clamp it,
-                # honoring it would silently promote it to a full user session, so
-                # reject it — disabling the flag must fail safe, not escalate.
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "code": "IMPERSONATION_NOT_ALLOWED",
-                        "message": "Delegated tokens are disabled.",
-                    },
-                )
+            connection.state.delegation_claims = delegation_claims
 
     except InvalidClaimsError:
         # Keep SuperTokens' invalid-claim contract intact. Its middleware turns

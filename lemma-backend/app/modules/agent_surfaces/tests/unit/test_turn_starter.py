@@ -41,6 +41,7 @@ from app.modules.agent_surfaces.services.telegram_mini_app_service import (
 from app.modules.agent_surfaces.services.surface_inbound_message import (
     transcribe_voice_attachments,
 )
+from app.modules.agent_surfaces.services.run_background import run_background
 from app.modules.agent_surfaces.services.turn_starter import SurfaceTurnStarter
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     ExternalIdentityDouble,
@@ -368,7 +369,13 @@ async def test_a_speaker_the_pod_cannot_place_is_not_reported_as_a_member():
         event=_slack_channel_event(),
     )
 
-    background = await starter._background(context, adapter=adapter, credentials={})
+    background = await run_background(
+        starter.uow_factory,
+        context,
+        adapter=adapter,
+        credentials={},
+        roster_reads=starter.roster_reads,
+    )
 
     assert [(person.name, person.in_pod) for person in background.participants] == [
         ("Dana", False),

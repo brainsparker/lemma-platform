@@ -31,6 +31,10 @@ from app.modules.agent.domain.value_objects import (
 
 MAX_AGENT_INSTRUCTION_CHARACTERS = 60_000
 
+#: What one message a person sends may hold. The same budget as an agent's
+#: instruction: both are text replayed into every model request that follows.
+MAX_MESSAGE_CHARACTERS = MAX_AGENT_INSTRUCTION_CHARACTERS
+
 
 def validate_agent_instruction(instruction: str | None) -> str:
     """Validate authored text without rejecting historical entities on read."""
@@ -179,6 +183,9 @@ class Conversation(Entity):
     last_run_error_reason: str | None = None
     last_run_finished_at: datetime | None = None
     last_run_retryable: bool = False
+    #: A pause here is waiting on the owner. Read-side only, like the
+    #: diagnostics above: set by the reads that answer a person, not stored.
+    has_pending_interaction: bool = False
     messages: list[Message] = Field(default_factory=list)
     agent_runs: list["AgentRun"] = Field(default_factory=list)
 

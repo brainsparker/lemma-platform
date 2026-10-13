@@ -6,6 +6,7 @@ from typing import Literal, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.core.domain.generation import GenerationSettings
 from app.modules.workflow.domain.workflow import WorkflowEntity
 from app.modules.workflow.domain.run import WorkflowRunEntity
 from app.modules.workflow.domain.wait import (
@@ -125,6 +126,9 @@ class WorkflowRunWaitRepository(ABC):
         wait_types: list[WorkflowRunWaitType],
         created_before: datetime,
         limit: int = 100,
+        after: tuple[datetime, UUID] | None = None,
+        human_created_before: datetime | None = None,
+        timers_due_by: datetime | None = None,
     ) -> list[WorkflowRunWaitEntity]: ...
 
 
@@ -148,12 +152,18 @@ class AgentPort(ABC):
         source: str = "WORKFLOW_RUN",
         conversation_metadata: dict[str, object] | None = None,
         instructions: str | None = None,
+        model_name: str | None = None,
+        generation: GenerationSettings | None = None,
     ) -> UUID:
         """Starts an agent conversation execution and returns the conversation ID.
 
         ``instructions`` is what this particular run is for, as opposed to what
         the agent is for. It becomes the conversation's instructions, which the
         prompt layers after the agent's own.
+
+        ``model_name`` and ``generation`` are a step's narrower choice of model
+        and generation settings, layered over the agent's for this
+        conversation only.
         """
 
     @abstractmethod

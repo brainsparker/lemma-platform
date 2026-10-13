@@ -267,6 +267,7 @@ async def worker(
                 "COMPOSIO_BASE_URL": fake_composio_server.base_url,
                 "MICROSOFT_BOT_APP_ID": "teams-app-id",
                 "MICROSOFT_BOT_APP_PASSWORD": "teams-app-secret",
+                "MICROSOFT_BOT_SERVICE_EXTRA_HOST": "127.0.0.1",
             },
         ) as process:
             yield process

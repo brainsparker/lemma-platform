@@ -43,7 +43,7 @@ from app.modules.agent.infrastructure.harnesses.channel_context import (
 from app.modules.agent.infrastructure.harnesses.channel_context import (
     participants_block as _participants_block,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     user_prompt_text,
 )
 from app.modules.agent.services import outsider_audience

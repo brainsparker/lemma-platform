@@ -15,6 +15,7 @@ from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import StreamAppendResult
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 
 from app.modules.agent_surfaces.platforms.slack.blocks import (
@@ -23,12 +24,18 @@ from app.modules.agent_surfaces.platforms.slack.blocks import (
 from app.modules.agent_surfaces.platforms.slack.message_blocks import _markdown_chunk
 from app.modules.agent_surfaces.platforms.slack.client import (
     build_slack_client,
+    classify_slack_error,
     slack_access_token,
     slack_customized_message_kwargs,
     slack_scopes,
 )
 
 logger = get_logger(__name__)
+
+#: Tries per overflow part once the stream has closed with the answer's start.
+#: Each try already retries what the transport may retry; this covers a failure
+#: that gave up on a part the stream's own close had nothing to do with.
+_OVERFLOW_ATTEMPTS = 2
 
 
 def _slack_error_code(exc: BaseException) -> str:
@@ -191,6 +198,10 @@ class SlackStreamSurface:
         )
         if not await self._close_stream(handle, channel=channel, chunks=chunks):
             return False
+        # The stream now holds the start of the answer, so from here the answer
+        # is delivered: a failed overflow part must not send the caller down
+        # the delete-and-resend path, which removed the start and posted every
+        # part again -- the ones already sent included.
         await self._send_overflow(event, chunks[1:], metadata=metadata)
         await remove_processing_reaction(self.credentials, event)
         return True
@@ -246,7 +257,13 @@ class SlackStreamSurface:
         *,
         metadata: dict[str, Any] | None,
     ) -> None:
-        """Anything past the stream's markdown budget, as ordinary messages."""
+        """Anything past the stream's markdown budget, as ordinary messages.
+
+        Each part is tried twice and the parts go in order; a part that still
+        fails stops the rest, since what follows a gap reads as nonsense. It
+        never raises: the answer has started in the stream, and resending it
+        whole would repeat what the person already has.
+        """
         if not overflow:
             return
         # Imported here rather than at module scope so the two surfaces stay
@@ -256,8 +273,30 @@ class SlackStreamSurface:
         )
 
         sender = SlackPlatformService(credentials=self.credentials)
-        for remainder in overflow:
-            await sender.send_message(event=event, message=remainder, metadata=metadata)
+        for index, remainder in enumerate(overflow):
+            for attempt in range(_OVERFLOW_ATTEMPTS):
+                try:
+                    await sender.send_message(
+                        event=event, message=remainder, metadata=metadata
+                    )
+                    break
+                except PLATFORM_TRANSPORT_ERRORS as exc:
+                    # Again only for what provably did not post (a rate limit, a
+                    # refused connection): a timeout may have posted the part.
+                    retryable = (
+                        isinstance(exc, Exception)
+                        and classify_slack_error(exc)
+                        is DeliveryClassification.TRANSIENT
+                    )
+                    if retryable and attempt + 1 < _OVERFLOW_ATTEMPTS:
+                        continue
+                    logger.error(
+                        "agent_surfaces.service.slack_answer_overflow_lost.failed",
+                        sent_parts=index + 1,
+                        total_parts=len(overflow) + 1,
+                        exc_info=True,
+                    )
+                    return
 
     async def end_progress(
         self,

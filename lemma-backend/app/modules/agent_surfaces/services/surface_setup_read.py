@@ -22,7 +22,7 @@ class SurfaceSetupReadMixin:
         """The remaining setup work on this surface, for one reader.
 
         ``reveal_secrets`` decides whether the org's own shared secrets appear
-        in the copy-able fields. ``SurfaceSetupActionField.secret`` is a
+        in the copy-able fields, and whether a Teams consent link does. ``SurfaceSetupActionField.secret`` is a
         rendering hint, not an access control, and the WhatsApp verify token is
         what re-points the org's webhook subscription — so it goes only to a
         reader who could change the surface anyway, not to everyone holding
@@ -32,7 +32,9 @@ class SurfaceSetupReadMixin:
         surface = await self.get_surface_by_name_in_pod(pod_id=pod_id, name=name)
         guide = self.get_platform_setup_guide(surface.surface_type.value)
         webhook_url = computed_webhook_url(surface)
-        admin_consent = await self._surface_admin_consent(surface)
+        admin_consent = await self._surface_admin_consent(
+            surface, include_consent_url=reveal_secrets
+        )
         is_custom_app = await self._surface_uses_org_custom_app(surface)
         signing_secret_missing, app_id_missing = await self._slack_verification_gaps(
             surface=surface, is_custom_app=is_custom_app

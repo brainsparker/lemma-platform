@@ -226,6 +226,15 @@ it is asked, not skipped.
 - When a message arrives from an external identity, the system shall resolve it
   to a Lemma user where one exists, and shall keep that resolution stable across
   later messages.
+- The system shall resolve a Telegram account only on proof: a contact the
+  person shares themselves whose number is verified on their Lemma account. A
+  Telegram @username is never proof — anyone can claim a free one, and one
+  given up is taken by a stranger — and a profile does not hold one. Until the
+  person has shared that contact, the system shall ask them for it and shall not
+  act as any Lemma user.
+- Where a person creates a Telegram bot from Lemma, the system shall not treat
+  opening the setup link as proof of who opened it; they are recognised in the
+  new bot the same way, by sharing their own contact.
 - The system shall give a resolved person exactly the access their Lemma
   identity has, and no more — being present in the Slack channel shall not by
   itself grant access to the pod.

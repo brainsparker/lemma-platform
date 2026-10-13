@@ -17,6 +17,7 @@ the status before the response body starts, or (b) a genuine status remap.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 
 from fastapi import FastAPI, HTTPException, Request
@@ -43,6 +44,35 @@ def _sanitize_validation_payload(value: object) -> object:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_sanitize_validation_payload(item) for item in value]
     return value
+
+
+#: How much of a refused value a validation error echoes back as ``input``.
+VALIDATION_INPUT_PREVIEW_CHARS = 200
+
+
+def _input_preview(value: object) -> object:
+    """A refused value short enough to echo back, saying how long it was.
+
+    Each error echoes the value it refused, and for a value refused for its
+    length that is the whole of it -- an over-long message came back entire
+    -- while a missing field echoes the whole body. Short values pass through
+    as they were; a long one, or a long structure, becomes a cut-down string.
+    """
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    if len(text) <= VALIDATION_INPUT_PREVIEW_CHARS:
+        return value
+    return f"{text[:VALIDATION_INPUT_PREVIEW_CHARS]}… ({len(text)} characters)"
+
+
+def _previewed_inputs(errors: object) -> object:
+    if not isinstance(errors, list):
+        return errors
+    return [
+        {**error, "input": _input_preview(error["input"])}
+        if isinstance(error, dict) and "input" in error
+        else error
+        for error in errors
+    ]
 
 
 def _error_body(
@@ -153,7 +183,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError):
-        errors = _sanitize_validation_payload(exc.errors())
+        errors = _previewed_inputs(_sanitize_validation_payload(exc.errors()))
         record_exception_on_current_span(
             exc,
             attributes={

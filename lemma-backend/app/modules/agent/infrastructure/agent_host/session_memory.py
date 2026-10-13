@@ -13,6 +13,7 @@ Both halves live here so the read and the write cannot drift apart.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
@@ -57,8 +58,14 @@ async def remember_provider_session(
     Returns whether the binding actually changed. The host puts the session id
     on *every* checkpoint, and a non-terminal checkpoint is the lease heartbeat
     it resends on every heartbeat, so writing unconditionally meant one
-    ``jsonb_set`` per heartbeat per active run to store a value that had not moved since the run
-    began.
+    ``jsonb_set`` per heartbeat per active run to store a value that had not
+    moved since the run began.
+
+    The row lock is taken only once a change is in sight. Reading under
+    ``FOR UPDATE`` first meant every heartbeat locked the conversation's
+    metadata to learn that nothing had changed, contending with message
+    appends on exactly the conversations that are busiest. The decision is
+    made again under the lock, because a newer run may have bound in between.
     """
     session_id = checkpoint.detail.get("provider_session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -82,32 +89,24 @@ async def remember_provider_session(
         return False
     conversation_id, harness_id, created_at, host_id = binding
     repository = ConversationRepository(uow)
+    opened = _OpenedSession(
+        session_id=session_id,
+        harness_id=str(harness_id),
+        host_id=str(host_id),
+        created_at=created_at,
+    )
+    unlocked = await repository.get_conversation_metadata_key(
+        conversation_id, AGENT_HOST_SESSION_METADATA_KEY
+    )
+    if _rebound(unlocked, checkpoint, opened) is None:
+        return False
     stored = await repository.get_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
         for_update=True,
     )
-    stored = stored if isinstance(stored, dict) else {}
-    if _binding_is_newer(stored, checkpoint.run_id, created_at):
-        return False
-    # Stored with the harness that opened it. A Codex rollout id means nothing
-    # to Claude Code, so a conversation moved to another harness starts a fresh
-    # session there instead of failing a load every turn.
-    binding_value: JsonObject = {
-        "harness_id": str(harness_id),
-        "host_id": str(host_id),
-        "session_id": session_id,
-        "run_id": str(checkpoint.run_id),
-        "run_created_at": created_at.isoformat(),
-    }
-    same_session = (
-        stored.get("session_id") == session_id
-        and stored.get("harness_id") == str(harness_id)
-        and stored.get("host_id", str(host_id)) == str(host_id)
-    )
-    binding_value.update(_host_directory_binding(stored, checkpoint, same_session))
-    binding_value.update(_instruction_binding(stored, checkpoint, same_session))
-    if stored == binding_value:
+    binding_value = _rebound(stored, checkpoint, opened)
+    if binding_value is None:
         return False
     await repository.set_conversation_metadata_key(
         conversation_id,
@@ -115,6 +114,47 @@ async def remember_provider_session(
         binding_value,
     )
     return True
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenedSession:
+    """The session a checkpoint reports, with the run's lease that opened it."""
+
+    session_id: str
+    harness_id: str
+    host_id: str
+    created_at: datetime
+
+
+def _rebound(
+    stored: object, checkpoint: AgentHostRunCheckpoint, opened: _OpenedSession
+) -> JsonObject | None:
+    """The binding this checkpoint calls for, or None when nothing would change.
+
+    None too when a newer run already holds the binding: a replay must not
+    take it back.
+    """
+    stored = stored if isinstance(stored, dict) else {}
+    if _binding_is_newer(stored, checkpoint.run_id, opened.created_at):
+        return None
+    # Stored with the harness that opened it. A Codex rollout id means nothing
+    # to Claude Code, so a conversation moved to another harness starts a fresh
+    # session there instead of failing a load every turn.
+    binding_value: JsonObject = {
+        "harness_id": opened.harness_id,
+        "host_id": opened.host_id,
+        "session_id": opened.session_id,
+        "run_id": str(checkpoint.run_id),
+        "run_created_at": opened.created_at.isoformat(),
+    }
+    same_session = (
+        stored.get("session_id") == opened.session_id
+        and stored.get("harness_id") == opened.harness_id
+        and stored.get("host_id", opened.host_id) == opened.host_id
+    )
+    binding_value.update(_host_directory_binding(stored, checkpoint, same_session))
+    binding_value.update(_instruction_binding(stored, checkpoint, same_session))
+    return None if stored == binding_value else binding_value
 
 
 def _host_directory_binding(

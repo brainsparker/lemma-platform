@@ -25,7 +25,7 @@ from app.modules.agent.services.model_stream_budget import ModelStreamBudgetTran
 
 @pytest.fixture
 def client() -> httpx.AsyncClient:
-    return factory._build_provider_client({})
+    return factory._build_provider_client()
 
 
 def _pool(client: httpx.AsyncClient) -> httpcore.AsyncConnectionPool:

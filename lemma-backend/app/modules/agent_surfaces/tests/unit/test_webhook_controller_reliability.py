@@ -27,7 +27,12 @@ from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.identity.config import identity_settings
 
 
-def _request(body: bytes, *, content_type: str = "application/json") -> Request:
+def _request(
+    body: bytes,
+    *,
+    content_type: str = "application/json",
+    extra_headers: dict[str, str] | None = None,
+) -> Request:
     sent = False
 
     async def receive():
@@ -46,7 +51,11 @@ def _request(body: bytes, *, content_type: str = "application/json") -> Request:
             "path": "/surfaces/webhooks/test",
             "raw_path": b"/surfaces/webhooks/test",
             "query_string": b"",
-            "headers": [(b"content-type", content_type.encode())],
+            "headers": [(b"content-type", content_type.encode())]
+            + [
+                (name.encode(), value.encode())
+                for name, value in (extra_headers or {}).items()
+            ],
             "client": ("127.0.0.1", 1234),
             "server": ("test", 443),
         },
@@ -169,7 +178,7 @@ async def test_platform_webhook_verifies_and_publishes_versioned_event():
         )
 
     assert result == {"message": "Webhook received"}
-    security.assert_platform_request_allowed.assert_called_once_with("telegram")
+    security.assert_platform_request_allowed.assert_called_once_with("TELEGRAM")
     security.verify_platform_request.assert_awaited_once()
     event = publish.await_args.args[1]
     assert event.source_event_id == "telegram:shared:99"
@@ -177,8 +186,9 @@ async def test_platform_webhook_verifies_and_publishes_versioned_event():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("platform", ["whatsapp", "WhatsApp", "WHATSAPP"])
 async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
-    monkeypatch,
+    monkeypatch, platform
 ):
     from app.modules.agent_surfaces.config import surface_settings
     from app.modules.identity.domain.events import (
@@ -205,12 +215,14 @@ async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
         new=AsyncMock(),
     ) as publish:
         result = await handle_platform_webhook(
-            "whatsapp",
+            platform,
             _request(body),
             security,
             uow_factory=_CountingUowFactory(),
         )
 
+    # Any spelling of the path reaches the verification-code branch; it used to
+    # be compared case-sensitively after a case-insensitive allow-list.
     assert result == {"message": "Verification message received"}
     security.verify_platform_request.assert_awaited_once()
     publish.assert_awaited_once()
@@ -375,3 +387,99 @@ def test_one_email_to_two_surfaces_is_two_deliveries():
     assert resend_source_event_id(
         normalized, receiver="surface-a"
     ) != resend_source_event_id(normalized, receiver="surface-b")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform", ["gmail", "not-a-platform"])
+async def test_a_path_naming_no_webhook_platform_is_not_found(platform):
+    from app.modules.agent_surfaces.domain.errors import (
+        SurfaceWebhookAuthenticationError,
+    )
+
+    with pytest.raises(SurfaceWebhookAuthenticationError) as refused:
+        await handle_platform_webhook(
+            platform,
+            _request(b"{}"),
+            SimpleNamespace(),
+            uow_factory=_CountingUowFactory(),
+        )
+    assert refused.value.status_code == 404
+
+
+def _slack_handshake(challenge: object) -> bytes:
+    return json.dumps(
+        {"token": "t", "challenge": challenge, "type": "url_verification"}
+    ).encode()
+
+
+def _slack_headers(*, age_seconds: int = 0) -> dict[str, str]:
+    import time
+
+    return {
+        "x-slack-signature": "v0=anything",
+        "x-slack-request-timestamp": str(int(time.time()) - age_seconds),
+    }
+
+
+async def _handshake(body: bytes, headers: dict[str, str] | None):
+    from app.modules.agent_surfaces.services.webhook_security_service import (
+        SurfaceWebhookSecurityService,
+    )
+
+    return await handle_platform_webhook(
+        "Slack",
+        _request(body, extra_headers=headers),
+        SurfaceWebhookSecurityService(),
+        uow_factory=_CountingUowFactory(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_slack_url_verification_answers_with_the_challenge_alone(monkeypatch):
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+
+    answer = await _handshake(_slack_handshake("3eZbrw1aBm2rZgRN"), _slack_headers())
+
+    assert answer == {"challenge": "3eZbrw1aBm2rZgRN"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers", [None, _slack_headers(age_seconds=3600)], ids=["unsigned", "stale"]
+)
+async def test_slack_url_verification_without_slacks_signed_headers_is_refused(
+    monkeypatch, headers
+):
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.domain.errors import (
+        SurfaceWebhookAuthenticationError,
+    )
+
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+
+    with pytest.raises(SurfaceWebhookAuthenticationError) as refused:
+        await _handshake(_slack_handshake("abc"), headers)
+    assert refused.value.status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "challenge",
+    ["<script>alert(1)</script>", "x" * 129, {"nested": "object"}, None],
+    ids=["markup", "too-long", "object", "missing"],
+)
+async def test_slack_url_verification_echoes_nothing_but_a_short_token(
+    monkeypatch, challenge
+):
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.domain.errors import (
+        SurfaceWebhookAuthenticationError,
+    )
+
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", False)
+
+    with pytest.raises(SurfaceWebhookAuthenticationError) as refused:
+        await _handshake(_slack_handshake(challenge), None)
+    assert refused.value.status_code == 400

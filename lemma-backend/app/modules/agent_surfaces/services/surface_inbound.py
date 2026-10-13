@@ -180,13 +180,15 @@ class SurfaceInboundMixin:
         surfaces: list[AgentSurfaceEntity] = []
         resolved_user: ResolvedSurfaceUser | None = None
         user_pod_ids: set[UUID] | None = None
-        if fan_in and parsed.is_dm:
+        if fan_in:
             surfaces, resolved_user, user_pod_ids = await fan_in_candidates(
                 platform=platform,
                 parsed=parsed,
                 adapter=adapter,
                 router=self.router,
                 surfaces=self.surface_repository,
+                uow=self.uow,
+                links=self.conversation_link_repository,
             )
         created = await created_group_surfaces(
             self.uow,
@@ -198,11 +200,9 @@ class SurfaceInboundMixin:
         if created == []:
             return None  # a group the bot created, but not for any pod here
         surfaces = created or surfaces
-        if not surfaces:
+        if not surfaces and not fan_in:
             surfaces = await self.surface_repository.list_active_for_routing(
-                platform,
-                surface_ids=receiver_surface_ids,
-                system_credentials_only=fan_in,
+                platform, surface_ids=receiver_surface_ids
             )
         if receiver_surface_ids is not None and not surfaces:
             return None

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import httpx
 
 from ..openapi_client.api.agent_conversations import (
@@ -12,6 +14,7 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_message_list,
     agent_conversation_message_send,
     agent_conversation_message_withdraw,
+    agent_conversation_pending_interaction_list,
     agent_conversation_retry,
     agent_conversation_stream,
     agent_conversation_stop,
@@ -27,6 +30,9 @@ from ..openapi_client.models.create_conversation_request import (
     CreateConversationRequest,
 )
 from ..openapi_client.models.message_list_response import MessageListResponse
+from ..openapi_client.models.pending_interaction_list_response import (
+    PendingInteractionListResponse,
+)
 from ..openapi_client.models.resolve_user_approval_request import (
     ResolveUserApprovalRequest,
 )
@@ -38,6 +44,25 @@ from ..openapi_client.models.user_approval_list_response import UserApprovalList
 from ..openapi_client.types import UNSET
 from ..types import Metadata
 from .base import BoundResource, as_uuid, compact
+
+
+def _message_body(
+    content: str, metadata: Metadata | None, client_message_id: str | None
+) -> dict[str, object]:
+    """A send, carrying the id that makes sending it again safe.
+
+    The server stores one message per ``client_message_id`` per conversation
+    and answers a repeat with the first send's run. Pass the same id when
+    retrying a message; otherwise one is made for this call.
+    """
+    return compact(
+        {
+            "content": content,
+            "metadata": metadata,
+            "client_message_id": client_message_id or str(uuid4()),
+        }
+    )
+
 
 POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT"
 
@@ -143,6 +168,7 @@ class PodConversations(BoundResource):
         content: str,
         *,
         metadata: Metadata | None = None,
+        client_message_id: str | None = None,
     ) -> None:
         """Send a message and return once the run it starts has finished.
 
@@ -152,7 +178,12 @@ class PodConversations(BoundResource):
         :meth:`send_stream` to read the events as they arrive, or :meth:`append`
         to post the message and return without waiting.
         """
-        response = self.send_stream(conversation_id, content, metadata=metadata)
+        response = self.send_stream(
+            conversation_id,
+            content,
+            metadata=metadata,
+            client_message_id=client_message_id,
+        )
         try:
             for _ in response.iter_bytes():
                 pass
@@ -165,6 +196,7 @@ class PodConversations(BoundResource):
         content: str,
         *,
         metadata: Metadata | None = None,
+        client_message_id: str | None = None,
     ) -> AgentRunStartResponse:
         # Unlike send()/send_stream(), this never opens an SSE stream: it
         # persists the message and returns immediately. When a run is
@@ -176,7 +208,7 @@ class PodConversations(BoundResource):
             agent_conversation_message_append,
             self._pod_uuid(),
             as_uuid(conversation_id),
-            body=compact({"content": content, "metadata": metadata}),
+            body=_message_body(content, metadata, client_message_id),
             body_model=SendMessageRequest,
         )
 
@@ -199,6 +231,7 @@ class PodConversations(BoundResource):
         content: str,
         *,
         metadata: Metadata | None = None,
+        client_message_id: str | None = None,
     ) -> httpx.Response:
         """Send a message and return the live SSE response for the run.
 
@@ -210,7 +243,7 @@ class PodConversations(BoundResource):
             self._pod_uuid(),
             as_uuid(conversation_id),
             body=SendMessageRequest.from_dict(
-                compact({"content": content, "metadata": metadata})
+                _message_body(content, metadata, client_message_id)
             ),
         )
 
@@ -245,6 +278,22 @@ class PodConversations(BoundResource):
             agent_conversation_approval_list,
             self._pod_uuid(),
             as_uuid(conversation_id),
+        )
+
+    def pending_interactions(
+        self, *, page_token: str | None = None, limit: int = 50
+    ) -> PendingInteractionListResponse:
+        """Questions, approvals and Agent Host permission requests waiting on you.
+
+        Across your own conversations in the pod, longest-waiting first. Answer
+        one with `resolve_approval`, passing its `tool_call_id` as the approval
+        id.
+        """
+        return self._call(
+            agent_conversation_pending_interaction_list,
+            self._pod_uuid(),
+            page_token=page_token if page_token is not None else UNSET,
+            limit=limit,
         )
 
     def resolve_approval(

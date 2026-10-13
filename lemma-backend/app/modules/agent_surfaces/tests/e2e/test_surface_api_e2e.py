@@ -542,12 +542,30 @@ async def test_platform_webhook_verification_endpoints_and_signature_rejection(
     assert telegram.status_code == 200, telegram.text
     assert telegram.text == "ok"
 
+    from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+        build_slack_signature_headers,
+    )
+
+    handshake = json.dumps(
+        {"type": "url_verification", "challenge": "slack-challenge"}
+    ).encode()
     slack_verify = await authenticated_client.post(
+        "/surfaces/webhooks/slack",
+        content=handshake,
+        headers=build_slack_signature_headers(
+            raw_body=handshake, signing_secret="slack-secret"
+        ),
+    )
+    assert slack_verify.status_code == 200, slack_verify.text
+    assert slack_verify.json() == {"challenge": "slack-challenge"}
+
+    # Unsigned, it is not Slack's: the handshake is the one branch that answers
+    # before the signature check, and it no longer answers anybody.
+    unsigned_verify = await authenticated_client.post(
         "/surfaces/webhooks/slack",
         json={"type": "url_verification", "challenge": "slack-challenge"},
     )
-    assert slack_verify.status_code == 200, slack_verify.text
-    assert slack_verify.json()["challenge"] == "slack-challenge"
+    assert unsigned_verify.status_code == 401, unsigned_verify.text
 
     missing_signature = await authenticated_client.post(
         "/surfaces/webhooks/slack",

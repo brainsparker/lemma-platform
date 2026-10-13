@@ -21,9 +21,12 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.agent_host import (
     AgentHostCommandKind,
     AgentHostCommandState,
-    AgentHostHarnessHealth,
     AgentHostRunSpec,
     AgentHostRunState,
+)
+from app.modules.agent.domain.agent_host_readiness import (
+    harness_refusal,
+    host_refusal,
 )
 from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_selections,
@@ -82,6 +85,7 @@ async def enqueue_run(
         host_id=host_id,
         harness_id=harness_id,
         run_spec=run_spec,
+        now=timestamp,
     )
 
     lease = AgentHostRunLeaseModel(
@@ -155,16 +159,35 @@ async def _require_admissible_harness(
     host_id: UUID,
     harness_id: UUID,
     run_spec: AgentHostRunSpec,
+    now: datetime,
 ) -> None:
     host_repository = AgentHostRepository(uow)
     host = await host_repository.require(host_id, for_update=True)
     if host.revoked_at is not None:
-        raise AgentHostRunConflict("Agent Host is revoked")
+        raise AgentHostRunConflict(
+            f"{host.display_name} was removed from Lemma, so it cannot run agents."
+        )
+    refusal = host_refusal(
+        host_name=host.display_name,
+        status=host.status,
+        last_seen_at=host.last_seen_at,
+        now=now,
+    )
+    if refusal is not None:
+        raise AgentHostRunConflict(refusal)
     harness = await host_repository.get_harness(harness_id=harness_id)
     if harness is None or harness.host_id != host_id:
         raise AgentHostNotFound("Agent Host harness was not found")
-    if harness.health != AgentHostHarnessHealth.READY.value:
-        raise AgentHostRunConflict(f"harness is not ready: {harness.health}")
+    refusal = harness_refusal(
+        host_name=host.display_name,
+        harness_name=harness.display_name,
+        harness_key=harness.harness_key,
+        health=harness.health,
+        stale_after=harness.stale_after,
+        now=now,
+    )
+    if refusal is not None:
+        raise AgentHostRunConflict(refusal)
     if harness.config_revision != run_spec.profile_revision:
         raise AgentHostRunConflict(
             "harness configuration changed after profile validation"

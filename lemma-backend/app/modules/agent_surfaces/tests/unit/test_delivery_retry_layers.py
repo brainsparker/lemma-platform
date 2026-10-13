@@ -15,6 +15,8 @@ from app.modules.agent_surfaces.domain.delivery_limits import (
     CONSUMER_ATTEMPTS,
     MAX_ATTEMPTS,
     MAX_DELIVERY_ATTEMPTS,
+    OWED_REPLY_ATTEMPTS,
+    OWED_REPLY_JOB_TRIES,
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfacePlatformError
 from app.modules.agent_surfaces.events import handlers
@@ -84,4 +86,14 @@ def test_the_surface_job_states_its_try_limit():
     assert jobs, "found no streaq_task registrations to check"
     for decorator in jobs:
         limit = _keyword(decorator, "max_tries")
-        assert isinstance(limit, ast.Name) and limit.id == "CONSUMER_ATTEMPTS"
+        # The owed-reply job is the one that is never retried by streaq: it
+        # reschedules itself on the platform's clock (see `delivery_limits`).
+        assert isinstance(limit, ast.Name) and limit.id in {
+            "CONSUMER_ATTEMPTS",
+            "OWED_REPLY_JOB_TRIES",
+        }
+
+
+def test_an_owed_reply_is_bounded_like_every_other_retry():
+    assert OWED_REPLY_ATTEMPTS <= MAX_ATTEMPTS
+    assert OWED_REPLY_JOB_TRIES == 1

@@ -195,7 +195,7 @@ async def test_a_notice_is_measured_by_the_ceiling_it_has_to_fit_inside():
 
     source = inspect.getsource(harness.PydanticAIHarness)
     notice_at = source.index("capabilities.append(RunNoticeCapability")
-    processors_at = source.index("ProcessHistory(processor) for processor")
+    processors_at = source.index("history_capabilities(options")
 
     assert notice_at < processors_at, (
         "RunNoticeCapability must be registered before the history processors, "

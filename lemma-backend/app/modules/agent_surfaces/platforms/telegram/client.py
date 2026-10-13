@@ -26,7 +26,10 @@ from typing import Any
 import httpx
 
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
-from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
+from app.modules.agent_surfaces.platforms.delivery import (
+    DeliveryClassification,
+    classify_transport_failure,
+)
 
 # The one canonical Telegram API base. ``api_base_url`` in the bot credentials
 # overrides it (used by tests to point at a fake server, and by self-hosted Bot
@@ -115,6 +118,15 @@ class TelegramApiError(Exception):
         """
         text = (self.description or "").lower()
         return "can't parse entities" in text or "can't find end" in text
+
+    @property
+    def is_message_too_long(self) -> bool:
+        """True when Telegram refused the text for its length.
+
+        Permanent as sent, but not as a reply: the same words split smaller
+        are accepted, which is what the sender does with it.
+        """
+        return "too long" in (self.description or "").lower()
 
     @property
     def is_not_modified(self) -> bool:
@@ -242,6 +254,18 @@ def classify_telegram_error(exc: Exception) -> DeliveryClassification:
     if isinstance(exc, httpx.RequestError):
         return DeliveryClassification.TRANSIENT
     return DeliveryClassification.PERMANENT
+
+
+def classify_telegram_send_error(exc: Exception) -> DeliveryClassification:
+    """``classify_telegram_error`` for a call that posts a message.
+
+    The general classifier retries any transport failure, which is right for a
+    read and wrong for a send: a read timeout after ``sendMessage`` went out may
+    have posted it, and a retry posts it twice.
+    """
+    if isinstance(exc, TelegramApiError):
+        return classify_telegram_error(exc)
+    return classify_transport_failure(exc)
 
 
 def telegram_retry_after(exc: Exception) -> float | None:

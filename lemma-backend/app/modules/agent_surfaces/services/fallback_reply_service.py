@@ -150,6 +150,21 @@ def _reply_context(
     )
 
 
+def _unresolved_reply(
+    adapter: SurfacePlatformAdapterPort,
+    parsed: ParsedInboundSurfaceEvent,
+) -> tuple[tuple[str, dict[str, object]], SurfaceReplyKind]:
+    """What to tell a sender nobody resolved, and which kind of reply it is.
+
+    Where the platform can prove who the sender is (a Telegram contact share),
+    they are asked for that proof; otherwise they are pointed at signup.
+    """
+    identity_reply = adapter.unresolved_sender_reply(parsed)
+    if identity_reply is not None:
+        return identity_reply, "identity_link"
+    return (signup_message(), {}), "signup"
+
+
 def unresolved_sender_context(
     *,
     surface: AgentSurfaceEntity,
@@ -162,11 +177,7 @@ def unresolved_sender_context(
         return None
     if not sender_can_be_answered(parsed):
         return None
-    identity_reply = adapter.unresolved_sender_reply(parsed)
-    message, reply_metadata = identity_reply or (signup_message(), {})
-    reply_kind: SurfaceReplyKind = (
-        "identity_link" if identity_reply is not None else "signup"
-    )
+    (message, reply_metadata), reply_kind = _unresolved_reply(adapter, parsed)
     return _reply_context(
         platform=surface.surface_type,
         surface=surface,
@@ -296,12 +307,8 @@ async def prepare_unrouted_context(
     # leave this person with no answer at all.
     built = False
     try:
-        identity_reply = adapter.unresolved_sender_reply(parsed)
-        confirmation = adapter.linked_sender_confirmation(parsed)
         reply, reply_kind = _unrouted_reply(
-            resolved_user=resolved_user,
-            identity_reply=identity_reply,
-            confirmation=confirmation,
+            adapter=adapter, parsed=parsed, resolved_user=resolved_user
         )
         logger.debug(
             "agent_surfaces.fallback_reply_service.agent_surface_prepared_unrouted_fallback.observed",
@@ -331,15 +338,13 @@ async def prepare_unrouted_context(
 
 def _unrouted_reply(
     *,
+    adapter: SurfacePlatformAdapterPort,
+    parsed: ParsedInboundSurfaceEvent,
     resolved_user: ResolvedSurfaceUser,
-    identity_reply: tuple[str, dict[str, Any]] | None,
-    confirmation: tuple[str, dict[str, Any]] | None,
 ) -> tuple[tuple[str, dict[str, Any]], SurfaceReplyKind]:
     if resolved_user.internal_user_id is None:
-        return (
-            identity_reply or (signup_message(), {}),
-            "identity_link" if identity_reply is not None else "signup",
-        )
+        return _unresolved_reply(adapter, parsed)
+    confirmation = adapter.linked_sender_confirmation(parsed)
     if confirmation is not None:
         return confirmation, "identity_link"
     return (surface_setup_message(), {}), "surface_setup"

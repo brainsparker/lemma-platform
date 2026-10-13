@@ -35,7 +35,10 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
 )
-from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
+from app.modules.agent_surfaces.domain.envelope import (
+    DeliveryReceipt,
+    SurfaceEnvelope,
+)
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.groups import OUTSIDERS_LINK_USER
 from app.modules.agent_surfaces.domain.ports import (
@@ -145,6 +148,20 @@ class SurfaceDelivery:
             # waiting for an answer that is now not coming. Those are
             # `warning`, because the failure is invisible from both ends --
             # the run completes normally and the person just never hears back.
+            #
+            # Except a conversation that *was* opened from a platform and has
+            # since lost its link -- the thread was repointed at a newer one.
+            # Then somebody is waiting there too, and the answer goes nowhere.
+            surface_id = await agent_conversations.conversation_metadata_value(
+                self.uow, conversation_id, "surface_id"
+            )
+            if surface_id is not None:
+                logger.warning(
+                    "agent_surfaces.egress.surface_conversation_lost_its_thread.degraded",
+                    conversation_id=str(conversation_id),
+                    surface_id=surface_id,
+                )
+                return None
             logger.debug(
                 "agent_surfaces.egress.skipped_no_conversation.diagnostic",
                 conversation_id=conversation_id,
@@ -324,16 +341,35 @@ class SurfaceDelivery:
         target: SurfaceEgressTarget,
         *,
         envelope: SurfaceEnvelope,
-        metadata: dict[str, Any],
+        metadata: dict[str, object],
         conversation_id: UUID,
     ) -> bool:
-        """Hand one envelope to the platform and say whether it arrived.
+        """Hand one envelope to the platform and say whether it arrived."""
+        receipt = await self.deliver_envelope_receipt(
+            target,
+            envelope=envelope,
+            metadata=metadata,
+            conversation_id=conversation_id,
+        )
+        return receipt is not None
+
+    async def deliver_envelope_receipt(
+        self,
+        target: SurfaceEgressTarget,
+        *,
+        envelope: SurfaceEnvelope,
+        metadata: dict[str, Any],
+        conversation_id: UUID,
+    ) -> DeliveryReceipt | None:
+        """Hand one envelope to the platform; its receipt, or None if it did not
+        arrive. The receipt says part by part what landed, for a caller that
+        must know (held files are released only when theirs did).
 
         The ladder -- native, then the part's own text, then nothing -- lives in
         ``BaseSurfaceAdapter.deliver``, and this is what is left once the two
         hand-written copies of it are gone: release the connection, send, report.
 
-        Returning ``False`` matters as much as delivering. A prompt that reached
+        Returning ``None`` matters as much as delivering. A prompt that reached
         nobody leaves the run WAITING on an answer that cannot come, so the
         caller un-dedupes and falls back to asking in plain words.
 
@@ -363,7 +399,7 @@ class SurfaceDelivery:
                     platform=target.surface.surface_type.value,
                     exc_info=True,
                 )
-                return False
+                return None
             if receipt.degraded:
                 logger.debug(
                     "agent_surfaces.egress.envelope_degraded.diagnostic",
@@ -381,7 +417,7 @@ class SurfaceDelivery:
                 platform=target.surface.surface_type.value,
                 parts=receipt.undelivered,
             )
-            return False
+            return None
         await remember_a_prompt_that_arrived_as_words(
             self.uow,
             conversation_id=conversation_id,
@@ -397,4 +433,4 @@ class SurfaceDelivery:
                 text=envelope.text,
                 answered=answered_in_group(target.link, target.conversation_user_id),
             )
-        return True
+        return receipt

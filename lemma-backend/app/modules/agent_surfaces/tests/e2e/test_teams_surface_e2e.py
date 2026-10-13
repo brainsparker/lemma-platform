@@ -122,6 +122,73 @@ async def test_teams_channel_surface_handles_platform_payload_and_replies(
     assert "E2E agent reply [TEAMS]" in text_payloads[-1]["text"]
 
 
+async def test_a_teams_token_replayed_with_another_service_url_is_refused(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_teams,
+    message_store,
+    monkeypatch,
+):
+    """A genuine token cannot carry an activity naming a host it was not issued for.
+
+    Every reply posts the bot token to the activity's ``serviceUrl``, so a
+    replayed token with a rewritten body would otherwise hand the token over.
+    """
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    monkeypatch.setattr(
+        surface_settings,
+        "microsoft_bot_openid_config_url",
+        f"{fake_teams.openid_config_url}",
+    )
+    monkeypatch.setattr(surface_settings, "microsoft_bot_app_id", "teams-app-id")
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="microsoft_teams",
+        credentials={
+            "access_token": "teams-token",
+            "user_data": {"tenant_id": REAL_TEAMS_TENANT_ID},
+        },
+    )
+    agent, _ = await _create_agent_surface(
+        authenticated_client,
+        test_pod["id"],
+        config={
+            "type": "TEAMS",
+            "account_id": str(account.id),
+            "allowed_channel_ids": [REAL_TEAMS_CHANNEL_ID],
+        },
+    )
+    payload = _load_teams_channel_mention_fixture(fake_teams)
+    payload["serviceUrl"] = "https://collector.example.test/teams"
+
+    response = await authenticated_client.post(
+        "/surfaces/webhooks/teams",
+        content=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": (
+                f"Bearer {fake_teams.issue_webhook_token(audience='teams-app-id')}"
+            ),
+        },
+    )
+
+    assert response.status_code == 401, response.text
+    assert response.json()["code"] == "SURFACE_WEBHOOK_AUTH_FAILED"
+    assert (
+        await _conversation_by_external_thread(
+            authenticated_client,
+            pod_id=test_pod["id"],
+            agent_name=agent["name"],
+            external_thread_id=REAL_TEAMS_THREAD_ID,
+        )
+        is None
+    )
+    assert message_store.get_all("TEAMS") == []
+
+
 async def test_teams_oauth_token_acquisition_succeeds_via_fake_provider(
     e2e_settings,
     fake_teams,
@@ -407,11 +474,9 @@ def test_teams_parser_legacy_value_event_dispatch_and_fields():
     assert event is not None
     assert event.platform == "TEAMS"
     assert event.is_dm is False
-    # ``strip_html`` removes the ``<at>...</at>`` mention tag before the
-    # legacy path's own "<at>" substring check ever sees it, so this is
-    # never actually detected as a mention here -- ``is_thread_reply``
-    # (via ``replyToId``) is what makes the conversation start instead.
-    assert event.mentioned_agent is False
+    # The ``<at>`` tag is read off the raw HTML, before ``strip_html``
+    # removes it -- this shape has no entities array to say so otherwise.
+    assert event.mentioned_agent is True
     assert event.should_start_conversation is True
     assert event.tenant_id == "legacy-tenant-e2e"
     assert event.external_channel_id == legacy_channel_id

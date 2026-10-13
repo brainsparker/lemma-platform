@@ -100,8 +100,20 @@ class FunctionRuntimeRouteResolver:
     async def endpoint(
         self,
         dispatch: FunctionExecutionDispatch,
+        *,
+        execution_ends_at: datetime | None = None,
+        wait_until: datetime | None = None,
     ) -> FunctionRuntimeEndpoint:
-        required_valid_until = self._required_valid_until(dispatch)
+        """A lease that outlives the run's execution, found before ``wait_until``.
+
+        Both default to the dispatch's own deadline. A PENDING run's deadline is
+        only when it must *start*, so a caller that knows when execution will
+        end -- which is what the lease has to cover -- passes it.
+        """
+        required_valid_until = self.lease_needed_until(
+            dispatch,
+            execution_ends_at or dispatch.deadline_at,
+        )
         return await self.endpoint_for(
             dispatch.pod_id,
             admission_class=(
@@ -109,7 +121,7 @@ class FunctionRuntimeRouteResolver:
                 if dispatch.mode == FunctionDispatchMode.SYNCHRONOUS
                 else AdmissionClass.BATCH
             ),
-            deadline_at=dispatch.deadline_at,
+            deadline_at=wait_until or dispatch.deadline_at,
             required_valid_until=required_valid_until,
         )
 
@@ -191,21 +203,22 @@ class FunctionRuntimeRouteResolver:
         self,
         pod_id: UUID,
         endpoint: FunctionRuntimeEndpoint,
-    ) -> None:
+    ) -> bool:
         """Drop the endpoint *and* the sandbox behind it, after it stops serving.
+
+        Returns whether the sandbox was destroyed. Callers decide *whether* to
+        quarantine; see ``FunctionRuntimeQuarantine``, which asks the runtime's
+        health probe first.
 
         Dropping the cached endpoint alone does not help: the reload adopts the
         same sandbox, because adoption asks the provider whether the sandbox is
         running and a sandbox whose runtime process has died is still running.
-        That is exactly what happened -- one slow cold start left a sandbox
-        answering 502 on the runtime port, every later run was handed it, and
-        the outage lasted 100 minutes until someone deleted it by hand. A
-        freshly booted sandbox from the same template answered 404, so the
-        template was sound and the process had died.
+        A sandbox left answering 502 on the runtime port was handed to every
+        later run until someone deleted it by hand.
 
-        Destroying is safe here in a way it would not be for a workspace: a
-        function sandbox holds no user files, so replacing it costs a cold start
-        and nothing else.
+        A function sandbox holds no user files, so replacing it loses no data --
+        but it does end every run in flight on it, which is why the decision to
+        call this belongs to the health probe and not to one failed request.
         """
         await self.invalidate_for(pod_id, endpoint)
         client = self._sandbox_client_factory()
@@ -222,11 +235,13 @@ class FunctionRuntimeRouteResolver:
                 pod_id=str(pod_id),
                 exc_info=True,
             )
+            return False
         else:
             logger.info(
                 "function.runtime.sandbox_quarantined",
                 pod_id=str(pod_id),
             )
+            return True
         finally:
             await client.close()
 
@@ -400,10 +415,11 @@ class FunctionRuntimeRouteResolver:
         )
 
     @staticmethod
-    def _required_valid_until(
+    def lease_needed_until(
         dispatch: FunctionExecutionDispatch,
+        execution_ends_at: datetime,
     ) -> datetime:
-        required_valid_until = dispatch.deadline_at
+        required_valid_until = execution_ends_at
         if dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS:
             required_valid_until += timedelta(
                 seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS

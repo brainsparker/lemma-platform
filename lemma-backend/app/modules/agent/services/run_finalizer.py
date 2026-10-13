@@ -20,13 +20,12 @@ from uuid import UUID
 
 
 from app.core.authorization.delegation import is_pod_default_agent
-from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
-from app.modules.agent.infrastructure.transport_errors import (
-    connection_failure_message,
-    is_retryable_stream_error,
+from app.modules.agent.infrastructure.harnesses.run_failure_classification import (
+    classify_run_failure,
+    is_usage_limit_error as is_usage_limit_error,
+    run_failure_reason as run_failure_reason,
 )
-from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import (
     AgentRunUsage,
@@ -50,89 +49,18 @@ from app.modules.agent.tools.context import ConversationContext
 logger = get_logger(__name__)
 
 
-def is_usage_limit_error(exc: BaseException) -> bool:
-    """Whether this run died because the workspace is out of allowance.
-
-    A predicate rather than an exported class because the architecture gate
-    allows the `agent` module exactly one import of `usage.domain.errors`, and
-    the module that already classifies run failures is the one that should have
-    it. Callers ask the question; they do not need the type.
-    """
-    if isinstance(exc, BaseExceptionGroup):
-        return any(is_usage_limit_error(child) for child in exc.exceptions)
-    return isinstance(exc, UsageLimitExceededError) and exc.reason == "exhausted"
-
-
 def run_failure_message(exc: BaseException) -> str:
     """What the user reads when a run dies outside the harness's own handling.
 
-    Distinguishing these matters: a quota exhaustion and a dropped connection
-    are both "the run failed", but only one of them is worth investigating, and
-    neither is fixed by checking the runtime configuration.
+    The same sentence the harness writes for the same exception: both read
+    `classify_run_failure`, so a failure does not change its explanation
+    depending on which layer happened to catch it.
     """
-    if isinstance(exc, BaseExceptionGroup):
-        if is_usage_limit_error(exc):
-            return run_failure_message(UsageLimitExceededError())
-        domain_error = next(
-            (child for child in exc.exceptions if isinstance(child, DomainError)), None
-        )
-        return run_failure_message(domain_error or exc.exceptions[0])
-    if is_usage_limit_error(exc):
-        return (
-            "This run cannot continue because the workspace has used its "
-            "available usage allowance. Usage resets with the billing period, "
-            "or the plan limit can be raised."
-        )
-    if is_retryable_stream_error(exc):
-        # No mention of Retry. `ConversationRetryService.retry_failed_run`
-        # accepts a failed run only while it holds nothing but user messages,
-        # and a dropped stream is by definition a run that had already been
-        # talking -- so the button would be both refused (409) and, since
-        # `last_run_retryable` asks the same question, not offered. Advice that
-        # names a control the reader cannot use is worse than no advice.
-        return connection_failure_message(exc)
-    if isinstance(exc, DomainError):
-        # A DomainError's message is already the sentence we would want to
-        # write. `model_not_configured` names the page where a model is added
-        # (never an environment variable -- the reader may not be the operator);
-        # `runtime_profile_archived` names the model that went away and where to
-        # pick another. Both were authored to be read by the person whose run
-        # just failed, and the generic line below replaced them with an
-        # instruction to check "the agent runtime configuration" -- while the
-        # server was holding the answer to which part of it.
-        return exc.message
-    if not isinstance(exc, Exception):
-        return "Agent run was interrupted (timeout or shutdown)"
-    return (
-        "The run failed. Check the model settings for this teammate "
-        "(Settings \u2192 Models)."
-    )
+    return classify_run_failure(exc).message
 
 
 def run_failure_code(exc: BaseException) -> str | None:
-    if isinstance(exc, BaseExceptionGroup):
-        if is_usage_limit_error(exc):
-            return "USAGE_LIMIT_EXCEEDED"
-        return next(
-            (code for child in exc.exceptions if (code := run_failure_code(child))),
-            None,
-        )
-    return exc.code if isinstance(exc, DomainError) else None
-
-
-def run_failure_reason(exc: BaseException) -> str | None:
-    if isinstance(exc, BaseExceptionGroup):
-        if is_usage_limit_error(exc):
-            return "exhausted"
-        return next(
-            (
-                reason
-                for child in exc.exceptions
-                if (reason := run_failure_reason(child))
-            ),
-            None,
-        )
-    return exc.reason if isinstance(exc, UsageLimitExceededError) else None
+    return classify_run_failure(exc).code
 
 
 async def finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:

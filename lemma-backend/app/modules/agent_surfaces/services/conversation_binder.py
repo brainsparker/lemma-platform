@@ -14,7 +14,7 @@ nothing, and most of this module's baselined errors are that.
 
 from __future__ import annotations
 
-from app.core.authorization.delegation import agent_display_name, effective_agent_id
+from app.core.authorization.delegation import agent_display_name
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -47,6 +47,10 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_re
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     build_surface_event_metadata,
 )
+from app.modules.agent_surfaces.services.dm_link_adoption import (
+    adopt_earlier_dm_link,
+    same_agent as _same_agent,
+)
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.services.contact_keepers import owned_or_moved
 
@@ -55,22 +59,6 @@ logger = get_logger(__name__)
 
 _CONVERSATION_TITLE_MAX_LENGTH = 120
 # Recent thread/channel messages fetched per run for group-mention continuity.
-
-
-def _same_agent(left: UUID | None, right: UUID | None, *, pod_id: UUID) -> bool:
-    """Whether two agent references name the same agent.
-
-    Compared through `effective_agent_id`, because the two sides are written in
-    different eras and the assistant has more than one spelling. A conversation
-    now names it by the pod's own id; a route computed from surface configuration
-    still names it by naming nobody. Raw, those two differ, and this reads "the
-    agent changed" for a thread whose agent never changed -- cutting a fresh
-    conversation and stranding the history the person can still see above the
-    reply.
-    """
-    return effective_agent_id(left, pod_id=pod_id) == effective_agent_id(
-        right, pod_id=pod_id
-    )
 
 
 def _agent_changed(
@@ -197,41 +185,31 @@ class ConversationBinder:
         if resolved_user.internal_user_id is None:
             raise ValueError("A conversation cannot be bound to an unresolved sender")
         external_user_id = resolved_user.external_user_id
-        link = await self.conversation_link_repository.get_by_external_thread(
+        # Serialise on the chat before deciding anything, then read. A missing
+        # link is not the only decision two messages can race on: a cold DM or
+        # a changed agent makes every concurrent message open a conversation of
+        # its own, and a burst after a quiet day became that many answers from
+        # that many contexts. The lock is held to commit, so the loser reads
+        # the winner's link -- already warm -- and continues it.
+        await self.conversation_link_repository.lock_thread(
             surface_id=surface.id,
             platform=surface.surface_type.value,
             external_channel_id=parsed.external_channel_id,
             external_thread_id=parsed.external_thread_id,
             external_user_id=external_user_id,
         )
+        link = await self._link_at(surface, parsed, external_user_id)
         if link is None:
-            # Two rapid first messages both read "no link" above. Serialise on
-            # the chat and read again: the loser then finds the winner's link
-            # instead of opening a second conversation and inserting a second
-            # link. The lock is held to commit, so the winner's row is visible
-            # by the time the loser gets past it.
-            await self.conversation_link_repository.lock_thread(
-                surface_id=surface.id,
-                platform=surface.surface_type.value,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_user_id=external_user_id,
+            link = await adopt_earlier_dm_link(
+                self.uow,
+                surface_repository=self.surface_repository,
+                links=self.conversation_link_repository,
+                surface=surface,
+                parsed=parsed,
+                resolved_user=resolved_user,
+                route=route,
+                for_contact=for_contact,
             )
-            link = await self.conversation_link_repository.get_by_external_thread(
-                surface_id=surface.id,
-                platform=surface.surface_type.value,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_user_id=external_user_id,
-            )
-            if link is None:
-                link = await self._adopt_earlier_dm_link(
-                    surface=surface,
-                    parsed=parsed,
-                    resolved_user=resolved_user,
-                    route=route,
-                    for_contact=for_contact,
-                )
         event_payload = parsed.model_dump(mode="json")
         if link is not None:
             if (
@@ -257,6 +235,7 @@ class ConversationBinder:
                 )
                 updated = await self.conversation_link_repository.update_conversation(
                     link_id=link.id,
+                    expected_conversation_id=link.conversation_id,
                     conversation_id=conversation.id,
                     last_event=event_payload,
                     last_message_id=parsed.external_message_id,
@@ -264,7 +243,17 @@ class ConversationBinder:
                     conversation_kind=route.conversation_kind,
                     route_key=route.route_key,
                 )
-                return (updated or link), conversation.title
+                if updated is not None:
+                    return updated, conversation.title
+                # A writer that does not take the thread lock -- a notification
+                # opening a conversation on this cold thread -- repointed it
+                # first. Continue theirs rather than split one thread in two.
+                logger.info(
+                    "agent_surfaces.conversation_binder.fresh_conversation_superseded.observed",
+                    surface_id=str(surface.id),
+                    conversation_id=str(conversation.id),
+                )
+                link = await self._link_at(surface, parsed, external_user_id) or link
             updated = await self.conversation_link_repository.update_last_event(
                 link_id=link.id,
                 last_event=event_payload,
@@ -308,7 +297,7 @@ class ConversationBinder:
                 # This row exists because they just wrote to us.
                 last_inbound_at=datetime.now(timezone.utc),
             ),
-            # Locked and re-read above, before the conversation was opened.
+            # Locked and read above, before the conversation was opened.
             locked=True,
         )
         if created_link.conversation_id != conversation.id:
@@ -318,78 +307,18 @@ class ConversationBinder:
             return created_link, None
         return created_link, conversation.title
 
-    async def _adopt_earlier_dm_link(
+    async def _link_at(
         self,
-        *,
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
-        resolved_user: ResolvedSurfaceUser,
-        route: ResolvedSurfaceRoute,
-        for_contact: UUID | None = None,
+        external_user_id: str | None,
     ) -> AgentSurfaceConversationLink | None:
-        """The link this person's private chat already has, under an older address.
-
-        A private chat is one conversation to the person wherever it is
-        delivered, but its link key names a delivery address: on WhatsApp the
-        channel and the thread id both embed the number the message arrived on.
-        A number reassigned within the pool, or another surface of the same pod
-        taking the chat over, therefore misses the exact lookup and would open a
-        fresh conversation with none of the history the person can still see.
-
-        So, once the exact key has missed, look for the same person's latest
-        private-chat link among this pod's surfaces and move it to the new
-        address. Only a link whose conversation is this person's own, in the pod
-        and with the agent this route names, is taken -- one number is not one
-        person, and a conversation in another pod is another conversation. The
-        reset and agent-change rules then run on the adopted link exactly as they
-        would have on one found by the exact key.
-
-        Private chats only: a channel or email thread is bounded by the platform,
-        so there is no "same person, new address" to continue.
-        """
-        external_user_id = resolved_user.external_user_id
-        user_id = resolved_user.internal_user_id
-        if (
-            external_user_id is None
-            or user_id is None
-            or thread_shape(route.conversation_kind) is not ThreadShape.MULTIPLEXED
-        ):
-            return None
-        platform = surface.surface_type.value
-        # This pod's surfaces, plus the one that received the message: the pod
-        # the conversation must be in is the route's, and the per-surface index
-        # is what keeps the read cheap.
-        siblings = await self.surface_repository.list_active_for_routing(
-            platform, pod_ids=[route.pod_id]
-        )
-        surface_ids = {surface.id, *(sibling.id for sibling in siblings)}
-        links = self.conversation_link_repository
-        earlier = await links.find_latest_dm_link_for_person(
-            platform=platform,
-            external_user_id=external_user_id,
-            surface_ids=sorted(surface_ids, key=str),
-        )
-        if earlier is None:
-            return None
-        conversation = await agent_conversations.surface_conversation(
-            self.uow, earlier.conversation_id
-        )
-        if (
-            conversation is None
-            or conversation.pod_id != route.pod_id
-            or not _same_agent(
-                conversation.agent_id, route.agent_id, pod_id=route.pod_id
-            )
-            or not await owned_or_moved(
-                self.uow, conversation, user_id, contact_id=for_contact
-            )
-        ):
-            return None
-        return await links.rebind_thread_address(
-            link_id=earlier.id,
+        return await self.conversation_link_repository.get_by_external_thread(
             surface_id=surface.id,
+            platform=surface.surface_type.value,
             external_channel_id=parsed.external_channel_id,
             external_thread_id=parsed.external_thread_id,
+            external_user_id=external_user_id,
         )
 
     async def _still_the_outsiders_thread(
@@ -458,6 +387,23 @@ class ConversationBinder:
             current_conversation_agent_id=current_conversation_agent_id,
         ):
             return True
+        # A run paused on the person holds the thread the same way, and for the
+        # same reason: the card they were shown answers only that conversation.
+        # Cutting to a new one left its buttons doing nothing and sent a typed
+        # "approve" to an agent with nothing to approve. Pauses never expire,
+        # so neither does the hold -- until the person answers or moves on.
+        if (
+            await agent_conversations.pending_interaction(
+                self.uow, link.conversation_id
+            )
+            is not None
+        ):
+            logger.info(
+                "agent_surfaces.conversation_binder.reset_held_for_pause.observed",
+                surface_id=str(surface.id),
+                conversation_id=str(link.conversation_id),
+            )
+            return False
         holds = await self.conversation_link_repository.conversation_holds_notification(
             link.conversation_id,
             delivered_since=datetime.now(timezone.utc)

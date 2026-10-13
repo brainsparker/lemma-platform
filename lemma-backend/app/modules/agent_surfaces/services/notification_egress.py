@@ -212,7 +212,10 @@ class NotificationEgress:
         a reply answers through the conversation the question was delivered into
         and nowhere else, and the link only ever points at one conversation: a
         second message opening a new one would move the person's next reply
-        away from the first question, which could then never be closed.
+        away from the first question, which could then never be closed. A run
+        paused on the person -- an approval card, an ``ask_user`` -- holds it
+        for the same reason: its buttons and a typed answer reach only the
+        conversation that paused, so repointing left both doing nothing.
 
         A message you cannot reply to is an alert, not a conversation — which is
         why this always resolves to a conversation the *recipient* owns, never
@@ -235,6 +238,11 @@ class NotificationEgress:
             ):
                 return conversation.id
             if await self.links.conversation_holds_notification(conversation.id):
+                return conversation.id
+            pause = await agent_conversations.pending_interaction(
+                self.uow, conversation.id
+            )
+            if pause is not None:
                 return conversation.id
 
         opened = await self.open_conversation(channel, notification=notification)

@@ -7,7 +7,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import {
-    AGENT_EDIT, AGENT_REMOVE, agentProblems, draftOfAgent, hasAgentChanges,
+    AGENT_EDIT, AGENT_REMOVE, REASONING_EFFORTS, agentProblems, draftOfAgent, hasAgentChanges,
     may, runtimeLine, surfacesLost, whyNot,
     type AgentDetail, type AgentDraft, type AgentRow,
 } from "@/data/agents";
@@ -370,8 +370,24 @@ function Block({ title, meta, children }: { title: string; meta?: string; childr
 
 /* ── editing ───────────────────────────────────────────────────────── */
 
-export function Editor({ podId, detail, onDone }: { podId: string; detail: AgentDetail; onDone: () => void }) {
+export function Editor({ podId, orgId, detail, onDone }: {
+    podId: string;
+    /** Where the agent's model is listed, to know whether it takes an effort. */
+    orgId?: string;
+    detail: AgentDetail;
+    onDone: () => void;
+}) {
     const cache = useQueryClient();
+    /* Same key as the model picker's, so this is usually already loaded. */
+    const runtimes = useQuery({
+        queryKey: ["runtimes", orgId],
+        queryFn: () => source.listRuntimes(orgId ?? ""),
+        enabled: Boolean(orgId && detail.runtime),
+        staleTime: 5 * 60_000,
+    });
+    const pinned = detail.runtime;
+    const runtime = runtimes.data?.find((one) => one.id === pinned?.profile);
+    const model = runtime?.models.find((one) => one.name === (pinned?.model || runtime.defaultModel));
     /* What the server holds, re-read on every render: the PATCH diff is
        against the *current* saved state, so a field somebody never touched is
        never resent — which is the whole point of sending only what changed. */
@@ -424,6 +440,43 @@ export function Editor({ podId, detail, onDone }: { podId: string; detail: Agent
                 />
                 {found.instruction && <em role="alert">{found.instruction}</em>}
             </div>
+
+            {/* Only on a pinned model: the settings belong to the runtime, and
+                an agent on the pod's default has none of its own to edit. The
+                effort only where the model says it reasons -- elsewhere it is
+                never sent, and a control that does nothing is worse than none. */}
+            {pinned && (
+                <div className="agents-generation">
+                    {(model?.reasons || draft.reasoningEffort) && (
+                        <div className="record-form__field">
+                            <label htmlFor="agent-effort">Reasoning effort</label>
+                            <select
+                                id="agent-effort"
+                                value={draft.reasoningEffort}
+                                disabled={save.isPending}
+                                onChange={(event) => setDraft({ ...draft, reasoningEffort: event.target.value })}
+                            >
+                                <option value="">Model default</option>
+                                {REASONING_EFFORTS.map((one) => (
+                                    <option key={one} value={one}>{one[0].toUpperCase() + one.slice(1)}</option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
+                    <div className="record-form__field">
+                        <label htmlFor="agent-max-output">Max output tokens</label>
+                        <input
+                            id="agent-max-output"
+                            inputMode="numeric"
+                            placeholder="Model limit"
+                            value={draft.maxOutputTokens}
+                            disabled={save.isPending}
+                            onChange={(event) => setDraft({ ...draft, maxOutputTokens: event.target.value })}
+                        />
+                        {found.maxOutputTokens && <em role="alert">{found.maxOutputTokens}</em>}
+                    </div>
+                </div>
+            )}
 
             {/* Toolsets, visibility, the runtime and the schemas are all on
                 `UpdateAgentRequest` and none of them are here. Each is a

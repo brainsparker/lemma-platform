@@ -34,6 +34,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 
 pytestmark = pytest.mark.unit
@@ -59,7 +61,13 @@ def _resolved_stub(capabilities):
     return SimpleNamespace(
         model=SimpleNamespace(capabilities=capabilities),
         credentials=None,
-        public_snapshot=dict,
+        runtime_snapshot=_snapshot,
+    )
+
+
+def _snapshot() -> RuntimeSnapshot:
+    return RuntimeSnapshot(
+        profile_id="p", profile_name="p", scope="SYSTEM", protocol="OPENAI_COMPATIBLE"
     )
 
 
@@ -189,7 +197,7 @@ class TestVisionModelResolution:
         monkeypatch.setenv("VISION_MODEL", "unlisted-model")
         sentinel = object()
         resolved_without_entry = SimpleNamespace(
-            model=None, credentials=None, public_snapshot=dict
+            model=None, credentials=None, runtime_snapshot=_snapshot
         )
 
         with (

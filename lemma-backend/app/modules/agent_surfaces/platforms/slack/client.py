@@ -4,7 +4,6 @@ import ipaddress
 from typing import Any
 from urllib.parse import urlsplit
 
-import aiohttp
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
@@ -12,7 +11,10 @@ from app.modules.agent_surfaces.platforms.common import (
     UnsafeApiBaseError,
     assert_safe_api_base,
 )
-from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
+from app.modules.agent_surfaces.platforms.delivery import (
+    DeliveryClassification,
+    classify_transport_failure,
+)
 
 
 def slack_access_token(credentials: dict[str, Any]) -> str | None:
@@ -160,9 +162,8 @@ def classify_slack_error(exc: Exception) -> DeliveryClassification:
         if status == 429 or (isinstance(status, int) and status >= 500):
             return DeliveryClassification.TRANSIENT
         return DeliveryClassification.PERMANENT
-    if isinstance(exc, (aiohttp.ClientError, TimeoutError)):
-        return DeliveryClassification.TRANSIENT
-    return DeliveryClassification.PERMANENT
+    # A post is not idempotent: a timeout after it went out may have posted it.
+    return classify_transport_failure(exc)
 
 
 def slack_retry_after(exc: Exception) -> float | None:

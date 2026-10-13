@@ -25,7 +25,9 @@ from app.modules.agent_surfaces.api.controllers.webhook_controller import (
     _decode_webhook_payload,
 )
 from app.modules.agent_surfaces.platforms.telegram.adapter import TelegramSurfaceAdapter
-from app.modules.agent_surfaces.platforms.telegram.service import _OTHER_CALLBACK_VALUE
+from app.modules.agent_surfaces.platforms.telegram.choice_cards import (
+    OTHER_CALLBACK_VALUE,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.adapter import WhatsAppSurfaceAdapter
 
 
@@ -202,6 +204,25 @@ def test_decode_webhook_payload_handles_form_encoded_and_json():
     assert _decode_webhook_payload(b"", {}) == {}
 
 
+@pytest.mark.parametrize(
+    ("body", "content_type"),
+    [
+        (b"{not json", "application/json"),
+        (b"\xff\xfe", "application/json"),
+        (b"[1, 2]", "application/json"),
+        (b"payload=%7Bbroken", "application/x-www-form-urlencoded"),
+    ],
+    ids=["bad-json", "not-utf8", "not-an-object", "bad-form-payload"],
+)
+def test_an_undecodable_webhook_body_is_refused_not_read_as_empty(body, content_type):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as refused:
+        _decode_webhook_payload(body, {"content-type": content_type})
+
+    assert refused.value.status_code == 400
+
+
 # ── Telegram native inline keyboards ─────────────────────────────────────────
 
 
@@ -239,7 +260,7 @@ async def test_telegram_send_questions_builds_inline_keyboard():
     tokens = iter(["tok0", "tok1", "tokother"])
     with (
         patch(
-            "app.modules.agent_surfaces.platforms.telegram.service.put_callback_token",
+            "app.modules.agent_surfaces.platforms.telegram.choice_cards.put_callback_token",
             new=AsyncMock(side_effect=lambda payload: next(tokens)),
         ),
         patch(
@@ -355,7 +376,7 @@ async def test_telegram_parse_inbound_interaction_other_and_unknown_are_acknowle
     other = {
         "callback_id": "conv-1|tool-1",
         "header": "country",
-        "value": _OTHER_CALLBACK_VALUE,
+        "value": OTHER_CALLBACK_VALUE,
     }
     with patch(
         "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",

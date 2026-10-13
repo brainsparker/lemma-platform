@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.agent_host import (
+    AgentHostHarnessHealth,
     AgentHostHarnessSnapshot,
     AgentHostStatus,
     HostHello,
@@ -440,6 +441,30 @@ class AgentHostRepository:
                 setattr(harness, key, value)
         await self.session.flush()
         return harness
+
+    async def disable_unreported_harnesses(
+        self, *, host_id: UUID, reported_keys: set[str]
+    ) -> None:
+        """Mark this host's harnesses that its latest report left out DISABLED.
+
+        A host reports every agent its manifest knows on each publish, ready or
+        not, so one missing from the report is gone from that computer -- a
+        release that stopped shipping its adapter. Left as it was, it kept its
+        last health, READY included, and admission queued runs to an agent the
+        host no longer has.
+        """
+        await self.session.execute(
+            update(AgentHostHarnessModel)
+            .where(
+                AgentHostHarnessModel.host_id == host_id,
+                AgentHostHarnessModel.harness_key.not_in(reported_keys),
+                AgentHostHarnessModel.health != AgentHostHarnessHealth.DISABLED.value,
+            )
+            .values(
+                health=AgentHostHarnessHealth.DISABLED.value,
+                stale_reason="No longer reported by this computer.",
+            )
+        )
 
     async def get_harness(
         self,

@@ -93,6 +93,11 @@ class Segment:
             self.object_id = object_id
         return delta
 
+    @property
+    def empty(self) -> bool:
+        """Whether nothing has accumulated since the last ``take``."""
+        return not (self.sealed or self.pending or self.inserts)
+
     def take(self) -> tuple[str, str | None]:
         text = self.sealed + _splice(self.pending, self.inserts)
         object_id = self.object_id

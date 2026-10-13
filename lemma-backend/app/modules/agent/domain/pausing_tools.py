@@ -20,6 +20,9 @@ would be silently dropped from history instead of reported as interrupted.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
+
 WAIT_TOOL_NAME = "wait_for"
 
 #: The pauses a *person* resolves. Waiting is excluded on purpose: it resolves
@@ -35,4 +38,48 @@ USER_PAUSING_TOOL_NAMES = ("ask_user", "request_approval", "browser_sign_in")
 
 PAUSING_TOOL_NAMES = (*USER_PAUSING_TOOL_NAMES, WAIT_TOOL_NAME)
 
-__all__ = ["PAUSING_TOOL_NAMES", "USER_PAUSING_TOOL_NAMES", "WAIT_TOOL_NAME"]
+#: On a pausing call's metadata: the call does not end its run. A remote
+#: harness has no way to pause mid tool call, so the run stays going while the
+#: host's bridge waits for the answer, and that answer is delivered into the
+#: same run rather than by a resume. Written by Lemma when it records the call,
+#: never read from the model's arguments.
+PARKED_IN_RUN_KEY = "parked_in_run"
+
+#: On a run's metadata: Lemma ended this run's turn because a person had not
+#: answered what it was parked on within the parked window. Its value names the
+#: pause (``tool_call_id``, ``tool_name``). It is what makes the host's
+#: "cancelled" read as WAITING, and what tells a later decision that it has no
+#: live turn to land in and must resume a new run instead.
+SUSPENDED_WHILE_PARKED_KEY = "suspended_while_parked"
+
+
+@dataclass(frozen=True, slots=True)
+class ParkedSuspension:
+    """The pause a run's turn was ended for, once it had waited too long."""
+
+    tool_call_id: str
+    tool_name: str
+
+
+def parked_suspension_of(
+    metadata: Mapping[str, object] | None,
+) -> ParkedSuspension | None:
+    """Read back the :data:`SUSPENDED_WHILE_PARKED_KEY` mark on a run's metadata."""
+    mark = (metadata or {}).get(SUSPENDED_WHILE_PARKED_KEY)
+    if not isinstance(mark, dict):
+        return None
+    tool_call_id, tool_name = mark.get("tool_call_id"), mark.get("tool_name")
+    if not (isinstance(tool_call_id, str) and isinstance(tool_name, str)):
+        return None
+    return ParkedSuspension(tool_call_id=tool_call_id, tool_name=tool_name)
+
+
+__all__ = [
+    "PARKED_IN_RUN_KEY",
+    "ParkedSuspension",
+    "SUSPENDED_WHILE_PARKED_KEY",
+    "parked_suspension_of",
+    "PAUSING_TOOL_NAMES",
+    "USER_PAUSING_TOOL_NAMES",
+    "WAIT_TOOL_NAME",
+]

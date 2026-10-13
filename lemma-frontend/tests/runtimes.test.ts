@@ -129,7 +129,7 @@ test("on the computer you are at, a fix names the command and the button", () =>
     const agent = readLocalAgent({ id: "h1", harness_key: "claude-code", health: "AUTH_REQUIRED" });
     assert.ok(agent);
     assert.equal(agent.health, "AUTH_REQUIRED");
-    assert.equal(agentFix(agent, "this Mac"), "Run `claude login` in Terminal, then press Check again.");
+    assert.equal(agentFix(agent, "this Mac"), "Run `claude auth login` in Terminal, then press Check again.");
     /* Anywhere else the fix is still over there, and cannot be checked from here. */
     assert.equal(agentFix(agent, null), agent.fix);
     assert.doesNotMatch(agentFix(agent, null), /Check again/);

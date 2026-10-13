@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.modules.datastore.infrastructure import search_schema_memo
 from app.core.bounded import BoundedSet
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
@@ -194,6 +195,7 @@ class SchemaManager:
         logger.debug(
             "datastore.schema_manager.dropped_schema_pod.observed", pod_id=pod_id
         )
+        search_schema_memo.forget(schema_name)
 
     async def create_table(
         self,

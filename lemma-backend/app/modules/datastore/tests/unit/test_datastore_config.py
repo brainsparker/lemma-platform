@@ -43,6 +43,11 @@ EXPECTED = [
         "DATASTORE_SEARCH_READABLE_ID_PUSHDOWN_LIMIT",
         5_000,
     ),
+    (
+        "datastore_search_scope_timeout_ms",
+        "DATASTORE_SEARCH_SCOPE_TIMEOUT_MS",
+        3_000,
+    ),
     ("document_processing_max_concurrency", "DOCUMENT_PROCESSING_MAX_CONCURRENCY", 2),
     (
         "document_processing_debounce_seconds",

@@ -14,6 +14,7 @@ from app.modules.datastore.domain.file_entities import (
     SearchMethod,
 )
 from app.modules.datastore.domain.document_processing import IndexingMetrics
+from app.modules.datastore.infrastructure import search_schema_memo
 from app.modules.datastore.infrastructure.file_chunk_repository import (
     DatastoreFileChunkRepository,
 )
@@ -60,7 +61,9 @@ class PostgresSearchService:
     _ENSURE_SCHEMA_LOCK_KEY = 0x6C656D6D61  # "lemma"
 
     async def ensure_schema(self):
-        if self._initialized:
+        # Once per process per schema (see `search_schema_memo`): the setup
+        # below takes a global lock and table locks, and searches must not.
+        if self._initialized or search_schema_memo.is_ensured(self.schema_name):
             return
         async with self.engine.begin() as conn:
             await conn.execute(
@@ -159,6 +162,7 @@ class PostgresSearchService:
             )
         await self._ensure_vector_index()
         self._initialized = True
+        search_schema_memo.mark_ensured(self.schema_name)
 
     async def _ensure_vector_index(self):
         # HNSW over a half-precision (halfvec) cast of the embedding: ~half the

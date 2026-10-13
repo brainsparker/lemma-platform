@@ -438,6 +438,16 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 )
             )
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
+            # After the module lifespans, so it unwinds before them: handlers
+            # may use what those set up, and shutdown must stop claiming and
+            # release owned work while the engine is still open.
+            from app.core.infrastructure.work.runtime import work_runtime_lifespan
+
+            await module_stack.enter_async_context(
+                work_runtime_lifespan(
+                    async_session_maker, database_url=settings.database_url
+                )
+            )
             ms, frozen = finish_startup(boot_started)
             logger.info("service.started", startup_ms=ms, gc_frozen_objects=frozen)
             started = True

@@ -287,6 +287,12 @@ def reap_stale_lemma_resources() -> None:
     reap_stale_lemma_volumes()
 
 
+#: How often a starting container is probed. Each local e2e run waits on
+#: Postgres, then SuperTokens, then Redis before its first test; a coarse poll
+#: is paid on top of the real start time, every run.
+_READINESS_POLL_SECONDS = 0.1
+
+
 def _wait_for_tcp(
     container: LemmaDockerContainer, port: int, timeout_seconds: int
 ) -> None:
@@ -298,7 +304,7 @@ def _wait_for_tcp(
             with socket.create_connection((host, exposed_port), timeout=2):
                 return
         except OSError:
-            time.sleep(0.5)
+            time.sleep(_READINESS_POLL_SECONDS)
     raise RuntimeError(f"{container.image} did not open port {port} in time")
 
 
@@ -316,7 +322,7 @@ def _wait_for_postgres(container: LemmaPostgresContainer) -> None:
             with psycopg.connect(dsn, autocommit=True):
                 return
         except psycopg.OperationalError:
-            time.sleep(0.5)
+            time.sleep(_READINESS_POLL_SECONDS)
     logs = container.get_logs().decode("utf-8", errors="replace")
     raise RuntimeError(f"Postgres did not become ready in time.\n{logs}")
 
@@ -419,8 +425,12 @@ def get_supertokens_container(
         health_url = f"http://{host}:{port}/hello"
 
         startup_timeout_seconds = _env_int("SUPERTOKENS_STARTUP_TIMEOUT_SECONDS", 120)
-        poll_interval_seconds = _env_int("SUPERTOKENS_STARTUP_POLL_SECONDS", 1)
-        max_retries = max(1, startup_timeout_seconds // max(1, poll_interval_seconds))
+        # Fine-grained: every local e2e run waits on this before its first
+        # test, and a whole-second poll spent up to a second past readiness.
+        poll_interval_seconds = max(
+            0.05, float(os.getenv("SUPERTOKENS_STARTUP_POLL_SECONDS", "0.2"))
+        )
+        max_retries = max(1, int(startup_timeout_seconds / poll_interval_seconds))
         for i in range(max_retries):
             try:
                 with urllib.request.urlopen(health_url, timeout=2) as response:

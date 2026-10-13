@@ -29,7 +29,10 @@ from app.modules.datastore.domain.document_processing import (
 )
 from app.modules.datastore.domain.file_projections import DispatchableFileRef
 from app.modules.datastore.domain.row_security import RowPrincipal
-from app.modules.datastore.domain.search_scope import SearchFileScope
+from app.modules.datastore.domain.search_scope import (
+    SearchablePartition,
+    SearchFileScope,
+)
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileSearchResult,
@@ -187,6 +190,15 @@ class DatastoreFileRepositoryPort(Protocol):
         ctx: Context,
         file_ids: Sequence[UUID],
     ) -> set[UUID]: ...
+
+    async def searchable_partition(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk_ancestors: bool,
+        timeout_ms: int,
+    ) -> SearchablePartition: ...
 
     async def list_pending_dispatch_candidates(
         self,

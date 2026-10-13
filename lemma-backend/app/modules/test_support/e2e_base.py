@@ -547,6 +547,27 @@ def postgres_container(worker_id, tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def postgres_only_container(worker_id, tmp_path_factory):
+    """The shared Postgres server alone, for tests of the database layer.
+
+    ``postgres_container`` warms SuperTokens and Redis alongside it, which is
+    right for a test that boots the app and pure cost -- most of the setup
+    time -- for one that only needs a database. Same shared server and
+    per-worker database, so a later test asking for the full stack reuses it
+    and starts only what is missing.
+    """
+    _start_postgres(worker_id, tmp_path_factory.getbasetemp().parent)
+    yield _SHARED_RESOURCES["postgres"]
+
+
+@pytest.fixture(scope="session")
+def postgres_only_database_url(postgres_only_container, worker_id) -> str:
+    return get_postgres_url(
+        postgres_only_container, _postgres_worker_db_name(worker_id)
+    )
+
+
+@pytest.fixture(scope="session")
 def supertokens_container(worker_id, tmp_path_factory):
     _warm_shared_containers(worker_id, tmp_path_factory)
     yield _SHARED_RESOURCES["supertokens"]
@@ -814,6 +835,7 @@ def _import_e2e_models() -> None:
     through a package ``__init__``, so importing the package is enough.
     """
     from app.core.infrastructure.events import models as event_models
+    from app.core.infrastructure.work import models as work_models
     from app.modules.agent.infrastructure import models as agent_models
     from app.modules.agent.infrastructure import runtime_models as agent_runtime_models
     from app.modules.agent_surfaces.infrastructure import models as agent_surface_models
@@ -843,6 +865,7 @@ def _import_e2e_models() -> None:
         workspace_models,
         agent_runtime_models,
         event_models,
+        work_models,
         user_models,
         organization_models,
         pod_models,

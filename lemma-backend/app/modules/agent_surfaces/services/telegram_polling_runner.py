@@ -16,7 +16,8 @@ import httpx
 
 from app.core.infrastructure.redis.client import get_redis
 
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
+from app.modules.agent_surfaces.domain.credentials import TelegramCredentials
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.telegram.client import (
     ALLOWED_UPDATES,
@@ -57,8 +58,11 @@ def _poll_params(offset: int | None) -> dict[str, Any]:
 class TelegramPollingReceiverRunner:
     def __init__(self, candidate: NativeReceiverCandidate) -> None:
         self._candidate = candidate
-        self._bot_token = str(candidate.credentials.get("bot_token") or "").strip()
-        self._api_base = resolve_api_base(candidate.credentials)
+        telegram = TelegramCredentials.of(candidate.credentials)
+        # Revealed for the life of the poll loop, which addresses every call
+        # to the bot by it.
+        self._bot_token = (reveal_secret(telegram.bot_token) or "").strip()
+        self._api_base = resolve_api_base(telegram)
         self._failures = ReceiverFailureStreak(
             platform=candidate.platform,
             credential_label=candidate.credential_label,

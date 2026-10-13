@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
 import asyncio
 import time
 from collections.abc import Callable
@@ -145,7 +147,7 @@ class SurfaceAgentRunProgressObserver(
         self._error_delivered = False
         # Opaque handle for the live progress message on streaming platforms
         # (Telegram/Teams), threaded across edits and cleared on finish.
-        self._progress_handle: dict[str, Any] | None = None
+        self._progress_handle: ProgressHandle | None = None
         # Live token streaming. ``_streamed_text`` is what the user has already
         # seen in the stream; ``_token_buffer`` is what has arrived but not yet
         # been flushed. Flushing every token would blow Slack's rate limit, so

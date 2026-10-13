@@ -26,6 +26,8 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.models import (
+    ProgressHandle,
+    ProgressHandleKind,
     SurfaceApprovalButton,
     SurfaceApprovalRenderPlan,
     SurfaceDisplayAction,
@@ -748,7 +750,11 @@ async def test_a_timeout_closing_a_slack_stream_is_a_warning_and_a_fallback(
     surface = SlackStreamSurface(credentials={"access_token": "xoxb-1"})
 
     finished = await surface.finish_progress(
-        _slack_event(), {"ts": "2.0", "channel": "C1", "stream": True}, "The answer."
+        _slack_event(),
+        ProgressHandle(
+            kind=ProgressHandleKind.STREAM, message_id="2.0", channel_id="C1"
+        ),
+        "The answer.",
     )
 
     assert finished is False

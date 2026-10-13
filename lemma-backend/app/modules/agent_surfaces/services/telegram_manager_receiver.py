@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import (
+    TelegramCredentials,
+    as_secret,
+)
+
 import asyncio
 from typing import Any
 
@@ -58,10 +63,13 @@ class TelegramManagerPollingReceiver:
             if manager_token is not None
             else reveal_secret(surface_settings.telegram_manager_bot_token)
         )
-        credentials: dict[str, Any] = {"bot_token": self._manager_token or ""}
-        if api_base_url:
-            credentials["api_base_url"] = api_base_url
-        self._client = TelegramClient.from_credentials(credentials, timeout=65)
+        self._client = TelegramClient.from_credentials(
+            TelegramCredentials(
+                bot_token=as_secret(self._manager_token),
+                api_base_url=api_base_url or None,
+            ),
+            timeout=65,
+        )
         self._service = TelegramManagerService(
             uow_factory=self._uow_factory,
             store=self._store,

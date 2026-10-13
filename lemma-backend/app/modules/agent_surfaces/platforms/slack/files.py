@@ -8,6 +8,8 @@ message is worded or posted.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SlackCredentials
+
 import mimetypes
 
 import httpx
@@ -29,7 +31,7 @@ from app.modules.agent_surfaces.platforms.slack.client import (
 class SlackFilesMixin:
     """Attachment download and file upload for :class:`SlackPlatformService`."""
 
-    credentials: dict[str, object]
+    credentials: SlackCredentials
 
     async def download_attachment_bytes(
         self,

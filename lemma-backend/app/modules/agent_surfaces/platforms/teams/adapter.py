@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 from urllib.parse import quote
 
@@ -79,7 +81,7 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
         return self._parser.parse(payload, headers)
 
     async def enrich_inbound_event(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
     ) -> ParsedInboundSurfaceEvent:
         del credentials
         item = await self._graph_message_for(event)
@@ -186,7 +188,7 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
         return f"{text}\n\n{attachment_text}" if text else attachment_text
 
     async def fetch_sender_profile(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
     ) -> SurfaceSenderProfile | None:
         del credentials
         tenant_id = event.tenant_id
@@ -271,7 +273,7 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
     async def fetch_thread_context(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         limit: int = 15,
     ):
@@ -286,7 +288,7 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
     async def download_attachment(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         attachment: dict[str, Any],
     ) -> tuple[bytes, str, str] | None:

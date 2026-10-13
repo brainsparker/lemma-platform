@@ -28,6 +28,11 @@ from app.modules.agent_surfaces.platforms.delivery import note_partial_delivery
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.whatsapp import media
 from app.modules.agent_surfaces.platforms.whatsapp.sent_messages import remember_sent
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    WhatsAppCredentials,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
     WhatsAppClient,
@@ -58,14 +63,15 @@ logger = get_logger(__name__)
 
 class WhatsAppPlatformService:
     def __init__(
-        self, credentials: dict[str, Any], *, client: WhatsAppClient | None = None
+        self, credentials: CredentialsLike, *, client: WhatsAppClient | None = None
     ):
-        self.credentials = credentials
-        self._access_token = credentials.get("access_token") or ""
-        self._phone_number_id = credentials.get("phone_number_id") or ""
+        self.credentials = WhatsAppCredentials.of(credentials)
+        # Revealed into a service built for the call at hand.
+        self._access_token = reveal_secret(self.credentials.access_token) or ""
+        self._phone_number_id = self.credentials.phone_number_id or ""
         # Resolve the base here (honoring a credential override) and hand it to
         # the typed client so all transport goes through one place.
-        self._api_base = resolve_api_base(credentials)
+        self._api_base = resolve_api_base(self.credentials)
         self._client = client or WhatsAppClient(
             access_token=self._access_token,
             phone_number_id=self._phone_number_id,
@@ -91,10 +97,8 @@ class WhatsAppPlatformService:
         phone number in surfaces list UI. Prefer already-stored account
         credential metadata, then resolve it through Graph best-effort.
         """
-        for key in ("display_phone_number", "phone_number"):
-            value = str(self.credentials.get(key) or "").strip()
-            if value:
-                return value
+        if self.credentials.display_phone_number:
+            return self.credentials.display_phone_number
         try:
             return await self._client.get_phone_number_field("display_phone_number")
         except Exception:

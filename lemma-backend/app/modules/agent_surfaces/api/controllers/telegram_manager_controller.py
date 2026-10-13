@@ -30,6 +30,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.services.surface_service import pod_scope
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceAlreadyExistsError,
 )
@@ -98,7 +99,7 @@ async def start_telegram_managed_bot_setup(
         action=Permissions.AGENT_UPDATE,
     )
 
-    organization_id, pod_name = await surfaces.pod_scope(pod_id)
+    organization_id, pod_name = await pod_scope(uow, pod_id)
 
     surface_config = surface_config_from_input(
         request.config,

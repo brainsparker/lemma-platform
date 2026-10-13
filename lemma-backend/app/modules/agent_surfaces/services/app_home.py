@@ -7,6 +7,8 @@ published (an open, a surface chosen), this decides what goes in it.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.authorization.context import Context
@@ -21,7 +23,7 @@ from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
+from app.modules.agent_surfaces.domain.adapter_port import InChatSetup
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
@@ -58,12 +60,12 @@ class AppHomeView:
         self.access = access
         self.external_user_repository = external_user_repository
 
-    async def publish(
+    async def show_to(
         self,
         *,
         surface: AgentSurfaceEntity,
-        adapter: SurfacePlatformAdapterPort,
-        credentials,
+        adapter: InChatSetup,
+        credentials: SurfaceCredentials,
         external_user_id: str,
         ctx: Context | None,
     ) -> None:

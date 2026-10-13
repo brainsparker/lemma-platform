@@ -121,15 +121,23 @@ async def test_native_receiver_coordinator_starts_account_backed_telegram_and_sl
         }
 
         telegram_candidate = started_by_platform[SurfacePlatform.TELEGRAM]
-        assert telegram_candidate.credentials["bot_token"] == "telegram-user-token"
+        assert (
+            telegram_candidate.credentials.bot_token.get_secret_value()
+            == "telegram-user-token"
+        )
         assert telegram_candidate.key.startswith(f"telegram:{telegram_account.id}:")
         assert telegram.json()["id"] in {
             str(surface_id) for surface_id in telegram_candidate.surface_ids
         }
 
         slack_candidate = started_by_platform[SurfacePlatform.SLACK]
-        assert slack_candidate.credentials["app_token"] == "xapp-user-app"
-        assert slack_candidate.credentials["bot_token"] == "xoxb-user-workspace"
+        assert (
+            slack_candidate.credentials.app_token.get_secret_value() == "xapp-user-app"
+        )
+        assert (
+            slack_candidate.credentials.token.get_secret_value()
+            == "xoxb-user-workspace"
+        )
         assert slack_candidate.key.startswith(f"slack:{slack_account.id}:")
         assert slack.json()["id"] in {
             str(surface_id) for surface_id in slack_candidate.surface_ids
@@ -198,7 +206,7 @@ async def test_native_receiver_coordinator_starts_resend_poller_on_a_local_url(
         started = await _collect_started(events, expected=1)
         candidate = started[0]
         assert candidate.platform is SurfacePlatform.RESEND
-        assert candidate.credentials["api_key"] == "re_test"
+        assert candidate.credentials.api_key.get_secret_value() == "re_test"
         assert candidate.key.startswith("resend:system:")
     finally:
         await service.stop()

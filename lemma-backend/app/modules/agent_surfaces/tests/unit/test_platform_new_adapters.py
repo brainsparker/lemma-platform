@@ -8,6 +8,8 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
 )
 from app.modules.agent_surfaces.domain.models import (
+    ProgressHandle,
+    ProgressHandleKind,
     SurfaceDisplayAction,
     SurfaceDisplayRenderPlan,
 )
@@ -847,11 +849,11 @@ async def test_telegram_stream_progress_send_edit_delete(monkeypatch):
     )
 
     handle = await svc.stream_progress(event, "Searching the web")
-    assert handle == {"message_id": 5}
+    assert handle == ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id="5")
     assert calls[-1] == "sendMessage"
 
     handle2 = await svc.stream_progress(event, "Reading results", handle)
-    assert handle2 == {"message_id": 5}
+    assert handle2 == ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id="5")
     assert calls[-1] == "editMessageText"
 
     await svc.end_progress(event, handle2)

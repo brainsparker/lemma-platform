@@ -4,32 +4,32 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from pydantic import SecretStr
 
+from app.modules.agent_surfaces.domain.credentials import TelegramCredentials
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     AgentSurfaceStatus,
     SurfaceConfig,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.services import telegram_mini_app_service
 from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceAgentPlatformConflictError,
     AgentSurfaceAlreadyExistsError,
     AgentSurfaceCredentialConflictError,
-    AgentSurfaceNotFoundError,
     AgentSurfaceError,
+    AgentSurfaceNotFoundError,
     AgentSurfaceValidationError,
 )
+from app.modules.agent_surfaces.domain.ports import (
+    SurfaceAccountInfo,
+)
+from app.modules.agent_surfaces.services import telegram_mini_app_service
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     TelegramMiniApp,
-)
-from app.modules.agent_surfaces.domain.errors import (
-    AgentSurfaceAgentPlatformConflictError,
-)
-from app.modules.agent_surfaces.domain.ports import (
-    SurfaceAccountInfo,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -400,7 +400,7 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
     assert result.webhook_secret
     webhook_url = f"https://api.example.test/surfaces/{result.id}/webhook"
     register.assert_awaited_once_with(
-        credentials={"bot_token": "telegram-token"},
+        credentials=TelegramCredentials(bot_token=SecretStr("telegram-token")),
         webhook_url=webhook_url,
         webhook_secret=result.webhook_secret.get_secret_value(),
         drop_pending_updates=True,
@@ -693,7 +693,7 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
     assert result.webhook_secret.get_secret_value() != "old-secret"
     # Resuming the same bot: what Telegram held while it was off is kept.
     register.assert_awaited_once_with(
-        credentials={"bot_token": "telegram-token"},
+        credentials=TelegramCredentials(bot_token=SecretStr("telegram-token")),
         webhook_url=f"https://api.example.test/surfaces/{entity.id}/webhook",
         webhook_secret=result.webhook_secret.get_secret_value(),
         drop_pending_updates=False,

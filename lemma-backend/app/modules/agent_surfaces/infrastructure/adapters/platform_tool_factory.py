@@ -24,6 +24,7 @@ from app.modules.agent_surfaces.platforms.surface_send_tools import (
 from app.modules.agent_surfaces.platforms.whatsapp.tools import (
     build_whatsapp_group_toolset,
 )
+from app.modules.agent_surfaces.platforms.credential_checks import can_deliver
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
     has_native_credentials,
@@ -87,7 +88,7 @@ class SurfacePlatformToolFactory:
             credentials = await resolver.for_surface(
                 surface, prefer_native=True, force_refresh=True
             )
-            if not credentials:
+            if not can_deliver(surface.surface_type, credentials):
                 return []
             allow_send = surface.config.send_policy.allow_send
 

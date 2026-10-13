@@ -8,6 +8,8 @@ surface once it has.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import WhatsAppCredentials
+
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -156,17 +158,19 @@ class SurfaceConsentMixin:
             return reveal_secret(surface_settings.whatsapp_verify_token)
         if surface.account_id is not None and self._credential_resolver is not None:
             try:
-                credentials = await self._credential_resolver.for_account(
-                    surface.account_id
+                credentials = WhatsAppCredentials.of(
+                    await self._credential_resolver.for_account(
+                        surface.account_id, platform=SurfacePlatform.WHATSAPP
+                    )
                 )
             except Exception:
-                logger.debug(
-                    "agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic",
-                    account_id=surface.account_id,
+                logger.warning(
+                    "agent_surfaces.surface_service.whatsapp_verify_token_unavailable.degraded",
+                    account_id=str(surface.account_id),
                     exc_info=True,
                 )
                 return None
-            return credentials.get("verify_token")
+            return reveal_secret(credentials.verify_token)
         if surface.surface_identity_id:
             number = await WhatsAppNumberRepository(
                 self.surface_repository.uow

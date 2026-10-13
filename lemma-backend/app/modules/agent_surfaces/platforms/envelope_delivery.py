@@ -10,6 +10,8 @@ behaviour rather than a promise each platform keeps separately.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 
 from app.core.log.log import get_logger
@@ -54,7 +56,7 @@ class EnvelopeDeliveryMixin:
     async def deliver(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None = None,
@@ -112,7 +114,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_each_part(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None,
@@ -218,7 +220,7 @@ class EnvelopeDeliveryMixin:
     async def _render_one(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None,
@@ -240,7 +242,7 @@ class EnvelopeDeliveryMixin:
     async def _send_text_fallback(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         text: str,
         metadata: dict[str, Any] | None,
@@ -264,7 +266,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_text(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         text: str,
         metadata: dict[str, Any] | None,
@@ -287,7 +289,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_choices(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None,
@@ -331,7 +333,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_decision(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None,
@@ -363,7 +365,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_resource(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None,
@@ -396,7 +398,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_file(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         attachment: EnvelopeFile,
         metadata: dict[str, Any] | None,
@@ -443,7 +445,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_voice(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         voice: EnvelopeVoice,
         metadata: dict[str, Any] | None,

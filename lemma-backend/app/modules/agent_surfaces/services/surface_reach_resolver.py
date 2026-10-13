@@ -19,6 +19,8 @@ the first.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from contextlib import suppress
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
@@ -175,7 +177,7 @@ class SurfaceReachResolver:
         self,
         surface: AgentSurfaceEntity,
         credential_resolver: "SurfaceCredentialResolver | None",
-    ) -> dict[str, object] | None:
+    ) -> SurfaceCredentials | None:
         """The database half of a live handle lookup, on its own.
 
         Separated so it can run in series while the calls it feeds run
@@ -215,7 +217,7 @@ class SurfaceReachResolver:
     async def _live_handle(
         self,
         surface: AgentSurfaceEntity,
-        credentials: dict[str, object] | None,
+        credentials: SurfaceCredentials | None,
     ) -> str | None:
         """Per-platform live handle lookup (best-effort → None on any failure).
 
@@ -248,7 +250,7 @@ class SurfaceReachResolver:
         return None
 
     async def _slack_handle(
-        self, user_id: str, credentials: dict[str, object]
+        self, user_id: str, credentials: SurfaceCredentials
     ) -> str | None:
         from app.modules.agent_surfaces.platforms.slack.service import (
             SlackPlatformService,
@@ -258,7 +260,7 @@ class SurfaceReachResolver:
             credentials=credentials
         ).get_user_display_name(user_id)
 
-    async def _telegram_handle(self, credentials: dict[str, object]) -> str | None:
+    async def _telegram_handle(self, credentials: SurfaceCredentials) -> str | None:
         from app.modules.agent_surfaces.platforms.telegram.service import (
             TelegramPlatformService,
         )
@@ -266,7 +268,7 @@ class SurfaceReachResolver:
         username = await TelegramPlatformService(credentials).get_bot_username()
         return f"@{username}" if username else None
 
-    async def _whatsapp_handle(self, credentials: dict[str, object]) -> str | None:
+    async def _whatsapp_handle(self, credentials: SurfaceCredentials) -> str | None:
         from app.modules.agent_surfaces.platforms.whatsapp.service import (
             WhatsAppPlatformService,
         )

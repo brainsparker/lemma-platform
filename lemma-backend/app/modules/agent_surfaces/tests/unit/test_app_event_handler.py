@@ -8,6 +8,11 @@ rendering.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.channel_setup import (
+    ChannelSetupKind,
+    ChannelSetupRequest,
+)
+
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -182,10 +187,14 @@ async def test_the_channel_setup_modal_opens_with_the_connection_handed_back(
     await _handler(uow=uow)._open_channel_setup(
         adapter,
         {"access_token": "xoxb"},
-        {"trigger_id": "T-1"},
+        ChannelSetupRequest(
+            kind=ChannelSetupKind.OPEN,
+            tenant_id="T1",
+            actor_external_user_id="U-1",
+            trigger_id="T-1",
+            channel_id="C-1",
+        ),
         SimpleNamespace(id=uuid4(), agent_id=uuid4()),
-        None,
-        "C-1",
     )
 
     assert events == ["commit", "views.open"]
@@ -215,11 +224,12 @@ async def test_a_channel_setting_that_could_not_be_saved_is_reported_in_the_chan
     )
     adapter = AsyncMock()
     adapter.parse_channel_setup = AsyncMock(
-        return_value={
-            "kind": "submit",
-            "channel_id": "C-1",
-            "actor_external_user_id": "U-1",
-        }
+        return_value=ChannelSetupRequest(
+            kind=ChannelSetupKind.SUBMIT,
+            tenant_id="T1",
+            channel_id="C-1",
+            actor_external_user_id="U-1",
+        )
     )
     surfaces = AsyncMock()
     surfaces.update = AsyncMock(side_effect=OperationalError("UPDATE", {}, None))

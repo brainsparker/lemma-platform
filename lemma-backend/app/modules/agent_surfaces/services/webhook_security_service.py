@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import WhatsAppCredentials
+
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -362,7 +364,11 @@ class SurfaceWebhookSecurityService:
                 async with self._resolver() as resolver:
                     if resolver is None:
                         return None, None
-                    credentials = await resolver.for_account(surface.account_id)
+                    credentials = WhatsAppCredentials.of(
+                        await resolver.for_account(
+                            surface.account_id, platform=SurfacePlatform.WHATSAPP
+                        )
+                    )
             except Exception as exc:
                 # The request is refused as unverifiable either way; this is
                 # what tells a broken connector account apart from a setting
@@ -374,7 +380,10 @@ class SurfaceWebhookSecurityService:
                     exc_info=exc,
                 )
                 return None, None
-            return credentials.get("app_secret"), credentials.get("verify_token")
+            return (
+                reveal_secret(credentials.app_secret),
+                reveal_secret(credentials.verify_token),
+            )
         return (
             reveal_secret(surface_settings.whatsapp_app_secret),
             reveal_secret(surface_settings.whatsapp_verify_token),

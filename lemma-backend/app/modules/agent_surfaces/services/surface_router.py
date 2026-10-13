@@ -32,6 +32,8 @@ whether to interrupt somebody.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from app.modules.agent_surfaces.platforms.common import (
     PLATFORM_TRANSPORT_ERRORS,
 )
@@ -43,17 +45,12 @@ from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
 
-from contextlib import suppress
-from typing import Any
 from uuid import UUID
 
 
 from app.core.infrastructure.db.transaction_locks import connection_released
 
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_agent_id
-from app.modules.agent_surfaces.services.telegram_addressing import (
-    addressed_to_this_bot,
-)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -407,30 +404,6 @@ class SurfaceRouter:
                 user_id=user_id,
             )
 
-    async def enrich_telegram_mention(
-        self,
-        parsed: ParsedInboundSurfaceEvent,
-        surface: AgentSurfaceEntity,
-    ) -> ParsedInboundSurfaceEvent:
-        """Settle whether a Telegram group message targets this bot.
-
-        Resolves the bot's @username and numeric id via getMe; the rules are
-        `telegram_addressing.addressed_to_this_bot`. Best-effort: returns the
-        event unchanged on any failure."""
-        with suppress(*PLATFORM_TRANSPORT_ERRORS, ImportError):
-            from app.modules.agent_surfaces.platforms.telegram.service import (
-                TelegramPlatformService,
-            )
-
-            credentials = await self.credential_resolver.for_surface(surface)
-            service = TelegramPlatformService(credentials)
-            return addressed_to_this_bot(
-                parsed,
-                bot_username=await service.get_bot_username() or "",
-                bot_user_id=await service.get_bot_user_id(),
-            )
-        return parsed
-
     async def resolve_route(
         self,
         *,
@@ -531,7 +504,7 @@ class SurfaceRouter:
         *,
         adapter: SurfacePlatformAdapterPort,
         parsed: ParsedInboundSurfaceEvent,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         installation_id: UUID | None = None,
     ) -> ResolvedSurfaceUser:
         profile_unavailable = False

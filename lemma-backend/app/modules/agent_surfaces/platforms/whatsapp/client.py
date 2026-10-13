@@ -22,6 +22,11 @@ from typing import Any
 
 import httpx
 
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    WhatsAppCredentials,
+)
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
 from app.modules.agent_surfaces.platforms.delivery import (
     DeliveryClassification,
@@ -61,13 +66,9 @@ def groups_api_base(api_base: str) -> str:
     return trimmed
 
 
-def resolve_api_base(credentials: dict[str, Any] | None) -> str:
+def resolve_api_base(credentials: CredentialsLike | None) -> str:
     """Resolve the WhatsApp Graph API base, honoring a credential override."""
-    if credentials:
-        candidate = str(credentials.get("api_base_url") or "").strip()
-        if candidate:
-            return candidate
-    return _WHATSAPP_API_BASE
+    return WhatsAppCredentials.of(credentials).api_base_url or _WHATSAPP_API_BASE
 
 
 class WhatsAppApiError(Exception):
@@ -134,12 +135,15 @@ class WhatsAppClient:
 
     @classmethod
     def from_credentials(
-        cls, credentials: dict[str, Any], *, timeout: float = 60.0
+        cls, credentials: CredentialsLike, *, timeout: float = 60.0
     ) -> "WhatsAppClient":
+        """A client for this number. The token is revealed here, into a client
+        built for the call at hand."""
+        whatsapp = WhatsAppCredentials.of(credentials)
         return cls(
-            access_token=str(credentials.get("access_token") or ""),
-            phone_number_id=str(credentials.get("phone_number_id") or ""),
-            api_base=resolve_api_base(credentials),
+            access_token=reveal_secret(whatsapp.access_token) or "",
+            phone_number_id=whatsapp.phone_number_id or "",
+            api_base=whatsapp.api_base_url or _WHATSAPP_API_BASE,
             timeout=timeout,
         )
 

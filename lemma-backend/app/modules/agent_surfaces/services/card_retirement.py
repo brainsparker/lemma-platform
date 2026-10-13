@@ -13,6 +13,8 @@ hold a connection across.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from uuid import UUID
 
 from app.core.log.log import get_logger
@@ -29,7 +31,7 @@ logger = get_logger(__name__)
 async def retire_superseded_cards(
     *,
     adapter: SurfacePlatformAdapterPort,
-    credentials: dict[str, object],
+    credentials: SurfaceCredentials,
     conversation_id: UUID,
     tool_call_ids: list[str],
 ) -> None:

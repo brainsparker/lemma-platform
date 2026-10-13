@@ -16,6 +16,8 @@ run, and the answer still lands through the egress path.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
 from typing import Any
 from uuid import UUID
 
@@ -50,8 +52,8 @@ class SurfaceProgress:
         *,
         conversation_id: UUID,
         progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+        progress_handle: ProgressHandle | None = None,
+    ) -> ProgressHandle | None:
         """Stream a live progress line on platforms with editable messages.
 
         Best-effort: returns the (possibly updated) handle and never raises, so a
@@ -96,7 +98,7 @@ class SurfaceProgress:
         self,
         *,
         conversation_id: UUID,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         text: str,
     ) -> StreamAppendResult:
         """Append streamed model text; returns the (possibly new) handle.
@@ -133,7 +135,7 @@ class SurfaceProgress:
         self,
         *,
         conversation_id: UUID,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         message: str,
         metadata: dict[str, Any] | None = None,
         already_streamed: bool = False,
@@ -181,7 +183,7 @@ class SurfaceProgress:
         self,
         *,
         conversation_id: UUID,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
     ) -> None:
         """Remove the streaming progress message at run end (best-effort)."""
         if not progress_handle:

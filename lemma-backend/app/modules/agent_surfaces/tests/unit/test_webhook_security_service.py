@@ -494,7 +494,7 @@ async def test_an_org_whatsapp_account_that_cannot_be_read_is_a_warning(caplog):
             return False
 
     class _BrokenResolver:
-        async def for_account(self, account_id):
+        async def for_account(self, account_id, *, platform):
             raise ConnectionError("vault unreachable")
 
     service = SurfaceWebhookSecurityService(

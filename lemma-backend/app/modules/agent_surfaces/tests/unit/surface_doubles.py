@@ -373,6 +373,8 @@ def build_doubles(
     adapter.enrich_inbound_event.side_effect = lambda *, credentials, event: event
     adapter.unresolved_sender_reply = Mock(return_value=None)
     adapter.linked_sender_confirmation = Mock(return_value=None)
+    # Synchronous on the port, so an AsyncMock's coroutine would read as True.
+    adapter.mention_is_provisional = Mock(return_value=False)
     return SurfaceDoubles(
         uow=uow,
         surface_repository=surface_repository,

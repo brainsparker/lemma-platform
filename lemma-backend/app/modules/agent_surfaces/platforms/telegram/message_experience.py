@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import ProgressHandle, ProgressHandleKind
+
 from collections.abc import Awaitable, Callable
 from html import escape
 from typing import Any
@@ -171,10 +173,10 @@ async def stream_progress(
     call_with_retry: TelegramCall,
     event: ParsedInboundSurfaceEvent,
     progress_text: str,
-    progress_handle: dict[str, Any] | None,
+    progress_handle: ProgressHandle | None,
     *,
     bot_token: str,
-) -> dict[str, Any] | None:
+) -> ProgressHandle | None:
     chat_id = event.reply_target.get("chat_id") or event.external_channel_id
     if not bot_token or not chat_id:
         return progress_handle
@@ -201,16 +203,21 @@ async def _send_rich_progress_draft(
     event: ParsedInboundSurfaceEvent,
     chat_id: str,
     progress_text: str,
-    progress_handle: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if not event.is_dm or (progress_handle or {}).get("message_id"):
+    progress_handle: ProgressHandle | None,
+) -> ProgressHandle | None:
+    if not event.is_dm or (
+        progress_handle is not None
+        and progress_handle.kind is ProgressHandleKind.MESSAGE
+    ):
         return None
-    draft_id = (progress_handle or {}).get("draft_id")
-    if not draft_id:
-        try:
-            draft_id = int(event.reply_target.get("message_id") or 1)
-        except TypeError, ValueError:
-            draft_id = 1
+    try:
+        draft_id = int(
+            progress_handle.message_id
+            if progress_handle is not None
+            else event.reply_target.get("message_id") or 1
+        )
+    except TypeError, ValueError:
+        draft_id = 1
     try:
         await call_with_retry(
             "sendRichMessageDraft",
@@ -222,7 +229,9 @@ async def _send_rich_progress_draft(
                 },
             },
         )
-        return {"draft_id": int(draft_id) or 1, "rich_draft": True}
+        return ProgressHandle(
+            kind=ProgressHandleKind.DRAFT, message_id=str(int(draft_id) or 1)
+        )
     except TelegramApiError as exc:
         if not can_fallback_from_rich_message(exc):
             raise
@@ -234,16 +243,21 @@ async def _stream_plain_progress(
     event: ParsedInboundSurfaceEvent,
     chat_id: str,
     progress_text: str,
-    progress_handle: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    message_id = (progress_handle or {}).get("message_id")
+    progress_handle: ProgressHandle | None,
+) -> ProgressHandle | None:
+    message_id = (
+        progress_handle.message_id
+        if progress_handle is not None
+        and progress_handle.kind is ProgressHandleKind.MESSAGE
+        else None
+    )
     try:
         if message_id:
             await call_with_retry(
                 "editMessageText",
                 {
                     "chat_id": chat_id,
-                    "message_id": message_id,
+                    "message_id": int(message_id),
                     "text": f"⏳ {progress_text}",
                 },
             )
@@ -257,7 +271,11 @@ async def _stream_plain_progress(
             payload["message_thread_id"] = thread_id
         result = await call_with_retry("sendMessage", payload)
         new_id = ((result or {}).get("result") or {}).get("message_id")
-        return {"message_id": new_id} if new_id else progress_handle
+        return (
+            ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id=str(new_id))
+            if new_id
+            else progress_handle
+        )
     except TelegramApiError as exc:
         if exc.is_not_modified:
             return progress_handle
@@ -267,18 +285,20 @@ async def _stream_plain_progress(
 async def end_progress(
     client: TelegramClient,
     event: ParsedInboundSurfaceEvent,
-    progress_handle: dict[str, Any] | None,
+    progress_handle: ProgressHandle | None,
 ) -> None:
     chat_id = event.reply_target.get("chat_id") or event.external_channel_id
-    if (progress_handle or {}).get("rich_draft"):
-        return
-    message_id = (progress_handle or {}).get("message_id")
-    if not chat_id or not message_id:
+    # A draft is replaced by the answer itself, so there is nothing to delete.
+    if (
+        progress_handle is None
+        or progress_handle.kind is not ProgressHandleKind.MESSAGE
+        or not chat_id
+    ):
         return
     try:
         await client.call(
             "deleteMessage",
-            {"chat_id": chat_id, "message_id": message_id},
+            {"chat_id": chat_id, "message_id": int(progress_handle.message_id)},
         )
     except TelegramApiError:
         logger.debug(

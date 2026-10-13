@@ -14,6 +14,11 @@ from uuid import uuid4
 
 import httpx
 
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    ResendCredentials,
+)
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
 
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
@@ -69,11 +74,13 @@ def _resend_retry_after(exc: Exception) -> float | None:
 
 
 class ResendPlatformService:
-    def __init__(self, credentials: dict[str, Any]):
-        self._api_key = str(credentials.get("api_key") or "")
-        self._from_address = str(credentials.get("from_address") or "")
-        self._from_name = str(credentials.get("from_name") or "Lemma")
-        self._api_base = str(credentials.get("api_base_url") or _RESEND_API_BASE)
+    def __init__(self, credentials: CredentialsLike):
+        resend = ResendCredentials.of(credentials)
+        # Revealed into a service built for the call at hand.
+        self._api_key = reveal_secret(resend.api_key) or ""
+        self._from_address = resend.from_address or ""
+        self._from_name = resend.from_name or "Lemma"
+        self._api_base = resend.api_base_url or _RESEND_API_BASE
         self._retry_policy = RetryPolicy()
 
     def _sender_name(self, metadata: dict[str, Any] | None) -> str:

@@ -7,6 +7,15 @@ call has to agree on its mode.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+from app.modules.agent_surfaces.domain.models import ProgressHandle, ProgressHandleKind
+
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SlackCredentials,
+)
+
 from typing import Any
 
 from slack_sdk.errors import SlackApiError
@@ -46,7 +55,7 @@ def _slack_error_code(exc: BaseException) -> str:
 
 
 async def remove_processing_reaction(
-    credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+    credentials: CredentialsLike, event: ParsedInboundSurfaceEvent
 ) -> None:
     """Take the "eyes" back off the message the agent has now answered.
 
@@ -85,13 +94,13 @@ async def remove_processing_reaction(
 class SlackStreamSurface:
     """One live Slack message, written into across a run."""
 
-    def __init__(self, *, credentials: dict[str, Any]) -> None:
-        self.credentials = credentials
+    def __init__(self, *, credentials: CredentialsLike) -> None:
+        self.credentials = SlackCredentials.of(credentials)
 
     async def append_stream_text(
         self,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         text: str,
         metadata: dict[str, Any] | None = None,
     ) -> StreamAppendResult:
@@ -113,7 +122,7 @@ class SlackStreamSurface:
             return StreamAppendResult(handle=progress_handle, appended=False)
         client = await build_slack_client(self.credentials)
         try:
-            if not (progress_handle and progress_handle.get("ts")):
+            if progress_handle is None:
                 progress_handle = await self._open_stream(
                     client,
                     channel=str(channel),
@@ -123,12 +132,12 @@ class SlackStreamSurface:
             if not text:
                 return StreamAppendResult(handle=progress_handle, appended=False)
             await client.chat_appendStream(
-                channel=str(progress_handle.get("channel") or channel),
-                ts=str(progress_handle["ts"]),
+                channel=progress_handle.channel_id or str(channel),
+                ts=progress_handle.message_id,
                 chunks=[_markdown_chunk(text)],
             )
             return StreamAppendResult(
-                handle={**progress_handle, "streamed_text": True},
+                handle=replace(progress_handle, streamed_text=True),
                 appended=True,
             )
         except PLATFORM_TRANSPORT_ERRORS as exc:
@@ -146,7 +155,7 @@ class SlackStreamSurface:
         channel: str,
         thread_ts: str,
         metadata: dict[str, Any] | None,
-    ) -> dict[str, Any]:
+    ) -> ProgressHandle:
         """Start a live stream on the thread, and describe it as a handle."""
         start_payload: dict[str, Any] = {
             "channel": channel,
@@ -164,17 +173,17 @@ class SlackStreamSurface:
             )
         )
         response = await client.chat_startStream(**start_payload)
-        return {
-            "ts": str(response["ts"]),
-            "channel": str(response.get("channel") or channel),
-            "stream": True,
-            "streamed_text": True,
-        }
+        return ProgressHandle(
+            kind=ProgressHandleKind.STREAM,
+            message_id=str(response["ts"]),
+            channel_id=str(response.get("channel") or channel),
+            streamed_text=True,
+        )
 
     async def finish_progress(
         self,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         message: str,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
@@ -187,7 +196,9 @@ class SlackStreamSurface:
         Returns False when there is no live stream to close, so the caller can
         deliver the answer as an ordinary message instead.
         """
-        handle = progress_handle or {}
+        if progress_handle is None:
+            return False
+        handle = progress_handle
         channel = self._closable_stream_channel(event, handle, message)
         if not channel:
             return False
@@ -207,21 +218,21 @@ class SlackStreamSurface:
         return True
 
     def _closable_stream_channel(
-        self, event: ParsedInboundSurfaceEvent, handle: dict[str, Any], message: str
+        self, event: ParsedInboundSurfaceEvent, handle: ProgressHandle, message: str
     ) -> str:
         """The channel whose stream can be closed, or "" when none can be.
 
         A stream that already carries the answer still needs closing, so an
         empty message is only a refusal when nothing was streamed.
         """
-        if not handle.get("ts") or not slack_access_token(self.credentials):
+        if not handle.message_id or not slack_access_token(self.credentials):
             return ""
-        if not message.strip() and not handle.get("streamed_text"):
+        if not message.strip() and not handle.streamed_text:
             return ""
-        return str(handle.get("channel") or event.reply_target.get("channel") or "")
+        return handle.channel_id or str(event.reply_target.get("channel") or "")
 
     async def _close_stream(
-        self, handle: dict[str, Any], *, channel: str, chunks: list[str]
+        self, handle: ProgressHandle, *, channel: str, chunks: list[str]
     ) -> bool:
         """Append the answer to the live stream, then stop it.
 
@@ -229,7 +240,7 @@ class SlackStreamSurface:
         append is the call that carries text and stop only finalises.
         """
         client = await build_slack_client(self.credentials)
-        ts = str(handle["ts"])
+        ts = handle.message_id
         try:
             if chunks:
                 await client.chat_appendStream(
@@ -301,7 +312,7 @@ class SlackStreamSurface:
     async def end_progress(
         self,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
     ) -> None:
         """Dispose of a live stream that will never receive an answer.
 
@@ -314,21 +325,18 @@ class SlackStreamSurface:
         stopped before Slack will accept a delete, and if the delete is refused
         a stopped stream is still better than a spinning one.
         """
-        if not progress_handle or not progress_handle.get("ts"):
+        if not progress_handle or not progress_handle.message_id:
             return
         token = slack_access_token(self.credentials)
         if not token:
             return
         client = await build_slack_client(self.credentials)
-        channel = progress_handle.get("channel") or event.reply_target.get("channel")
+        channel = progress_handle.channel_id or event.reply_target.get("channel")
+        ts = progress_handle.message_id
         try:
-            if progress_handle.get("stream"):
-                await client.chat_stopStream(
-                    channel=str(channel), ts=str(progress_handle["ts"])
-                )
-            await client.chat_delete(
-                channel=str(channel), ts=str(progress_handle["ts"])
-            )
+            if progress_handle.kind is ProgressHandleKind.STREAM:
+                await client.chat_stopStream(channel=str(channel), ts=ts)
+            await client.chat_delete(channel=str(channel), ts=ts)
         except PLATFORM_TRANSPORT_ERRORS:
             logger.debug(
                 "agent_surfaces.service.slack_end_progress_delete_channel.diagnostic",

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import (
+    ProgressHandle,
+    ProgressHandleKind,
+)
+
 from unittest.mock import AsyncMock
 
 import pytest
@@ -439,7 +444,9 @@ async def test_teams_end_progress_deletes_activity(monkeypatch):
     await adapter.end_progress(
         credentials={},
         event=event,
-        progress_handle={"activity_id": "act-99"},
+        progress_handle=ProgressHandle(
+            kind=ProgressHandleKind.MESSAGE, message_id="act-99"
+        ),
     )
 
     assert deleted["url"].endswith("/activities/act-99")

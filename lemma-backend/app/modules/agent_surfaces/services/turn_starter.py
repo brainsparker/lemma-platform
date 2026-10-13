@@ -18,6 +18,8 @@ is what those became once nothing needed them to be methods on a namespace.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 import sys
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -353,7 +355,7 @@ class SurfaceTurnStarter:
         self,
         context: SurfaceChatContext,
         adapter: SurfacePlatformAdapterPort,
-        credentials: dict[str, object],
+        credentials: SurfaceCredentials,
     ) -> None:
         """Keep the message for the member, and tell the person once a day."""
         if context.pod_id is None:
@@ -391,7 +393,7 @@ class SurfaceTurnStarter:
             )
 
     async def _ingest_files(
-        self, context: SurfaceChatContext, credentials: dict[str, Any]
+        self, context: SurfaceChatContext, credentials: SurfaceCredentials
     ) -> AttachmentIngest:
         """Auto-ingest user-provided files into the pod datastore (/me/{platform}).
 
@@ -436,7 +438,7 @@ class SurfaceTurnStarter:
     async def _name_new_thread(
         self,
         adapter: SurfacePlatformAdapterPort,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         context: SurfaceChatContext,
     ) -> None:
         """Name the thread on the platform when this turn created the conversation.
@@ -487,7 +489,9 @@ class SurfaceTurnStarter:
                         "The queued personal destination no longer matches"
                     )
 
-    async def _credentials_for(self, context: AgentSurfaceContext) -> dict[str, Any]:
+    async def _credentials_for(
+        self, context: AgentSurfaceContext
+    ) -> SurfaceCredentials:
         """Credentials for a reply that has only the run's context in hand.
 
         Read in a short scope of its own and returned as a plain dict, so no

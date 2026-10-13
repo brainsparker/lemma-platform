@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
 import hashlib
 import hmac
 
@@ -66,6 +68,10 @@ from app.modules.agent_surfaces.platforms.telegram.models import (
     TelegramFileAttachment,
 )
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    TelegramCredentials,
+)
 from app.modules.agent_surfaces.caches import TELEGRAM_BOT_INFO, surface_caches
 from app.core.log.log import get_logger
 from app.core.net.capped_read import read_capped
@@ -98,11 +104,11 @@ def _get_bot_info_cache() -> RedisJsonCache:
 class TelegramPlatformService:
     def __init__(
         self,
-        credentials: dict[str, Any],
+        credentials: CredentialsLike,
         *,
         bot_info_cache: RedisJsonCache | None = None,
     ):
-        self.credentials = credentials
+        self.credentials = TelegramCredentials.of(credentials)
         self._bot_info_cache = bot_info_cache
         self._client = TelegramClient.from_credentials(credentials)
         self._bot_token = self._client._bot_token
@@ -423,8 +429,8 @@ class TelegramPlatformService:
         self,
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+        progress_handle: ProgressHandle | None = None,
+    ) -> ProgressHandle | None:
         return await stream_telegram_progress(
             self._call_with_retry,
             event,
@@ -436,7 +442,7 @@ class TelegramPlatformService:
     async def end_progress(
         self,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
     ) -> None:
         await end_telegram_progress(self._client, event, progress_handle)
 

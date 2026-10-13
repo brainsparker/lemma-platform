@@ -12,6 +12,31 @@ from __future__ import annotations
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 
 
+def mention_is_provisional(parsed: ParsedInboundSurfaceEvent) -> bool:
+    """Whether a group message might be an @mention of this bot.
+
+    The parser records any @username / text_mention entities but does not set
+    `mentioned_agent` for a generic mention -- a `mention` entity is a plain
+    @username and does not say *which* user was meant. Settling that costs a
+    getMe call, so it is only worth making when the message could plausibly be
+    for us, and it has to happen before admission filters the event out.
+    """
+    if parsed.is_dm:
+        return False
+    metadata = parsed.metadata or {}
+    if metadata.get("reply_to_user_id"):
+        # A reply to a bot reads as addressed, and which bot is only known
+        # once getMe has said who we are.
+        return True
+    if parsed.mentioned_agent:
+        return False
+    return bool(
+        metadata.get("mentioned_usernames")
+        or metadata.get("text_mention_user_ids")
+        or "@" in (parsed.message_text or "")
+    )
+
+
 def addressed_to_this_bot(
     parsed: ParsedInboundSurfaceEvent,
     *,

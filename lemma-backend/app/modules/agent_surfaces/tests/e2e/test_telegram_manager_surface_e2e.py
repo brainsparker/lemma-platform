@@ -375,17 +375,17 @@ async def test_a_setup_for_a_pod_with_no_row_is_not_found_not_a_server_error(
     from uuid import UUID, uuid4
 
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.composition import build_surface_service
+    from app.modules.agent_surfaces.services.surface_service import pod_scope
     from app.modules.agent_surfaces.domain.errors import (
         AgentSurfacePodNotFoundError,
     )
 
-    service = build_surface_service(SqlAlchemyUnitOfWork(db_session))
+    uow = SqlAlchemyUnitOfWork(db_session)
 
     with pytest.raises(AgentSurfacePodNotFoundError) as raised:
-        await service.pod_scope(uuid4())
+        await pod_scope(uow, uuid4())
     assert raised.value.status_code == 404
 
-    organization_id, name = await service.pod_scope(UUID(str(test_pod["id"])))
+    organization_id, name = await pod_scope(uow, UUID(str(test_pod["id"])))
     assert organization_id is not None
     assert name

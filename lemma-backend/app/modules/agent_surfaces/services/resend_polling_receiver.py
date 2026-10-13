@@ -11,6 +11,13 @@ ingress path fills the body and runs the agent. The email id is the
 
 from __future__ import annotations
 
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    ResendCredentials,
+    as_secret,
+)
+
 import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -62,7 +69,7 @@ _RESEND_POISON_EMAIL_ATTEMPTS = 3
 ResendEmailIngest = Callable[[dict[str, Any]], Awaitable[None]]
 
 
-def resend_receiver_credentials() -> dict[str, Any] | None:
+def resend_receiver_credentials() -> ResendCredentials | None:
     """System Resend credentials for the poller, or ``None`` if the key is unset."""
     api_key = resolve_resend_api_key()
     if not api_key:
@@ -70,13 +77,14 @@ def resend_receiver_credentials() -> dict[str, Any] | None:
             "agent_surfaces.resend_polling_receiver.resend_system_surface_exists_but.diagnostic"
         )
         return None
-    return {"api_key": api_key}
+    return ResendCredentials(api_key=as_secret(api_key))
 
 
 def resend_candidate_from_surface(
-    surface: AgentSurfaceEntity, credentials: dict[str, Any]
+    surface: AgentSurfaceEntity, credentials: CredentialsLike
 ) -> NativeReceiverCandidate | None:
-    api_key = str(credentials.get("api_key") or "").strip()
+    resend = ResendCredentials.of(credentials)
+    api_key = (reveal_secret(resend.api_key) or "").strip()
     if not api_key:
         logger.debug(
             "agent_surfaces.resend_polling_receiver.resend_native_receiver_skipped_surface.diagnostic"
@@ -90,7 +98,7 @@ def resend_candidate_from_surface(
         platform=SurfacePlatform.RESEND,
         surface_ids=(surface.id,),
         credential_label="system",
-        credentials=credentials,
+        credentials=resend,
     )
 
 
@@ -129,14 +137,14 @@ class ResendPollingReceiverRunner:
         self._email_attempts: dict[str, int] = {}
 
     async def run(self) -> None:
-        api_key = str(self._candidate.credentials.get("api_key") or "").strip()
-        if not api_key:
+        resend = ResendCredentials.of(self._candidate.credentials)
+        if not reveal_secret(resend.api_key):
             logger.debug(
                 "agent_surfaces.resend_polling_receiver.resend_native_receiver_missing_key.diagnostic"
             )
             return
 
-        service = ResendPlatformService({"api_key": api_key})
+        service = ResendPlatformService(ResendCredentials(api_key=resend.api_key))
         cursor = await _load_resend_cursor(self._candidate.key)
 
         while True:

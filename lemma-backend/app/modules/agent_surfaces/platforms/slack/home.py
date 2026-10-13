@@ -8,7 +8,11 @@ it, and the Home tab.
 
 from __future__ import annotations
 
-from typing import Any
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SlackCredentials,
+)
+
 
 from slack_sdk.errors import SlackApiError
 
@@ -36,8 +40,8 @@ logger = get_logger(__name__)
 class SlackHomeSurface:
     """Everything a person interacts with to configure Lemma inside Slack."""
 
-    def __init__(self, *, credentials: dict[str, Any]) -> None:
-        self.credentials = credentials
+    def __init__(self, *, credentials: CredentialsLike) -> None:
+        self.credentials = SlackCredentials.of(credentials)
 
     async def send_channel_setup_prompt(
         self,

@@ -27,7 +27,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
-    SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
@@ -46,38 +45,6 @@ from app.modules.agent_surfaces.services.credential_resolver import (
     native_credentials,
 )
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
-
-
-def needs_mention_verification(
-    platform: str,
-    parsed: ParsedInboundSurfaceEvent,
-    surfaces: list[AgentSurfaceEntity],
-) -> bool:
-    """Whether a group message might be an @mention of this bot.
-
-    The parser records any @username / text_mention entities but does not set
-    `mentioned_agent` for a generic mention -- a `mention` entity is a plain
-    @username and does not say *which* user was meant. Settling that costs a
-    getMe call, so it is only worth making when the message could plausibly be
-    for us, and it has to happen before `allows_inbound_event` filters the event
-    out.
-    """
-    if platform != SurfacePlatform.TELEGRAM.value:
-        return False
-    if parsed.is_dm or not surfaces:
-        return False
-    metadata = parsed.metadata or {}
-    if metadata.get("reply_to_user_id"):
-        # A reply to a bot reads as addressed, and which bot is only known
-        # once getMe has said who we are.
-        return True
-    if parsed.mentioned_agent:
-        return False
-    return bool(
-        metadata.get("mentioned_usernames")
-        or metadata.get("text_mention_user_ids")
-        or "@" in (parsed.message_text or "")
-    )
 
 
 type FanIn = tuple[

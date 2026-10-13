@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SurfaceCredentials,
+)
+
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -38,7 +43,7 @@ class PrivateDeliveryUnavailable(RuntimeError):
 
 
 #: Builds the Slack web client for a set of credentials.
-SlackClientFactory = Callable[[dict[str, JsonValue]], Awaitable[Any]]
+SlackClientFactory = Callable[[CredentialsLike], Awaitable[Any]]
 #: The shared outbound HTTP client.
 HttpClientFactory = Callable[[], Any]
 #: Fetches a Bot Framework token for this deployment's Teams app.
@@ -52,7 +57,7 @@ class _ConversationCreated(BaseModel):
 async def _slack_private_destination(
     event: ParsedInboundSurfaceEvent,
     actor: str,
-    credentials: dict[str, JsonValue],
+    credentials: SurfaceCredentials,
     open_slack: SlackClientFactory,
 ) -> tuple[str, dict[str, JsonValue]]:
     """The DM channel Slack opens with this person, and where to reply in it."""
@@ -125,7 +130,7 @@ async def _teams_private_destination(
 async def private_onboarding_destination(
     event: ParsedInboundSurfaceEvent,
     *,
-    credentials: dict[str, JsonValue],
+    credentials: SurfaceCredentials,
     slack_client: SlackClientFactory | None = None,
     http_client: HttpClientFactory | None = None,
     bot_token: BotTokenFactory | None = None,

@@ -7,6 +7,8 @@ coordinator — which imports the runners, so the reverse would be a cycle.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
@@ -122,7 +124,7 @@ class NativeReceiverCandidate:
     platform: SurfacePlatform
     surface_ids: tuple[UUID, ...]
     credential_label: str
-    credentials: dict[str, Any]
+    credentials: SurfaceCredentials
 
 
 def receiver_key(platform: str, label: str, secret: str) -> str:

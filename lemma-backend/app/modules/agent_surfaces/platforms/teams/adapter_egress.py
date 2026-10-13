@@ -11,6 +11,10 @@ wins without the reader having to work out an MRO.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 from urllib.parse import quote
 
@@ -23,6 +27,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.domain.models import (
+    ProgressHandleKind,
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
@@ -95,7 +100,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def send_message(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
@@ -185,7 +190,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def _render_resource(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -222,7 +227,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def _render_choices(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -259,7 +264,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def _render_decision(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -298,7 +303,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def add_processing_indicator(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         metadata: dict[str, Any] | None = None,
     ) -> None:
@@ -342,7 +347,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def acknowledge_interaction(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         interaction: ParsedSurfaceInteraction,
         text: str | None = None,
         show_alert: bool = False,
@@ -397,12 +402,12 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
     async def stream_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> ProgressHandle | None:
         # Accepted and unused: the PUT edits an activity this bot already owns,
         # so there is no author to set. Declared because the shared caller
         # passes it to whichever adapter answers.
@@ -415,7 +420,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         if not bot_token:
             return progress_handle
         base = client.bf_service_url(event.reply_target.get("service_url"))
-        activity_id = (progress_handle or {}).get("activity_id")
+        activity_id = progress_handle.message_id if progress_handle else None
         body = {"type": "message", "text": progress_text}
         timeout = aiohttp.ClientTimeout(total=30)
         try:
@@ -438,22 +443,26 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                     response.raise_for_status()
                     data = await response.json()
             new_id = (data or {}).get("id")
-            return {"activity_id": new_id} if new_id else progress_handle
+            return (
+                ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id=str(new_id))
+                if new_id
+                else progress_handle
+            )
         except Exception:
             return progress_handle
 
     async def end_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
     ) -> None:
         """Delete the streamed progress ("thinking") activity at run end so it
         does not linger next to the final answer (the final answer is delivered
         separately). Mirrors Slack/Telegram end_progress. Best-effort."""
         del credentials
-        activity_id = (progress_handle or {}).get("activity_id")
+        activity_id = progress_handle.message_id if progress_handle else None
         tenant_id = event.tenant_id
         conversation_id = event.reply_target.get("conversation_id")
         if not activity_id or not tenant_id or not conversation_id:

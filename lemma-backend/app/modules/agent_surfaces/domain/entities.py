@@ -537,24 +537,11 @@ class AgentSurfaceEntity(AggregateRoot):
         # `SurfaceInboundMixin._admit`.
         if event.metadata.get("is_thread_reply") and thread_is_ours:
             return True
-        if not event.mentioned_agent:
-            return False
-        if self.surface_type is SurfacePlatform.SLACK:
-            # Slack delivers `app_mention` only to the app that was mentioned,
-            # so the event type is itself the answer.
-            if event.metadata.get("event_type") == "app_mention":
-                return True
-            # A plain `message` reaches here whenever *anyone* was @-mentioned,
-            # because that is all the parser can tell. So it needs this
-            # surface's own bot id among them — and fails closed when there is
-            # no bot id to compare, which a surface created through the
-            # bundle/CLI path has not recorded. That case used to be read as
-            # "allow": the agent then answered every channel message in which
-            # two colleagues mentioned each other.
-            bot_user_id = self.surface_identity_id
-            mentioned_user_ids = set(event.metadata.get("mentioned_user_ids") or [])
-            return bool(bot_user_id) and bot_user_id in mentioned_user_ids
-        return True
+        # `mentioned_agent` means *this* bot by now: where the parser could
+        # not tell (a Slack `message` mentioning anyone, a Telegram @name),
+        # the platform's adapter settled it before admission
+        # (`InboundReader.settle_mention`).
+        return event.mentioned_agent
 
 
 class AgentSurfaceConversationLink(Entity):

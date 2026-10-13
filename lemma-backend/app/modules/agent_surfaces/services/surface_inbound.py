@@ -7,6 +7,8 @@ a voice note to transcribe, recent channel history for a group mention.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from uuid import UUID
 
 
@@ -208,10 +210,10 @@ class SurfaceInboundMixin:
             return None
         parsed = await logged_and_addressed(
             self.uow,
-            router=self.router,
+            adapter=adapter,
+            credential_resolver=self.credential_resolver,
             surfaces=surfaces,
             parsed=parsed,
-            platform=platform,
         )
 
         candidates = await admitted_surfaces(
@@ -321,7 +323,8 @@ class SurfaceInboundMixin:
         if parsed is not None and not parsed.is_dm:
             parsed = await own_bot_group_message(
                 self.uow,
-                router=self.router,
+                adapter=adapter,
+                credential_resolver=self.credential_resolver,
                 surface_repository=self.surface_repository,
                 links=self.conversation_link_repository,
                 surface=surface,
@@ -471,7 +474,7 @@ class SurfaceInboundMixin:
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
         adapter: SurfacePlatformAdapterPort,
-        credentials: dict[str, object],
+        credentials: SurfaceCredentials,
         resolved_user: ResolvedSurfaceUser | None,
         fallback_agent_display_name: str,
     ) -> AgentSurfaceContext | None:

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.adapter_port import in_chat_setup
 
-from typing import TYPE_CHECKING, Any
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
+
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 
@@ -63,6 +67,7 @@ from app.modules.agent_surfaces.services.surface_consent import (
     SurfaceConsentMixin,
 )
 from app.core.infrastructure.db.session_uow import active_uow
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.pod.contracts.agent_access import pod_organization_id
 from app.modules.pod.contracts.members import pod_name
 from app.core.log.log import get_logger
@@ -115,7 +120,7 @@ class AgentSurfaceService(
         Empty for platforms without enumerable channels, or when credentials
         cannot be resolved.
         """
-        adapter = self._adapter_registry.get(surface.surface_type)
+        adapter = in_chat_setup(self._adapter_registry.get(surface.surface_type))
         if adapter is None or self._credential_resolver is None:
             return []
         credentials = await self._credential_resolver.for_surface(surface)
@@ -208,7 +213,7 @@ class AgentSurfaceService(
             entity, surface_repository=self.surface_repository
         )
         await self._ensure_identity_is_claimable(entity)
-        telegram_credentials: dict[str, Any] | None = None
+        telegram_credentials: SurfaceCredentials | None = None
         if telegram_requires_webhook_setup(entity):
             await self._ensure_unique_telegram_account(entity)
             telegram_credentials = await self._prepare_telegram_webhook(entity)
@@ -280,20 +285,6 @@ class AgentSurfaceService(
             pod_id=pod_id, name=name
         )
         return existing is not None
-
-    async def pod_scope(self, pod_id: UUID) -> tuple[UUID, str]:
-        """The pod's organization and name, which a surface set-up records.
-
-        Raises the surface module's not-found error: a pod deleted between the
-        permission check and this read answers 404, where a bare `ValueError`
-        answered 500.
-        """
-        uow = self.surface_repository.uow
-        organization_id = await pod_organization_id(uow, pod_id)
-        name = await pod_name(uow.session, pod_id)
-        if organization_id is None or name is None:
-            raise AgentSurfacePodNotFoundError(str(pod_id))
-        return organization_id, name
 
     async def resend_surface_for_agent(
         self,
@@ -376,7 +367,7 @@ class AgentSurfaceService(
             surface.toggle_active(is_active)
 
         telegram = _telegram_transition(previous_surface, surface)
-        telegram_credentials: dict[str, Any] | None = None
+        telegram_credentials: SurfaceCredentials | None = None
         if telegram.register:
             await self._ensure_unique_telegram_account(surface)
             telegram_credentials = await self._prepare_telegram_webhook(surface)
@@ -587,3 +578,17 @@ class AgentSurfaceService(
         await ensure_unique_platform_identity(
             surface, surface_repository=self.surface_repository
         )
+
+
+async def pod_scope(uow: SqlAlchemyUnitOfWork, pod_id: UUID) -> tuple[UUID, str]:
+    """The pod's organization and name, which a surface set-up records.
+
+    Raises the surface module's not-found error: a pod deleted between the
+    permission check and this read answers 404, where a bare `ValueError`
+    answered 500.
+    """
+    organization_id = await pod_organization_id(uow, pod_id)
+    name = await pod_name(uow.session, pod_id)
+    if organization_id is None or name is None:
+        raise AgentSurfacePodNotFoundError(str(pod_id))
+    return organization_id, name

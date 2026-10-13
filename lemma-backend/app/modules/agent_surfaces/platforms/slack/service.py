@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SlackCredentials,
+)
+
 from typing import Any
 from uuid import uuid4
 
@@ -75,14 +80,14 @@ def _ephemeral_target(metadata: dict[str, object] | None) -> str:
 
 
 class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
-    def __init__(self, *, credentials: dict[str, Any], parser=None) -> None:
+    def __init__(self, *, credentials: CredentialsLike, parser=None) -> None:
         if parser is None:
             from app.modules.agent_surfaces.platforms.slack.parser import (
                 SlackMessageParser,
             )
 
             parser = SlackMessageParser()
-        self.credentials = credentials
+        self.credentials = SlackCredentials.of(credentials)
         self.parser = parser
         self._retry_policy = RetryPolicy()
 

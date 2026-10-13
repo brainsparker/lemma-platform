@@ -7,6 +7,8 @@ transcribed first, recent channel history a group mention needs for context.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 from datetime import datetime, timezone
 
@@ -246,7 +248,7 @@ async def fetch_channel_context(
     *,
     adapter: SurfacePlatformAdapterPort,
     context: SurfaceChatContext,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
 ) -> list[dict[str, Any]]:
     """Best-effort recent thread/channel messages for a group mention, as a
     list of ``{author, text, ts}`` dicts. Fetched fresh per run; never raises."""

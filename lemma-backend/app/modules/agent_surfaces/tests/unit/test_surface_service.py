@@ -744,6 +744,24 @@ async def test_list_surfaces_by_pod():
     )
 
 
+async def test_every_surface_in_a_pod_is_read_past_the_first_page():
+    """A bundle export read one page of a hundred and dropped the rest."""
+    repo = _repo()
+    service = AgentSurfaceService(
+        surface_repository=repo,
+        account_binding_resolver=AsyncMock(),
+    )
+    pod_id = uuid4()
+    first = [_surface_entity(pod_id=pod_id) for _ in range(100)]
+    second = [_surface_entity(pod_id=pod_id)]
+    repo.list_by_pod.side_effect = [(first, first[-1].id), (second, None)]
+
+    surfaces = await service.all_surfaces_in_pod(pod_id)
+
+    assert len(surfaces) == 101
+    assert repo.list_by_pod.await_args_list[1].kwargs["cursor"] == first[-1].id
+
+
 async def test_delete_all_surfaces_for_pod_paginates_and_deletes():
     repo = _repo()
     service = AgentSurfaceService(

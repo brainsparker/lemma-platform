@@ -445,6 +445,24 @@ class AgentSurfaceService(
             limit=limit,
         )
 
+    async def all_surfaces_in_pod(
+        self, pod_id: UUID, *, page_size: int = 100
+    ) -> list[AgentSurfaceEntity]:
+        """Every surface in the pod, however many pages that takes.
+
+        For callers that want the whole set -- a bundle export, a plan diff --
+        and would otherwise read one page and silently drop the rest.
+        """
+        surfaces: list[AgentSurfaceEntity] = []
+        cursor: UUID | None = None
+        while True:
+            page, cursor = await self.list_surfaces_by_pod(
+                pod_id, cursor=cursor, limit=page_size
+            )
+            surfaces.extend(page)
+            if cursor is None:
+                return surfaces
+
     async def delete_surface(self, surface_id: UUID) -> None:
         surface = await self.surface_repository.get(surface_id)
         if surface is not None:

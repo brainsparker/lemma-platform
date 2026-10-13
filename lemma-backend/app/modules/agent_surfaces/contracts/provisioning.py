@@ -105,11 +105,8 @@ async def warned_surface_response(
 
 
 async def list_surfaces(uow, *, pod_id: UUID) -> list[AgentSurfaceEntity]:
-    """Every surface configured on the pod."""
-    surfaces, _ = await build_surface_service(uow).list_surfaces_by_pod(
-        pod_id, limit=100
-    )
-    return list(surfaces)
+    """Every surface configured on the pod -- all of them, not the first page."""
+    return await build_surface_service(uow).all_surfaces_in_pod(pod_id)
 
 
 async def get_surface_by_name(

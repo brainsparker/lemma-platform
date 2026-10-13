@@ -259,6 +259,9 @@ async def test_teams_send_message_declares_markdown_text_format(monkeypatch):
         def raise_for_status(self):
             return None
 
+        async def json(self):
+            return {"id": "activity-1"}
+
     class _Session:
         async def __aenter__(self):
             return self
@@ -325,6 +328,9 @@ async def test_teams_send_display_resource_posts_adaptive_card(monkeypatch):
 
         def raise_for_status(self):
             return None
+
+        async def json(self):
+            return {"id": "activity-1"}
 
     class _Session:
         async def __aenter__(self):
@@ -405,6 +411,9 @@ async def test_teams_end_progress_deletes_activity(monkeypatch):
 
         def raise_for_status(self):
             return None
+
+        async def json(self):
+            return {"id": "activity-1"}
 
     class _Session:
         async def __aenter__(self):

@@ -352,6 +352,18 @@ async def test_slack_names_each_message_once_across_its_retries(monkeypatch):
     assert posts[0]["client_msg_id"] == posts[1]["client_msg_id"]
 
 
+async def test_a_slack_post_reports_the_ts_it_can_be_edited_by(monkeypatch):
+    async def post(self, **kwargs: Any) -> dict[str, object]:
+        return {"ok": True, "ts": "1700000000.0001"}
+
+    monkeypatch.setattr(AsyncWebClient, "chat_postMessage", post)
+    service = SlackPlatformService(credentials={"access_token": "xoxb-test"})
+
+    ts = await service._post_message(AsyncWebClient(token="x"), {"channel": "C1"})
+
+    assert ts == "1700000000.0001"
+
+
 # ── Telegram counts UTF-16, and "too long" is split, not lost ───────────────
 
 

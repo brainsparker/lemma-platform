@@ -70,7 +70,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
 
     async def _post_activity(
         self, url: str, *, token: str, body: BotFrameworkActivity
-    ) -> None:
+    ) -> str | None:
         """Post one Bot Framework activity, retrying what is worth retrying.
 
         The Connector throttles, and a throttled reply used to raise straight
@@ -79,7 +79,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         use, so one policy covers every platform.
         """
 
-        async def send() -> None:
+        async def send() -> str | None:
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as session:
@@ -89,8 +89,17 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                     json=body,
                 ) as response:
                     response.raise_for_status()
+                    # The activity id is how it is edited later (a card's
+                    # buttons taken away with a PUT). Best-effort: a body
+                    # that is not the documented JSON leaves it unknown.
+                    try:
+                        sent = await response.json()
+                    except aiohttp.ContentTypeError, ValueError:
+                        return None
+                    activity_id = sent.get("id") if isinstance(sent, dict) else None
+                    return str(activity_id) if activity_id else None
 
-        await with_retry(
+        return await with_retry(
             send,
             policy=self._retry_policy,
             classify=client.classify_teams_error,

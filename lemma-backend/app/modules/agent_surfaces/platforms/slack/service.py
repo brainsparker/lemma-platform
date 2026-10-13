@@ -93,8 +93,10 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
 
     async def _post_message(
         self, client: AsyncWebClient, payload: SlackMessagePayload
-    ) -> None:
+    ) -> str | None:
         """Post one message, retrying the failures Slack expects us to retry.
+
+        Returns the posted message's ``ts``, or None for an ephemeral.
 
         Slack limits ``chat.postMessage`` per channel and answers a throttled
         call with 429 and a ``Retry-After`` header. Without this the throttle
@@ -121,12 +123,18 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
             if user
             else (lambda: client.chat_postMessage(**payload))
         )
-        await with_retry(
+        response = await with_retry(
             send,
             policy=self._retry_policy,
             classify=classify_slack_error,
             retry_after=slack_retry_after,
         )
+        # The message's `ts` is how it is edited later (a card's buttons taken
+        # away with `chat.update`). An ephemeral has none worth keeping.
+        if user:
+            return None
+        ts = response.get("ts") if response is not None else None
+        return str(ts) if ts else None
 
     async def fetch_sender_profile(
         self,

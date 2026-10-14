@@ -69,11 +69,18 @@ async def retire_uninstalled_app(
         and surface.external_workspace_id == parsed.tenant_id
     ]
     revoked = parsed.revoked_identity_ids
+    # A Slack app has one bot per workspace, so a surface that never recorded
+    # its bot's user id is that bot all the same: skipping it would leave the
+    # one surface nobody can tell apart reading as connected.
     account_ids = {
         surface.account_id
         for surface in surfaces
         if surface.account_id is not None
-        and (revoked is None or surface.surface_identity_id in revoked)
+        and (
+            revoked is None
+            or surface.surface_identity_id is None
+            or surface.surface_identity_id in revoked
+        )
     }
     changed = await retire_accounts(
         uow.session, connector_id=binding.connector_id, account_ids=account_ids

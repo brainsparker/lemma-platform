@@ -18,6 +18,16 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 
 
+UNINSTALL_EVENT_TYPES = frozenset({"app_uninstalled", "tokens_revoked"})
+
+
+def is_uninstall_delivery(payload: dict[str, object]) -> bool:
+    """Whether a raw event callback is one of the two, read before verification
+    so a paused surface's signing secret is among the candidates."""
+    event = payload.get("event")
+    return isinstance(event, dict) and event.get("type") in UNINSTALL_EVENT_TYPES
+
+
 def parse_uninstall(
     event: dict[str, object], *, tenant_id: str | None, raw: dict[str, object]
 ) -> ParsedSurfaceLifecycleEvent | None:

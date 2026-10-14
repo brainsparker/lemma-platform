@@ -124,4 +124,4 @@ class SurfaceSetupReadMixin:
             [surface.account_id]
         )
         account = summaries.get(surface.account_id)
-        return account is not None and account.status == "REAUTH_REQUIRED"
+        return account is not None and account.needs_reauthorization

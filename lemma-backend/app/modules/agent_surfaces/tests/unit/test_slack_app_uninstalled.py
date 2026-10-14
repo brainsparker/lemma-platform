@@ -20,8 +20,13 @@ from app.modules.agent_surfaces.domain.setup_actions import (
 from app.modules.agent_surfaces.platforms.slack.manifest import (
     build_slack_app_manifest,
 )
+from app.modules.agent_surfaces.api.controllers.slack_webhook_verification import (
+    slack_candidates_for_workspace,
+)
 from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+from app.modules.agent_surfaces.platforms.slack.uninstall import is_uninstall_delivery
 from app.modules.agent_surfaces.services import app_uninstall
+from app.modules.test_support.surface_routing_double import routing_surfaces_double
 
 pytestmark = pytest.mark.asyncio
 
@@ -100,7 +105,7 @@ class _Uow:
         self.committed = True
 
 
-def _surface(identity: str, *, workspace: str = "T1", status: str = "ACTIVE"):
+def _surface(identity: str | None, *, workspace: str = "T1", status: str = "ACTIVE"):
     return SimpleNamespace(
         id=uuid4(),
         account_id=uuid4(),
@@ -189,6 +194,57 @@ async def test_a_revoked_bot_retires_only_its_own_surface(monkeypatch):
 
     assert changed == 1
     assert retired["account_ids"] == {gone.account_id}
+
+
+async def test_a_revoked_bot_retires_a_surface_that_never_recorded_its_bot(
+    monkeypatch,
+):
+    """One bot per app per workspace: an unrecorded identity is that bot too."""
+    unrecorded = _surface(None)
+
+    changed, retired, _, _ = await _retire(
+        monkeypatch,
+        surfaces=[unrecorded],
+        receivers=[unrecorded.id],
+        revoked=["U_BOT_A"],
+    )
+
+    assert changed == 1
+    assert retired["account_ids"] == {unrecorded.account_id}
+
+
+async def _candidate_receivers(payload: dict, surfaces) -> set:
+    class _Resolver:
+        async def slack_webhook_credentials(self, surface):
+            return SimpleNamespace(app_id="A1", signing_secret="secret")
+
+    service = SimpleNamespace(
+        credential_resolver=_Resolver(),
+        surface_repository=SimpleNamespace(
+            list_active_for_routing=routing_surfaces_double(surfaces)
+        ),
+    )
+    candidates = await slack_candidates_for_workspace(
+        service=service,
+        team_id="T1",
+        also_paused=is_uninstall_delivery(payload),
+    )
+    return {surface_id for c in candidates for surface_id in c.receiver_surface_ids}
+
+
+async def test_a_paused_surface_can_verify_its_apps_removal_and_nothing_else():
+    """The signature check is where a paused surface's uninstall used to stop."""
+    live, paused = _surface("U_BOT_A"), _surface("U_BOT_B", status="INACTIVE")
+
+    removal = await _candidate_receivers(
+        _callback({"type": "app_uninstalled"}), [live, paused]
+    )
+    message = await _candidate_receivers(
+        _callback({"type": "message", "text": "hi"}), [live, paused]
+    )
+
+    assert removal == {live.id, paused.id}
+    assert message == {live.id}
 
 
 async def test_without_verified_receivers_nothing_is_retired(monkeypatch):

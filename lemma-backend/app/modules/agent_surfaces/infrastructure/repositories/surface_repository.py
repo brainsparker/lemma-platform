@@ -173,6 +173,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
         surface_identity_id: str | None = None,
+        also_paused: bool = False,
         limit: int | None = None,
     ) -> list[AgentSurfaceEntity]:
         """The live surfaces an inbound event could be for; see `routing_surfaces`.
@@ -187,6 +188,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             external_workspace_id=external_workspace_id,
             system_credentials_only=system_credentials_only,
             surface_identity_id=surface_identity_id,
+            also_paused=also_paused,
         )
         if limit is not None:
             statement = statement.limit(limit)

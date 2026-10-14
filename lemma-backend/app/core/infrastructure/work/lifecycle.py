@@ -147,10 +147,10 @@ async def lock_owned(
     return AttemptState(row.attempts, row.lease_losses, row.first_unavailable_at)
 
 
-async def finish_item(
+async def _rearm_periodic(
     session: AsyncSession, item: ClaimedItem, registry: WorkRegistry
 ) -> None:
-    """Delete the finished item, re-arming it first if it is a periodic."""
+    """Queue a periodic's next run ``every`` from now; nothing for other items."""
     periodic = registry.periodic_for(item.dedup_key)
     if periodic is not None:
         await WorkWriter(session, registry=registry).add(
@@ -160,6 +160,13 @@ async def finish_item(
             dedup_key=periodic.dedup_key,
             delay=periodic.every,
         )
+
+
+async def finish_item(
+    session: AsyncSession, item: ClaimedItem, registry: WorkRegistry
+) -> None:
+    """Delete the finished item, re-arming it first if it is a periodic."""
+    await _rearm_periodic(session, item, registry)
     await session.execute(_DELETE, {"id": item.id})
 
 
@@ -204,7 +211,12 @@ async def mark_dead(
     spec: HandlerSpec | None,
     registry: WorkRegistry,
 ) -> None:
-    """Move to ``dead`` and let the kind write its terminal domain state, together."""
+    """Move to ``dead`` and let the kind write its terminal domain state, together.
+
+    A periodic is re-armed in the same transaction: one bad tick is kept dead
+    for inspection, and the chain goes on ``every`` later. The dedup index
+    covers queued items only, so the dead one does not block its successor.
+    """
     await uow.session.execute(
         _MARK_DEAD,
         {
@@ -225,6 +237,7 @@ async def mark_dead(
                 work=WorkWriter(uow.session, registry=registry),
             )
         )
+    await _rearm_periodic(uow.session, item, registry)
     dead_counter.add(
         1,
         {

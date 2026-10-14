@@ -15,9 +15,7 @@ from pydantic_ai import UsageLimits
 
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 from opentelemetry import trace
-from app.core.infrastructure.db.transient_errors import is_transient_database_error
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.work import LeaseLost
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.observability.telemetry import (
@@ -84,6 +82,7 @@ from app.modules.agent.services.run_event_pump import (
     drive_harness,
 )
 from app.modules.agent.services.turn_resume import TurnResume
+from app.modules.agent.services.run_interruptions import run_is_not_over
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_finalizer import (
     is_usage_limit_error,
@@ -126,20 +125,6 @@ logger = get_logger(__name__)
 # takes and comfortably inside the worker's shutdown grace period, so a healthy
 # run always finalizes and a wedged one still lets the process exit.
 _FINALIZATION_TIMEOUT_SECONDS = 8.0
-
-
-def run_is_not_over(exc: BaseException) -> bool:
-    """Whether ``exc`` interrupts the run rather than ending it.
-
-    A cancellation (a lost lease, a shutdown past its grace), a shutdown yield
-    at a step boundary, and a transient database failure all leave the run
-    RUNNING for its work item to resume from the last committed step. Anything
-    else is the run going wrong, and it fails.
-    """
-    if isinstance(exc, LeaseLost):
-        # Another worker owns the turn now; it finishes the run, not this one.
-        return True
-    return not isinstance(exc, Exception) or is_transient_database_error(exc)
 
 
 #: The contract the surface layer implements; kept under the old name here.

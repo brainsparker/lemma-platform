@@ -271,6 +271,46 @@ async def test_a_dead_periodic_is_recreated_at_the_next_boot(
     assert await work_db.count("state = 'dead'") == 1
 
 
+async def test_a_periodic_that_keeps_failing_goes_dead_and_its_chain_goes_on(
+    work_db: WorkDb, registry: WorkRegistry
+) -> None:
+    """A failed tick is a failed item: retried, then dead -- and re-armed.
+
+    The runtime records the failure (attempts, ``last_error``, the dead row);
+    the dead transaction queues the next tick ``every`` later, so a body that
+    keeps raising never stops the sweep until a deploy re-arms it.
+    """
+    from app.core.infrastructure.work import periodic_job
+
+    calls: list[int] = []
+
+    @periodic_job("demo.failing_tick", every=timedelta(hours=1), work_registry=registry)
+    async def failing_tick() -> None:
+        calls.append(1)
+        raise RuntimeError("the sweep failed")
+
+    async with work_db.sessions() as session:
+        await arm_periodics(session, registry, [WorkClass.ADMIN])
+        await session.commit()
+    for _ in range(3):  # the default policy: three attempts
+        await make_due(work_db.sessions)
+        await run_until_idle(work_db.sessions, registry=registry)
+    assert len(calls) == 3
+    key = "dedup_key = 'periodic:demo.failing_tick'"
+    assert await work_db.count(f"{key} AND state = 'dead'") == 1
+    assert (
+        await work_db.scalar(
+            f"SELECT last_error FROM work_items WHERE {key} AND state = 'dead'"
+        )
+        or ""
+    ).find("the sweep failed") >= 0
+    next_run = await work_db.scalar(
+        f"SELECT run_at - now() FROM work_items WHERE {key} AND state = 'queued'"
+    )
+    assert isinstance(next_run, timedelta)
+    assert timedelta(minutes=59) < next_run <= timedelta(hours=1)
+
+
 class _Finished(Fact):
     run_id: str
     pod: str

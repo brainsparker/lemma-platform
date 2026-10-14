@@ -1076,7 +1076,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'work.limit_overrides.unparseable': EventSpec('warning', frozenset()),
     'work.listener.connected': EventSpec('info', frozenset({'channels'})),
     'work.namespaces.busiest': EventSpec('info', frozenset({'queued', 'running', 'work_class'})),
-    'work.periodic.failed': EventSpec('error', frozenset({'kind'})),
     'work.periodic.recreated': EventSpec('warning', frozenset({'kind', 'name'})),
     'work.queues.refresh_failed': EventSpec('warning', frozenset({'work_class'})),
     'work.retention.pruned': EventSpec('info', frozenset({'dead_items', 'full_buckets', 'idle_queues'})),

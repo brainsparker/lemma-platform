@@ -36,7 +36,11 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import metrics
+from pydantic import ValidationError
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.analytics.event_catalog import UnknownAnalyticEventError
 from app.core.log.log import get_logger
 from app.core.origin import origin_from_payload, origin_scope
 from app.core.request_context import create_background_task
@@ -58,6 +62,19 @@ DEFAULT_INTERVAL_SECONDS = 2.0
 #: claim); none may hold the flusher hostage.
 _PROJECTION_TIMEOUT_SECONDS = 10.0
 _CLOSE_TIMEOUT_SECONDS = 10.0
+
+#: What a projection's body can raise and still be an outcome rather than a
+#: bug: an event it cannot parse, a scope or delivery-claim read that failed
+#: (database, Redis, a refused connection, its timeout), and a strict-mode
+#: contract violation. Anything else is a bug and ends the flusher task loudly
+#: (``create_background_task`` logs it); the next offer starts a new one.
+_PROJECTION_ERRORS: tuple[type[BaseException], ...] = (
+    ValidationError,
+    SQLAlchemyError,
+    RedisError,
+    OSError,
+    UnknownAnalyticEventError,
+)
 
 _projections: dict[str, list[Projection]] = {}  # memory: bounded one per event type
 
@@ -178,9 +195,7 @@ class DomainEventSink:
                     await asyncio.wait_for(
                         handler(payload), timeout=_PROJECTION_TIMEOUT_SECONDS
                     )
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001 - analytics is best effort
+            except _PROJECTION_ERRORS:
                 failed_counter.add(1)
                 logger.warning(
                     "analytics.sink.projection_failed",

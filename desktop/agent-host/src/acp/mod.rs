@@ -60,7 +60,7 @@ pub(crate) use supervision::*;
 pub(crate) use tolerance::{STOP_REASONS, Tolerance, note_unknown};
 pub use tolerance::{
     cancelled_permission, sanitize_permission_request, sanitize_session_update,
-    session_notification,
+    session_notification, whole_count,
 };
 
 #[cfg(test)]

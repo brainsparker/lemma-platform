@@ -231,22 +231,24 @@ fn settle_plan(plan: &mut Map<String, Value>) {
 }
 
 /// A count an adapter sent as `12.0` or `"12"`, as the whole number ACP's
-/// type requires. Anything else is left for the parse to judge.
-fn whole_number(object: &mut Map<String, Value>, key: &str) {
-    let Some(value) = object.get(key) else {
-        return;
-    };
-    if value.is_u64() {
-        return;
+/// type requires; `None` for anything that is not a count.
+#[must_use]
+pub fn whole_count(value: &Value) -> Option<u64> {
+    if let Some(count) = value.as_u64() {
+        return Some(count);
     }
     let number = value
         .as_f64()
         .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
-        .filter(|number| number.is_finite() && *number >= 0.0);
-    if let Some(number) = number {
-        // Saturating, and a count is never fractional in a way that matters.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        object.insert(key.to_owned(), Value::from(number.round() as u64));
+        .filter(|number: &f64| number.is_finite() && *number >= 0.0)?;
+    // Saturating, and a count is never fractional in a way that matters.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Some(number.round() as u64)
+}
+
+fn whole_number(object: &mut Map<String, Value>, key: &str) {
+    if let Some(count) = object.get(key).and_then(whole_count) {
+        object.insert(key.to_owned(), Value::from(count));
     }
 }
 

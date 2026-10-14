@@ -765,22 +765,11 @@ fn progress_text(update: &Map<String, Value>) -> Option<String> {
 }
 
 fn usage_payload(usage: &Value) -> Option<UsagePayload> {
-    // A count sent as `12.0` is still a count; a negative or non-number one
-    // is not, and is left out rather than failing the rest.
+    // A count sent as `12.0` is still a count, and one that is not a count is
+    // left out rather than failing the rest.
     let number = |keys: &[&str]| {
-        keys.iter().find_map(|key| {
-            let value = usage.get(*key)?;
-            value.as_u64().or_else(|| {
-                value
-                    .as_f64()
-                    .filter(|number| number.is_finite() && *number >= 0.0)
-                    .map(|number| {
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        let whole = number.round() as u64;
-                        whole
-                    })
-            })
-        })
+        keys.iter()
+            .find_map(|key| usage.get(*key).and_then(crate::acp::whole_count))
     };
     let payload = UsagePayload {
         input_tokens: number(&["inputTokens", "input_tokens"]),

@@ -12,7 +12,6 @@ import httpx
 from opentelemetry import trace
 
 
-from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
@@ -25,10 +24,10 @@ from app.modules.function.application.dispatch_failures import (
     runtime_failure_message,
 )
 from app.modules.function.application.function_run_token import function_run_token
-from app.core.infrastructure.work import Released
 from app.modules.function.application.dispatch_failures import (
     PodAtCapacity,
     SandboxNotReady,
+    not_a_failure,
 )
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
@@ -89,19 +88,6 @@ START_DEADLINE_ERROR = (
     "Function never started before its start deadline. Nothing ran, so it is "
     "safe to retry."
 )
-
-
-def _not_a_failure(exc: Exception, *, queued: bool, started: bool) -> bool:
-    """Signals for the caller, not outcomes of the run: a full pod, a sandbox
-    not up yet, or a queued run stopped before its start."""
-    if isinstance(exc, (PodAtCapacity, SandboxNotReady)):
-        return True
-    if not started and is_database_unavailable(exc):
-        # Lemma's database could not be reached before the function was sent
-        # anywhere: nothing ran, so the run is retried, not failed. Once it
-        # started, the result is the sandbox's and failing is what records it.
-        return True
-    return queued and not started and isinstance(exc, Released)
 
 
 RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
@@ -283,7 +269,7 @@ class FunctionDispatcher:
             # `agent_runner_service` re-raises at the same boundary and for the
             # same reason -- swallowing it there made every interrupted run look
             # like a success, and a deploy ended every conversation in flight.
-            if not isinstance(exc, Exception) or _not_a_failure(
+            if not isinstance(exc, Exception) or not_a_failure(
                 exc, queued=queued, started=started is not None
             ):
                 raise

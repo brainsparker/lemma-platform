@@ -213,7 +213,7 @@ class PlatformDeliverySender:
             await discard_display_paths(target.conversation_id, run)
         return SendResult(
             delivered=delivered,
-            transient=outcome.gave_up_transient or database_down,
+            transient=any((outcome.gave_up_transient, database_down)),
             partial=outcome.partial,
             retry_after=outcome.retry_after,
             error=error,

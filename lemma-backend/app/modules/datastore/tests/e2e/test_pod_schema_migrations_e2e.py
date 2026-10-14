@@ -33,6 +33,7 @@ from app.modules.datastore.infrastructure.pod_schema_migrations import (
     CHUNKS_VERSION,
     POD_SCHEMA_LATEST,
     all_pod_schemas_at_least,
+    ensure_change_log,
     forget_all,
     migrate_pod_schema,
     pod_schema_version,
@@ -279,3 +280,46 @@ async def test_search_reads_either_version_and_v2_keeps_the_data(
     assert await service.rename_folder("/finance", "/archive/finance")
     assert await _search(service, "/archive") == ["/archive/finance/forecast.pdf"]
     assert await _search(service, "/finance") == []
+
+
+async def _exists(engine: AsyncEngine, relation: str) -> bool:
+    async with engine.connect() as conn:
+        return bool(
+            await conn.scalar(
+                text("SELECT to_regclass(:r) IS NOT NULL"), {"r": relation}
+            )
+        )
+
+
+async def test_a_record_write_never_runs_the_chunk_rewrite(engine: AsyncEngine) -> None:
+    """A schema the backfill has not reached, holding search chunks, gets the
+    change log alone on its first record write; the version-2 rewrite of its
+    chunks stays the backfill's, which later finds the log already there."""
+    schema = schema_name_for_pod(uuid4())
+    async with engine.begin() as conn:
+        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+    await migrate_pod_schema(engine, schema, target=CHUNKS_VERSION)
+    await _legacy_chunks(engine, schema, uuid4())
+
+    await ensure_change_log(engine, schema)
+
+    assert await _exists(engine, f'"{schema}".reserved_changes')
+    assert await _exists(engine, f'"{schema}".reserved_change_subscribers')
+    assert not await _exists(engine, f'"{schema}".search_files'), "no v2 step"
+    assert await pod_schema_version(engine, schema) == CHUNKS_VERSION
+    await ensure_change_log(engine, schema)  # the memo: nothing to do
+
+    await migrate_pod_schema(engine, schema)
+    assert await pod_schema_version(engine, schema) == POD_SCHEMA_LATEST
+    assert await _exists(engine, f'"{schema}".search_files')
+
+
+async def test_a_schema_without_chunks_is_migrated_properly_on_its_first_write(
+    engine: AsyncEngine,
+) -> None:
+    [schema] = await _create_schemas(engine, 1)
+
+    await ensure_change_log(engine, schema)
+
+    assert await pod_schema_version(engine, schema) == POD_SCHEMA_LATEST
+    assert await _exists(engine, f'"{schema}".reserved_changes')

@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from app.core.infrastructure.db.transient_errors import is_database_unavailable
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
@@ -213,10 +213,7 @@ async def resume_pending_interaction(
             else Resumed(ResumeOutcome.NOT_A_DECISION)
         )
     except Exception as exc:
-        if is_database_unavailable(exc):
-            # Lemma's own database, not this decision: raised so the work item
-            # retries it (uncharged) instead of recording a failure for good.
-            raise
+        raise_if_database_unavailable(exc)
         if recording:
             # The person decided and we could not write it down. Never fall
             # through: the turn that would start supersedes this pause with an

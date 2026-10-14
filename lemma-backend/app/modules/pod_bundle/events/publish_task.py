@@ -8,7 +8,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from app.core.infrastructure.db.transient_errors import is_database_unavailable
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.concurrency.offload import run_blocking
@@ -430,10 +430,7 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
             publish_id=publish_id,
         )
     except Exception as exc:
-        if is_database_unavailable(exc):
-            # Lemma's own database: retried by the work item, uncharged and
-            # for as long as the outage lasts, not failed after a few seconds.
-            raise
+        raise_if_database_unavailable(exc)
         if state.attempt < 3:
             await _record_publish_retry(store, state, exc)
             raise Defer(timedelta(seconds=min(state.attempt**2, 9))) from exc

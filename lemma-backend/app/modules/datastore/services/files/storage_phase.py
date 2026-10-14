@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 from uuid import UUID
 
-from app.core.infrastructure.db.transient_errors import is_database_unavailable
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.api.uploads import upload_source_sha256
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
@@ -498,10 +498,7 @@ class FileStoragePhase:
         try:
             await search_service.remove_files(file_ids)
         except Exception as exc:
-            if is_database_unavailable(exc):
-                # Lemma's own database, not this purge: raised so the work item
-                # retries it (uncharged) instead of recording a failure for good.
-                raise
+            raise_if_database_unavailable(exc)
             logger.error(
                 "datastore.storage_phase.deleted_file_search_purge.failed",
                 file_count=len(file_ids),

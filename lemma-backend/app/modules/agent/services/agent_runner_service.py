@@ -38,12 +38,8 @@ from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
-    AgentEvent,
-    AgentEventType,
     AgentRuntimeConfig,
     AgentRunStatus,
-    ConversationStatus,
-    MessageDraft,
     ConversationType,
     HarnessKind,
     JsonObject,
@@ -213,7 +209,9 @@ class AgentRunnerService:
             return
         answered = await self.turn_resume.committed_answer(agent_run_id)
         if answered is not None:
-            await self._finish_on(answered, run=run)
+            await self.turn_resume.finish_on(
+                answered, run=run, finalizer=self.finalizer
+            )
             return
         usage_reservation: UsageReservation | None = None
         runtime_profile_snapshot: dict[str, object | None] | None = None
@@ -479,24 +477,6 @@ class AgentRunnerService:
             # like a success, so a deploy ended every conversation in flight.
             if run_is_not_over(exc):
                 raise
-
-    async def _finish_on(self, answer: MessageDraft, *, run: RunIdentity) -> None:
-        """End a resumed run on the answer its previous attempt committed."""
-        event = AgentEvent(
-            type=AgentEventType.MESSAGE, data=answer, agent_run_id=run.agent_run_id
-        )
-        final_status, final_error = self.message_writer.final_status_from_event(event)
-        await self.finalizer.finish(
-            run=run,
-            status=(
-                AgentRunStatus.FAILED
-                if final_status == ConversationStatus.FAILED
-                else AgentRunStatus.COMPLETED
-            ),
-            conversation_status=final_status,
-            error=final_error,
-            output_data=self.message_writer.output_data_from_event(event),
-        )
 
     async def _runtime_for(
         self, conversation: Conversation, agent_run: AgentRun, *, user_id: UUID

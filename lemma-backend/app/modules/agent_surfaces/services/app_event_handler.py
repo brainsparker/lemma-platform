@@ -19,7 +19,7 @@ choose, and has no edge back into any of this.
 
 from __future__ import annotations
 
-from app.core.infrastructure.db.transient_errors import is_database_unavailable
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 from app.modules.agent_surfaces.domain.channel_setup import (
@@ -183,10 +183,7 @@ class AppEventHandler:
                 credentials=credentials,
             )
         except SQLAlchemyError as exc:
-            if is_database_unavailable(exc):
-                # Lemma's own database, not this setup: raised so the work item
-                # retries it (uncharged) instead of recording a failure for good.
-                raise
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "agent_surfaces.app_event_handler.channel_setup_failed.failed",
                 surface_id=str(surface.id),
@@ -460,10 +457,7 @@ class AppEventHandler:
         try:
             await self._handle_lifecycle_event(surface=surface, parsed=parsed, ctx=ctx)
         except SQLAlchemyError as exc:
-            if is_database_unavailable(exc):
-                # Lemma's own database, not this event: raised so the work item
-                # retries it (uncharged) instead of recording a failure for good.
-                raise
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "agent_surfaces.app_event_handler.lifecycle_event_failed.failed",
                 surface_id=str(surface.id),

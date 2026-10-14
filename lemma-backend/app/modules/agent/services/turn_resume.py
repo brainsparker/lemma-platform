@@ -43,8 +43,17 @@ from app.modules.agent.domain.replay import (
     is_replayable_call,
     replay_class,
 )
-from app.modules.agent.domain.value_objects import MessageDraft, to_json_value
+from app.modules.agent.domain.value_objects import (
+    AgentEvent,
+    AgentEventType,
+    AgentRunStatus,
+    ConversationStatus,
+    MessageDraft,
+    to_json_value,
+)
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.services.run_finalizer import RunFinalizer
+from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.tool_errors import (
     format_tool_error,
@@ -162,6 +171,26 @@ class TurnResume:
             tool_name=last.tool_name,
             tool_call_id=last.tool_call_id,
             metadata=last.metadata,
+        )
+
+    async def finish_on(
+        self, answer: MessageDraft, *, run: RunIdentity, finalizer: RunFinalizer
+    ) -> None:
+        """End a resumed run on the answer its previous attempt committed."""
+        event = AgentEvent(
+            type=AgentEventType.MESSAGE, data=answer, agent_run_id=run.agent_run_id
+        )
+        final_status, final_error = self.message_writer.final_status_from_event(event)
+        await finalizer.finish(
+            run=run,
+            status=(
+                AgentRunStatus.FAILED
+                if final_status == ConversationStatus.FAILED
+                else AgentRunStatus.COMPLETED
+            ),
+            conversation_status=final_status,
+            error=final_error,
+            output_data=self.message_writer.output_data_from_event(event),
         )
 
     async def settle(

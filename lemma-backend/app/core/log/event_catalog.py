@@ -729,6 +729,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.orphan_schemas.reaped': EventSpec('info', frozenset({'dropped_count', 'failed_count', 'retention_days', 'scanned_count'})),
     'datastore.parent_backfill.page.observed': EventSpec('info', frozenset({'linked'})),
     'datastore.pod_schema.backfill_page.observed': EventSpec('info', frozenset({'enqueued', 'more'})),
+    'datastore.pod_schema_migrations.change_log_ahead_of_backfill.observed': EventSpec('info', frozenset({'schema_name', 'version'})),
     'datastore.pod_schema_migrations.vector_index_build.degraded': EventSpec('warning', frozenset({'schema_name'})),
     'datastore.postgres_search_service.add_file_search_s.propagated': EventSpec('debug', frozenset()),
     'datastore.postgres_search_service.datastore_indexing_stages_file_s.observed': EventSpec('debug', frozenset({'count', 'embedding_seconds', 'file_id', 'persistence_seconds', 'schema_seconds'})),

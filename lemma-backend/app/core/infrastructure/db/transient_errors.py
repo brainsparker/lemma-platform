@@ -22,6 +22,7 @@ __all__ = [
     "DEADLOCK_DETECTED",
     "SERIALIZATION_FAILURE",
     "is_database_unavailable",
+    "raise_if_database_unavailable",
     "is_deadlock",
     "is_transient_database_error",
 ]
@@ -120,3 +121,14 @@ def is_transient_database_error(exc: BaseException) -> bool:
     return is_database_unavailable(exc) or any(
         _sqlstate(link) in _RETRYABLE_SQLSTATES for link in _chain(exc)
     )
+
+
+def raise_if_database_unavailable(exc: BaseException) -> None:
+    """Re-raise ``exc`` if it is the database being unavailable.
+
+    For a catch that records a failure: an outage is not the work failing,
+    so it goes to the work item, which retries it uncharged within its
+    unavailable budget instead of the catch recording a failure for good.
+    """
+    if is_database_unavailable(exc):
+        raise exc

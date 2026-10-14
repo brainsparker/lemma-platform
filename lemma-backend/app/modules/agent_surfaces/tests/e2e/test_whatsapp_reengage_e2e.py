@@ -20,7 +20,32 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow_factory import (
+    SessionUnitOfWorkFactory,
+    UnitOfWorkFactory,
+)
+from app.modules.agent.infrastructure.repositories.conversation_repository import (
+    ConversationRepository,
+)
+from app.modules.agent_surfaces.domain.adapter_port import OutboundMetadata
+from app.modules.agent_surfaces.domain.credentials import (
+    SurfaceCredentials,
+    WhatsAppCredentials,
+)
+from app.modules.agent_surfaces.domain.entities import (
+    ParsedInboundSurfaceEvent,
+    SurfacePlatform,
+)
+from app.modules.agent_surfaces.platforms.whatsapp.adapter import (
+    WhatsAppSurfaceAdapter,
+)
+from app.modules.agent_surfaces.services.held_replies import (
+    HELD_REPLIES_KEY,
+    HeldReplies,
+    deliver_held_replies,
+    hold_reply,
+)
 from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
 )
@@ -129,3 +154,100 @@ async def test_a_closed_window_is_reopened_with_a_template_and_the_message_waits
     await stage.say("thanks", script=[script_text("You're welcome.")])
     assert await stage.saw("You're welcome.")
     assert _bodies(message_store).count(FIRST) == 1
+
+
+class _HoldsWhileDelivering(WhatsAppSurfaceAdapter):
+    """Records what it is given to send, and -- while the first held message is
+    going out -- has another message held, the way a second send to the member
+    landing mid-delivery would."""
+
+    def __init__(self, conversation_id: UUID, uow_factory: UnitOfWorkFactory) -> None:
+        super().__init__()
+        self.conversation_id = conversation_id
+        self.uow_factory = uow_factory
+        self.sent: list[str] = []
+
+    async def send_message(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        message: str,
+        metadata: OutboundMetadata | None = None,
+    ) -> None:
+        del credentials, event, metadata
+        self.sent.append(message)
+        if message == FIRST:
+            async with self.uow_factory() as uow:
+                await hold_reply(uow, self.conversation_id, SECOND, asked=False)
+
+
+async def _held_messages(
+    uow_factory: UnitOfWorkFactory, conversation_id: UUID
+) -> list[str]:
+    async with uow_factory() as uow:
+        record = await ConversationRepository(uow).get_conversation_metadata_key(
+            conversation_id, HELD_REPLIES_KEY
+        )
+    if record is None:
+        return []
+    return [reply.message for reply in HeldReplies.model_validate(record).replies]
+
+
+async def test_a_message_held_while_the_hold_is_delivered_is_kept_for_next_time(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fixed_test_org,
+    message_store,
+    monkeypatch,
+    platform_fake,
+) -> None:
+    """The clear is of what was sent, not of whatever is held by then.
+
+    It used to drop the record by the ask it belonged to, and a second message
+    held under the same ask while the first was going out shared it -- so the
+    clear took the second one with it, unsent.
+    """
+    stage = await stage_surface(
+        SurfacePlatform.WHATSAPP,
+        fake=platform_fake[SurfacePlatform.WHATSAPP],
+        authenticated_client=authenticated_client,
+        db_session=db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fixed_test_org=fixed_test_org,
+        message_store=message_store,
+        monkeypatch=monkeypatch,
+    )
+    context = await stage.say("hello", script=[script_text("Hi there.")])
+    assert await stage.saw("Hi there.")
+    conversation_id = context.conversation_id
+    uow_factory = SessionUnitOfWorkFactory(async_session_maker)
+    async with uow_factory() as uow:
+        await hold_reply(uow, conversation_id, FIRST, asked=True)
+    adapter = _HoldsWhileDelivering(conversation_id, uow_factory)
+
+    async def deliver() -> None:
+        await deliver_held_replies(
+            adapter=adapter,
+            credentials=WhatsAppCredentials(),
+            event=context.event,
+            conversation_id=conversation_id,
+            uow_factory=uow_factory,
+        )
+
+    await deliver()
+
+    assert adapter.sent == [FIRST]
+    assert await _held_messages(uow_factory, conversation_id) == [SECOND], (
+        "the message held mid-delivery was cleared without being sent"
+    )
+
+    # Their next message delivers it -- not refused by the first delivery's
+    # claim, and not the first one again.
+    await deliver()
+
+    assert adapter.sent == [FIRST, SECOND]
+    assert await _held_messages(uow_factory, conversation_id) == []

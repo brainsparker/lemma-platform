@@ -21,7 +21,13 @@ from pathlib import Path
 
 _APP = Path(__file__).resolve().parents[4]
 _DRIVERS = frozenset(
-    {"run_until_idle", "make_due", "dispatcher_for", "run_approval_work", "run_wait_work"}
+    {
+        "run_until_idle",
+        "make_due",
+        "dispatcher_for",
+        "run_approval_work",
+        "run_wait_work",
+    }
 )
 _REAL_WORKER_FIXTURES = frozenset({"worker", "document_worker"})
 

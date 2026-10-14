@@ -16652,6 +16652,42 @@
         "title": "SlackManagerBindRequest",
         "type": "object"
       },
+      "SlackPersonLinkPreviewResponse": {
+        "description": "Whose Slack account a link would connect, before it is connected.",
+        "properties": {
+          "slack_user_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slack User Name"
+          },
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          },
+          "team_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Name"
+          }
+        },
+        "required": [
+          "team_id"
+        ],
+        "title": "SlackPersonLinkPreviewResponse",
+        "type": "object"
+      },
       "SlackPersonLinkRequest": {
         "description": "The values in the link a Slack user's App Home showed them.",
         "properties": {
@@ -41597,6 +41633,58 @@
           "resource": "agent.surface.slack_person",
           "result": "entity",
           "verb": "link"
+        }
+      }
+    },
+    "/surface-setup/slack/people/preview": {
+      "post": {
+        "description": "Say whose Slack account this link would connect to the signed-in person.\n\nConnects nothing. The page shows it and asks first, so a link somebody\nelse sent cannot connect their Slack account to yours unannounced.",
+        "operationId": "agent.surface.slack_person.preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackPersonLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackPersonLinkPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Slack Person Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_person"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_person",
+          "result": "entity",
+          "verb": "preview"
         }
       }
     },

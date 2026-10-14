@@ -16390,6 +16390,27 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Preview Slack Person Link
+     * Say whose Slack account this link would connect to the signed-in person.
+     *
+     * Connects nothing. The page shows it and asks first, so a link somebody
+     * else sent cannot connect their Slack account to yours unannounced.
+     * @param requestBody
+     * @returns SlackPersonLinkPreviewResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackPersonPreview(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/surface-setup/slack/people/preview",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/pod-surfaces.ts
@@ -16552,6 +16573,15 @@ var LemmaClient = (() => {
      * Prove the signed-in person is the Slack user whose App Home showed the
      * "Connect your Lemma account" link these values came from.
      */
+    /**
+     * Whose Slack account a "Connect your Lemma account" link would connect,
+     * checked and named without connecting anything -- so the page can ask first.
+     */
+    previewSlackPerson(request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackPersonPreview(request2)
+      );
+    }
     linkSlackPerson(request2) {
       return this.client.request(
         () => AgentSurfacesService.agentSurfaceSlackPersonLink(request2)

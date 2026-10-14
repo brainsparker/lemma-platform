@@ -210,6 +210,16 @@ export class PodSurfacesNamespace {
    * Prove the signed-in person is the Slack user whose App Home showed the
    * "Connect your Lemma account" link these values came from.
    */
+  /**
+   * Whose Slack account a "Connect your Lemma account" link would connect,
+   * checked and named without connecting anything -- so the page can ask first.
+   */
+  previewSlackPerson(request: SlackPersonLinkRequest) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackPersonPreview(request),
+    );
+  }
+
   linkSlackPerson(request: SlackPersonLinkRequest) {
     return this.client.request(() =>
       AgentSurfacesService.agentSurfaceSlackPersonLink(request),

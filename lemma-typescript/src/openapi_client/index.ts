@@ -400,6 +400,7 @@ export type { SlackConfigurationTokenRequest } from './models/SlackConfiguration
 export type { SlackManagedWorkspaceListResponse } from './models/SlackManagedWorkspaceListResponse.js';
 export type { SlackManagedWorkspaceResponse } from './models/SlackManagedWorkspaceResponse.js';
 export type { SlackManagerBindRequest } from './models/SlackManagerBindRequest.js';
+export type { SlackPersonLinkPreviewResponse } from './models/SlackPersonLinkPreviewResponse.js';
 export type { SlackPersonLinkRequest } from './models/SlackPersonLinkRequest.js';
 export type { StepRecordResponse } from './models/StepRecordResponse.js';
 export { StepStatus } from './models/StepStatus.js';

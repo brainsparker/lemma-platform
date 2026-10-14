@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from app.core.config import reveal_secret
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (
-    SlackManagerRepository,
-)
 from app.modules.agent_surfaces.services.surface_service import AgentSurfaceService
 from app.modules.agent_surfaces.services.webhook_security_service import (
     SlackWebhookVerificationCandidate,
@@ -33,7 +31,7 @@ async def slack_candidates_for_workspace(
     *,
     service: AgentSurfaceService,
     team_id: str | None,
-    managers: SlackManagerRepository | None = None,
+    is_managed: Callable[[str], Awaitable[bool]] | None = None,
     also_paused: bool = False,
 ) -> list[SlackWebhookVerificationCandidate]:
     # No resolver, no credentials to verify a signature against -- the same
@@ -67,7 +65,7 @@ async def slack_candidates_for_workspace(
     # teammate answering through it, so its Home and its invites verify. Where
     # Lemma's app is still a pod's bot, that pod's surface is already in the
     # group, and the delivery goes to it as before.
-    manager = await _manager_candidate(managers, team_id) if managers else None
+    manager = await _manager_candidate(is_managed, team_id) if is_managed else None
     if manager is not None:
         grouped.setdefault(manager, [])
     return [
@@ -81,12 +79,11 @@ async def slack_candidates_for_workspace(
 
 
 async def _manager_candidate(
-    managers: SlackManagerRepository, team_id: str
+    is_managed: Callable[[str], Awaitable[bool]], team_id: str
 ) -> tuple[str, str] | None:
     """``(app_id, signing_secret)`` of Lemma's own app, when it manages this workspace."""
     app_id = surface_settings.slack_app_id
     secret = reveal_secret(surface_settings.slack_signing_secret)
     if not app_id or not secret:
         return None
-    install = await managers.install_for_team(team_id)
-    return (app_id, secret) if install is not None else None
+    return (app_id, secret) if await is_managed(team_id) else None

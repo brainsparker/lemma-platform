@@ -18,8 +18,8 @@ someone invited it for. Three tables let it:
   arrives, the pod's surface is made from it, so nobody has to come back to
   Lemma to finish.
 
-Revision ID: 0053_slack_manager
-Revises: 0052_slack_configuration_tokens
+Revision ID: 0054_slack_manager
+Revises: 0053_slack_configuration_tokens
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0053_slack_manager"
-down_revision = "0052_slack_configuration_tokens"
+revision = "0054_slack_manager"
+down_revision = "0053_slack_configuration_tokens"
 branch_labels = None
 depends_on = None
 

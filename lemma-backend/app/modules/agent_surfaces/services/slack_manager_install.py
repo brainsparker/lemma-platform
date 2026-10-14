@@ -131,6 +131,13 @@ async def bind_manager(
     return ManagedWorkspace(team_id=team_id, team_name=team_name)
 
 
+async def manages_workspace(uow: SqlAlchemyUnitOfWork, team_id: str) -> bool:
+    """Whether Lemma's own app manages this Slack workspace for anybody."""
+    return (
+        await SlackManagerRepository(uow.session).install_for_team(team_id) is not None
+    )
+
+
 async def managed_workspaces(
     uow: SqlAlchemyUnitOfWork, organization_id: UUID
 ) -> list[ManagedWorkspace]:
@@ -141,6 +148,66 @@ async def managed_workspaces(
         ManagedWorkspace(team_id=row.team_id, team_name=row.team_name)
         for row in installs
     ]
+
+
+@dataclass(frozen=True)
+class PersonLinkPreview:
+    """Who a link would connect, shown before anything is connected."""
+
+    team_id: str
+    team_name: str | None
+    slack_user_name: str | None
+
+
+async def preview_person_link(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    team_id: str,
+    slack_user_id: str,
+    expires: int,
+    signature: str,
+) -> PersonLinkPreview:
+    """Check a link and say whose Slack account it is, connecting nothing.
+
+    The page asks this first and connects only when the person says "that's
+    me": a link sent by somebody else would otherwise connect *their* Slack
+    account to whoever opened it, signed in, without a word.
+    """
+    from app.modules.agent_surfaces.platforms.slack.workspace_calls import user_profile
+    from app.modules.agent_surfaces.services.slack_manager_context import load_context
+
+    if not verify_person_link(
+        team_id=team_id,
+        slack_user_id=slack_user_id,
+        expires=expires,
+        signature=signature,
+    ):
+        raise AgentSurfaceValidationError(
+            "That link has expired. Open Lemma's Home tab in Slack and connect again."
+        )
+    ctx = await load_context(uow, team_id=team_id, slack_user_id=None)
+    if ctx is None:
+        raise AgentSurfaceValidationError(
+            "Lemma isn't installed in that Slack workspace."
+        )
+    profile = await user_profile(ctx.credentials, slack_user_id)
+    details = profile.get("profile")
+    details = details if isinstance(details, dict) else {}
+    name = next(
+        (
+            str(value).strip()
+            for value in (
+                details.get("real_name"),
+                details.get("display_name"),
+                profile.get("name"),
+            )
+            if isinstance(value, str) and value.strip()
+        ),
+        None,
+    )
+    return PersonLinkPreview(
+        team_id=team_id, team_name=ctx.install.team_name, slack_user_name=name
+    )
 
 
 async def link_person(

@@ -18,6 +18,7 @@ from uuid import UUID
 from app.core.config import settings
 from app.core.crypto import get_secret_signer
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.domain.credentials import CredentialsLike
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
@@ -130,7 +131,7 @@ class ManagedInstall:
 @dataclass(frozen=True)
 class ManagerContext:
     install: ManagedInstall
-    credentials: dict[str, object]
+    credentials: CredentialsLike
     slack_user_id: str | None
     #: The Lemma person this Slack user is proven to be, if anyone.
     user_id: UUID | None
@@ -161,7 +162,7 @@ async def load_context(
         return None
     install = ManagedInstall.of(row)
     credentials = await SurfaceCredentialResolver(uow=uow).for_account(
-        install.account_id
+        install.account_id, platform=SurfacePlatform.SLACK
     )
     user_id = (
         await SlackManagerRepository(uow.session).person(team_id, slack_user_id)
@@ -177,7 +178,7 @@ async def load_context(
     )
     return ManagerContext(
         install=install,
-        credentials=dict(credentials),
+        credentials=credentials,
         slack_user_id=slack_user_id,
         user_id=user_id,
         organization_name=await organization_name(uow, install.organization_id),

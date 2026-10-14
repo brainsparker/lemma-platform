@@ -24,6 +24,7 @@ from app.modules.agent_surfaces.services.slack_manager_install import (
     bind_manager,
     link_person,
     managed_workspaces,
+    preview_person_link,
 )
 from app.modules.pod.contracts.agent_access import pod_organization_id
 
@@ -98,6 +99,40 @@ async def bind_slack_manager(
         account_id=request.account_id,
     )
     return _response(bound)
+
+
+class SlackPersonLinkPreviewResponse(BaseModel):
+    """Whose Slack account a link would connect, before it is connected."""
+
+    team_id: str
+    team_name: str | None = None
+    slack_user_name: str | None = None
+
+
+@people_router.post(
+    "/people/preview", operation_id="agent.surface.slack_person.preview"
+)
+async def preview_slack_person_link(
+    request: SlackPersonLinkRequest, user: CurrentUser, uow: UoWDep
+) -> SlackPersonLinkPreviewResponse:
+    """Say whose Slack account this link would connect to the signed-in person.
+
+    Connects nothing. The page shows it and asks first, so a link somebody
+    else sent cannot connect their Slack account to yours unannounced.
+    """
+    del user
+    preview = await preview_person_link(
+        uow,
+        team_id=request.team_id,
+        slack_user_id=request.slack_user_id,
+        expires=request.expires,
+        signature=request.signature,
+    )
+    return SlackPersonLinkPreviewResponse(
+        team_id=preview.team_id,
+        team_name=preview.team_name,
+        slack_user_name=preview.slack_user_name,
+    )
 
 
 @people_router.post("/people", operation_id="agent.surface.slack_person.link")

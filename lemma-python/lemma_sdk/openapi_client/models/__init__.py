@@ -507,6 +507,7 @@ _NAME_TO_MODULE = {
     'SlackManagedWorkspaceListResponse': 'slack_managed_workspace_list_response',
     'SlackManagedWorkspaceResponse': 'slack_managed_workspace_response',
     'SlackManagerBindRequest': 'slack_manager_bind_request',
+    'SlackPersonLinkPreviewResponse': 'slack_person_link_preview_response',
     'SlackPersonLinkRequest': 'slack_person_link_request',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
@@ -1153,6 +1154,7 @@ if TYPE_CHECKING:
     from .slack_managed_workspace_list_response import SlackManagedWorkspaceListResponse
     from .slack_managed_workspace_response import SlackManagedWorkspaceResponse
     from .slack_manager_bind_request import SlackManagerBindRequest
+    from .slack_person_link_preview_response import SlackPersonLinkPreviewResponse
     from .slack_person_link_request import SlackPersonLinkRequest
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
@@ -1812,6 +1814,7 @@ __all__ = [
     'SlackManagedWorkspaceListResponse',
     'SlackManagedWorkspaceResponse',
     'SlackManagerBindRequest',
+    'SlackPersonLinkPreviewResponse',
     'SlackPersonLinkRequest',
     'StepRecordResponse',
     'StepStatus',

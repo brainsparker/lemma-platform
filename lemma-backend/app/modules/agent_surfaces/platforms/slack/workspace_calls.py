@@ -15,11 +15,12 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.webhook.async_client import AsyncWebhookClient
 
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.credentials import CredentialsLike
 from app.modules.agent_surfaces.platforms.slack.client import build_slack_client
 
 logger = get_logger(__name__)
 
-Credentials = Mapping[str, object]
+Credentials = CredentialsLike
 Blocks = Sequence[Mapping[str, object]]
 
 
@@ -41,7 +42,7 @@ async def publish_home(
     credentials: Credentials, *, user_id: str, view: Mapping[str, object]
 ) -> str | None:
     try:
-        client = await build_slack_client(dict(credentials))
+        client = await build_slack_client(credentials)
         await client.views_publish(user_id=user_id, view=dict(view))
     except SlackApiError as exc:
         logger.info(
@@ -55,7 +56,7 @@ async def open_modal(
     credentials: Credentials, *, trigger_id: str, view: Mapping[str, object]
 ) -> str | None:
     try:
-        client = await build_slack_client(dict(credentials))
+        client = await build_slack_client(credentials)
         await client.views_open(trigger_id=trigger_id, view=dict(view))
     except SlackApiError as exc:
         logger.info("agent_surfaces.slack_manager.modal_open_failed", error=_error(exc))
@@ -68,7 +69,7 @@ async def update_view(
 ) -> str | None:
     """Replace an open modal: from "making the app" to "allow it", say."""
     try:
-        client = await build_slack_client(dict(credentials))
+        client = await build_slack_client(credentials)
         await client.views_update(view_id=view_id, view=dict(view))
     except SlackApiError as exc:
         logger.info(
@@ -87,7 +88,7 @@ async def post_ephemeral(
     blocks: Blocks | None = None,
 ) -> str | None:
     try:
-        client = await build_slack_client(dict(credentials))
+        client = await build_slack_client(credentials)
         await client.chat_postEphemeral(
             channel=channel,
             user=user,
@@ -104,7 +105,7 @@ async def post_message(
     credentials: Credentials, *, channel: str, text: str, blocks: Blocks | None = None
 ) -> str | None:
     try:
-        client = await build_slack_client(dict(credentials))
+        client = await build_slack_client(credentials)
         await client.chat_postMessage(
             channel=channel, text=text, blocks=_blocks(blocks)
         )
@@ -130,7 +131,7 @@ async def respond(
 async def is_private_channel(credentials: Credentials, channel: str) -> bool | None:
     """True for a private channel, None when Slack would not say."""
     try:
-        client = await build_slack_client(dict(credentials))
+        client = await build_slack_client(credentials)
         response = await client.conversations_info(channel=channel)
     except SlackApiError:
         return None
@@ -142,7 +143,7 @@ async def is_private_channel(credentials: Credentials, channel: str) -> bool | N
 async def join_channel(credentials: Credentials, channel: str) -> str | None:
     """A bot joining a public channel by itself (needs ``channels:join``)."""
     try:
-        client = await build_slack_client(dict(credentials))
+        client = await build_slack_client(credentials)
         await client.conversations_join(channel=channel)
     except SlackApiError as exc:
         return _error(exc)
@@ -154,7 +155,7 @@ async def invite(
 ) -> str | None:
     """Invite users -- another app's bot included -- into a channel the caller is in."""
     try:
-        client = await build_slack_client(dict(credentials))
+        client = await build_slack_client(credentials)
         await client.conversations_invite(channel=channel, users=",".join(user_ids))
     except SlackApiError as exc:
         if _error(exc) == "already_in_channel":
@@ -165,7 +166,7 @@ async def invite(
 
 async def leave_channel(credentials: Credentials, channel: str) -> str | None:
     try:
-        client = await build_slack_client(dict(credentials))
+        client = await build_slack_client(credentials)
         await client.conversations_leave(channel=channel)
     except SlackApiError as exc:
         return _error(exc)
@@ -175,7 +176,7 @@ async def leave_channel(credentials: Credentials, channel: str) -> str | None:
 async def open_dm(credentials: Credentials, user_id: str) -> str | None:
     """The DM channel with this person, opened if it was not."""
     try:
-        client = await build_slack_client(dict(credentials))
+        client = await build_slack_client(credentials)
         response = await client.conversations_open(users=user_id)
     except SlackApiError:
         return None
@@ -186,3 +187,15 @@ async def open_dm(credentials: Credentials, user_id: str) -> str | None:
         if isinstance(channel, dict) and channel.get("id")
         else None
     )
+
+
+async def user_profile(credentials: Credentials, user_id: str) -> dict[str, object]:
+    """Slack's user record (``users.info``), or nothing when it won't say."""
+    try:
+        client = await build_slack_client(credentials)
+        response = await client.users_info(user=user_id)
+    except SlackApiError:
+        return {}
+    data = response.data if isinstance(response.data, dict) else {}
+    user = data.get("user")
+    return user if isinstance(user, dict) else {}

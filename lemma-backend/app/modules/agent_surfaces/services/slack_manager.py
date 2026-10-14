@@ -341,6 +341,11 @@ async def _uninstalled(uow: SqlAlchemyUnitOfWork, parsed: ManagerInput) -> None:
     install = await repo.install_for_team(parsed.team_id)
     if install is None:
         return
+    if (
+        parsed.revoked_bots is not None
+        and install.bot_user_id not in parsed.revoked_bots
+    ):
+        return
     await retire_accounts(
         uow.session, connector_id="slack", account_ids=[install.account_id]
     )

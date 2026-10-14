@@ -3428,6 +3428,10 @@ export const fixtureSource: PodSource = {
         slackManagedWorkspaces = [bound];
         return bound;
     },
+    async previewSlackPerson() {
+        await wait(300);
+        return { teamName: "Sample workspace", slackUserName: "Sam Rivera" };
+    },
     async linkSlackPerson(link: SlackPersonLink) {
         await wait(400);
         if (link.expires * 1000 < Date.now()) {

@@ -10,11 +10,11 @@ by someone who may set it up, and Lemma's manager bringing the teammate in.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from uuid import UUID
 
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.domain.credentials import CredentialsLike
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.ports import SurfaceInstallationRepositoryPort
 from app.modules.agent_surfaces.domain.surface_config import SurfaceChannelRoute
@@ -51,7 +51,7 @@ async def welcome_in_channel(
     *,
     surfaces: SurfaceInstallationRepositoryPort,
     surface: AgentSurfaceEntity,
-    credentials: Mapping[str, object],
+    credentials: CredentialsLike,
     channel_id: str,
     owner_user_id: UUID | None,
 ) -> None:

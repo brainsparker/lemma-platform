@@ -69,6 +69,9 @@ class ManagerInput:
     pod_id: str | None = None
     surface_id: str | None = None
     form: AddForm = field(default_factory=AddForm)
+    #: UNINSTALLED from ``tokens_revoked``: the bot users whose tokens went.
+    #: None for ``app_uninstalled``, which takes every one.
+    revoked_bots: tuple[str, ...] | None = None
 
 
 def _text(value: object) -> str:
@@ -122,8 +125,10 @@ def _event(payload: Mapping[str, object], team_id: str | None) -> ManagerInput:
     event_type = event.get("type")
     user = _text(event.get("user")) or None
     channel = _text(event.get("channel")) or None
-    if event_type in ("app_uninstalled", "tokens_revoked"):
+    if event_type == "app_uninstalled":
         return ManagerInput(ManagerInputKind.UNINSTALLED, team_id=team_id)
+    if event_type == "tokens_revoked":
+        return _revocation(event, team_id)
     if event_type == "app_home_opened":
         return ManagerInput(ManagerInputKind.HOME_OPENED, team_id=team_id, user_id=user)
     if event_type == "member_joined_channel":
@@ -154,6 +159,22 @@ def _event(payload: Mapping[str, object], team_id: str | None) -> ManagerInput:
             channel_id=channel,
         )
     return ManagerInput(ManagerInputKind.OTHER, team_id=team_id)
+
+
+def _revocation(event: Mapping[str, object], team_id: str | None) -> ManagerInput:
+    """A member revoking their own sign-in revokes a user token, not the
+    manager's: only the bots named under ``tokens.bot`` have lost theirs."""
+    bots = _dict(event.get("tokens")).get("bot")
+    revoked = (
+        tuple(_text(bot) for bot in bots if _text(bot))
+        if isinstance(bots, list)
+        else ()
+    )
+    if not revoked:
+        return ManagerInput(ManagerInputKind.OTHER, team_id=team_id)
+    return ManagerInput(
+        ManagerInputKind.UNINSTALLED, team_id=team_id, revoked_bots=revoked
+    )
 
 
 def _action(payload: Mapping[str, object], team_id: str | None) -> ManagerInput:

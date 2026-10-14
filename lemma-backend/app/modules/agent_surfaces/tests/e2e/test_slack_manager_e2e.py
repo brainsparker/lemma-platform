@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from urllib.parse import parse_qs, urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
@@ -760,3 +760,106 @@ async def test_a_teammates_own_bot_invited_by_its_editor_takes_the_channel(
         f"/pods/{test_pod['id']}/surfaces/{surface['name']}"
     )
     assert "C-DIRECT" in [r["channel_id"] for r in updated.json()["config"]["channels"]]
+
+
+async def test_a_bot_token_revoked_for_another_app_leaves_lemma_installed(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+):
+    account = await _manager_account(db_session, fixed_test_user, fake_slack)
+    await _bind(authenticated_client, test_pod["id"], account.id)
+
+    await handle_event(
+        _uow_factory(),
+        _event({"type": "tokens_revoked", "tokens": {"bot": ["U-SOME-OTHER-BOT"]}}),
+    )
+
+    assert await db_session.scalar(
+        select(SlackManagerInstallModel).where(SlackManagerInstallModel.team_id == TEAM)
+    )
+
+
+async def test_a_link_is_named_before_it_connects_anything(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+):
+    """The page asks "is this you?" first: a link somebody else sent must not
+    connect their Slack account to whoever opens it."""
+    from app.modules.agent_surfaces.infrastructure.slack_manager_models import (
+        SlackWorkspacePersonModel,
+    )
+
+    account = await _manager_account(db_session, fixed_test_user, fake_slack)
+    await _bind(authenticated_client, test_pod["id"], account.id)
+    fake_slack.user_overrides[STRANGER] = {
+        "email": "x@elsewhere.test",
+        "display_name": "Mallory",
+    }
+    query = parse_qs(urlsplit(person_link_url(TEAM, STRANGER)).query)
+    body = {
+        "team_id": TEAM,
+        "slack_user_id": STRANGER,
+        "expires": int(query["exp"][0]),
+        "signature": query["sig"][0],
+    }
+
+    preview = await authenticated_client.post(
+        "/surface-setup/slack/people/preview", json=body
+    )
+
+    assert preview.status_code == 200, preview.text
+    assert preview.json() == {
+        "team_id": TEAM,
+        "team_name": "Acme",
+        "slack_user_name": "Mallory",
+    }
+    assert not await db_session.scalar(
+        select(SlackWorkspacePersonModel).where(
+            SlackWorkspacePersonModel.slack_user_id == STRANGER
+        )
+    )
+
+
+async def test_an_allow_by_someone_else_is_explained_to_whoever_asked(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    message_store,
+):
+    from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (
+        SlackManagerRepository,
+    )
+    from app.modules.agent_surfaces.services.slack_manager_bots import bind_allowed_app
+
+    manager = await _manager_account(db_session, fixed_test_user, fake_slack)
+    await _bind(authenticated_client, test_pod["id"], manager.id)
+    allowed = await _teammate_account(db_session, fixed_test_user, fake_slack)
+    async with _uow_factory()() as uow:
+        await SlackManagerRepository(uow.session).add_pending_binding(
+            auth_config_id=allowed.auth_config_id,
+            pod_id=UUID(test_pod["id"]),
+            team_id=TEAM,
+            app_id="A-TEAMMATE",
+            requested_by_user_id=UUID(fixed_test_user["id"]),
+            slack_user_id=INSTALLER,
+        )
+        await uow.commit()
+
+    async with _uow_factory()() as uow:
+        assert not await bind_allowed_app(
+            uow,
+            auth_config_id=allowed.auth_config_id,
+            account_id=allowed.id,
+            user_id=uuid4(),
+        )
+
+    told = await wait_for_messages(message_store, "SLACK", min_count=1)
+    assert "Someone else allowed" in told[-1]["text"]

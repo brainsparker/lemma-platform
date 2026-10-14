@@ -129,6 +129,23 @@ async def test_removal_is_an_uninstall():
     )
 
 
+async def test_a_member_revoking_their_own_sign_in_is_not_an_uninstall():
+    """tokens_revoked names user tokens under ``oauth``; the manager keeps its bot."""
+    parsed = parse_manager_input(
+        _event({"type": "tokens_revoked", "tokens": {"oauth": ["U_MEMBER"]}})
+    )
+    assert parsed.kind is ManagerInputKind.OTHER
+
+
+async def test_a_revoked_bot_token_names_the_bots_that_went():
+    parsed = parse_manager_input(
+        _event({"type": "tokens_revoked", "tokens": {"bot": ["U_MANAGER"]}})
+    )
+    assert parsed.kind is ManagerInputKind.UNINSTALLED
+    assert parsed.revoked_bots == ("U_MANAGER",)
+    assert parse_manager_input(_event({"type": "app_uninstalled"})).revoked_bots is None
+
+
 async def test_add_to_slack_names_the_teammate_and_the_trigger():
     payload = {
         "type": "block_actions",

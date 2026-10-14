@@ -22,6 +22,7 @@ import type { SlackConfigurationTokenRequest } from '../models/SlackConfiguratio
 import type { SlackManagedWorkspaceListResponse } from '../models/SlackManagedWorkspaceListResponse.js';
 import type { SlackManagedWorkspaceResponse } from '../models/SlackManagedWorkspaceResponse.js';
 import type { SlackManagerBindRequest } from '../models/SlackManagerBindRequest.js';
+import type { SlackPersonLinkPreviewResponse } from '../models/SlackPersonLinkPreviewResponse.js';
 import type { SlackPersonLinkRequest } from '../models/SlackPersonLinkRequest.js';
 import type { SurfaceCreateRequest } from '../models/SurfaceCreateRequest.js';
 import type { SurfacePlatformSetupGuide } from '../models/SurfacePlatformSetupGuide.js';
@@ -843,6 +844,29 @@ export class AgentSurfacesService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/surface-setup/slack/people',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Preview Slack Person Link
+     * Say whose Slack account this link would connect to the signed-in person.
+     *
+     * Connects nothing. The page shows it and asks first, so a link somebody
+     * else sent cannot connect their Slack account to yours unannounced.
+     * @param requestBody
+     * @returns SlackPersonLinkPreviewResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackPersonPreview(
+        requestBody: SlackPersonLinkRequest,
+    ): CancelablePromise<SlackPersonLinkPreviewResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surface-setup/slack/people/preview',
             body: requestBody,
             mediaType: 'application/json',
             errors: {

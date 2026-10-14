@@ -185,6 +185,9 @@ class FakeSlackServer:
         #: Channels ``conversations.info`` reports as private, so a test can
         #: send the manager down its invite path rather than a join.
         self.private_channels: set[str] = set()
+        #: ``users.info`` answers for particular users: someone who is not the
+        #: test user, or a guest (``is_restricted``). Anybody else is the test user.
+        self.user_overrides: dict[str, dict[str, Any]] = {}
 
     async def start(self) -> None:
         app = web.Application()
@@ -279,6 +282,23 @@ class FakeSlackServer:
 
     async def _users_info(self, request: web.Request) -> web.Response:
         params = await self._collect_params(request)
+        override = self.user_overrides.get(str(params.get("user") or ""))
+        if override is not None:
+            return web.json_response(
+                {
+                    "ok": True,
+                    "user": {
+                        "id": params.get("user"),
+                        "is_restricted": bool(override.get("is_restricted")),
+                        "is_bot": bool(override.get("is_bot")),
+                        "team_id": override.get("team_id"),
+                        "profile": {
+                            "email": override.get("email"),
+                            "display_name": override.get("display_name", "Someone"),
+                        },
+                    },
+                }
+            )
         return web.json_response(
             {
                 "ok": True,

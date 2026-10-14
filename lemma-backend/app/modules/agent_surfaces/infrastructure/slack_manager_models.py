@@ -1,4 +1,4 @@
-"""The manager's tables. Mirrors ``2026-10-14_slack_manager_0053.py`` column for
+"""The manager's tables. Mirrors ``2026-10-14_slack_manager_0054.py`` column for
 column, for the reason ``whatsapp_pool_models`` gives."""
 
 from __future__ import annotations

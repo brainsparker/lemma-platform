@@ -295,7 +295,23 @@ async def bind_allowed_app(
 
     repo = SlackManagerRepository(uow.session)
     pending = await repo.pending_binding(auth_config_id)
-    if pending is None or pending.requested_by_user_id != user_id:
+    if pending is None:
+        return False
+    if pending.requested_by_user_id != user_id:
+        # Somebody else's Allow: theirs is not this person's to hand a pod. Say
+        # so to whoever asked, rather than leave them waiting on nothing.
+        logger.info(
+            "agent_surfaces.slack_manager.allowed_by_someone_else",
+            team_id=pending.team_id,
+        )
+        await _tell(
+            uow,
+            pending.team_id,
+            pending.slack_user_id,
+            "Someone else allowed the teammate's app with their own Lemma account, "
+            "so I left it unconnected. Open the Allow link I gave you and allow it "
+            "yourself.",
+        )
         return False
     pod_id, team_id, slack_user_id = (
         pending.pod_id,

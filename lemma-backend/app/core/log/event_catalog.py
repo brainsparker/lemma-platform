@@ -522,6 +522,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.slack_app_creation.created': EventSpec('info', frozenset({'app_id', 'organization_id', 'team_id'})),
     'agent_surfaces.slack_app_creation.install_failed': EventSpec('warning', frozenset({'app_deleted', 'app_id', 'organization_id', 'team_id'})),
     'agent_surfaces.slack_app_creation.token_saved': EventSpec('info', frozenset({'organization_id', 'team_id'})),
+    'agent_surfaces.slack_manager.allowed_by_someone_else': EventSpec('info', frozenset({'team_id'})),
     'agent_surfaces.slack_manager.bind_failed': EventSpec('warning', frozenset({'error', 'team_id'})),
     'agent_surfaces.slack_manager.ephemeral_failed': EventSpec('info', frozenset({'error'})),
     'agent_surfaces.slack_manager.handoff_failed': EventSpec('info', frozenset({'error', 'private', 'team_id'})),

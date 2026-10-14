@@ -15,7 +15,7 @@ class _Session:
         self.main_age = main_age
 
     async def execute(self, statement, params=None):
-        return SimpleNamespace(all=lambda: [])
+        return SimpleNamespace(all=list)
 
     async def scalar(self, statement):
         assert statement is gauges.OLDEST_TRANSACTION_AGE

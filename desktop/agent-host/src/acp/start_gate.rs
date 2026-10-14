@@ -122,7 +122,8 @@ pub fn is_transient_start_failure(error: &str) -> bool {
     let timed_out = normalized.contains("timed out")
         || normalized.contains("did not answer")
         || normalized.contains("timeout");
-    let deterministic = normalized.contains("authenticat")
+    let deterministic = normalized.contains("authenticate")
+        || normalized.contains("authentication")
         || normalized.contains("not logged in")
         || normalized.contains("unauthorized")
         || normalized.contains("(401)")

@@ -32,6 +32,7 @@ class SqlAlchemySurfaceAccountAdapter:
             auth_config_id=account.auth_config_id,
             email=account.email,
             connector_id=account.connector_id,
+            status=account.status,
             credentials=credentials,
         )
 

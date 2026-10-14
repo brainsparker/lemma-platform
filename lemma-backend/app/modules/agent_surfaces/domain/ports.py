@@ -21,6 +21,8 @@ class SurfaceAccountInfo(BaseModel):
     auth_config_id: UUID | None = None
     email: str | None = None
     connector_id: str
+    # ``AccountStatus`` as text: CONNECTED, REAUTH_REQUIRED or DISCONNECTED.
+    status: str | None = None
     credentials: dict[str, Any] = {}
 
 

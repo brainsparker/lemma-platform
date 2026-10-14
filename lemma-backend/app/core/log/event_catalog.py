@@ -1023,7 +1023,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.run_cap.fire_skipped': EventSpec('info', frozenset({'max_concurrent_runs', 'schedule_id'})),
     'schedule.run_cap.invalid_config.degraded': EventSpec('warning', frozenset({'schedule_id'})),
     'schedule.runs.pruned': EventSpec('info', frozenset({'deleted_count'})),
-    'schedule.runs.recovered': EventSpec('warning', frozenset({'dead_lettered', 'reconciled', 'redelivered', 'still_running'})),
+    'schedule.runs.recovered': EventSpec('warning', frozenset({'dead_lettered', 'reconciled', 'still_running'})),
     'schedule.schedule_service.delete_external_schedule_s.propagated': EventSpec('debug', frozenset({'schedule_id'})),
     'schedule.target_outcome.unmapped': EventSpec('error', frozenset({'target_kind', 'target_status'})),
     'schedule.trigger_resubscription.create.propagated': EventSpec('debug', frozenset()),

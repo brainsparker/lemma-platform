@@ -18,7 +18,8 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | Work kinds | `file.process` and `file.cleanup` (`ingestion`), written in the transaction that uploads, updates or deletes; `pod_schema.migrate`, `pod_schema.backfill`, `datastore.parent_backfill` and `datastore.storage_copy` (`admin`), the backfills armed as periodics |
 | streaq tasks | Nightly, drop the schemas of pods deleted more than `DATASTORE_ORPHAN_SCHEMA_RETENTION_DAYS` ago (0 disables); purge expired signed-link rows |
 | API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily, and the datastore outbox table is created by the first record write |
-| Worker lifespan | Runs the datastore outbox dispatcher |
+| Worker lifespan | Runs the change-log handoff (LISTEN on the datastore database plus a poll), which turns a watched write's wake row into a `changes.deliver` item; the outbox dispatcher only while the change log is not on |
+| Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly) and `changes.drain` (cutover) (`admin`); see [Record change log](#record-change-log) |
 
 ## Storage model
 
@@ -80,6 +81,39 @@ A lost wake costs latency only: the hub also reads on an idle poll.
   (`LIVE_MAX_SUBSCRIPTIONS_PER_SOCKET`, `LIVE_MAX_SOCKETS_PER_USER_PER_POD`,
   per-pod overrides in `LIVE_LIMIT_OVERRIDES_JSON`, or a provider installed with
   `install_live_limit_port`). A socket past the per-user limit closes with 4429.
+
+## Record change log
+
+Every record write appends one slim row per record to its pod schema's
+`reserved_changes`, in the writing statement; row snapshots are kept only for a
+`(table, op)` a durable subscriber (a DATASTORE trigger, an MCP event
+subscription) watches. Readers (`changes/reader.py`) only see rows whose
+transaction id is below the oldest transaction still open
+(`pg_snapshot_xmin`), which is what makes a read final and gap-free. The cost
+of that rule is that delivery and the live socket wait for the **oldest open
+transaction on the datastore database's cluster**, whatever it is doing.
+
+**Operating it.** A transaction left open on the datastore database -- an
+`idle in transaction` session, a long migration, a stuck backfill, or the main
+database if it shares the cluster -- holds the horizon back: DATASTORE triggers
+stop firing, MCP event deliveries stop, and live sockets go quiet, while writes
+keep succeeding. Alert when any transaction on that cluster has been open for
+more than 30 seconds:
+
+```sql
+SELECT pid, usename, application_name, state, now() - xact_start AS open_for, query
+FROM pg_stat_activity
+WHERE xact_start IS NOT NULL AND now() - xact_start > interval '30 seconds'
+ORDER BY xact_start;
+```
+
+Runbook: find the oldest row above. A worker or API session idle in
+transaction is a bug to report, and is safe to end with
+`pg_terminate_backend(pid)`; a migration or backfill should be let finish or
+cancelled by its owner. Delivery catches up by itself once the horizon moves --
+nothing is lost, because cursors only advance past rows that were read. The
+statement and idle-in-transaction timeouts bound how long this can last;
+`changes.retention` never deletes a row a durable cursor has not passed.
 
 ## File lifecycle
 

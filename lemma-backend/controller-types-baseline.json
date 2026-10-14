@@ -3,7 +3,6 @@
   "files": {
     "app/modules/agent/api/controllers/tool_controller.py": 1,
     "app/modules/agent_surfaces/services/email_surface_provisioning.py": 1,
-    "app/modules/agent_surfaces/services/event_receiver_service.py": 1,
     "app/modules/agent_surfaces/services/identity_resolution_service.py": 1,
     "app/modules/agent_surfaces/services/managed_bot_persistence.py": 1,
     "app/modules/agent_surfaces/services/progress_display.py": 12,

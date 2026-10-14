@@ -34,7 +34,6 @@ paths reached still takes effect once.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -42,6 +41,7 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+from pydantic_core import to_jsonable_python
 from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -322,10 +322,9 @@ async def convert_streaq_jobs(ctx: JobContext) -> int:
     try:
         async for job in queued_jobs(redis):
             if job.function in STREAQ_ROUTES:
-                event = json.loads(
-                    json.dumps(
-                        {"args": list(job.args), "kwargs": job.kwargs}, default=str
-                    )
+                # One job's arguments, as JSON (a UUID or a datetime as text).
+                event = to_jsonable_python(
+                    {"args": list(job.args), "kwargs": job.kwargs}, fallback=str
                 )
                 async with ctx.checkpoint() as uow:
                     await WorkWriter.of(uow).add(

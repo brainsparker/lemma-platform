@@ -16,9 +16,9 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | --- | --- |
 | API routers | Table, record, SQL query, file, signed/public file, and WebSocket change APIs |
 | Work kinds | `file.process` and `file.cleanup` (`ingestion`), written in the transaction that uploads, updates or deletes; `pod_schema.migrate`, `pod_schema.backfill`, `datastore.parent_backfill` and `datastore.storage_copy` (`admin`), the backfills armed as periodics |
-| streaq tasks | Nightly, drop the schemas of pods deleted more than `DATASTORE_ORPHAN_SCHEMA_RETENTION_DAYS` ago (0 disables); purge expired signed-link rows |
-| API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily, and the datastore outbox table is created by the first record write |
-| Worker lifespan | Runs the change-log handoff (LISTEN on the datastore database plus a poll), which turns a watched write's wake row into a `changes.deliver` item; the outbox dispatcher only while the change log is not on |
+| Periodic work | Daily, drop the schemas of pods deleted more than `DATASTORE_ORPHAN_SCHEMA_RETENTION_DAYS` ago (0 disables, `datastore.orphan_schemas_reap`) and purge expired signed-link rows (`datastore.signed_links_purge`) |
+| API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily |
+| Worker lifespan | Runs the change-log handoff (LISTEN on the datastore database plus a poll), which turns a watched write's wake row into a `changes.deliver` item |
 | Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly) and `changes.drain` (cutover) (`admin`); see [Record change log](#record-change-log) |
 
 ## Storage model
@@ -94,6 +94,19 @@ transaction id is below the oldest transaction still open
 (`pg_snapshot_xmin`), which is what makes a read final and gap-free. The cost
 of that rule is that delivery and the live socket wait for the **oldest open
 transaction on the datastore database's cluster**, whatever it is doing.
+
+**Cutover.** Record writes used to stage events in the datastore database's
+`domain_event_outbox`, which a dispatcher published to `datastore.events` for
+the `schedule-datastore-events` and `mcp-access-event-deliveries` consumer
+groups. Until every pod schema carried the change log, writes kept that path,
+and the `changes.drain` converter (queued once by migration `0058`) appended
+what the outbox and the two groups still held to each pod's log, under the
+event's own id so nothing is appended twice. It finishes, destroying the two
+groups, once both are empty with the log on everywhere. From the release with
+migration `0063_drop_event_outbox` on, every write appends to the change log and
+the outbox path and the converter are gone; the operator check that gates that
+release is described in
+[the cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13).
 
 **Operating it.** A transaction left open on the datastore database -- an
 `idle in transaction` session, a long migration, a stuck backfill, or the main
@@ -181,9 +194,11 @@ sizing should be driven by the embedding backend.
 
 ## Dependencies and consumers
 
-Agents expose datastore/file tools; schedules consume record events; bundles
-export/import schemas and seed data. The module uses identity/pod context and
-publishes the shared `datastore_events` stream.
+Agents expose datastore/file tools; DATASTORE triggers and MCP event
+subscriptions read the record change log; bundles export/import schemas and
+seed data. The module uses identity/pod context. Its committed `datastore.*`
+domain events feed the after-commit sink only (analytics and the agent
+memory-brief invalidation).
 
 ## Tests and operations
 

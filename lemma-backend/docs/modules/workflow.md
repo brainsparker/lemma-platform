@@ -16,8 +16,9 @@ work, and resumes from function, agent, schedule, or user-form events.
 | Work kinds (JOB) | `workflow.decide` (ask a decision node's question), `workflow.notify_form` (tell a form's assignee) |
 | Fact subscription | `FunctionRunFinished` -> `workflow.resume` |
 | Facts emitted | `WorkflowRunFinished` in every terminal transaction; `WorkflowStartRefused` when a start item gives up |
-| Redis consumers | Agent completion (`workflow-agent-events`) and schedule-fired events, until those modules emit facts |
-| cron | Reconcile stale AGENT waits every five minutes, for the same reason |
+| Fact subscription | `AgentRunFinished` -> `workflow.resume_for_agent`, for a run started by an AGENT step |
+| Periodic work | `workflow.waits_prune` (hourly); `workflow.schedule_runs_recover` (5 min) settles schedule runs whose agent outcome was lost before outcomes were facts |
+| Cutover converter | `workflow.drain_schedule_fires` (`admin`, queued once by migration `0062`): starts what the retired `workflow-schedule-events` group, unpublished `schedule.fired` outbox rows and queued `check_and_start_flows_for_schedule` streaq jobs still held, then destroys the group and finishes. See [the cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13) |
 
 ## Main data model
 

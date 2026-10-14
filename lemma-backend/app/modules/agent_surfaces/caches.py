@@ -27,6 +27,9 @@ class CacheNamespace:
 _DAY = 24 * 60 * 60
 
 DECISION_CARDS = CacheNamespace("surface:decision-card", 30 * _DAY)
+#: A run's live Slack stream, so its reply can finish that message in place.
+#: Outlives the longest reply retry (30 min) with room to spare.
+LIVE_DISPLAYS = CacheNamespace("surface:live-display", _DAY)
 TELEGRAM_CALLBACK_TOKENS = CacheNamespace("surface:telegram-cb", 7 * _DAY)
 TELEGRAM_BOT_INFO = CacheNamespace("surface:telegram-bot", 3600)
 TEAMS_TOKENS = CacheNamespace("surface:teams-token", 3600)

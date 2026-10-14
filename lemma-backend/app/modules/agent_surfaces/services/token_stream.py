@@ -16,6 +16,7 @@ from app.modules.agent.contracts import AgentEvent, Conversation
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
+from app.modules.agent_surfaces.services.live_display import record_live_display
 from app.modules.agent_surfaces.services.progress_events import _surface_platform
 
 logger = get_logger(__name__)
@@ -48,6 +49,26 @@ class TokenStreamMixin:
             return
         if result.handle is not None:
             self._progress_handle = result.handle
+            await self._record_stream(conversation)
+
+    async def _record_stream(
+        self, conversation: Conversation, *, sealed: bool = False
+    ) -> None:
+        """Tell the run's reply where the stream is and what it shows.
+
+        The reply (``surface.reply``) closes this message with the rest of the
+        answer, so the thread holds one message; see ``live_display``.
+        """
+        run_id = self._run_files.agent_run_id
+        if run_id is None or self._progress_handle is None:
+            return
+        await record_live_display(
+            run_id,
+            conversation_id=conversation.id,
+            handle=self._progress_handle,
+            streamed=self._streamed_text,
+            sealed=sealed,
+        )
 
     async def _on_token(self, event: AgentEvent, conversation: Conversation) -> None:
         """Stream the answer as it is written, on platforms that can show it.
@@ -106,3 +127,4 @@ class TokenStreamMixin:
         if self._token_buffer.startswith(pending):
             self._token_buffer = self._token_buffer[len(pending) :]
         self._streamed_text += pending
+        await self._record_stream(conversation)

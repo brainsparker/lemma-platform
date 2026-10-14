@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.modules.agent_surfaces.domain.models import ProgressHandle
+from app.modules.agent_surfaces.domain.models import ProgressHandle, ProgressHandleKind
 
 import asyncio
 import time
@@ -31,6 +31,7 @@ from app.modules.agent_surfaces.platforms.rendering import (
     ThinkingStreamFilter,
 )
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
+from app.modules.agent_surfaces.services.live_display import forget_live_display
 from app.modules.agent_surfaces.services.progress_display import (
     ProgressDisplayMixin,
 )
@@ -260,6 +261,10 @@ class SurfaceAgentRunProgressObserver(
             return
         handle = self._progress_handle
         self._progress_handle = None
+        run_id = self._run_files.agent_run_id
+        if run_id is not None and handle.kind is ProgressHandleKind.STREAM:
+            # Taken down here, so the reply must not try to close it.
+            await forget_live_display(run_id)
         try:
             async with self.uow_factory() as uow:
                 service = self.egress_factory(uow)
@@ -281,19 +286,83 @@ class SurfaceAgentRunProgressObserver(
         conversation: Conversation,
         ctx: ConversationContext,
     ) -> None:
-        """Take the run's display down; the answer is not the observer's to send.
+        """Finish the run's display; the answer is not the observer's to send.
 
         The finished run writes its reply as a ``surface_deliveries`` row in the
         transaction that finishes it (``surface.reply_for_run``), and the
         destination pump sends it -- so a worker that dies here loses a typing
-        bubble, never the answer. What is left for the observer is display: the
-        typing refresh stops, and a live progress message or stream is closed
-        and removed, so the answer arrives as the one message in the thread.
+        bubble, never the answer. What is left for the observer is display:
+
+        * the typing refresh stops;
+        * a live Slack stream carrying an answer is flushed to the last token
+          and *left open*, sealed in its ``live_display`` record: the reply
+          closes this same message with the rest of the answer, so the thread
+          holds one message, as it did when the observer sent it;
+        * any other live message (a progress line, a stream of a run with no
+          answer to close it with) is closed and removed, and the reply, if
+          there is one, arrives as the one message in the thread.
         """
         self._run_files = RunFiles(ctx.agent_run_id)
         if self._stays_in_lemma:
             return
-        await self._stop_display(conversation.id)
+        await self._stop_typing()
+        if await self._hand_stream_to_reply(conversation):
+            return
+        await self._clear_progress(conversation.id)
+
+    async def _hand_stream_to_reply(self, conversation: Conversation) -> bool:
+        """Leave a live stream for the run's reply to close; True if it was left."""
+        run_id = self._run_files.agent_run_id
+        handle = self._progress_handle
+        if handle is None or run_id is None or self._run_errored:
+            return False
+        if handle.kind is not ProgressHandleKind.STREAM:
+            return False
+        capabilities = PLATFORM_CAPABILITIES.get(_surface_platform(conversation) or "")
+        if capabilities is None or not capabilities.finishes_stream_with_answer:
+            return False
+        if not await self._reply_will_close(run_id):
+            return False
+        try:
+            await self._flush_tokens(conversation, final=True)
+        except _DELIVERY_ERRORS:
+            # The reply closes the stream with whatever it does not show yet,
+            # so a last flush that failed costs nothing but a later chunk.
+            logger.warning(
+                "agent_surfaces.progress_observer.final_flush_failed.degraded",
+                conversation_id=str(conversation.id),
+                exc_info=True,
+            )
+        await self._record_stream(conversation, sealed=True)
+        self._progress_handle = None
+        return True
+
+    async def _reply_will_close(self, run_id: UUID) -> bool:
+        """Whether this run's reply is an answer the stream can carry.
+
+        The same test ``surface.reply_for_run`` applies: a completed run, not
+        private, that wrote an answer. Anything else -- a stop, a pause, a
+        failure notice -- leaves no reply to close the stream, so it comes
+        down now rather than spinning beside whatever follows.
+        """
+        from app.modules.agent.contracts.run_replies import run_reply_material
+
+        try:
+            async with self.uow_factory() as uow:
+                material = await run_reply_material(uow, run_id)
+        except SQLAlchemyError:
+            logger.warning(
+                "agent_surfaces.progress_observer.reply_material_unread.degraded",
+                run_id=str(run_id),
+                exc_info=True,
+            )
+            return False
+        return (
+            material is not None
+            and material.status == "COMPLETED"
+            and not material.private
+            and bool(material.answer)
+        )
 
     async def on_run_failed(
         self,
@@ -311,6 +380,10 @@ class SurfaceAgentRunProgressObserver(
         await self._stop_display(conversation.id)
 
     async def _stop_display(self, conversation_id: UUID) -> None:
+        await self._stop_typing()
+        await self._clear_progress(conversation_id)
+
+    async def _stop_typing(self) -> None:
         task = self._typing_task
         self._typing_task = None
         if task is not None:
@@ -320,7 +393,6 @@ class SurfaceAgentRunProgressObserver(
             except asyncio.CancelledError:
                 # Expected after task.cancel(); the cleanup must continue.
                 pass
-        await self._clear_progress(conversation_id)
 
     async def _refresh_typing_loop(
         self,

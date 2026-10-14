@@ -5,6 +5,11 @@ with no session held, and records what it learned. ``send_delivery`` never
 raises for a platform failure: it says whether the message arrived and, when
 not, whether the platform called the refusal transient and how long it asked
 to be left alone.
+
+A run's answer on Slack finishes the message the run streamed into, in place
+(``_finish_live_stream``), when the run's observer left one open for it
+(``live_display``); otherwise -- or when closing it fails -- that stream is
+taken down and the answer is posted as a new message.
 """
 
 from __future__ import annotations
@@ -46,6 +51,12 @@ from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERROR
 from app.modules.agent_surfaces.platforms.delivery import track_sends
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
+from app.modules.agent_surfaces.services.live_display import (
+    LiveDisplay,
+    forget_live_display,
+    remainder_after,
+    take_live_display,
+)
 from app.modules.agent_surfaces.services.pending_envelope import (
     RunFiles,
     discard_display_paths,
@@ -149,6 +160,13 @@ class PlatformDeliverySender:
             if content.attach_files_of_run is not None
             else None
         )
+        if content.purpose == "answer" and row.agent_run_id is not None:
+            display = await take_live_display(row.agent_run_id)
+            if display is not None:
+                if await self._finish_live_stream(row, target, display, text):
+                    return SendResult(delivered=True)
+                await self._take_down(target.conversation_id, display)
+                await forget_live_display(row.agent_run_id)
         with track_sends() as outcome:
             try:
                 async with self.uow_factory() as uow:
@@ -185,6 +203,69 @@ class PlatformDeliverySender:
             retry_after=outcome.retry_after,
             error=error,
         )
+
+    async def _finish_live_stream(
+        self,
+        row: SurfaceDeliveryModel,
+        target: ConversationTarget,
+        display: LiveDisplay,
+        answer: str,
+    ) -> bool:
+        """Close the run's stream with what of the answer it does not show yet.
+
+        True when the answer is now on screen as that one message. A stream
+        that disagrees with the stored answer is closed as it stands when the
+        observer sealed it (it flushed everything the run wrote, so it is the
+        answer the person has been reading); an unsealed one that disagrees
+        (its observer died mid-stream) is not trusted, and the caller posts the
+        whole answer instead.
+        """
+        remainder = remainder_after(display.streamed, answer)
+        if remainder is None:
+            if not display.sealed:
+                return False
+            remainder = ""
+        try:
+            async with self.uow_factory() as uow:
+                egress = self.egress_factory(uow)
+                finished = await egress.progress.finish_with_answer(
+                    conversation_id=target.conversation_id,
+                    progress_handle=display.handle,
+                    message=remainder,
+                    already_streamed=bool(display.streamed.strip()),
+                )
+        except _SEND_ERRORS:
+            logger.warning(
+                "agent_surfaces.delivery_sender.stream_finish_failed.degraded",
+                delivery_id=str(row.id),
+                conversation_id=str(target.conversation_id),
+                exc_info=True,
+            )
+            return False
+        if not finished:
+            return False
+        if row.agent_run_id is not None:
+            await forget_live_display(row.agent_run_id)
+        logger.info(
+            "agent_surfaces.delivery_sender.stream_finished_in_place.observed",
+            delivery_id=str(row.id),
+            sealed=display.sealed,
+        )
+        return True
+
+    async def _take_down(self, conversation_id: UUID, display: LiveDisplay) -> None:
+        """Remove a stream the answer will not close, before posting the answer."""
+        try:
+            async with self.uow_factory() as uow:
+                await self.egress_factory(uow).progress.clear_progress(
+                    conversation_id=conversation_id, progress_handle=display.handle
+                )
+        except _SEND_ERRORS:
+            logger.warning(
+                "agent_surfaces.delivery_sender.stream_take_down_failed.degraded",
+                conversation_id=str(conversation_id),
+                exc_info=True,
+            )
 
     async def _to_inbound_sender(
         self, target: InboundSenderTarget, content: DeliveryContent

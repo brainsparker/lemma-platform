@@ -51,7 +51,7 @@ from app.core.infrastructure.cutover.routes import (
     ROUTES,
     STATE_ROUTES,
     STREAQ_ROUTES,
-    STREAQ_SEEDED,
+    retired_streaq_jobs,
     TAKEN_OVER_MARK,
     converter_for,
 )
@@ -157,7 +157,9 @@ async def run_sweep(ctx: JobContext, state: SweepState) -> None:
     other_taken, other_last = await _sweep_other_outboxes(ctx, state, final=False)
     busy = sum(taken.values()) + other_taken
     if busy:
-        logger.info("cutover.legacy_sweep.taken_over", routes=taken, other=other_taken)
+        logger.info(
+            "cutover.legacy_sweep.taken_over", routes=_counts(taken), other=other_taken
+        )
     newest = max((t for t in (last, other_last) if t is not None), default=None)
     quiet = newest is None or datetime.now(UTC) - newest >= timedelta(
         seconds=state.quiet_seconds
@@ -216,6 +218,11 @@ async def finish(ctx: JobContext, state: SweepState) -> None:
         streaq_converted=converted,
         dropped_tables=dropped,
     )
+
+
+def _counts(by_name: dict[str, int]) -> str:
+    """``name=count`` pairs as one string: a dict field below error is dropped."""
+    return ",".join(f"{name}={n}" for name, n in sorted(by_name.items()) if n)
 
 
 async def legacy_tables_present(session: AsyncSession) -> bool:
@@ -319,6 +326,7 @@ async def convert_streaq_jobs(ctx: JobContext) -> int:
 
     redis = get_redis(decode_responses=False)
     converted, left = 0, {}
+    retired = retired_streaq_jobs()
     try:
         async for job in queued_jobs(redis):
             if job.function in STREAQ_ROUTES:
@@ -333,7 +341,7 @@ async def convert_streaq_jobs(ctx: JobContext) -> int:
                         LegacyEvent(route=f"streaq:{job.function}", event=event),
                     )
                 converted += 1
-            elif job.function not in STREAQ_SEEDED:
+            elif job.function not in retired:
                 left[job.function] = left.get(job.function, 0) + 1
                 continue
             await forget_job(redis, job)
@@ -343,7 +351,9 @@ async def convert_streaq_jobs(ctx: JobContext) -> int:
             evidence=UnavailableEvidence.CONNECTION_REFUSED,
         ) from exc
     if left:
-        logger.warning("cutover.legacy_sweep.streaq_unconverted", functions=left)
+        logger.warning(
+            "cutover.legacy_sweep.streaq_unconverted", functions=_counts(left)
+        )
     return converted
 
 

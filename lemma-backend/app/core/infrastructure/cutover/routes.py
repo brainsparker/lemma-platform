@@ -218,6 +218,28 @@ def converter_for(name: str) -> Converter | None:
     return _converters.get(name)
 
 
+#: Retired streaq jobs a deployment registers beside ``STREAQ_SEEDED`` -- a job
+#: of its own whose work is seeded from state now. One name per job kind.
+_retired_streaq: set[str] = set()  # memory: bounded one per retired job kind
+
+
+def retire_streaq_jobs(*names: str) -> None:
+    """Declare streaq job names whose leftover Redis copies the sweep deletes.
+
+    For a deployment's own jobs (lemma-cloud's), registered with its worker
+    modules. A job named nowhere is still left in Redis and reported.
+    """
+    clash = set(names) & set(STREAQ_ROUTES)
+    if clash:
+        raise ValueError(f"streaq jobs {sorted(clash)} are converted, not retired")
+    _retired_streaq.update(names)
+
+
+def retired_streaq_jobs() -> frozenset[str]:
+    """Every streaq job whose leftover copies are deleted, not converted."""
+    return frozenset(STREAQ_SEEDED) | _retired_streaq
+
+
 def all_route_names() -> tuple[str, ...]:
     return (
         *(route.consumer for route in ROUTES),
@@ -238,5 +260,7 @@ __all__ = [
     "LegacyRoute",
     "all_route_names",
     "converter_for",
+    "retire_streaq_jobs",
+    "retired_streaq_jobs",
     "legacy_converter",
 ]

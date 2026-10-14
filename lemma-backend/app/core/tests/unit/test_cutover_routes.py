@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from collections import Counter
 
+import pytest
+
 from app.core.infrastructure.cutover.routes import (
     ROUTES,
     STATE_ROUTES,
@@ -60,3 +62,32 @@ def test_analytics_routes_cover_exactly_the_projected_event_types() -> None:
 def test_every_route_matches_something() -> None:
     for route in ROUTES:
         assert route.types or route.like, route.consumer
+
+
+def test_a_deployment_registers_its_own_retired_streaq_jobs() -> None:
+    from app.core.infrastructure.cutover import routes
+
+    try:
+        routes.retire_streaq_jobs("cloud_only_cron")
+        assert "cloud_only_cron" in routes.retired_streaq_jobs()
+        assert set(STREAQ_SEEDED) <= routes.retired_streaq_jobs()
+    finally:
+        routes._retired_streaq.discard("cloud_only_cron")  # noqa: SLF001
+    with pytest.raises(ValueError):
+        routes.retire_streaq_jobs(STREAQ_ROUTES[0])
+
+
+def test_the_sweeps_per_route_counts_survive_the_logging_contract() -> None:
+    """A dict field below error is dropped (``dropped_fields``); counts go as text."""
+    from app.core.infrastructure.cutover.work import _counts
+    from app.core.log.log import _bound_fields
+
+    for event, field in (
+        ("cutover.legacy_sweep.taken_over", "routes"),
+        ("cutover.legacy_sweep.streaq_unconverted", "functions"),
+    ):
+        logged = _bound_fields(
+            {"event": event, "level": "info", field: _counts({"b": 2, "a": 1, "z": 0})}
+        )
+        assert "dropped_fields" not in logged
+        assert logged[field] == "a=1,b=2"

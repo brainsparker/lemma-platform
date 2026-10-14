@@ -28,6 +28,8 @@ import pytest
 from sqlalchemy import text
 
 from app.core.config import settings
+from app.core.infrastructure.cutover import routes as cutover_routes
+from app.core.infrastructure.cutover.routes import retire_streaq_jobs
 from app.core.infrastructure.cutover.takeover import LEGACY_EVENT, LEGACY_SWEEP
 from app.core.infrastructure.cutover.work import (
     LegacyEvent,
@@ -574,9 +576,12 @@ async def test_every_owed_delivery_takes_effect_once(
             "process_agent_run", run_id=str(agent_run_id)
         ),
         b"streaq:default:task:data:e2e-unknown": streaq_job("some_cron"),
+        # A deployment's own retired job (lemma-cloud's), registered by name.
+        b"streaq:default:task:data:e2e-retired": streaq_job("e2e_retired_cron"),
     }
     for key, value in jobs.items():
         await redis.set(key, value)
+    retire_streaq_jobs("e2e_retired_cron")
     try:
         async with async_session_maker() as session:
             await session.execute(
@@ -609,7 +614,7 @@ async def test_every_owed_delivery_takes_effect_once(
                 )
         assert [k for k in jobs if await redis.exists(k)] == [
             b"streaq:default:task:data:e2e-unknown"
-        ], "converted and seeded jobs are gone; an unknown one is left and logged"
+        ], "converted, seeded and registered jobs are gone; an unknown one is left"
         assert await _items("agent.title", conversation_id=str(conversation_id)) == 1
         assert (
             sum(
@@ -628,3 +633,4 @@ async def test_every_owed_delivery_takes_effect_once(
         )
     finally:
         await redis.delete(*jobs)
+        cutover_routes._retired_streaq.discard("e2e_retired_cron")  # noqa: SLF001

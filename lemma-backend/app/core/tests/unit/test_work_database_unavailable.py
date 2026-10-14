@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import asyncpg
 import pytest
 from pydantic import BaseModel
 from sqlalchemy.exc import InterfaceError, OperationalError
@@ -72,6 +73,15 @@ UNAVAILABLE = [
     pytest.param(InterfaceError("SELECT 1", {}, Exception("closed")), id="interface"),
     pytest.param(ConnectionRefusedError(61, "refused"), id="refused"),
     pytest.param(OSError("Multiple exceptions: refused, refused"), id="bare_oserror"),
+    # Raised by the pool's connect, before SQLAlchemy wraps anything.
+    pytest.param(
+        asyncpg.exceptions.TooManyConnectionsError("too many clients"),
+        id="asyncpg_too_many_connections",
+    ),
+    pytest.param(
+        asyncpg.exceptions.ConnectionDoesNotExistError("closed"),
+        id="asyncpg_connection_gone",
+    ),
 ]
 
 

@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import socket
 
+import asyncpg
+
 from sqlalchemy.exc import DBAPIError, InterfaceError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
@@ -45,9 +47,18 @@ _MAX_CAUSE_DEPTH = 4
 
 
 def _sqlstate(exc: BaseException) -> str | None:
-    if not isinstance(exc, DBAPIError):
+    """The SQLSTATE on a wrapped driver error, or on asyncpg's own.
+
+    A connection the pool opens is refused before SQLAlchemy wraps anything:
+    asyncpg's ``TooManyConnectionsError`` (53300) reaches the caller raw.
+    """
+    if isinstance(exc, DBAPIError):
+        source: object = exc.orig
+    elif isinstance(exc, asyncpg.PostgresError):
+        source = exc
+    else:
         return None
-    sqlstate = getattr(exc.orig, "sqlstate", None)
+    sqlstate = getattr(source, "sqlstate", None)
     return sqlstate if isinstance(sqlstate, str) else None
 
 
@@ -87,7 +98,7 @@ def _is_network_os_error(exc: BaseException) -> bool:
 
 
 def _link_unavailable(link: BaseException) -> bool:
-    if isinstance(link, PoolTimeoutError | InterfaceError):
+    if isinstance(link, PoolTimeoutError | InterfaceError | asyncpg.InterfaceError):
         return True
     if isinstance(link, DBAPIError) and link.connection_invalidated:
         return True

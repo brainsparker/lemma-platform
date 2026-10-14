@@ -149,6 +149,10 @@ class MemoryChannel:
     def __init__(self) -> None:
         self.queues: list[asyncio.Queue[str]] = []
 
+    async def subscriber_count(self, channel: str) -> int:
+        del channel
+        return len(self.queues)
+
     async def publish(self, channel: str, message: object) -> None:
         for queue in self.queues:
             queue.put_nowait(str(message))

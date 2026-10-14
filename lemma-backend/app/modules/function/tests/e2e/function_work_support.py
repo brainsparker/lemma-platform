@@ -156,8 +156,15 @@ async def fake_runtime() -> AsyncIterator[FakeRuntime]:
 class LoopbackDispatcher(FunctionDispatcher):
     """The shipping dispatcher with the provider's endpoint lease replaced."""
 
-    def __init__(self, uow_factory: UnitOfWorkFactory, *, url: str, cap: int) -> None:
-        self._client = httpx.AsyncClient()
+    def __init__(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        *,
+        url: str,
+        cap: int,
+        client: httpx.AsyncClient,
+    ) -> None:
+        self._client = client
         super().__init__(
             uow_factory=uow_factory,
             sandbox_client_factory=_no_sandbox_client,
@@ -222,8 +229,13 @@ async def _no_organization(_pod_id: UUID | None) -> str | None:
 
 
 def loopback_dispatcher_factory(url: str, *, cap: int = 32):
+    # One client for every job, as the deployment shares one: a client per job
+    # built an SSL context each time, which was a visible share of the CPU in
+    # the workflow load test -- the test double's cost, not the product's.
+    client = httpx.AsyncClient()
+
     def build(uow_factory: UnitOfWorkFactory) -> FunctionDispatcher:
-        return LoopbackDispatcher(uow_factory, url=url, cap=cap)
+        return LoopbackDispatcher(uow_factory, url=url, cap=cap, client=client)
 
     return build
 

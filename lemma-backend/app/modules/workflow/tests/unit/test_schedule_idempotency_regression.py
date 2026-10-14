@@ -6,12 +6,14 @@ single-owner target dispatch.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.modules.schedule.domain.schedule import (
     ScheduleFireStatus,
@@ -202,14 +204,20 @@ async def test_reserved_workflow_run_id_is_idempotent():
     )
     engine._require_action = AsyncMock(return_value=None)
     engine._entry_node_id = Mock(return_value="entry")
-    engine.run_repo = AsyncMock(get=AsyncMock(return_value=existing))
+    # The reserved id is not looked up first: its insert conflicts, inside a
+    # savepoint, and the conflict returns the run that already holds it.
+    engine.uow.session.begin_nested = Mock(return_value=nullcontext())
+    engine.run_repo = AsyncMock(
+        get=AsyncMock(return_value=existing),
+        create=AsyncMock(side_effect=IntegrityError("INSERT", {}, Exception("dup"))),
+    )
     engine._stepper = Mock()
 
     result = await engine.start_run(flow_id, user_id, run_id=run_id)
 
     assert result is existing
-    engine.run_repo.create.assert_not_awaited()
     engine._stepper.assert_not_called()
+    engine.run_repo.update.assert_not_awaited()
 
 
 @pytest.mark.anyio

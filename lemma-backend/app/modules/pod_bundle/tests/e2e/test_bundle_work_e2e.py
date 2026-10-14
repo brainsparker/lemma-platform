@@ -35,6 +35,7 @@ from app.modules.pod_bundle.tests.e2e.bundle_e2e_helpers import (
     new_pod,
     wait_import,
 )
+from app.modules.test_support.e2e.waiters import eventually
 from app.modules.pod_bundle.tests.e2e.bundle_work_support import (
     execute,
     item,
@@ -71,9 +72,20 @@ async def test_an_export_request_commits_its_state_and_its_item_together(
     )
 
     await pause_admin(pod_id, paused=False)
+    # Run here, or by a session worker if one is up: either way it finishes.
     await run_until_idle(async_session_maker, classes=[WorkClass.ADMIN])
-    assert await _job_status(export_id) == ExportStatus.READY.value
-    assert await item(f"pod-export:{export_id}") is None
+    await eventually(
+        label="the export finished",
+        probe=lambda: _job_status(export_id),
+        done=lambda found: found == ExportStatus.READY.value,
+        timeout_seconds=60,
+    )
+    await eventually(
+        label="its item is gone",
+        probe=lambda: item(f"pod-export:{export_id}"),
+        done=lambda found: found is None,
+        timeout_seconds=30,
+    )
 
 
 class _QueueThatFailsAfterWriting(bundle_work.BundleJobQueue):
@@ -194,8 +206,11 @@ async def test_a_dead_item_ends_its_job_failed_in_the_dead_transaction(
     async def doomed(ctx: JobContext, payload: bundle_work.ExportJob) -> None:
         raise PermanentFailure("cannot run")
 
+    # A kind no session worker knows, with the real dead hook: only this test
+    # claims it.
+    kind = "test.pod_bundle.doomed"
     registry.handler(
-        kind=bundle_work.EXPORT,
+        kind=kind,
         cls=WorkClass.ADMIN,
         mode=WorkMode.JOB,
         payload=bundle_work.ExportJob,
@@ -209,7 +224,7 @@ async def test_a_dead_item_ends_its_job_failed_in_the_dead_transaction(
         from app.core.infrastructure.work import WorkWriter, pod_namespace
 
         await WorkWriter(uow.session, registry=registry).add(
-            bundle_work.EXPORT,
+            kind,
             pod_namespace(pod_id),
             bundle_work.ExportJob(export_id=export_id, pod_id=pod_id, user_id=user_id),
             dedup_key=bundle_work.export_key(export_id),

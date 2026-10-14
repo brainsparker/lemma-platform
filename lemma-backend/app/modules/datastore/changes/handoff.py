@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.core.infrastructure.db.notify_listener import NotifyWakeListener
@@ -107,7 +107,7 @@ class ChangeHandoff:
             wake.clear()
             try:
                 await self.drain()
-            except (DBAPIError, OperationalError, OSError) as exc:
+            except (SQLAlchemyError, OSError) as exc:
                 # The rows stay; the next pass hands them off.
                 self._incident.record_failure(error_type=type(exc).__name__)
             else:

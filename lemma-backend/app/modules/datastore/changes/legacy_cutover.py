@@ -33,7 +33,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.core.config import settings
 from app.core.infrastructure.cutover.routes import legacy_converter
@@ -199,17 +199,19 @@ async def file_cleanup(ctx: JobContext, event: dict[str, Any], route: str) -> No
         )
 
 
-def _separate_datastore_database() -> bool:
+def _separate_datastore_engine() -> AsyncEngine | None:
+    """The datastore database's engine when it is not the main database."""
     url = datastore_settings.datastore_database_url
-    return bool(url) and url != settings.database_url
+    if not url or url == settings.database_url:
+        return None
+    return get_datastore_engine()
 
 
-if _separate_datastore_database():
-    register_legacy_outbox(
-        LegacyOutbox(
-            name="datastore",
-            engine=get_datastore_engine,
-            routes=RECORD_ROUTES,
-            like="datastore.record.%",
-        )
+register_legacy_outbox(
+    LegacyOutbox(
+        name="datastore",
+        engine=_separate_datastore_engine,
+        routes=RECORD_ROUTES,
+        like="datastore.record.%",
     )
+)

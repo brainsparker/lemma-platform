@@ -107,7 +107,9 @@ class LegacyOutbox:
     """Another database's ``domain_event_outbox``, and the routes it feeds."""
 
     name: str
-    engine: Callable[[], AsyncEngine]
+    #: The database's engine, or ``None`` when it is the main database (whose
+    #: outbox the main take-over already reads).
+    engine: Callable[[], AsyncEngine | None]
     routes: tuple[str, ...]
     like: str
 
@@ -146,7 +148,9 @@ async def run_sweep(ctx: JobContext, state: SweepState) -> None:
     quiet = newest is None or datetime.now(UTC) - newest >= timedelta(
         seconds=state.quiet_seconds
     )
-    if busy or not quiet:
+    # A full batch means more is waiting now; otherwise, once quiet, the last
+    # take-over happens under the lock in ``finish``.
+    if busy >= BATCH or not quiet:
         async with ctx.complete_work() as uow:
             await WorkWriter.of(uow).add(
                 LEGACY_SWEEP,
@@ -231,6 +235,8 @@ async def _sweep_other_outboxes(
     routes = {route.consumer: route for route in ROUTES}
     for outbox in _other_outboxes.values():
         engine = outbox.engine()
+        if engine is None:
+            continue
         async with engine.connect() as conn:
             if not await conn.scalar(
                 text("SELECT to_regclass('domain_event_outbox') IS NOT NULL")

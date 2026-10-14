@@ -536,7 +536,10 @@ async fn a_hosted_run_without_a_bundled_cli_may_run_the_downloaded_one() {
     run.lemma_cli_bin =
         lemma_agent_host::lemma_cli::cli_root(false, named, &candidates, &clis.home)
             .map(|root| root.join("bin"));
-    AcpDriver::default().run(run, Arc::new(Quiet)).await.unwrap();
+    AcpDriver::default()
+        .run(run, Arc::new(Quiet))
+        .await
+        .unwrap();
 
     let traffic = read_traffic(&log);
     let binary = downloaded.join("bin/lemma");

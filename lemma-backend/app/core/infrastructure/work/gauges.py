@@ -85,7 +85,9 @@ type TransactionAgeProbe = Callable[[], Awaitable[float]]
 
 #: The main database is read on the gauges' own session; other databases (the
 #: datastore's) register a probe here.
-_transaction_age_probes: dict[str, TransactionAgeProbe] = {}
+_transaction_age_probes: dict[
+    str, TransactionAgeProbe
+] = {}  # memory: bounded one per database (main, datastore)
 
 
 def register_transaction_age_probe(database: str, probe: TransactionAgeProbe) -> None:

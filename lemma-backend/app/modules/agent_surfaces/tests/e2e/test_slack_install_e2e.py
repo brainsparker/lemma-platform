@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent_surfaces.infrastructure.slack_manager_models import (
@@ -48,6 +48,14 @@ async def _adopt(fixed_test_user, account) -> bool:
             organization_id=account.organization_id,
             account_id=account.id,
         )
+
+
+async def _organizations_of(db_session: AsyncSession, fixed_test_user) -> set:
+    rows = await db_session.execute(
+        text("SELECT organization_id FROM organization_members WHERE user_id = :user"),
+        {"user": UUID(fixed_test_user["id"])},
+    )
+    return {row[0] for row in rows}
 
 
 async def test_lemmas_grant_for_an_unheld_workspace_adopts_it_and_says_hello(
@@ -157,6 +165,7 @@ async def test_add_to_slack_answers_with_slacks_consent_for_lemmas_app(
     monkeypatch.setenv("SLACK_CLIENT_ID", "1234.lemma")
     monkeypatch.setenv("SLACK_CLIENT_SECRET", "lemma-secret")
     await _manager_account(db_session, fixed_test_user, fake_slack)  # the connector row
+    memberships = await _organizations_of(db_session, fixed_test_user)
     restore = await _slack_accepts_an_orgs_own_app(db_session)
     try:
         response = await authenticated_client.post("/surface-setup/slack/install")
@@ -164,6 +173,8 @@ async def test_add_to_slack_answers_with_slacks_consent_for_lemmas_app(
         await restore()
 
     assert response.status_code == 200, response.text
+    # The organization they are in, the one checked: nothing provisioned beside it.
+    assert await _organizations_of(db_session, fixed_test_user) == memberships
     url = response.json()["authorization_url"]
     assert url.startswith("https://slack.com/oauth/v2/authorize")
     assert parse_qs(urlsplit(url).query)["client_id"] == ["1234.lemma"]

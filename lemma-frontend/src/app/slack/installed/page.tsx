@@ -23,9 +23,8 @@ export default function SlackInstalledPage() {
                         <p className="portal__lead">{refused.replace(/[.\s]+$/, "")}. Try &ldquo;Add to Slack&rdquo; again.</p>
                     ) : (
                         <p className="portal__lead">
-                            In a moment Lemma messages you in Slack with your first teammate to add. If nothing
-                            arrives, the workspace may already belong to another organization on Lemma; Lemma
-                            says so in Slack when it can.
+                            Open Lemma&rsquo;s Home tab in Slack to add your first teammate. If the workspace
+                            already belongs to another organization on Lemma, Lemma says so in Slack when it can.
                         </p>
                     )}
                     {!refused && <a className="btn btn--primary" href="https://app.slack.com/client">Open Slack</a>}

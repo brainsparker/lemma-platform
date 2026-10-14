@@ -62,18 +62,18 @@ async def start_slack_install(uow_factory: UnitOfWorkFactory, *, user_id: UUID) 
         preferred_organization_membership,
     )
 
-    # Refused before anything is made: somebody already in an organization they
-    # may not add installs to would otherwise be given a teammate there first.
+    # Somebody already in an organization installs into that one, checked
+    # before anything is made; only a person with none is provisioned one.
+    # One organization decides both, so the check and the install can't part.
     async with uow_factory() as uow:
         membership = await preferred_organization_membership(
             uow, user_id=user_id, preferred_organization_id=None
         )
-        if membership is not None and not await may_manage_installs(
-            uow, user_id=user_id, organization_id=membership[0]
-        ):
-            raise SlackAppCreationForbiddenError()
-    workspace = await ensure_signed_in_workspace(uow_factory, user_id=user_id)
-    organization_id = workspace.organization_id
+    if membership is not None:
+        organization_id = membership[0]
+    else:
+        workspace = await ensure_signed_in_workspace(uow_factory, user_id=user_id)
+        organization_id = workspace.organization_id
     async with uow_factory() as uow:
         if not await may_manage_installs(
             uow, user_id=user_id, organization_id=organization_id

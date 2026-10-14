@@ -15,7 +15,9 @@ from __future__ import annotations
 import math
 from decimal import Decimal
 
-from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
+from app.core.infrastructure.db.transient_errors import (
+    raise_if_transient_database_error,
+)
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreValidationError,
@@ -112,10 +114,10 @@ def map_datastore_db_error(
     ``details`` via :mod:`db_error_parser`. Only true infrastructure failures
     (connection, timeout) remain as :class:`DatastoreInfrastructureError` (500).
     """
-    # The database being unavailable is raised as it is, not mapped: a
-    # refused connection's text matches none of the markers below and came
-    # back as a 400 echoing the driver.
-    raise_if_database_unavailable(exc)
+    # The database being unavailable, or a deadlock, is raised as it is, not
+    # mapped: neither text matches the markers below, and both came back as a
+    # 400 echoing the driver.
+    raise_if_transient_database_error(exc)
     raw = str(getattr(exc, "orig", exc))
     lower = raw.lower()
 

@@ -25,7 +25,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.core.infrastructure.db.transient_errors import is_database_unavailable
+from app.core.infrastructure.db.transient_errors import is_transient_database_error
 from app.core.domain.errors import DomainError
 from app.core.observability.telemetry import record_exception_on_current_span
 from app.core.redaction import redact_text, redact_value
@@ -277,8 +277,9 @@ _DATABASE_RETRY_AFTER_SECONDS = 2
 def _database_unavailable(request: Request, exc: Exception) -> JSONResponse:
     """503, retryable: the database could not take the request, nothing failed.
 
-    A refused connection, a full server or an empty pool says nothing about
-    the request; a 500 told clients and monitors it had broken.
+    A refused connection, a full server, an empty pool or a deadlock says
+    nothing about the request; a 500 told clients and monitors it had broken,
+    and a datastore mapper called a deadlock a 400 validation error.
     """
     record_exception_on_current_span(
         exc,
@@ -378,7 +379,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def handle_unexpected_exception(request: Request, exc: Exception):
-        if is_database_unavailable(exc):
+        if is_transient_database_error(exc):
             return _database_unavailable(request, exc)
         record_exception_on_current_span(
             exc,

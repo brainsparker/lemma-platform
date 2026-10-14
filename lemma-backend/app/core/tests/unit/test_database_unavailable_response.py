@@ -50,3 +50,12 @@ async def test_any_other_unexpected_error_is_still_a_500() -> None:
 
     assert response.status_code == 500
     assert response.json()["code"] == "INTERNAL_ERROR"
+
+
+async def test_a_deadlock_is_retryable_too() -> None:
+    class _Deadlock(Exception):
+        sqlstate = "40P01"
+
+    response = await _get(_app(OperationalError("UPDATE", {}, _Deadlock("deadlock"))))
+
+    assert response.status_code == 503

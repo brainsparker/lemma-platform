@@ -314,3 +314,22 @@ def test_the_database_being_unavailable_is_not_mapped_to_a_datastore_error() -> 
         raise_record_read_error(down, operation="list records")
     with pytest.raises(OperationalError):
         map_datastore_db_error(operation="create table", exc=down, table_name="t")
+
+
+def test_a_deadlock_is_not_the_callers_validation_error() -> None:
+    """Seen in e2e under load: ``deadlock detected`` came back as a 400
+    ``DATASTORE_VALIDATION_ERROR``. Retrying the request succeeds."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.modules.datastore.infrastructure.record_errors import (
+        raise_record_read_error,
+    )
+
+    class _Deadlock(Exception):
+        sqlstate = "40P01"
+
+    with pytest.raises(OperationalError):
+        raise_record_read_error(
+            OperationalError("SELECT", {}, _Deadlock("deadlock detected")),
+            operation="list records",
+        )

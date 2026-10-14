@@ -25,6 +25,7 @@ __all__ = [
     "SERIALIZATION_FAILURE",
     "is_database_unavailable",
     "raise_if_database_unavailable",
+    "raise_if_transient_database_error",
     "is_deadlock",
     "is_transient_database_error",
 ]
@@ -142,4 +143,14 @@ def raise_if_database_unavailable(exc: BaseException) -> None:
     unavailable budget instead of the catch recording a failure for good.
     """
     if is_database_unavailable(exc):
+        raise exc
+
+
+def raise_if_transient_database_error(exc: BaseException) -> None:
+    """Re-raise ``exc`` if the same statement later is expected to succeed.
+
+    The database unavailable, or a deadlock or serialization failure: for a
+    mapper that would otherwise call the error the caller's fault.
+    """
+    if is_transient_database_error(exc):
         raise exc

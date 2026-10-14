@@ -960,7 +960,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.datastore_trigger.unparsable_config.degraded': EventSpec('warning', frozenset({'schedule_id'})),
     'schedule.decision_filter.fields_not_asked.observed': EventSpec('info', frozenset({'fields', 'schedule_id'})),
     'schedule.filter.dead_lettered.degraded': EventSpec('warning', frozenset({'counted', 'error_type', 'pod_id', 'schedule_id'})),
-    'schedule.filter.interrupted': EventSpec('warning', frozenset({'pod_id', 'schedule_id'})),
+    'schedule.filter.interrupted': EventSpec('warning', frozenset({'asks', 'pod_id', 'schedule_id'})),
     'schedule.fire_cap.paused': EventSpec('warning', frozenset({'pod_id', 'schedule_id'})),
     'schedule.mcp_listening.reconciled': EventSpec('info', frozenset({'orphan_count', 'turned_off_count'})),
     'schedule.mcp_listening.turned_off': EventSpec('info', frozenset({'reason', 'schedule_id'})),

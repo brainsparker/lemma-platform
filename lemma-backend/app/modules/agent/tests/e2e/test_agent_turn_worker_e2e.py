@@ -82,6 +82,16 @@ async def _returns(run_id: str, call_id: str) -> int:
     )
 
 
+async def _unpaired(run_id: str) -> int:
+    return await scalar(
+        "SELECT count(*) FROM agent_messages c WHERE c.agent_run_id = :r "
+        "AND c.kind = 'TOOL_CALL' AND NOT EXISTS (SELECT 1 FROM agent_messages t "
+        "WHERE t.agent_run_id = :r AND t.kind = 'TOOL_RETURN' "
+        "AND t.tool_call_id = c.tool_call_id)",
+        r=UUID(run_id),
+    )
+
+
 async def _answers(run_id: str) -> int:
     return await scalar(
         "SELECT count(*) FROM agent_messages WHERE agent_run_id = :r "
@@ -148,19 +158,29 @@ async def test_a_killed_worker_turn_resumes_from_its_last_step_within_a_lease(
 async def test_a_shut_down_worker_hands_its_turn_back_uncharged(
     e2e_settings, pod: TurnPod
 ) -> None:
+    """SIGTERM while a model request is in flight: the turn finishes that step,
+    hands itself back at the boundary, and the next worker resumes it.
+
+    The signal is sent once the first step's return is committed, so the turn
+    is inside its harness. Sent as soon as the item was merely claimed, it could
+    land before the turn had begun: handed back just as uncharged, but with no
+    step to stop after -- which is what made this test flaky.
+    """
     conversation = await pod.conversation(
         [
             script_tool_call("pod_tables", {}, tool_call_id="before-yield"),
+            script_tool_call("pod_tables", {}, tool_call_id="in-flight"),
             script_text("Finished on the next worker."),
         ]
     )
     async with _worker(e2e_settings, "draining", latency_ms=3000) as first:
         run_id = (await pod.append(conversation))["agent_run_id"]
         await eventually(
-            label="the turn is running",
-            probe=lambda: _turn(run_id),
-            done=lambda t: t is not None and t[0] == "running",
+            label="the first step committed",
+            probe=lambda: _returns(run_id, "before-yield"),
+            done=lambda n: n == 1,
             timeout_seconds=30,
+            interval_seconds=0.05,
         )
         first.process.send_signal(signal.SIGTERM)
         signalled_at = time.monotonic()
@@ -179,7 +199,8 @@ async def test_a_shut_down_worker_hands_its_turn_back_uncharged(
     assert released == ("queued", 0, 0)
     assert '"event": "agent.turn.yielded"' in log
     assert await pod.run_status(run_id) == "RUNNING"
-    # It stopped between steps: the step it was on finished first.
+    # It stopped between steps: every call it made has its return.
+    assert await _unpaired(run_id) == 0
     assert await _returns(run_id, "before-yield") == 1
 
     async with _worker(e2e_settings, "next", latency_ms=200):
@@ -194,6 +215,7 @@ async def test_a_shut_down_worker_hands_its_turn_back_uncharged(
 
     assert status == "COMPLETED"
     assert await _returns(run_id, "before-yield") == 1
+    assert await _returns(run_id, "in-flight") == 1
     assert await _answers(run_id) == 1
     print(
         f"\nSIGTERM -> handed back in {released_after:.2f}s; "

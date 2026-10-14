@@ -220,14 +220,15 @@ model.
 | No, or could not tell | a `FILTERED` run carrying the answers; `last_fire_status` `FILTERED` |
 | Provider unavailable or rate-limited | retried with backoff (up to six tries), then `DEAD_LETTERED` as `ScheduleFilterUnavailable` -- never `FAILED`, which run recovery would send past the filter |
 | Spend limit, event too large, no provider, invalid questions | `DEAD_LETTERED` at once (`ScheduleFilterQuotaExhausted`, `ScheduleFilterEventTooLarge`, `ScheduleFilterNotConfigured`, `ScheduleFilterInvalid`) |
+| Interrupted after the question was asked (a crash, a lost lease, Lemma's database unreachable while the verdict was recorded) | asked once more -- the question has no effect until its verdict commits, so the only cost of asking again is a second billed call; interrupted again, `DEAD_LETTERED` as `ScheduleFilterInterrupted` |
 
 A redelivered event that already has a run is not judged again. (Two
 deliveries racing each other can both be judged, and billed, within the length
 of one decision; only one run is kept.) The failure breaker passes over
-`FILTERED` runs and over `ScheduleFilterUnavailable` and
-`ScheduleFilterNotConfigured` dead letters: a skip is not a failure, and a
-provider outage or a deployment with no provider is the operator's to fix, not
-the schedule's -- counting either would switch off every filtered schedule at
+`FILTERED` runs and over `ScheduleFilterUnavailable`,
+`ScheduleFilterNotConfigured` and `ScheduleFilterInterrupted` dead letters: a
+skip is not a failure, and a provider outage, an interruption or a deployment
+with no provider is the operator's to fix, not the schedule's -- counting either would switch off every filtered schedule at
 once. A spent budget, an event too large to judge and an invalid filter are the
 pod's or the schedule's, and are counted. The run list takes `status` and `skipped` filters; partial indexes
 on `status <> 'FILTERED'` keep the breaker's streak and a history without skips

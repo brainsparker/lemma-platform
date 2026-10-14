@@ -21,6 +21,7 @@ from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
     SlackAppCreationForbiddenError,
@@ -34,7 +35,14 @@ from app.modules.agent_surfaces.services.slack_manager_context import (
     load_context,
     teammates,
 )
-from app.modules.agent_surfaces.services.slack_manager_install import bind_manager
+from app.modules.agent_surfaces.services.credential_resolver import (
+    SurfaceCredentialResolver,
+)
+from app.modules.agent_surfaces.services.slack_manager_install import (
+    bind_manager,
+    installer_of,
+    lemma_app_grant,
+)
 from app.modules.connectors.contracts.own_apps import (
     ensure_system_install,
     may_manage_installs,
@@ -50,7 +58,20 @@ INSTALLED_RETURN_PATH = "/slack/installed"
 async def start_slack_install(uow_factory: UnitOfWorkFactory, *, user_id: UUID) -> str:
     """Slack's consent page for Lemma's own app, for this person's organization."""
     from app.modules.identity.contracts.onboarding import ensure_signed_in_workspace
+    from app.modules.identity.contracts.organizations import (
+        preferred_organization_membership,
+    )
 
+    # Refused before anything is made: somebody already in an organization they
+    # may not add installs to would otherwise be given a teammate there first.
+    async with uow_factory() as uow:
+        membership = await preferred_organization_membership(
+            uow, user_id=user_id, preferred_organization_id=None
+        )
+        if membership is not None and not await may_manage_installs(
+            uow, user_id=user_id, organization_id=membership[0]
+        ):
+            raise SlackAppCreationForbiddenError()
     workspace = await ensure_signed_in_workspace(uow_factory, user_id=user_id)
     organization_id = workspace.organization_id
     async with uow_factory() as uow:
@@ -89,17 +110,50 @@ async def adopt_workspace(
     not fit -- not Lemma's app, not this person's to bind, a workspace already
     held -- leaves it as it was: the account stays an account.
     """
+    grant = await lemma_app_grant(
+        uow, user_id=user_id, organization_id=organization_id, account_id=account_id
+    )
+    if grant is None:
+        return False  # Not Lemma's own app: an ordinary account, nothing to adopt.
     try:
         bound = await bind_manager(
             uow, user_id=user_id, organization_id=organization_id, account_id=account_id
         )
-    except DomainError:
+    except DomainError as exc:
         await uow.rollback()
+        # Lemma's app was installed and is not being taken on: say so where it
+        # was installed, and leave a line for whoever looks into it.
+        logger.warning(
+            "agent_surfaces.slack_manager.adoption_refused",
+            organization_id=str(organization_id),
+            reason=str(exc),
+        )
+        await _explain(
+            uow,
+            account_id,
+            installer_of(grant),
+            f"Lemma couldn't join this workspace: {exc}",
+        )
         return False
     if not bound.created:
         return False
     await welcome(uow, team_id=bound.team_id, user_id=user_id)
     return True
+
+
+async def _explain(
+    uow: SqlAlchemyUnitOfWork, account_id: UUID, installer: str, text: str
+) -> None:
+    """A DM from the installed app itself, for when it is not becoming the manager."""
+    if not installer:
+        return
+    credentials = await SurfaceCredentialResolver(uow=uow).for_account(
+        account_id, platform=SurfacePlatform.SLACK
+    )
+    async with connection_released(uow.session):
+        channel = await slack.open_dm(credentials, installer)
+        if channel:
+            await slack.post_message(credentials, channel=channel, text=text)
 
 
 async def welcome(uow: SqlAlchemyUnitOfWork, *, team_id: str, user_id: UUID) -> None:
@@ -108,9 +162,19 @@ async def welcome(uow: SqlAlchemyUnitOfWork, *, team_id: str, user_id: UUID) -> 
         team_id=team_id, user_id=user_id
     )
     if not installer:
+        logger.info(
+            "agent_surfaces.slack_manager.welcome_skipped",
+            team_id=team_id,
+            reason="no_installer",
+        )
         return
     ctx = await load_context(uow, team_id=team_id, slack_user_id=installer)
     if ctx is None:
+        logger.info(
+            "agent_surfaces.slack_manager.welcome_skipped",
+            team_id=team_id,
+            reason="no_install",
+        )
         return
     waiting = [mate for mate in await teammates(uow, ctx) if mate.surface is None]
     text, blocks = views.welcome(
@@ -119,8 +183,16 @@ async def welcome(uow: SqlAlchemyUnitOfWork, *, team_id: str, user_id: UUID) -> 
     )
     async with connection_released(uow.session):
         channel = await slack.open_dm(ctx.credentials, installer)
-        if channel:
+        error = (
             await slack.post_message(
                 ctx.credentials, channel=channel, text=text, blocks=blocks
             )
+            if channel
+            else "dm_unavailable"
+        )
+    if error:
+        logger.warning(
+            "agent_surfaces.slack_manager.welcome_failed", team_id=team_id, error=error
+        )
+        return
     logger.info("agent_surfaces.slack_manager.welcomed", team_id=team_id)

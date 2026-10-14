@@ -86,16 +86,11 @@ async def ensure_system_install(
     app's own flow makes the same install on first use, from the browser.
     """
     service = get_connector_service(uow)
-    installs, _ = await service.list_auth_configs(
-        user_id=user_id, organization_id=organization_id, limit=200
+    held = await service.auth_config_repository.get_active_by_org_app_and_source(
+        organization_id, connector_id, AuthConfigSource.SYSTEM_DEFAULT.value
     )
-    for install in installs:
-        if (
-            install.connector_id == connector_id
-            and install.config_source == AuthConfigSource.SYSTEM_DEFAULT
-            and str(getattr(install.status, "value", install.status)) == "ACTIVE"
-        ):
-            return install.id
+    if held is not None:
+        return held.id
     made = await service.create_auth_config(
         user_id=user_id,
         organization_id=organization_id,

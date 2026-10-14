@@ -94,6 +94,7 @@ async def test_a_workspace_another_organization_holds_is_not_adopted(
     test_pod,
     fixed_test_user,
     fake_slack,
+    message_store,
 ):
     from app.modules.identity.infrastructure.models.organization_models import (
         Organization,
@@ -122,6 +123,10 @@ async def test_a_workspace_another_organization_holds_is_not_adopted(
         select(SlackManagerInstallModel).where(SlackManagerInstallModel.team_id == TEAM)
     )
     assert install is not None and install.organization_id == other.id
+    # Not silent: the app that was installed says why it is not staying.
+    told = await wait_for_messages(message_store, "SLACK", min_count=1)
+    assert "Lemma couldn't join this workspace" in told[-1]["text"]
+    assert "another Lemma organization" in told[-1]["text"]
 
 
 async def test_binding_from_the_web_says_hello_too(

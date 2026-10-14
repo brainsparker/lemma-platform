@@ -84,6 +84,25 @@ async def _lemma_app_grant(
     return account.id, raw
 
 
+async def lemma_app_grant(
+    uow: SqlAlchemyUnitOfWork, *, user_id: UUID, organization_id: UUID, account_id: UUID
+) -> dict[str, object] | None:
+    """Slack's OAuth answer when this account is this person's grant of Lemma's
+    own app; None for any other account, which there is nothing to adopt from."""
+    try:
+        _, raw = await _lemma_app_grant(
+            uow, user_id=user_id, organization_id=organization_id, account_id=account_id
+        )
+    except AgentSurfaceValidationError:
+        return None
+    return raw
+
+
+def installer_of(raw: dict[str, object]) -> str:
+    """The Slack user whose OAuth grant this was."""
+    return _nested_id(raw, "authed_user")
+
+
 def _workspace_of(raw: dict[str, object]) -> tuple[str, str | None, str]:
     """``(team_id, team_name, bot_user_id)`` from Slack's OAuth answer."""
     team = raw.get("team")

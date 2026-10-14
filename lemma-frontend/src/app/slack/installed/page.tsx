@@ -17,12 +17,17 @@ export default function SlackInstalledPage() {
         <main className="portal">
             <div className="portal__pane">
                 <div className="portal__form">
-                    <h2>{refused ? "Lemma isn't in Slack yet" : "Lemma is in your Slack workspace"}</h2>
-                    <p className="portal__lead">
-                        {refused
-                            ? `${refused} Try "Add to Slack" again.`
-                            : "Open Slack: Lemma has sent you a message with your first teammate to add."}
-                    </p>
+                    <h2>{refused ? "Lemma isn't in Slack yet" : "Slack added Lemma"}</h2>
+                    {refused ? (
+                        /* Slack's own words, then ours: two sentences, never one run together. */
+                        <p className="portal__lead">{refused.replace(/[.\s]+$/, "")}. Try &ldquo;Add to Slack&rdquo; again.</p>
+                    ) : (
+                        <p className="portal__lead">
+                            In a moment Lemma messages you in Slack with your first teammate to add. If nothing
+                            arrives, the workspace may already belong to another organization on Lemma; Lemma
+                            says so in Slack when it can.
+                        </p>
+                    )}
                     {!refused && <a className="btn btn--primary" href="https://app.slack.com/client">Open Slack</a>}
                 </div>
             </div>

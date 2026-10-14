@@ -43,7 +43,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.outside_links import
     WEB_PLATFORM,
     latest_contact_thread,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.contact_email_follow_ups import (
     ContactsMailbox,
     contacts_mailbox,
@@ -328,7 +328,7 @@ async def _send(
             ).send_agent_message_for_conversation(
                 conversation_id=conversation_id, message=text
             )
-    except PLATFORM_TRANSPORT_ERRORS as exc:
+    except platform_transport_errors() as exc:
         logger.warning(
             "agent_surfaces.contact_follow_ups.send_failed.degraded",
             platform=platform,

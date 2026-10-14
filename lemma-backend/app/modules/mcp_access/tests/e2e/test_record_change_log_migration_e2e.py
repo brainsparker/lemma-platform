@@ -14,8 +14,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0056_flow_work_items"
-REVISION = "0057_record_change_log"
+BEFORE = "0057_flow_work_items"
+REVISION = "0058_record_change_log"
 
 
 def test_record_change_log_upgrades_seeds_and_rolls_back_cleanly() -> None:

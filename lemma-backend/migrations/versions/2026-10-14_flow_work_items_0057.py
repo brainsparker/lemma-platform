@@ -27,15 +27,15 @@ PENDING -> RUNNING transition.
 Two indexes served the deleted sweeps; one is added for the per-pod gate,
 which counts a pod's RUNNING runs at every start.
 
-Revision ID: 0056_flow_work_items
-Revises: 0055_trigger_work_items
+Revision ID: 0057_flow_work_items
+Revises: 0056_trigger_work_items
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0056_flow_work_items"
-down_revision = "0055_trigger_work_items"
+revision = "0057_flow_work_items"
+down_revision = "0056_trigger_work_items"
 branch_labels = None
 depends_on = None
 

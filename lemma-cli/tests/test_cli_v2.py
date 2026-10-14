@@ -26,7 +26,7 @@ from lemma_cli.cli_core.commands import (
     system,
     workflows,
 )
-from lemma_cli.cli_core.chat import iter_sse_events
+from lemma_cli.cli_core.sse import iter_sse_events
 from lemma_cli.cli_app.pod_bundle import (
     _normalize_function_payload,
     _sanitize_function_payload_for_import,

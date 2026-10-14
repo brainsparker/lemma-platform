@@ -358,9 +358,9 @@ def _seed_statements() -> list[str]:
         Path(__file__).resolve().parents[5]
         / "migrations"
         / "versions"
-        / "2026-10-14_file_work_items_0054.py"
+        / "2026-10-14_file_work_items_0055.py"
     )
-    spec = importlib.util.spec_from_file_location("file_work_items_0054", path)
+    spec = importlib.util.spec_from_file_location("file_work_items_0055", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

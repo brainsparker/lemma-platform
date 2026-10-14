@@ -23,7 +23,7 @@ from uuid import UUID
 from app.core.config import reveal_secret, settings
 from app.core.infrastructure.db.session_uow import commit_now
 from app.modules.agent_surfaces.platforms.common import (
-    PLATFORM_TRANSPORT_ERRORS,
+    platform_transport_errors,
     public_https_api_url_available,
 )
 from app.modules.agent_surfaces.platforms.delivery import with_retry
@@ -253,7 +253,7 @@ class SurfaceTelegramWebhookMixin:
                 "Could not configure Telegram webhook automatically. Set it "
                 f"manually to {webhook_url}. Telegram response: {exc.description}",
             ) from exc
-        except PLATFORM_TRANSPORT_ERRORS as exc:
+        except platform_transport_errors() as exc:
             raise AgentSurfacePlatformError(
                 "telegram",
                 "Could not configure Telegram webhook automatically. Set it "
@@ -266,7 +266,7 @@ class SurfaceTelegramWebhookMixin:
     ) -> None:
         try:
             info = await self._telegram_webhook_call(client, "getWebhookInfo", {})
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.surface_service.telegram_webhook_unconfirmed.degraded",
                 exc_info=True,

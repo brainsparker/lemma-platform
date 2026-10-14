@@ -1799,7 +1799,9 @@ def test_runner_uses_final_answer_tool_for_structured_output_agents():
         type=ConversationType.TASK,
     )
 
-    assert runner._resolve_output_type(agent, conversation).__name__ == "final_answer"
+    assert runner._resolve_output_type(agent, conversation).output.__name__ == (
+        "final_answer"
+    )
 
 
 def test_final_answer_tool_output_becomes_normal_assistant_message():

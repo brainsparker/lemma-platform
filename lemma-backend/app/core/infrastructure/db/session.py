@@ -42,6 +42,12 @@ def json_serial(obj):
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
+#: Every time this code writes is UTC. Pinned per connection so that a naive
+#: value cast to ``timestamp with time zone`` is read as UTC whatever the
+#: server's or role's default zone is, rather than as that zone.
+SESSION_ZONE = {"timezone": "UTC"}
+
+
 def _build_connect_args() -> dict:
     """Build asyncpg connect_args with server-side session settings.
 
@@ -52,7 +58,7 @@ def _build_connect_args() -> dict:
     ``AsyncAdapt_asyncpg_connection`` that has no sync ``execute()`` method.
     """
     connect_args: dict = {}
-    server_settings: dict[str, str] = {}
+    server_settings: dict[str, str] = dict(SESSION_ZONE)
     idle_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
     if idle_ms > 0:
         server_settings["idle_in_transaction_session_timeout"] = str(idle_ms)
@@ -116,7 +122,7 @@ def get_engine():
     global engine
     if engine is None:
         engine_kwargs = {}
-        connect_args = {}
+        connect_args: dict[str, object] = {"server_settings": dict(SESSION_ZONE)}
         if settings.environment == "testing" and not settings.db_pool_in_testing:
             engine_kwargs["poolclass"] = NullPool
         else:

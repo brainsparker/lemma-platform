@@ -25,6 +25,7 @@ from app.modules.agent_surfaces.domain.credentials import (
     ResendCredentials,
 )
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
@@ -94,13 +95,22 @@ class ResendPlatformService:
         Read off metadata rather than added to every signature between here and
         the notification service: ``agent_display_name`` already travels that
         way for the chat platforms, and both send paths already forward the
-        dict. A caller that knows neither name gets ``self._from_name`` back,
-        which is what the header said before any of this existed.
+        dict. ``email_sender_name`` is mail's own key and wins where it is set:
+        it names the pod when the pod's assistant is writing, and a chat bot
+        answering to the pod's name is not what that key is for. A caller that
+        knows neither gets ``self._from_name`` back, which is what the header
+        said before any of this existed. A present ``email_sender_name`` of
+        ``None`` is an answer -- the pod's name could not be found -- and the
+        chat name beside it is ``Lem``, which names no pod, so it does not stand
+        in.
         """
         data = metadata or {}
         return sender_display_name(
-            agent_name=data.get("agent_display_name"),
-            actor_display_name=data.get("actor_display_name"),
+            sender_name=(
+                data["email_sender_name"]
+                if "email_sender_name" in data
+                else data.get("agent_display_name")
+            ),
             product_name=self._from_name,
         )
 
@@ -174,7 +184,7 @@ class ResendPlatformService:
         if not email_id:
             raise AgentSurfaceValidationError("Resend receive requires an email id.")
         await assert_safe_api_base(self._api_base, platform="Resend")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with outbound_http(30.0) as client:
             response = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving/{email_id}",
                 headers={"Authorization": f"Bearer {self._api_key}"},
@@ -198,7 +208,7 @@ class ResendPlatformService:
         if after:
             params["after"] = after
         await assert_safe_api_base(self._api_base, platform="Resend")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with outbound_http(30.0) as client:
             response = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving",
                 headers={"Authorization": f"Bearer {self._api_key}"},
@@ -225,7 +235,7 @@ class ResendPlatformService:
             return None
 
         await assert_safe_api_base(self._api_base, platform="Resend")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with outbound_http(30.0) as client:
             described = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving/"
                 f"{email_id}/attachments/{attachment_id}",
@@ -366,7 +376,7 @@ class ResendPlatformService:
         idempotency_key = str(uuid4())
 
         async def post_email_once() -> dict[str, Any]:
-            async with httpx.AsyncClient(timeout=_SEND_TIMEOUT) as client:
+            async with outbound_http(_SEND_TIMEOUT) as client:
                 resp = await client.post(
                     f"{self._api_base.rstrip('/')}/emails",
                     json=payload,

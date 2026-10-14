@@ -16,16 +16,16 @@ claim time; a missing row is a full bucket.
 Both tables are new and empty, so nothing is locked beyond the creating
 transaction, and the previous release never reads them.
 
-Revision ID: 0053_work_runtime
-Revises: 0052_folder_visibility_index
+Revision ID: 0054_work_runtime
+Revises: 0053_folder_visibility_index
 """
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0053_work_runtime"
-down_revision = "0052_folder_visibility_index"
+revision = "0054_work_runtime"
+down_revision = "0053_folder_visibility_index"
 branch_labels = None
 depends_on = None
 

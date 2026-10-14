@@ -25,7 +25,7 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     WhatsAppSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms import common
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.delivery import note_partial_delivery
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.whatsapp import media
@@ -161,7 +161,7 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
                     },
                 )
                 await remember_sent((metadata or {}).get("notification_id"), message_id)
-            except PLATFORM_TRANSPORT_ERRORS:
+            except platform_transport_errors():
                 if index:
                     # The person already has the first part. The caller sees
                     # this as "not delivered" and there is no rung below plain

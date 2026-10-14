@@ -521,10 +521,13 @@ class ScheduleRunRepository:
 def _as_utc(value: datetime | None) -> datetime | None:
     """A target's finish time, aware.
 
-    A workflow run keeps its times in a column without a zone, so the time on
-    its terminal event is naive -- UTC wall time. Left naive, comparing it with
-    the recorded one raised, and storing it let the database read it in the
-    server's local zone.
+    Workflow run times are stored with their zone now (migration 0052), so a
+    terminal event published since carries an aware ``completed_at``. Events
+    published before it carried a naive one -- UTC wall time -- and those
+    outlive the deploy: a stream entry still pending in the consumer group, an
+    older replica publishing during the rollout. Left naive, comparing one
+    with the recorded time raised, and storing it let the database read it in
+    the server's local zone. So a naive time is still read as UTC here.
     """
     if value is None or value.tzinfo is not None:
         return value

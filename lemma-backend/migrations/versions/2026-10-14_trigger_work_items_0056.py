@@ -19,15 +19,15 @@ sweep would still have re-sent them, become reservations with a
 ``schedule.start_target`` item each. An old worker finishing one during the
 rolling deploy is harmless: the start claims the reservation once.
 
-Revision ID: 0055_trigger_work_items
-Revises: 0054_file_work_items
+Revision ID: 0056_trigger_work_items
+Revises: 0055_file_work_items
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0055_trigger_work_items"
-down_revision = "0054_file_work_items"
+revision = "0056_trigger_work_items"
+down_revision = "0055_file_work_items"
 branch_labels = None
 depends_on = None
 

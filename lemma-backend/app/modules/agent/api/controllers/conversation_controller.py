@@ -20,6 +20,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.server_metadata import client_metadata
 from app.modules.agent.services.runtime_availability import check_runtime_for_pod
+from app.modules.agent.services.runtime_resolution import RuntimeHolder
 from app.modules.agent.api.controllers.conversation_streaming import (
     load_authorized_agent_run,
     start_and_stream_run,
@@ -108,7 +109,11 @@ async def create_conversation(
 ) -> ConversationResponse:
     # Refused when saved, with the reason, rather than at the first turn.
     await check_runtime_for_pod(
-        service.uow, data.agent_runtime, pod_id=pod_id, user_id=user.id
+        service.uow,
+        data.agent_runtime,
+        pod_id=pod_id,
+        user_id=user.id,
+        saving_for=RuntimeHolder.CONVERSATION,
     )
     conversation = await service.create_conversation(
         pod_id=pod_id,
@@ -231,6 +236,7 @@ async def update_conversation(
             data.agent_runtime,
             pod_id=pod_id,
             user_id=user.id,
+            saving_for=RuntimeHolder.CONVERSATION,
         )
     # Null is not a state a conversation can be in: the field is optional so
     # omitting it means "leave it alone", and an explicit null means the same.

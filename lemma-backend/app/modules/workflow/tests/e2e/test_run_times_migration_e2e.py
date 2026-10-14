@@ -36,7 +36,7 @@ def _types(connection: psycopg.Connection) -> dict[str, str]:
         " WHERE table_name = 'workflow_flow_runs'"
         " AND column_name IN ('started_at', 'completed_at')"
     ).fetchall()
-    return {name: data_type for name, data_type in rows}
+    return {str(name): str(data_type) for name, data_type in rows}
 
 
 def _times(

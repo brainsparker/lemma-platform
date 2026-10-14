@@ -50,7 +50,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.group_repository imp
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
@@ -169,7 +169,7 @@ async def _say_hello(
         await telegram.send_message(
             credentials=adopted.credentials, event=parsed, message=adopted.hello
         )
-    except PLATFORM_TRANSPORT_ERRORS:
+    except platform_transport_errors():
         logger.info(
             "agent_surfaces.telegram_group_join.hello_failed.observed",
             surface_id=str(adopted.surface.id),

@@ -49,7 +49,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.delivery_limits import OWED_REPLY_ATTEMPTS
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.delivery import SendOutcome, track_sends
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.pending_envelope import (
@@ -77,12 +77,11 @@ _SENT_TTL_SECONDS = 2 * 24 * 60 * 60
 _SENDING = "sending"
 _SENT = "sent"
 
+
 #: What one attempt can fail with and still leave the reply owed: the platform
 #: family, and the database work that resolves where the reply goes.
-_ATTEMPT_ERRORS: tuple[type[BaseException], ...] = (
-    SQLAlchemyError,
-    *PLATFORM_TRANSPORT_ERRORS,
-)
+def _attempt_errors() -> tuple[type[BaseException], ...]:
+    return (SQLAlchemyError, *platform_transport_errors())
 
 
 def _claims() -> RedisJsonCache:
@@ -236,7 +235,7 @@ async def deliver_owed_reply(
                     message=owed.message,
                     attach_files_of=run,
                 )
-        except _ATTEMPT_ERRORS:
+        except _attempt_errors():
             logger.warning(
                 "agent_surfaces.owed_reply.attempt_failed.degraded",
                 conversation_id=str(owed.conversation_id),

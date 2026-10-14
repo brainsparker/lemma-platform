@@ -26,7 +26,7 @@ from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.rendering import (
     ThinkingStreamFilter,
 )
@@ -62,12 +62,12 @@ from app.modules.agent.contracts.run_failures import user_safe_failure_reason
 
 logger = get_logger(__name__)
 
+
 # What a platform call can raise that must not stop the answer being delivered
 # another way: the transport family, plus the database work around it.
-_DELIVERY_ERRORS: tuple[type[BaseException], ...] = (
-    SQLAlchemyError,
-    *PLATFORM_TRANSPORT_ERRORS,
-)
+def _delivery_errors() -> tuple[type[BaseException], ...]:
+    return (SQLAlchemyError, *platform_transport_errors())
+
 
 # Read from the capability registry once; a mapping so a test can shorten one.
 _TYPING_REFRESH_INTERVAL_SECONDS = {
@@ -308,7 +308,7 @@ class SurfaceAgentRunProgressObserver(
                     message=message,
                     already_streamed=bool(self._streamed_text),
                 )
-        except _DELIVERY_ERRORS:
+        except _delivery_errors():
             # Not debug: this is the step that turns a live stream into the
             # answer, and a timeout here used to escape `on_run_finished`
             # before `_deliver_final_answer` ran -- the stream was left open and
@@ -338,7 +338,7 @@ class SurfaceAgentRunProgressObserver(
                     conversation_id=conversation_id,
                     progress_handle=handle,
                 )
-        except _DELIVERY_ERRORS:
+        except _delivery_errors():
             # Clearing is cosmetic and the answer that follows it is not, so a
             # failure here must never be the reason the answer is not sent.
             logger.warning(
@@ -366,7 +366,7 @@ class SurfaceAgentRunProgressObserver(
                 pass
         try:
             finished = await self._finish_stream_with_answer(conversation)
-        except _DELIVERY_ERRORS:
+        except _delivery_errors():
             # The flush before the close is outside the guarded call above. Either
             # way the answer still has to go out, and that is the next line.
             logger.warning(

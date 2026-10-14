@@ -25,7 +25,7 @@ from app.modules.agent_surfaces.domain.decision_card import (
     CardRetirement,
     DecisionCardHandle,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.decision_cards import take_decision_cards
 from app.modules.agent_surfaces.services.display_resource_renderer import (
     build_callback_id,
@@ -61,7 +61,7 @@ async def _retire(
         await adapter.retire_decision_card(
             credentials=credentials, handle=handle, reason=reason
         )
-    except PLATFORM_TRANSPORT_ERRORS:
+    except platform_transport_errors():
         # The card keeps its buttons, and a tap on it is still answered
         # "already cancelled" -- worse than retiring it, not wrong.
         logger.warning(

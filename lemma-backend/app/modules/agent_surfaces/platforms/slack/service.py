@@ -10,13 +10,12 @@ from app.modules.agent_surfaces.domain.credentials import (
     SlackCredentials,
 )
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import httpx
 from app.modules.agent_surfaces.platforms.slack.reply_blocks import reply_blocks
-from slack_sdk.errors import SlackApiError
-from slack_sdk.web.async_client import AsyncWebClient
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
@@ -73,6 +72,9 @@ from app.modules.agent_surfaces.domain.decision_card import (
     DecisionCardHandle,
 )
 from app.core.log.log import get_logger
+
+if TYPE_CHECKING:
+    from slack_sdk.web.async_client import AsyncWebClient
 
 logger = get_logger(__name__)
 
@@ -453,7 +455,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                         loading_messages=[PROCESSING_LOADING_TEXT],
                     )
                     return
-                except SlackApiError as exc:
+                except slack_api_error() as exc:
                     error_code = str((exc.response or {}).get("error") or "")
                     if error_code in {
                         "missing_scope",
@@ -475,7 +477,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                 name="eyes",
                 timestamp=str(timestamp),
             )
-        except SlackApiError as exc:
+        except slack_api_error() as exc:
             error_code = str((exc.response or {}).get("error") or "")
             if error_code in {"already_reacted", "missing_scope", "not_reactable"}:
                 logger.debug(

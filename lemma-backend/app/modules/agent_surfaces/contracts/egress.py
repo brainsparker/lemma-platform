@@ -138,7 +138,7 @@ async def report_approved_action_failed(
     from sqlalchemy.exc import SQLAlchemyError
 
     from app.modules.agent_surfaces.composition import build_surface_egress
-    from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+    from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 
     try:
         async with uow_factory() as uow:
@@ -146,7 +146,7 @@ async def report_approved_action_failed(
                 conversation_id=conversation_id,
                 message=APPROVED_ACTION_FAILED_NOTICE,
             )
-    except (SQLAlchemyError, RedisError, *PLATFORM_TRANSPORT_ERRORS):
+    except (SQLAlchemyError, RedisError, *platform_transport_errors()):
         logger.warning(
             "agent_surfaces.egress.approval_failure_notice_failed.degraded",
             conversation_id=str(conversation_id),

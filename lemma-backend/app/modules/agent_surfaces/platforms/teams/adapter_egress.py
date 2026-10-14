@@ -38,7 +38,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.delivery import (
     RetryPolicy,
     note_partial_delivery,
@@ -167,7 +167,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                 ]
             try:
                 await self._post_activity(url, token=token, body=body)
-            except PLATFORM_TRANSPORT_ERRORS:
+            except platform_transport_errors():
                 if index:
                     note_partial_delivery()
                     logger.warning(

@@ -67,6 +67,14 @@ _MUST_STAY_LAZY = {
         "not imported directly by us at all: it arrives inside composio, which "
         "imports its default provider. If composio is lazy this is too"
     ),
+    "slack_sdk": (
+        "the Slack SDK, reached through the agent surface platforms -- "
+        "`platforms/common`'s transport-error family and every Slack module "
+        "that caught `SlackApiError`. Catch it with "
+        "`except slack_api_error():` (or `is_slack_api_error`) from "
+        "`platforms/slack/errors`, name the client under TYPE_CHECKING, and "
+        "import it inside the function that builds one"
+    ),
     "sqlglot": (
         "the SQL parser, reached through the connector registry's SQL executor "
         "and the datastore record service's query check. Import it inside the "

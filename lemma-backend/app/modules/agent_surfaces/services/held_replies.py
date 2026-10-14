@@ -33,7 +33,7 @@ from app.modules.agent_surfaces.caches import HELD_REPLY_CLAIMS, surface_caches
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
@@ -167,7 +167,7 @@ async def deliver_held_replies(
             await adapter.send_message(
                 credentials=credentials, event=event, message=reply.message
             )
-    except PLATFORM_TRANSPORT_ERRORS:
+    except platform_transport_errors():
         logger.warning(
             "agent_surfaces.held_replies.not_delivered.degraded",
             conversation_id=str(conversation_id),

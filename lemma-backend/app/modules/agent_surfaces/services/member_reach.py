@@ -39,7 +39,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_re
     SurfaceConversationLinkRepository,
 )
 from app.modules.agent_surfaces.domain.adapter_port import reply_window_reopener
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.held_replies import (
     hold_reply,
@@ -158,7 +158,7 @@ class MemberReach:
                         event=target.event,
                         template=template,
                     )
-            except PLATFORM_TRANSPORT_ERRORS:
+            except platform_transport_errors():
                 logger.warning(
                     "agent_surfaces.member_reach.reengage_not_sent.degraded",
                     surface_id=str(surface.id),

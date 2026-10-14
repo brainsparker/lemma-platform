@@ -8,6 +8,8 @@ message is worded or posted.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from app.modules.agent_surfaces.domain.reply_targets import (
     SlackReplyTarget,
     reply_target_as,
@@ -18,7 +20,7 @@ from app.modules.agent_surfaces.domain.credentials import SlackCredentials
 import mimetypes
 
 import httpx
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
@@ -31,6 +33,9 @@ from app.modules.agent_surfaces.platforms.slack.client import (
     slack_access_token,
     slack_customized_message_kwargs,
 )
+
+if TYPE_CHECKING:
+    from slack_sdk.errors import SlackApiError
 
 
 class SlackFilesMixin:
@@ -150,7 +155,7 @@ class SlackFilesMixin:
         )
         try:
             await client.files_completeUploadExternal(**completion_payload)
-        except SlackApiError as exc:
+        except slack_api_error() as exc:
             if not _slack_rejected_customized_identity(exc):
                 raise
             fallback_payload: dict[str, object] = {

@@ -17,7 +17,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
@@ -103,7 +103,7 @@ class WhatsAppInteractiveRenders:
                     to=sender_wa_id,
                     interactive=interactive,
                 )
-            except PLATFORM_TRANSPORT_ERRORS:
+            except platform_transport_errors():
                 if not index:
                     # Nothing went out: the caller's fallback sends every
                     # question as text, and none of them is a duplicate.

@@ -20,7 +20,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ResolvedSurfaceUser,
 )
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.identity_resolution_service import (
     SurfaceIdentityResolutionService,
 )
@@ -57,7 +57,7 @@ class SenderResolver:
                     credentials=credentials,
                     event=parsed,
                 )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             # Without the profile there is no email to match, so a member reads
             # as a stranger -- for this message only: the miss is not cached.
             logger.warning(

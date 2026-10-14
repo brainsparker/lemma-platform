@@ -299,7 +299,7 @@ async def test_a_message_for_one_person_on_an_email_thread_drops_the_copies():
             "reply_target": {
                 "recipient_email": "asha@acme.test",
                 "cc": ["tom@client.test"],
-            }
+            },
         }
     )
     link = _link(surface, event, conversation_id=conversation_id, kind="EMAIL")

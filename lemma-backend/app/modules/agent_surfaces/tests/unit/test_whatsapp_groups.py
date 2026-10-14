@@ -202,9 +202,7 @@ def test_a_group_reply_never_falls_back_to_the_senders_number():
 
 
 def test_a_private_reply_still_goes_to_the_person():
-    recipient = whatsapp_recipient(
-        WhatsAppReplyTarget(), fallback_wa_id="16505551234"
-    )
+    recipient = whatsapp_recipient(WhatsAppReplyTarget(), fallback_wa_id="16505551234")
 
     assert recipient is not None
     assert (recipient.to, recipient.recipient_type) == ("16505551234", "individual")

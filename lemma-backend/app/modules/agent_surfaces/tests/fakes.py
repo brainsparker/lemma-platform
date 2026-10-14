@@ -18,7 +18,9 @@ import httpx
 
 from app.modules.agent_surfaces.platforms.outbound_http import bind_outbound_client
 
-type PlatformHandler = Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
+type PlatformHandler = Callable[
+    [httpx.Request], httpx.Response | Awaitable[httpx.Response]
+]
 
 
 class PlatformHttp:
@@ -42,7 +44,9 @@ class PlatformHttp:
     @staticmethod
     def form_of(request: httpx.Request) -> dict[str, FormPart]:
         """A multipart request body, by field name."""
-        head = b"Content-Type: " + request.headers["content-type"].encode() + b"\r\n\r\n"
+        head = (
+            b"Content-Type: " + request.headers["content-type"].encode() + b"\r\n\r\n"
+        )
         message = BytesParser(policy=HTTP).parsebytes(head + request.content)
         parts: dict[str, FormPart] = {}
         for part in message.iter_parts():
@@ -79,9 +83,7 @@ def platform_http(handler: PlatformHandler) -> Iterator[PlatformHttp]:
             return answer
         return await answer
 
-    with bind_outbound_client(
-        httpx.AsyncClient(transport=httpx.MockTransport(record))
-    ):
+    with bind_outbound_client(httpx.AsyncClient(transport=httpx.MockTransport(record))):
         yield recorded
 
 

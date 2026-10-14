@@ -155,6 +155,34 @@ async def report_approved_action_failed(
         return False
 
 
+async def retire_cards_answered_in_lemma(
+    *,
+    conversation_id: UUID,
+    tool_call_id: str,
+    uow_factory: UnitOfWorkFactory | None = None,
+) -> None:
+    """Take the buttons off the platform cards of a pause answered in Lemma.
+
+    For the web app's decision endpoint, once the decision has committed: a
+    tap and a typed reply retire their own cards, and an answer given in the
+    web app reaches neither path. The cards then read "Answered." Nothing for
+    a conversation that is not on a platform. Never raises.
+    """
+    from app.core.infrastructure.db.session import get_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent_surfaces.composition import build_surface_egress
+    from app.modules.agent_surfaces.services.card_retirement import (
+        retire_cards_answered_in_lemma as retire,
+    )
+
+    await retire(
+        uow_factory=uow_factory or SessionUnitOfWorkFactory(get_session_maker()),
+        egress_factory=build_surface_egress,
+        conversation_id=conversation_id,
+        tool_call_ids=[tool_call_id],
+    )
+
+
 def build_progress_observer(
     *, uow_factory: UnitOfWorkFactory
 ) -> SurfaceAgentRunProgressObserver:
@@ -191,4 +219,5 @@ __all__ = [
     "hold_display_for_one_reply",
     "parse_surface_event_metadata",
     "report_approved_action_failed",
+    "retire_cards_answered_in_lemma",
 ]

@@ -161,9 +161,7 @@ def test_the_listing_publishes_typed_fields_rather_than_the_metadata_bag() -> No
     """Internal bookkeeping stays in; the two facts clients read come out typed."""
     profile = _profile(
         OpenAICompatibleRuntimeConfig(base_url="https://api.example.com/v1")
-    ).with_changes(
-        metadata={"source": "openai_compatible", "catalog_discovered": True}
-    )
+    ).with_changes(metadata={"source": "openai_compatible", "catalog_discovered": True})
     marked = with_default_mark(profile, model_name=None)
 
     unmarked_view = AgentRuntimeProfileResponse.model_validate(profile.public_dict())

@@ -216,7 +216,9 @@ async def _forget(
             current = await _held(uow, conversation_id, for_update=True)
             if current is None:
                 return
-            left = [reply for reply in current.replies if reply not in delivered.replies]
+            left = [
+                reply for reply in current.replies if reply not in delivered.replies
+            ]
             if not left:
                 await metadata_records.forget_conversation_metadata_record(
                     uow, conversation_id, HELD_REPLIES_KEY, matching=current.identity()

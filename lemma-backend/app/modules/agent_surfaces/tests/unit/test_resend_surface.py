@@ -990,6 +990,7 @@ async def test_an_attachment_is_downloaded_through_its_signed_url():
             )
         )
     )
+
     def resend(request: httpx.Request) -> httpx.Response:
         if "/attachments/" in str(request.url):
             return httpx.Response(

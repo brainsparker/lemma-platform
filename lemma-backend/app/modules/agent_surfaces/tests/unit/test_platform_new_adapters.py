@@ -387,7 +387,9 @@ async def test_whatsapp_display_phone_number_lookup_uses_graph_phone_id():
     (requested,) = http.requests
     assert number == "+1 555 0100"
     assert requested.method == "GET"
-    assert requested.url.copy_with(query=None) == "https://graph.example.test/v21.0/PN42"
+    assert (
+        requested.url.copy_with(query=None) == "https://graph.example.test/v21.0/PN42"
+    )
     assert dict(requested.url.params) == {"fields": "display_phone_number"}
     assert requested.headers["Authorization"] == "Bearer wa-token"
 
@@ -570,7 +572,10 @@ async def test_telegram_send_display_resource_uses_inline_keyboard():
 
     with platform_http(answer_json({"ok": True, "result": {"message_id": 1}})) as http:
         await telegram_service_module.TelegramPlatformService(
-            {"bot_token": "telegram-token", "api_base_url": "https://telegram.example/bot"}
+            {
+                "bot_token": "telegram-token",
+                "api_base_url": "https://telegram.example/bot",
+            }
         )._render_resource(
             event,
             SurfaceDisplayRenderPlan(

@@ -128,7 +128,9 @@ async def _teams_ack(
 
 async def test_teams_edits_the_card_activity_so_the_buttons_retire() -> None:
     """An Adaptive Card's actions stay tappable forever unless the activity is replaced."""
-    calls = await _teams_ack(_teams_interaction(reply_to_id="act-7"), clear_actions=True)
+    calls = await _teams_ack(
+        _teams_interaction(reply_to_id="act-7"), clear_actions=True
+    )
     assert calls == [
         (
             "PUT",

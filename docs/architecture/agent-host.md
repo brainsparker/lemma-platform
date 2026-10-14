@@ -833,6 +833,25 @@ the worker loop had to do sooner than 25 seconds needed its own arm in the
 request. The link's reader, writer and worker are separate tasks joined by
 channels, so work happens when it is due.
 
+### Starting several runs at once
+
+Every run spawns its own adapter process. Conversations started together would
+otherwise cold-start that many copies of one agent at the same moment, and the
+burst itself made them miss their setup deadlines. So a run waits for a
+start-up slot for its agent before its process is spawned and gives it back
+once its session is configured, before the prompt goes out
+(`acp/start_gate.rs`). Codex gets one slot, because concurrent Codex sessions
+opening side by side time out inside Codex; every other agent gets a few. A
+queued run stays `ACCEPTED`, Stop reaches it in the queue, and the setup
+deadlines (`SETUP_REQUEST_TIMEOUT`, per request) start counting only once it has
+a slot. The run's own deadline bounds the whole wait.
+
+A start that fails before the prompt with a timeout — the host's setup deadline
+or a timeout the agent reports itself — is tried once more in a fresh process.
+Sign-in and configuration failures are not retried. A start that times out
+twice ends the run as `FAILED` with a message saying the agent did not start in
+time, not that it is broken.
+
 ### Retired HTTP routes
 
 Desktop 0.8.0 and earlier run a protocol-2 host, which speaks HTTP and never

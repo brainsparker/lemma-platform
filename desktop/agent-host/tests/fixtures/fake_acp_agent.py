@@ -6,6 +6,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 
 # ACP uses UTF-8 even when Windows gives redirected Python pipes a legacy codec.
 sys.stdin.reconfigure(encoding="utf-8")
@@ -16,7 +17,49 @@ log_path = pathlib.Path(sys.argv[1])
 # way a real provider's does when its rollout file has been pruned or its
 # session deleted from disk -- the case Lemma cannot predict and withholds the
 # conversation's history for.
+#
+# The other modes are about starting, and share state between every copy
+# started against one log directory, the way copies of a real agent share its
+# home directory:
+#
+# - "contended": a second copy opening a session while another is doing so
+#   fails with a timeout, as Codex does ("workspace routing discovery timed
+#   out") when several start together;
+# - "times-out-once": the first `session/new` among all copies times out, and
+#   every later one succeeds;
+# - "misconfigured": `session/new` always fails, for a reason no retry fixes.
 MODE = sys.argv[2] if len(sys.argv) > 2 else "remembers"
+START_LOCK = log_path.parent / "starting.lock"
+TIMED_OUT_ONCE = log_path.parent / "timed-out-once"
+
+
+def timed_out(details):
+    return {"code": -32603, "message": "Internal error", "data": {"details": details}}
+
+
+def start_failure():
+    """The error this copy's `session/new` fails with, or None to answer it."""
+    if MODE == "misconfigured":
+        return {
+            "code": -32602,
+            "message": "Invalid params",
+            "data": 'unknown model provider "nope" in config.toml',
+        }
+    if MODE == "times-out-once":
+        try:
+            os.close(os.open(TIMED_OUT_ONCE, os.O_CREAT | os.O_EXCL))
+        except FileExistsError:
+            return None
+        return timed_out("workspace routing discovery timed out")
+    if MODE == "contended":
+        try:
+            os.close(os.open(START_LOCK, os.O_CREAT | os.O_EXCL))
+        except FileExistsError:
+            return timed_out("workspace routing discovery timed out")
+        # Long enough that an ungated burst reliably overlaps it.
+        time.sleep(0.5)
+        os.remove(START_LOCK)
+    return None
 
 
 def emit(message):
@@ -38,6 +81,7 @@ for raw_line in sys.stdin:
     record(message)
     method = message.get("method")
     request_id = message.get("id")
+    failure = start_failure() if method == "session/new" else None
     if method == "initialize":
         # What the host set up for this agent beyond ACP, so a test can see
         # the switches a real adapter would read (see `acp::session_options`).
@@ -90,6 +134,8 @@ for raw_line in sys.stdin:
                 "agentInfo": {"name": "fake-acp", "version": "1.0.0"},
             },
         )
+    elif failure is not None:
+        emit({"jsonrpc": "2.0", "id": request_id, "error": failure})
     elif method == "session/load" and MODE == "forget-session":
         emit(
             {

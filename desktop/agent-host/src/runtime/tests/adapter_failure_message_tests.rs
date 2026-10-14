@@ -296,3 +296,38 @@ fn the_structured_data_is_cut_from_the_message() {
         "plain {not json"
     );
 }
+
+/// A start that ran out of time says so, rather than calling a working agent
+/// broken and sending the person to a terminal to debug it.
+#[test]
+fn a_start_that_timed_out_is_reported_as_slow_rather_than_broken() {
+    for raw in [
+        r#"Internal error: "the agent did not answer session/new within 30s""#,
+        r#"Internal error: {"details": "workspace routing discovery timed out"}"#,
+    ] {
+        let framed = super::start_timeout_message("Codex", raw).expect("a start timeout");
+        assert!(
+            framed.starts_with("Codex did not start in time on this computer"),
+            "{framed}"
+        );
+        assert!(framed.contains("send the message again"), "{framed}");
+        assert!(!framed.contains("encountered an error"), "{framed}");
+    }
+}
+
+/// Anything that is not a timeout keeps the wording that fits it.
+#[test]
+fn only_a_timeout_is_reported_as_a_slow_start() {
+    for raw in [
+        r#"Internal error: OpenCode service failure: {"service": "session"}"#,
+        "Process exited with exit status: 1",
+        "Failed to authenticate: OAuth session expired",
+        r#"Internal error: {"details": "workspace routing discovery unauthorized (401)"}"#,
+        r#"Invalid params: "unknown model provider \"nope\" in config.toml""#,
+    ] {
+        assert!(
+            super::start_timeout_message("Codex", raw).is_none(),
+            "{raw:?}"
+        );
+    }
+}

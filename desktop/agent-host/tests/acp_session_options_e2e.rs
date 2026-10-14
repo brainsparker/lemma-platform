@@ -172,10 +172,16 @@ async fn claude_code_gets_lemmas_instructions_and_settings_in_the_sessions_meta(
         false,
         mcp,
     );
-    AcpDriver.run(first.clone(), Arc::new(Quiet)).await.unwrap();
+    AcpDriver::default()
+        .run(first.clone(), Arc::new(Quiet))
+        .await
+        .unwrap();
     let mut resumed = first;
     resumed.run_spec.resume_session_id = Some("fake-session".into());
-    AcpDriver.run(resumed, Arc::new(Quiet)).await.unwrap();
+    AcpDriver::default()
+        .run(resumed, Arc::new(Quiet))
+        .await
+        .unwrap();
 
     let traffic = read_traffic(&log);
     let opened = sessions(&traffic);
@@ -217,7 +223,10 @@ async fn claude_code_with_its_own_settings_keeps_them() {
         true,
         Value::Null,
     );
-    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+    AcpDriver::default()
+        .run(run, Arc::new(Quiet))
+        .await
+        .unwrap();
 
     let traffic = read_traffic(&log);
     let options = &sessions(&traffic)[0]["params"]["_meta"]["claudeCode"]["options"];
@@ -246,7 +255,10 @@ async fn codex_keeps_the_persons_setup_and_the_pinned_config() {
         false,
         json!({ "tool_names": ["lemma_web_search"] }),
     );
-    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+    AcpDriver::default()
+        .run(run, Arc::new(Quiet))
+        .await
+        .unwrap();
 
     let traffic = read_traffic(&log);
     let config: Value = serde_json::from_str(
@@ -281,7 +293,10 @@ async fn opencode_keeps_the_persons_own_setup_either_way() {
             own,
             Value::Null,
         );
-        AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+        AcpDriver::default()
+            .run(run, Arc::new(Quiet))
+            .await
+            .unwrap();
         let traffic = read_traffic(&log);
         let environment = recorded_environment(&traffic);
         assert!(
@@ -377,7 +392,10 @@ async fn lemmas_cli_goes_first_on_the_agents_path() {
     let clis = clis();
     let log = clis.directory.path().join("cursor.jsonl");
     let run = run_choosing("cursor", &log, &clis, true, &clis.bundled);
-    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+    AcpDriver::default()
+        .run(run, Arc::new(Quiet))
+        .await
+        .unwrap();
 
     assert_eq!(first_on_path(&read_traffic(&log)), clis.named.join("bin"));
 }
@@ -391,7 +409,10 @@ async fn claude_code_may_run_lemmas_cli_without_asking() {
     let clis = clis();
     let log = clis.directory.path().join("claude.jsonl");
     let run = run_choosing("claude-code", &log, &clis, true, &clis.bundled);
-    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+    AcpDriver::default()
+        .run(run, Arc::new(Quiet))
+        .await
+        .unwrap();
 
     let traffic = read_traffic(&log);
     let binary = clis.named.join("bin/lemma");
@@ -411,7 +432,10 @@ async fn a_hosted_run_may_run_the_cli_bundled_with_the_app() {
     let clis = clis();
     let log = clis.directory.path().join("claude-hosted.jsonl");
     let run = run_choosing("claude-code", &log, &clis, false, &clis.bundled);
-    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+    AcpDriver::default()
+        .run(run, Arc::new(Quiet))
+        .await
+        .unwrap();
 
     let traffic = read_traffic(&log);
     let binary = clis.bundled.join("bin/lemma");
@@ -435,7 +459,10 @@ async fn a_hosted_run_without_a_bundled_cli_is_allowed_none() {
         .join("Other.app/Contents/Resources/lemma-cli");
     let run = run_choosing("claude-code", &log, &clis, false, &missing);
     assert!(run.lemma_cli_bin.is_none());
-    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+    AcpDriver::default()
+        .run(run, Arc::new(Quiet))
+        .await
+        .unwrap();
 
     let traffic = read_traffic(&log);
     assert_eq!(allowed_tools(&traffic), Value::Null);
@@ -543,7 +570,10 @@ async fn each_agent_keeps_lemmas_server_sign_in_and_instructions() {
             "lemma",
             PathBuf::from("lemma-agent-host"),
         )));
-        AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+        AcpDriver::default()
+            .run(run, Arc::new(Quiet))
+            .await
+            .unwrap();
 
         let traffic = read_traffic(&log);
         let environment = recorded_environment(&traffic);

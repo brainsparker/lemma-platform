@@ -122,7 +122,7 @@ impl HostRuntime {
             paths,
             journal,
             manifest,
-            driver: Arc::new(AcpDriver),
+            driver: Arc::new(AcpDriver::default()),
             mcp_bridge_executable: std::env::current_exe()?,
         })
     }

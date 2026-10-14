@@ -209,6 +209,30 @@ pub(crate) fn adapter_failure_message(harness: &str, error: &str) -> Option<Stri
     ))
 }
 
+/// Say that an agent did not start in time, rather than that it is broken.
+///
+/// A start-up that ran out of time -- the host's own setup deadline, or a
+/// timeout the agent reported while opening its session -- is what a busy
+/// computer, or several conversations started at once, produce. The driver has
+/// already tried it a second time. Framing it as "encountered an error, check
+/// that it runs in a terminal" sent people to debug an agent that works,
+/// when sending the message again is what fixes it.
+///
+/// Only for a run that failed before its prompt went out; nothing was asked of
+/// the agent, so trying again cannot duplicate anything.
+pub(crate) fn start_timeout_message(harness: &str, error: &str) -> Option<String> {
+    if !crate::acp::is_transient_start_failure(error) {
+        return None;
+    }
+    Some(format!(
+        "{harness} did not start in time on this computer, even on a second try. \
+         This is usually because the computer is busy or several conversations \
+         started at once; send the message again in a moment. \
+         Its own error was: {}",
+        error.trim()
+    ))
+}
+
 impl TargetWorker {
     /// Bring the published harnesses up to date, then wait if there are none.
     ///

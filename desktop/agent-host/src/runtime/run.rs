@@ -6,8 +6,8 @@ use super::{
     OwnedSemaphorePermit, OwnedTask, PERMISSION_DECISION_TIMEOUT, ResolvedAdapter, RunSpec,
     RunState, SteerInbox, StreamSegments, TargetWorker, Utc, Value, adapter_failure_message,
     authentication_hint, host_directory_instructions, prepare_run_directory,
-    publish_generated_images, redact_error, terminal_failure, terminal_failure_detail,
-    usage_limit_message, watch, without_error_data,
+    publish_generated_images, redact_error, start_timeout_message, terminal_failure,
+    terminal_failure_detail, usage_limit_message, watch, without_error_data,
 };
 
 impl TargetWorker {
@@ -239,8 +239,18 @@ impl TargetWorker {
                         // broken to a user who simply stopped it.
                         Some("run cancelled by Lemma; the agent did not stop on request".to_owned())
                     } else {
+                        // Never reached its prompt: a timeout here is the
+                        // machine being slow to start the agent, not a fault.
+                        let never_prompted = run.checkpoint == Checkpoint::Accepted;
                         authentication_hint(&adapter_name, &raw)
                             .or_else(|| usage_limit_message(&adapter_name, &redact_error(&raw)))
+                            .or_else(|| {
+                                never_prompted
+                                    .then(|| {
+                                        start_timeout_message(&adapter_name, &redact_error(&raw))
+                                    })
+                                    .flatten()
+                            })
                             .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)))
                     };
                     // Rewriting an internal error does not mean the text it

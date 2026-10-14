@@ -494,8 +494,11 @@ tells the agent to use Lemma's:
     as the Desktop release is.
   - *Trust.* The manifest URL is compiled into the host:
     `https://github.com/lemma-work/lemma-platform/releases/download/v<host
-    version>/lemma-cli-<platform>.json` for a release build (another channel
-    sets `LEMMA_AGENT_HOST_CLI_MANIFEST_URL` at compile time). Nothing a
+    version>/lemma-cli-<platform>.json` for a release build. The nightly
+    (`share-desktop-dmg` in `release-local-images.yml`) sets
+    `LEMMA_AGENT_HOST_CLI_MANIFEST_URL` at compile time to its own
+    `desktop-nightly-*` prerelease and publishes the archive there, versioned
+    as the runtime version, which is the host's `CARGO_PKG_VERSION`. Nothing a
     paired server sends changes it. The host refuses a manifest for another
     version or platform and an archive outside the manifest's own release
     folder, fetches with the system `curl` (`-q`, so no `~/.curlrc`;

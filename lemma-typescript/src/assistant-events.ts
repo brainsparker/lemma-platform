@@ -119,16 +119,27 @@ function extractStatus(payload: unknown): string | undefined {
   return normalizeStatus(payload);
 }
 
+/**
+ * A notice off a status frame the lifecycle reader did not recognise.
+ *
+ * The backend sends `{status: "config_update", notice: "<kind>", detail:
+ * "<sentence>", option?}`: `status` names the frame, `notice` the kind, so
+ * the kind is read from `notice` first and `status` is only the fallback for
+ * a frame that carries no `notice`. Older backends nested the host's own
+ * `{status, detail}` inside `detail`; that shape is still read, so a
+ * conversation reopened against one does not drop its sentence.
+ */
 function extractNotice(
   payload: unknown,
 ): { notice: string; noticeKind?: string } | undefined {
   if (!isRecord(payload)) return undefined;
-  const detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
+  const nested = isRecord(payload.detail) ? payload.detail : undefined;
+  const sentence = nested ? nested.detail : payload.detail;
+  const detail = typeof sentence === "string" ? sentence.trim() : "";
   if (!detail) return undefined;
-  const kind = typeof payload.status === "string"
-    ? payload.status.trim().toLowerCase()
-    : undefined;
-  return kind ? { notice: detail, noticeKind: kind } : { notice: detail };
+  const kind = [payload.notice, nested?.status, payload.status]
+    .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return kind ? { notice: detail, noticeKind: kind.trim().toLowerCase() } : { notice: detail };
 }
 
 function extractTitle(payload: unknown): string | undefined {

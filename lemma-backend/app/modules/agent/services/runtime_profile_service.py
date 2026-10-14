@@ -340,6 +340,7 @@ class AgentRuntimeProfileService:
                 if model is not None
                 else unselected_capabilities(profile, harness_sees=harness_sees)
             ),
+            selection_overrides=dict(runtime.config_selections or {}),
         )
 
     async def _harness_reads_images(self, profile: AgentRuntimeProfile) -> bool:

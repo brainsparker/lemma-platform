@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from app.modules.agent.domain.agent_host import AgentHostRunState
+from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -242,6 +242,42 @@ def status_event(
     return AgentEvent(
         type=AgentEventType.STATUS,
         data={"status": status, "detail": payload, **metadata},
+        agent_run_id=agent_run_id,
+        sequence=sequence,
+    )
+
+
+def config_update_event(
+    *,
+    agent_run_id: UUID,
+    payload: JsonObject,
+    metadata: JsonObject,
+    sequence: int,
+) -> AgentEvent:
+    """A host's ``config_update`` as a flat notice a client can show as is.
+
+    ``status`` stays ``config_update`` so a reader that switches on it is
+    unchanged; what the host said happened -- ``model_unavailable``,
+    ``selection_unavailable``, ``session_lost``, or ``config_options`` for a
+    plain option change -- is ``notice``, and ``detail`` is always the
+    sentence written for the person, or empty. It used to be the host's whole
+    payload under ``detail``, an object with its own ``status`` and
+    ``detail``, which the SDK reads as a string and so dropped every notice.
+    """
+    notice = payload.get("status") or payload.get("kind")
+    detail = payload.get("detail")
+    option = payload.get("option")
+    data: JsonObject = {
+        **metadata,
+        "status": AgentHostEventType.CONFIG_UPDATE.value,
+        "notice": notice.strip() if isinstance(notice, str) else None,
+        "detail": detail.strip() if isinstance(detail, str) else "",
+    }
+    if isinstance(option, str) and option.strip():
+        data["option"] = option.strip()
+    return AgentEvent(
+        type=AgentEventType.STATUS,
+        data=data,
         agent_run_id=agent_run_id,
         sequence=sequence,
     )

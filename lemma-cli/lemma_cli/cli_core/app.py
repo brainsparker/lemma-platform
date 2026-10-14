@@ -6,7 +6,7 @@ from pathlib import Path
 import typer
 
 from ..cli_app.enums import SURFACE_PLATFORM_HELP
-from .context import selected_conversation, selected_org, selected_pod
+from .context import chat_conversation, selected_org, selected_pod
 from .io import emit
 from .lazy import LazyEntry, LazyRootGroup
 from .project_env import load_project_env
@@ -553,8 +553,10 @@ def chat(
     from .commands import conversations
 
     state = state_from_ctx(ctx)
-    selected = selected_conversation(state, conversation, required=False)
     parsed_agent, parsed_message = _parse_chat_args(args or [], agent, message)
+    # Not selected_conversation: that falls back to LEMMA_CONVERSATION_ID, which
+    # inside an agent sandbox is the caller's own conversation.
+    selected = chat_conversation(state, conversation, agent=parsed_agent)
     if parsed_message is None:
         conversations.interactive_chat(
             ctx,

@@ -450,6 +450,75 @@ async fn a_hosted_run_without_a_bundled_cli_is_allowed_none() {
     );
 }
 
+/// Serves one CLI archive (a gzipped tar of `bin/lemma`) and its manifest, as
+/// a GitHub release does, and returns the manifest's URL.
+#[cfg(unix)]
+async fn serve_cli_release(directory: &Path) -> String {
+    use axum::{Router, routing::get};
+    use sha2::Digest as _;
+
+    let tree = cli_folder(&directory.join("release-tree"));
+    let packed = directory.join("lemma-cli.tar.gz");
+    let mut tar = std::process::Command::new("tar");
+    tar.arg("-czf").arg(&packed).arg("-C").arg(&tree).arg("bin");
+    assert!(tar.status().unwrap().success());
+    let archive = std::fs::read(&packed).unwrap();
+    std::fs::remove_file(&packed).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let manifest = json!({
+        "version": "9.8.7",
+        "platform": "aarch64-apple-darwin",
+        "url": format!("http://{address}/v/lemma-cli.tar.gz"),
+        "sha256": hex::encode(sha2::Sha256::digest(&archive)),
+        "size": archive.len(),
+    })
+    .to_string();
+    let app = Router::new()
+        .route("/v/lemma-cli.json", get(move || async move { manifest }))
+        .route("/v/lemma-cli.tar.gz", get(move || async move { archive }));
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{address}/v/lemma-cli.json")
+}
+
+/// An app with no CLI in it, on a hosted pairing: the host downloads its own
+/// release's CLI, and the run's agent may run exactly that binary.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hosted_run_without_a_bundled_cli_may_run_the_downloaded_one() {
+    use lemma_agent_host::lemma_cli::download::Downloader;
+
+    let clis = clis();
+    let data = clis.directory.path().join("agent-host-data");
+    let manifest = Some(serve_cli_release(clis.directory.path()).await);
+    let fetcher = Downloader::for_release(&data, manifest, "9.8.7", "aarch64-apple-darwin");
+    let downloaded = Arc::new(fetcher)
+        .ready_within(Duration::from_secs(60))
+        .await;
+    let downloaded = std::fs::canonicalize(downloaded.expect("the CLI downloads")).unwrap();
+
+    let log = clis.directory.path().join("claude-downloaded.jsonl");
+    let missing = clis
+        .directory
+        .path()
+        .join("Other.app/Contents/Resources/lemma-cli");
+    let mut run = run_choosing("claude-code", &log, &clis, false, &missing);
+    // As the runtime resolves it: bundled first, then downloaded.
+    let candidates = [missing, downloaded.clone()];
+    let named = run.run_spec.mcp["lemma_cli"].as_str();
+    run.lemma_cli_bin =
+        lemma_agent_host::lemma_cli::cli_root(false, named, &candidates, &clis.home)
+            .map(|root| root.join("bin"));
+    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+
+    let traffic = read_traffic(&log);
+    let binary = downloaded.join("bin/lemma");
+    assert!(binary.starts_with(std::fs::canonicalize(&data).unwrap()));
+    let rules = json!([format!("Bash({}:*)", binary.display()), "Bash(lemma:*)"]);
+    assert_eq!(allowed_tools(&traffic), rules);
+    assert_eq!(first_on_path(&traffic).join("lemma"), binary);
+}
+
 /// What each agent's run is given when the person has not chosen their own
 /// setup: Lemma's MCP server, Lemma's sign-in and Lemma's instructions. Codex
 /// and `OpenCode` stay in the person's own config folders, as they are.

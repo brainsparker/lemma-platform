@@ -140,7 +140,8 @@ impl TargetWorker {
             let own_settings = crate::config::HostConfig::load_or_create(&paths)
                 .is_ok_and(|config| config.own_settings.contains(&adapter.spec.key));
             // Whose pairing this is decides whose word on the CLI is taken.
-            let lemma_cli_bin = crate::lemma_cli::cli_bin_for_run(local_pairing, &spec.mcp);
+            let lemma_cli_bin =
+                crate::lemma_cli::cli_bin_for_run(local_pairing, &spec.mcp, &paths.root).await;
             let request = AcpRunRequest {
                 adapter,
                 run_spec: spec,

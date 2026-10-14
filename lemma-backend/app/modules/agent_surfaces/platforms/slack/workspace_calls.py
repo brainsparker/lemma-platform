@@ -193,6 +193,22 @@ async def open_dm(credentials: Credentials, user_id: str) -> str | None:
     )
 
 
+async def channel_member_ids(
+    credentials: Credentials, channel: str, *, limit: int
+) -> list[str]:
+    """Who is in the channel, by Slack id, up to ``limit``. Empty when Slack won't say."""
+    try:
+        client = await build_slack_client(credentials)
+        response = await client.conversations_members(channel=channel, limit=limit)
+    except SlackApiError:
+        return []
+    data = response.data if isinstance(response.data, dict) else {}
+    members = data.get("members")
+    return (
+        [str(member) for member in members[:limit]] if isinstance(members, list) else []
+    )
+
+
 async def user_profile(credentials: Credentials, user_id: str) -> dict[str, object]:
     """Slack's user record (``users.info``), or nothing when it won't say."""
     try:

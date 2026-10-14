@@ -32,6 +32,7 @@ from app.modules.datastore.contracts.changes import (
     SubscriberSpec,
     register_durable_subscriber,
 )
+from app.modules.datastore.contracts.changes import WriteIntent as LogIntent
 from app.modules.pod.contracts.trigger_settings import pod_bulk_writes_default
 from app.modules.schedule.repositories.change_subscription import PREFIX
 from app.modules.schedule.domain.schedule import (
@@ -46,6 +47,7 @@ from app.modules.schedule.services.trigger_delivery import (
     TriggerChange,
     WriteIntent,
     deliver_page,
+    write_mode,
 )
 
 logger = get_logger(__name__)
@@ -78,14 +80,28 @@ class ScheduleChangeSubscriber:
         config = schedule.datastore_config
         assert config is not None
         operations = config.operations or list(DatastoreOperation)
-        modes = {config.bulk_writes, config.import_writes}
+        pod_default = None
         if config.bulk_writes is None:
-            pod_default = await pod_bulk_writes_default(uow.session, pod_id)
-            modes.add(TriggerWriteMode(pod_default) if pod_default else None)
+            setting = await pod_bulk_writes_default(uow.session, pod_id)
+            pod_default = TriggerWriteMode(setting) if setting else None
+        modes = {
+            intent: write_mode(config, intent, pod_bulk_default=pod_default)
+            for intent in WriteIntent
+        }
         return SubscriberSpec(
             table_name=config.table_name,
             ops=frozenset(_WATCHED[operation] for operation in operations),
-            delay=BATCH_WINDOW if TriggerWriteMode.BATCH in modes else timedelta(0),
+            delay=(
+                BATCH_WINDOW
+                if TriggerWriteMode.BATCH in modes.values()
+                else timedelta(0)
+            ),
+            # A skipped intent needs no rows: its changes only become a count.
+            snapshot_intents=frozenset(
+                LogIntent(intent.value)
+                for intent, mode in modes.items()
+                if mode is not TriggerWriteMode.SKIP
+            ),
         )
 
     async def deliver(

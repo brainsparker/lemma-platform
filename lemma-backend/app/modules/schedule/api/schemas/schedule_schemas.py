@@ -1,6 +1,7 @@
 """Schedule API schemas."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
@@ -295,6 +296,39 @@ class ScheduleRunResponse(BaseModel):
 class ScheduleRunListResponse(BaseModel):
     items: list[ScheduleRunResponse]
     limit: int
+
+
+class TriggerSkipReason(StrEnum):
+    BULK_WRITE = "bulk_write"
+    IMPORT_WRITE = "import_write"
+    FIRE_CAP = "fire_cap"
+
+
+class TriggerSkipResponse(BaseModel):
+    """Changes or fires the trigger let pass without firing, aggregated.
+
+    One row stands for every change of one delivered page skipped for one
+    reason: a bulk write of thousands of rows is a handful of rows here.
+    """
+
+    id: UUID
+    reason: TriggerSkipReason = Field(
+        description=(
+            "`bulk_write` / `import_write`: the trigger's write mode for that "
+            "intent is `skip`. `fire_cap`: the trigger reached its daily fire "
+            "ceiling and paused."
+        )
+    )
+    first: str = Field(description="Position of the first skipped change or fire.")
+    last: str = Field(description="Position of the last skipped change or fire.")
+    count: int = Field(description="How many changes or fires this row stands for.")
+    at: datetime
+
+
+class TriggerSkipListResponse(BaseModel):
+    items: list[TriggerSkipResponse]
+    limit: int
+    next_page_token: str | None = None
 
 
 class MessageResponse(BaseModel):

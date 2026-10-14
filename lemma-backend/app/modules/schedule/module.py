@@ -64,6 +64,7 @@ def _event_routers():
 def _register_work() -> None:
     # Every process: a pod deletion (API) writes this through `PodDeleted`.
     import app.modules.schedule.events.pod_deleted_work  # noqa: F401
+    import app.modules.schedule.events.trigger_defaults_work  # noqa: F401
 
     # Every process: the API arms TIME fires and fires webhooks inline, the
     # worker runs them.

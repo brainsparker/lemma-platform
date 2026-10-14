@@ -14,12 +14,15 @@ from collections.abc import Collection
 from typing import Protocol
 from uuid import UUID
 
+from sqlalchemy import select
+
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.datastore.contracts.changes import (
     request_subscriber_sync,
     subscriber_key,
 )
 from app.modules.schedule.domain.schedule import ScheduleType
+from app.modules.schedule.infrastructure.models.schedule import Schedule
 
 PREFIX = "schedule"
 
@@ -52,4 +55,36 @@ async def sync_trigger_subscription(
     await request_subscriber_sync(uow, row.pod_id, subscriber_key(PREFIX, schedule_id))
 
 
-__all__ = ["PREFIX", "sync_trigger_subscription"]
+_RESYNC_PAGE = 500
+
+
+async def resync_pod_triggers(uow: SqlAlchemyUnitOfWork, pod_id: UUID) -> int:
+    """Ask a sync for every active DATASTORE trigger of ``pod_id``; returns how many.
+
+    For a change to the pod's trigger defaults, which every trigger that
+    leaves a write mode unset inherits.
+    """
+    after: UUID | None = None
+    count = 0
+    while True:
+        query = select(Schedule.id).where(
+            Schedule.pod_id == pod_id,
+            Schedule.schedule_type == ScheduleType.DATASTORE,
+            Schedule.is_active.is_(True),
+        )
+        if after is not None:
+            query = query.where(Schedule.id > after)
+        ids = list(
+            await uow.session.scalars(query.order_by(Schedule.id).limit(_RESYNC_PAGE))
+        )
+        for schedule_id in ids:
+            await request_subscriber_sync(
+                uow, pod_id, subscriber_key(PREFIX, schedule_id)
+            )
+        count += len(ids)
+        if len(ids) < _RESYNC_PAGE:
+            return count
+        after = ids[-1]
+
+
+__all__ = ["PREFIX", "resync_pod_triggers", "sync_trigger_subscription"]

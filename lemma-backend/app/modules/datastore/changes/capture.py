@@ -10,9 +10,9 @@ inserts one row per written record into the pod's ``reserved_changes``:
 
 so the append costs no round trip and cannot commit apart from the write. The
 row is slim (~80 bytes) unless a durable subscriber watches the table and
-operation: then it also carries the new row and the prior values, taken from
-what the statement returned (the prior image the update statements already
-capture), never from an extra read. Whether anything watches is one probe of
+operation and acts on the write's intent: then it also carries the new row and
+the prior values, taken from what the statement returned (the prior image the
+update statements already capture), never from an extra read. Whether anything watches is one probe of
 the pod's tiny subscriber table per write call.
 
 A watched write also leaves a ``lemma_change_pending`` row and notifies the
@@ -104,6 +104,10 @@ class ChangeCapture:
     outside_actor: str | None = None
     #: Operations a durable subscriber watches on this table, as of ``begin``.
     watched: frozenset[str] = field(default_factory=frozenset)
+    #: Of those, the ones some subscriber acts on for this write's intent:
+    #: only these changes carry their rows. A bulk write every watcher skips
+    #: is logged slim and still wakes them, so they can record the skip.
+    snapshot: frozenset[str] = field(default_factory=frozenset)
     _statements: int = 0
     #: The writing transaction's id (xid8, as text), once ``wake_handoff`` ran.
     xid: str | None = None
@@ -116,15 +120,19 @@ class ChangeCapture:
 
     async def begin(self, session: AsyncSession) -> None:
         """Ask, in the write's transaction, what is watched on this table."""
-        ops = await session.scalar(
-            text(
-                "SELECT array_agg(DISTINCT op) FROM "
-                f"{subscribers_table(self.ctx.schema_name)}, unnest(ops) AS op "
-                "WHERE table_id = CAST(:table_id AS uuid)"
-            ),
-            {"table_id": str(self.ctx.table_id)},
-        )
-        self.watched = frozenset(str(op) for op in ops or ())
+        watched, snapshot = (
+            await session.execute(
+                text(
+                    "SELECT array_agg(DISTINCT op), array_agg(DISTINCT op) "
+                    "FILTER (WHERE :intent = ANY(snapshot_intents)) FROM "
+                    f"{subscribers_table(self.ctx.schema_name)}, unnest(ops) AS op "
+                    "WHERE table_id = CAST(:table_id AS uuid)"
+                ),
+                {"table_id": str(self.ctx.table_id), "intent": self.intent.value},
+            )
+        ).one()
+        self.watched = frozenset(str(op) for op in watched or ())
+        self.snapshot = frozenset(str(op) for op in snapshot or ())
 
     def wrap(
         self,
@@ -167,6 +175,7 @@ class ChangeCapture:
             old_values = f"CASE WHEN o.op = 'D' THEN {row_json} END"
         owner = 'CAST(w."user_id" AS uuid)' if ctx.enable_rls else "NULL::uuid"
         watched = "o.op = ANY(CAST(:__chg_watched AS text[]))"
+        snapshot = "o.op = ANY(CAST(:__chg_snapshot AS text[]))"
         statement = (
             f"WITH w AS ({sql}), "
             f"c AS (INSERT INTO {changes_table(ctx.schema_name)} "
@@ -175,8 +184,8 @@ class ChangeCapture:
             f"SELECT CAST(:__chg_table AS uuid), o.op, "
             f'CAST(w."{ctx.primary_key_column}" AS text), :__chg_intent, {owner}, '
             f"CAST(:__chg_outside AS text), "
-            f"CASE WHEN {watched} THEN {new_row} END, "
-            f"CASE WHEN {watched} THEN {old_values} END "
+            f"CASE WHEN {snapshot} THEN {new_row} END, "
+            f"CASE WHEN {snapshot} THEN {old_values} END "
             f"FROM w CROSS JOIN LATERAL (SELECT {op_sql} AS op) AS o "
             f"RETURNING {watched.replace('o.op', 'op')} AS watched)"
         )
@@ -195,6 +204,7 @@ class ChangeCapture:
             "__chg_intent": self.intent.value,
             "__chg_outside": self.outside_actor,
             "__chg_watched": sorted(self.watched),
+            "__chg_snapshot": sorted(self.snapshot),
         }
         if drop:
             bound["__chg_drop"] = drop

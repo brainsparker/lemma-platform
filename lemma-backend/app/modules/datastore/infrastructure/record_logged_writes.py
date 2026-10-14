@@ -126,13 +126,13 @@ async def update_logged(
                     RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
                 )
             await changes.begin(session)
-            # The prior image is captured only for a watched update: it costs a
-            # locked self-join that an unwatched table has no use for.
+            # The prior image is captured only for an update a subscriber reads:
+            # it costs a locked self-join that nobody else has a use for.
             sql, alias = build_update_statement(
                 ctx,
                 set_clauses=set_clauses,
                 where_clauses=where,
-                capture_previous="U" in changes.watched,
+                capture_previous="U" in changes.snapshot,
             )
             statement, bound = changes.wrap(
                 sql, params, op="U", previous_alias=alias, changed=changed

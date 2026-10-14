@@ -18179,6 +18179,34 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * List Schedule Skips
+     * What the trigger let pass without firing -- e.g. the changes of a bulk
+     * write or an import it is set to skip -- newest first.
+     * @param podId
+     * @param scheduleId
+     * @param limit
+     * @param pageToken
+     * @returns TriggerSkipListResponse Successful Response
+     * @throws ApiError
+     */
+    static scheduleSkipList(podId, scheduleId, limit = 50, pageToken) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/schedules/{schedule_id}/skips",
+        path: {
+          "pod_id": podId,
+          "schedule_id": scheduleId
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/schedules.ts
@@ -18231,6 +18259,25 @@ var LemmaClient = (() => {
             (_a = options.limit) != null ? _a : 100,
             (_b = options.status) != null ? _b : void 0,
             options.skipped
+          );
+        }
+      );
+    }
+    /**
+     * What a trigger let pass without firing, newest first, aggregated: one item
+     * per delivered page and reason (`bulk_write`, `import_write`, `fire_cap`)
+     * with its `count`. Pass the response's `next_page_token` back as
+     * `pageToken` for the next page.
+     */
+    skips(scheduleId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b;
+          return SchedulesService.scheduleSkipList(
+            this.podId(),
+            scheduleId,
+            (_a = options.limit) != null ? _a : 50,
+            (_b = options.pageToken) != null ? _b : void 0
           );
         }
       );

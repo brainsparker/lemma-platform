@@ -34,13 +34,7 @@ standing one to fall back on. `schedule_runs` is the
 durable idempotency/delivery ledger keyed by schedule plus source event; it
 records the run's single user owner, attempts, target run, payload, and terminal
 outcome. RLS datastore events assign that ownership to the row owner; other
-schedule sources assign it to the schedule owner. `trigger_skips` aggregates what a
-trigger let pass without firing -- one row per (delivered page, reason) with the
-first and last change position and a count, so a bulk write of thousands of
-rows is a handful of rows and run history can still say what was skipped and
-why. `trigger_batches` records each window a `batch`-mode trigger cut before
-firing it, so a replay after a crash fires that window again rather than a
-differently cut one. The three types are TIME
+schedule sources assign it to the schedule owner. The three types are TIME
 (cron, or once with `scheduled_at`), WEBHOOK and DATASTORE.
 
 `GET /pods/{pod_id}/events` lists what a schedule can start on, in the MCP
@@ -69,6 +63,14 @@ case-insensitive filesystem.
 
 The poller owns the concrete time job set: `next_fire_at` is the whole index,
 claimed with `FOR UPDATE SKIP LOCKED` and advanced in the claiming transaction.
+
+`trigger_skips` records what a DATASTORE trigger let pass without firing --
+the changes of a bulk write or import it skips, or fires past its daily
+ceiling -- one row per delivered page and reason with a count, so a bulk write
+of thousands of rows is a handful of rows; `GET .../schedules/{id}/skips`
+pages them for run history. `trigger_batches` holds each window a `batch`-mode
+trigger planned before firing it, so a replay after a crash fires that same
+window rather than a differently cut one.
 
 ## API groups
 

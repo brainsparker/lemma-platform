@@ -553,6 +553,9 @@ _NAME_TO_MODULE = {
     'TableSummaryResponse': 'table_summary_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
+    'TriggerSkipListResponse': 'trigger_skip_list_response',
+    'TriggerSkipReason': 'trigger_skip_reason',
+    'TriggerSkipResponse': 'trigger_skip_response',
     'Update': 'update',
     'UpdateAgentHostRuntimeProfileRequest': 'update_agent_host_runtime_profile_request',
     'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0': 'update_agent_host_runtime_profile_request_config_selections_type_0',
@@ -1195,6 +1198,9 @@ if TYPE_CHECKING:
     from .table_summary_response import TableSummaryResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
+    from .trigger_skip_list_response import TriggerSkipListResponse
+    from .trigger_skip_reason import TriggerSkipReason
+    from .trigger_skip_response import TriggerSkipResponse
     from .update import Update
     from .update_agent_host_runtime_profile_request import UpdateAgentHostRuntimeProfileRequest
     from .update_agent_host_runtime_profile_request_config_selections_type_0 import UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0
@@ -1850,6 +1856,9 @@ __all__ = [
     'TableSummaryResponse',
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
+    'TriggerSkipListResponse',
+    'TriggerSkipReason',
+    'TriggerSkipResponse',
     'Update',
     'UpdateAgentHostRuntimeProfileRequest',
     'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0',

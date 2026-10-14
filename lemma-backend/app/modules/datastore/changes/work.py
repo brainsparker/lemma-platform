@@ -52,6 +52,7 @@ from app.modules.datastore.changes.subscribers import (
     SubscriberTable,
     durable_subscriber,
 )
+from app.modules.datastore.domain.write_intent import WriteIntent
 from app.modules.datastore.infrastructure.pod_schema_migrations import (
     CHANGE_LOG_VERSION,
     migrate_pod_schema,
@@ -155,6 +156,7 @@ async def run_sync(ctx: JobContext, payload: SyncRequest) -> None:
         ops=spec.ops,
         delay=spec.delay,
         since=payload.since,
+        snapshot_intents=spec.snapshot_intents,
     )
     async with ctx.complete_work() as uow:
         work = ctx.writer(uow)
@@ -178,7 +180,9 @@ async def run_deliver(ctx: JobContext, payload: SubscriberRef) -> None:
     )
     if page.changes:
         async with ctx.checkpoint() as uow:
-            changes = await _with_current_rows(uow, payload.pod_id, page.changes)
+            changes = await _with_current_rows(
+                uow, payload.pod_id, page.changes, row.snapshot_intents
+            )
             outcome = await module.deliver(uow, payload.pod_id, subscriber_id, changes)
         if outcome is DeliverOutcome.GONE:
             await rows.delete(payload.subscriber)
@@ -198,15 +202,28 @@ async def run_deliver(ctx: JobContext, payload: SubscriberRef) -> None:
 
 
 async def _with_current_rows(
-    uow: SqlAlchemyUnitOfWork, pod_id: UUID, changes: Sequence[Change]
+    uow: SqlAlchemyUnitOfWork,
+    pod_id: UUID,
+    changes: Sequence[Change],
+    snapshot_intents: frozenset[WriteIntent],
 ) -> list[Change]:
     """Fill the row of a change logged before anything watched its table.
 
     The subscriber watches changes committed after its row exists; a write
     already in flight when it was created was logged slim. What it gets for
-    those is the row as it is now -- the best the log can say.
+    those is the row as it is now -- the best the log can say. A change whose
+    intent the subscriber does not act on (a bulk write a trigger skips) was
+    logged slim on purpose and stays that way.
     """
-    missing = [c for c in changes if c.new_row is None and c.op is not ChangeOp.DELETE]
+
+    def wants(c: Change) -> bool:
+        return (
+            c.new_row is None
+            and c.op is not ChangeOp.DELETE
+            and WriteIntent(c.intent) in snapshot_intents
+        )
+
+    missing = [c for c in changes if wants(c)]
     if not missing:
         return list(changes)
     entity = await DatastoreTableRepository(uow).get(missing[0].table_id)
@@ -215,9 +232,7 @@ async def _with_current_rows(
     ctx = TableContext.from_table_entity(entity, schema_name_for_pod(pod_id))
     current = await fetch_rows(pod_id, ctx, [c.record_id for c in missing])
     return [
-        replace(c, new_row=current.get(c.record_id, {}))
-        if c.new_row is None and c.op is not ChangeOp.DELETE
-        else c
+        replace(c, new_row=current.get(c.record_id, {})) if wants(c) else c
         for c in changes
     ]
 

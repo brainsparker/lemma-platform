@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildTurns, liveNote, newestMessageId, openInteraction, relayedBy, spanOf, type RawMessage } from "../src/thread/turns.ts";
+import { buildTurns, liveNote, openInteraction, relayedBy, spanOf, type RawMessage } from "../src/thread/turns.ts";
 
 /** The rules that were actually wrong, pinned.
  *
@@ -403,12 +403,4 @@ test("a request another teammate put here is its, and says whether it asked for 
     assert.equal(relayedBy(asked("LINK") ?? {})?.chip, "Asked over its connection");
     assert.equal(relayedBy(asked("LINK") ?? {})?.place, null);
     assert.deepEqual(relayedBy(asked("AS_PERSON") ?? {})?.place, { podId: "pod-a", conversationId: "conv-a" });
-});
-
-test("loading older history leaves the newest message where it was", () => {
-    const shown = [{ id: "m3" }, { id: "m4" }];
-    const withOlder = [{ id: "m1" }, { id: "m2" }, ...shown];
-    assert.equal(newestMessageId(withOlder), newestMessageId(shown));
-    assert.notEqual(newestMessageId([...shown, { id: "m5" }]), newestMessageId(shown));
-    assert.equal(newestMessageId([]), null);
 });

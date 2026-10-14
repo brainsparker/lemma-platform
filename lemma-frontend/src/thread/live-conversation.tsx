@@ -6,7 +6,7 @@ import { NEW_CONVERSATION, saidAboutSending, source } from "@/data";
 import { initialsOf } from "@/data/agent-names";
 import type { ApprovalDecision } from "./approval";
 import type { Pod } from "@/data";
-import { buildTurns, newestMessageId, openInteraction, openSignIn, type RawMessage, type Turn } from "./turns";
+import { buildTurns, openInteraction, openSignIn, type RawMessage, type Turn } from "./turns";
 import { messageIds, runTouched } from "./run-touched";
 import { InteractionDock } from "./interaction-dock";
 import type { AnswerWith } from "./interaction-card";
@@ -280,13 +280,12 @@ export function LiveConversation({
     useEffect(() => { streamingIn.current = session.conversationId; }, [session.conversationId]);
 
     /* Gone the moment the run shows any sign of having started, or ends: the
-       server says it once, not again when the wait is over. Keyed on the
-       newest message, not the count: loading older history adds messages
-       without the run having done anything, and the notice is not re-sent. */
+       server says it once, not again when the wait is over. Not on messages
+       landing: loading older history, or the person steering the queued run,
+       adds messages while the run is still waiting for a slot. */
     const underway = !session.isStreaming
         || Boolean(session.streamingText || session.streamingThinking || session.streamingTool);
-    const newest = newestMessageId(session.messages);
-    useEffect(() => { setSlotWait(null); }, [underway, newest]);
+    useEffect(() => { setSlotWait(null); }, [underway]);
 
     /* What this conversation looked like the last time it was open here, or
        when someone last rested on it in the history: drawn while the server is

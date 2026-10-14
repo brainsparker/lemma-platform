@@ -274,3 +274,68 @@ async def test_the_hold_does_not_wait_for_a_start_run_the_control_frame_holds(
             await hold_uow.commit()
         assert (await asyncio.wait_for(frame_lease, timeout=10)) is not None
         await frame.commit()
+
+
+async def test_a_start_run_held_back_by_a_full_host_lives_as_long_as_its_lease(
+    db_session, scenario
+) -> None:
+    """The poll that holds a START_RUN back keeps it alive with its lease.
+
+    The hold skips a command a poll has locked, so without this the command
+    could expire between checks and the run be stranded once a slot frees.
+    """
+    machine, run_id = await _queued_run(db_session, scenario)
+    soon = datetime.now(timezone.utc) + timedelta(seconds=5)
+    later = datetime.now(timezone.utc) + timedelta(minutes=20)
+    async with async_session_maker() as session:
+        await session.execute(
+            update(AgentHostRunLeaseModel)
+            .where(AgentHostRunLeaseModel.run_id == run_id)
+            .values(lease_expires_at=later)
+        )
+        await session.execute(
+            update(AgentHostCommandModel)
+            .where(
+                AgentHostCommandModel.run_id == run_id,
+                AgentHostCommandModel.kind == AgentHostCommandKind.START_RUN.value,
+            )
+            .values(expires_at=soon)
+        )
+        await session.commit()
+
+    assert await _poll(machine, free=0) == []
+
+    (start,) = await _start_runs(run_id)
+    assert start.state == AgentHostCommandState.QUEUED.value
+    assert start.expires_at == later
+
+
+async def test_a_start_run_whose_run_stopped_waiting_is_not_kept_alive(
+    db_session, scenario
+) -> None:
+    """Only a lease still queued for the host carries its command along."""
+    machine, run_id = await _queued_run(db_session, scenario)
+    soon = datetime.now(timezone.utc) + timedelta(seconds=5)
+    async with async_session_maker() as session:
+        await session.execute(
+            update(AgentHostRunLeaseModel)
+            .where(AgentHostRunLeaseModel.run_id == run_id)
+            .values(
+                state=AgentHostRunState.CANCELLED.value,
+                lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=20),
+            )
+        )
+        await session.execute(
+            update(AgentHostCommandModel)
+            .where(
+                AgentHostCommandModel.run_id == run_id,
+                AgentHostCommandModel.kind == AgentHostCommandKind.START_RUN.value,
+            )
+            .values(expires_at=soon)
+        )
+        await session.commit()
+
+    await _poll(machine, free=0)
+
+    (start,) = await _start_runs(run_id)
+    assert start.expires_at == soon

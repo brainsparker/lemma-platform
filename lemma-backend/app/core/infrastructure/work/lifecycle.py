@@ -76,6 +76,10 @@ _MARK_DEAD = text(
      WHERE id = :id
     """
 )
+_DUE_NOW = text(
+    "UPDATE work_items SET run_at = least(run_at, now()) "
+    "WHERE id = :id AND state = 'queued'"
+)
 _EXTEND = text(
     """
     UPDATE work_items SET lease_until = now() + make_interval(secs => :seconds)
@@ -329,6 +333,10 @@ async def release(
             last_error=None,
         ),
     )
+    # Due by the database's clock, which is what a claim compares with: a
+    # worker whose clock runs ahead would otherwise requeue it slightly in the
+    # future, and the next process would find nothing due.
+    await session.execute(_DUE_NOW, {"id": item.id})
     # Another process may be idle and able to take it straight away.
     await session.execute(
         text("SELECT pg_notify(:channel, '')"), {"channel": wake_channel(item.cls)}

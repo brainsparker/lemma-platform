@@ -533,6 +533,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.slack_manager.respond_failed': EventSpec('info', frozenset()),
     'agent_surfaces.slack_manager.uninstalled': EventSpec('info', frozenset({'team_id'})),
     'agent_surfaces.slack_manager.view_update_failed': EventSpec('info', frozenset({'error'})),
+    'agent_surfaces.slack_manager.welcomed': EventSpec('info', frozenset({'team_id'})),
     'agent_surfaces.surface_connection_resolver.connection_lookup_failed.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
     'agent_surfaces.surface_display_delivery.display_resource_delivery_failed.degraded': EventSpec('warning', frozenset({'conversation_id', 'tool_call_id'})),
     'agent_surfaces.surface_display_delivery.surface_message_delivery_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),

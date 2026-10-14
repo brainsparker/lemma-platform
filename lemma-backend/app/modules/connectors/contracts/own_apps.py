@@ -75,3 +75,32 @@ async def start_authorization(
         return_to=return_to,
     )
     return str(request.authorization_url or "")
+
+
+async def ensure_system_install(
+    uow, *, user_id: UUID, organization_id: UUID, connector_id: str
+) -> UUID:
+    """The organization's install of Lemma's own app for this connector, made if absent.
+
+    What a connect started outside the web app authorises against: the web
+    app's own flow makes the same install on first use, from the browser.
+    """
+    service = get_connector_service(uow)
+    installs, _ = await service.list_auth_configs(
+        user_id=user_id, organization_id=organization_id, limit=200
+    )
+    for install in installs:
+        if (
+            install.connector_id == connector_id
+            and install.config_source == AuthConfigSource.SYSTEM_DEFAULT
+            and str(getattr(install.status, "value", install.status)) == "ACTIVE"
+        ):
+            return install.id
+    made = await service.create_auth_config(
+        user_id=user_id,
+        organization_id=organization_id,
+        connector_id=connector_id,
+        config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
+        name=f"{connector_id} (Lemma)",
+    )
+    return made.id

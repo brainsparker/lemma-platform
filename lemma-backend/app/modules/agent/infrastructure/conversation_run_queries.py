@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.modules.agent.domain.entities import (
@@ -34,6 +34,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ACTIVE_AGENT_RUN_STATUSES,
     ConversationStatus,
+    MessageKind,
 )
 from app.modules.agent.infrastructure.repositories.conversation_run_lifecycle import (
     lock_conversation_row,
@@ -279,12 +280,13 @@ class ConversationRunQueriesMixin:
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
-    async def run_has_only_user_messages(self, agent_run_id: UUID) -> bool:
-        """Whether a run holds at least one message and none of them are replies.
+    async def run_is_replay_safe(self, agent_run_id: UUID) -> bool:
+        """Whether a run holds a user message and nothing a replay would repeat.
 
-        This is the message half of ``AgentRun.is_safely_retryable`` — a run is
-        safe to retry only if the model never got far enough to say anything,
-        so replaying it cannot duplicate assistant output or tool effects.
+        This is the message half of ``AgentRun.is_safely_retryable``, and the
+        same rule (``replays_without_effect``): only the person's messages and
+        the model's reasoning, so replaying it cannot duplicate assistant
+        output or tool effects.
 
         Answered as one aggregate over ``ix_agent_message_run_sequence`` instead
         of loading the run's messages. Callers should check the status half
@@ -294,14 +296,22 @@ class ConversationRunQueriesMixin:
         row = (
             await self.session.execute(
                 select(
-                    func.count().label("total"),
                     func.count()
-                    .filter(MessageModel.role != MessageRole.USER.value)
-                    .label("non_user"),
+                    .filter(MessageModel.role == MessageRole.USER.value)
+                    .label("user"),
+                    func.count()
+                    .filter(
+                        MessageModel.role != MessageRole.USER.value,
+                        or_(
+                            MessageModel.role != MessageRole.ASSISTANT.value,
+                            MessageModel.kind != MessageKind.THINKING.value,
+                        ),
+                    )
+                    .label("with_effect"),
                 ).where(MessageModel.agent_run_id == agent_run_id)
             )
         ).one()
-        return bool(row.total) and not row.non_user
+        return bool(row.user) and not row.with_effect
 
     async def count_queued_user_messages(
         self,

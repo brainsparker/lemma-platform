@@ -80,7 +80,7 @@ def _service(
         lock_conversation=AsyncMock(),
         get_active_agent_run_for_update=AsyncMock(return_value=None),
         get_latest_agent_run_for_conversation=AsyncMock(),
-        run_has_only_user_messages=AsyncMock(return_value=True),
+        run_is_replay_safe=AsyncMock(return_value=True),
         create_agent_run=AsyncMock(),
         conversations_with_pending_interaction=AsyncMock(return_value=set()),
     )
@@ -146,7 +146,7 @@ async def test_retry_runs_on_the_conversation_s_current_runtime_without_a_new_me
     retry_run = _run(status=AgentRunStatus.RUNNING)
     retry_run.conversation_id = conversation.id
     repository.get_latest_agent_run_for_conversation.return_value = failed_run
-    repository.run_has_only_user_messages.return_value = True
+    repository.run_is_replay_safe.return_value = True
     repository.create_agent_run.return_value = retry_run
     authorize = _authorize(monkeypatch, conversation)
 
@@ -172,7 +172,7 @@ async def test_retry_runs_on_the_conversation_s_current_runtime_without_a_new_me
     uow.collect_events.assert_called_once()
     uow.commit.assert_awaited_once()
     # Asked about this one run, not handed every run of the conversation.
-    repository.run_has_only_user_messages.assert_awaited_once_with(failed_run.id)
+    repository.run_is_replay_safe.assert_awaited_once_with(failed_run.id)
     # Retrying runs the agent again, so it demands execute rather than read.
     authorize.assert_awaited_once_with(
         repository,

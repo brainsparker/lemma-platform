@@ -63,7 +63,9 @@ def history_and_prompt(
     ``replay_prior_run_reasoning`` say which of the thoughts that pass that
     test are this run's own; see `pydantic_ai_thinking`.
     """
-    ordered = sorted(messages, key=lambda message: message.sequence)
+    ordered = _without_unanswered_thoughts(
+        sorted(messages, key=lambda message: message.sequence)
+    )
     user_prompt: str | None = None
     history_messages = list(ordered)
     if (
@@ -88,6 +90,25 @@ def history_and_prompt(
         ),
         user_prompt,
     )
+
+
+def _without_unanswered_thoughts(ordered: list[Message]) -> list[Message]:
+    """``ordered`` without the reasoning trailing after its last user turn.
+
+    A run that failed after only thinking leaves its thoughts newest, and a
+    retry of it replays the user turn before them. A thought with no answer
+    after it is never sent to the model (``PendingThoughts`` drops it), so
+    leaving them in only hid the turn the retry is for, and the run started
+    with no prompt.
+    """
+    end = len(ordered)
+    while (
+        end
+        and ordered[end - 1].role is MessageRole.ASSISTANT
+        and ordered[end - 1].kind is MessageKind.THINKING
+    ):
+        end -= 1
+    return ordered[:end]
 
 
 def _to_pydantic_ai_messages(

@@ -89,7 +89,7 @@ class RetryCoordinator:
         # Asks about this one run rather than loading every run of the
         # conversation with every message attached to find it again -- the run
         # is already in hand, and only its message roles were ever in question.
-        if not await self.conversation_repository.run_has_only_user_messages(
+        if not await self.conversation_repository.run_is_replay_safe(
             failed_run.id
         ):
             raise ConversationStateError("The failed run cannot be retried safely")

@@ -210,6 +210,21 @@ class Conversation(Entity):
         return sorted(self.messages, key=lambda message: message.sequence)
 
 
+def replays_without_effect(role: MessageRole, kind: MessageKind) -> bool:
+    """Whether a failed run holding this message can be run again as it was.
+
+    The person's own messages are what a retry replays. The model's reasoning
+    is the one thing it says that does nothing: no text reached anyone and no
+    tool ran, so a run that failed after only thinking is as safe to retry as
+    one that failed before the model answered at all. The retry does not carry
+    the old reasoning forward -- a thought with no answer after it is never
+    replayed to the model.
+    """
+    return role is MessageRole.USER or (
+        role is MessageRole.ASSISTANT and kind is MessageKind.THINKING
+    )
+
+
 class AgentRun(Entity):
     """Internal execution record for one harness pass."""
 
@@ -253,8 +268,11 @@ class AgentRun(Entity):
     def is_safely_retryable(self) -> bool:
         return (
             self.status == AgentRunStatus.FAILED
-            and bool(self.messages)
-            and all(message.role is MessageRole.USER for message in self.messages)
+            and any(message.role is MessageRole.USER for message in self.messages)
+            and all(
+                replays_without_effect(message.role, message.kind)
+                for message in self.messages
+            )
         )
 
     def ordered_messages(self) -> list[Message]:

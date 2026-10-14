@@ -19,10 +19,16 @@ import pytest
 from httpx import Response
 from starlette import status
 
+from pydantic_ai.messages import ThinkingPart
+
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     MessageDraft,
     MessageRole,
+)
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+    history_and_prompt,
 )
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
@@ -92,6 +98,46 @@ async def test_a_failed_run_that_said_nothing_is_run_again_without_a_second_mess
     )
 
 
+async def test_a_failed_run_that_only_thought_is_run_again_from_the_users_turn(
+    scenario,
+) -> None:
+    """Reasoning has no effect to repeat, so it does not take the retry away.
+
+    The retry starts from the person's message, not from the reasoning the
+    failed run left after it: that reasoning never reaches the model again.
+    """
+    seeded = await seeded_conversation(scenario)
+    failed = await _failed_after(
+        seeded,
+        # Signed, so it is a thought the model could be sent again.
+        MessageDraft.of_thinking(
+            "The document is long; start with the outline.",
+            metadata={"thinking_signature": "signed"},
+        ),
+        MessageDraft.of_thinking(
+            "Then the conclusions.", metadata={"thinking_signature": "signed"}
+        ),
+    )
+    assert await _retryable(scenario, seeded) is True
+
+    response = await _retry(scenario, seeded)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    retry_id = UUID(response.json()["agent_run_id"])
+    assert retry_id != failed
+    history, prompt = history_and_prompt(
+        await messages(seeded.conversation_id),
+        protocol=RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
+        current_run_id=retry_id,
+    )
+    assert prompt is not None and prompt.endswith("Summarise it.")
+    assert not any(
+        isinstance(part, ThinkingPart)
+        for message in history
+        for part in message.parts
+    )
+
+
 async def test_retrying_twice_while_the_retry_runs_returns_the_same_run(
     scenario,
 ) -> None:
@@ -124,12 +170,19 @@ async def test_retrying_twice_while_the_retry_runs_returns_the_same_run(
         ),
     ],
 )
+@pytest.mark.parametrize(
+    "thought_first", [False, True], ids=["at-once", "after-thinking"]
+)
 async def test_a_failed_run_that_already_did_something_is_not_replayed(
-    scenario, work: MessageDraft
+    scenario, work: MessageDraft, thought_first: bool
 ) -> None:
-    """Replaying it would say the reply twice, or run the tool twice."""
+    """Replaying it would say the reply twice, or run the tool twice.
+
+    Reasoning before the work does not make it replayable: the work is done.
+    """
     seeded = await seeded_conversation(scenario)
-    await _failed_after(seeded, work)
+    drafts = [MessageDraft.of_thinking("First, the outline."), work]
+    await _failed_after(seeded, *(drafts if thought_first else drafts[1:]))
     assert await _retryable(scenario, seeded) is False
 
     response = await _retry(scenario, seeded)

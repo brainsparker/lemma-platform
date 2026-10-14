@@ -23,7 +23,7 @@ from __future__ import annotations
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager, suppress
+from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -50,7 +50,7 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.credential_resolver import (
     PooledNumberReader,
     SurfaceCredentialResolver,
@@ -200,7 +200,10 @@ class SurfaceTurnStarter:
         if await self._waits_for_a_person(context):
             await self._hand_to_a_person(context, adapter, credentials)
             return
-        with suppress(*PLATFORM_TRANSPORT_ERRORS):
+        # Matched after the raise rather than taken up front as `suppress` would:
+        # this call may be the one that first loads Slack's SDK, whose errors
+        # join the family only once it is loaded.
+        try:
             await adapter.add_processing_indicator(
                 credentials=credentials,
                 event=context.event,
@@ -208,6 +211,8 @@ class SurfaceTurnStarter:
                     "agent_display_name": context.agent_display_name,
                 },
             )
+        except platform_transport_errors():
+            pass
 
         ingest = await self._ingest_files(context, credentials)
         ingested: list[IngestedAttachment] = ingest.saved
@@ -308,7 +313,7 @@ class SurfaceTurnStarter:
                 credentials=await self._credentials_for(reply),
                 event_dedup_store=self.event_dedup_store,
             )
-        except (SQLAlchemyError, *PLATFORM_TRANSPORT_ERRORS):
+        except (SQLAlchemyError, *platform_transport_errors()):
             logger.warning(
                 "agent_surfaces.turn_starter.failure_reply_not_sent.degraded",
                 platform=str(context.platform),
@@ -389,7 +394,7 @@ class SurfaceTurnStarter:
                 message=held.reply,
                 metadata={"agent_display_name": context.agent_display_name},
             )
-        except (AgentSurfaceError, *PLATFORM_TRANSPORT_ERRORS):
+        except (AgentSurfaceError, *platform_transport_errors()):
             # The message is kept and the member told; only the courtesy line
             # did not land, and the conversation already shows it.
             logger.warning(
@@ -462,7 +467,7 @@ class SurfaceTurnStarter:
                 event=context.event,
                 title=context.created_conversation_title,
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             # A platform call, so a platform failure. It caught
             # `SQLAlchemyError` -- the wrong family entirely, and nothing here
             # touches the database: Slack's implementation catches only

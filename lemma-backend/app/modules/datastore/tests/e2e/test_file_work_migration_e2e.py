@@ -25,8 +25,8 @@ pytestmark = pytest.mark.e2e
 postgres_only_container = e2e_fixtures.postgres_only_container
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0053_work_runtime"
-REVISION = "0054_file_work_items"
+BEFORE = "0054_work_runtime"
+REVISION = "0055_file_work_items"
 
 _COLUMNS = (
     "SELECT count(*) FROM information_schema.columns WHERE table_name = "

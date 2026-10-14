@@ -26,16 +26,16 @@ replies in conversation metadata, open notifications with no expiry item) is
 converted by the ``surfaces.drain_events`` job, which reads Redis -- a
 migration cannot. This migration only queues that job, once.
 
-Revision ID: 0060_surface_inbound_deliveries
-Revises: 0059_agent_wait_approval_work
+Revision ID: 0061_surface_inbound_deliveries
+Revises: 0060_agent_wait_approval_work
 """
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-revision = "0060_surface_inbound_deliveries"
-down_revision = "0059_agent_wait_approval_work"
+revision = "0061_surface_inbound_deliveries"
+down_revision = "0060_agent_wait_approval_work"
 branch_labels = None
 depends_on = None
 

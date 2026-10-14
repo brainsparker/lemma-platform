@@ -27,7 +27,7 @@ import {
  *  it. Getting one wrong produces a page that looks finished and says nothing
  *  true. */
 
-test("a coding agent is HARNESS; which one it is comes from metadata", () => {
+test("a coding agent is HARNESS; which one it is comes from harness_key", () => {
     /* There is no kind per tool. Reading `kind` for "is this Codex" would
        make Codex and Claude Code the same row. */
     const runtime = readRuntime({
@@ -36,7 +36,7 @@ test("a coding agent is HARNESS; which one it is comes from metadata", () => {
         kind: "HARNESS",
         scope: "PERSONAL",
         harness_id: "h1",
-        metadata: { harness_key: "claude-code" },
+        harness_key: "claude-code",
         availability_status: "READY",
     });
     assert.equal(runtime?.kind, "agent");

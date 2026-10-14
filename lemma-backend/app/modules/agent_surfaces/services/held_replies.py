@@ -10,12 +10,17 @@ pump sends before anything else is said.
 
 Held for a week. A message nobody came back for in that time is dropped when
 they finally do, rather than delivered as if it were news.
+
+Adding and clearing are both conditional. Each write locks the conversation row
+and stamps a new ``version``; a delivery clears only the messages it sent, so a
+message held while the earlier ones were going out stays held for the next
+reply instead of being cleared unsent.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -60,14 +65,27 @@ class HeldReplies(BaseModel):
     #: set from a later one, so clearing it cannot clear a newer.
     asked_at: datetime
     replies: list[HeldReply] = Field(default_factory=list)
+    #: Stamped afresh on every write, so a set a hold has added to since it was
+    #: read is told from the one that was. None on a record written before
+    #: versions, which ``asked_at`` stands in for.
+    version: str | None = None
 
     def identity(self) -> dict[str, str | None]:
+        if self.version is not None:
+            return {"version": self.version}
         return {"asked_at": self.model_dump(mode="json")["asked_at"]}
 
+    def claim_token(self) -> str:
+        """What a delivery claims, so two deliveries of this set are one."""
+        token = self.identity()
+        return str(token.get("version") or token.get("asked_at"))
 
-async def _held(uow: SqlAlchemyUnitOfWork, conversation_id: UUID) -> HeldReplies | None:
+
+async def _held(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, *, for_update: bool = False
+) -> HeldReplies | None:
     stored = await metadata_records.conversation_metadata_record(
-        uow, conversation_id, HELD_REPLIES_KEY
+        uow, conversation_id, HELD_REPLIES_KEY, for_update=for_update
     )
     if stored is None:
         return None
@@ -106,9 +124,14 @@ async def hold_reply(
     now: datetime | None = None,
 ) -> None:
     """Hold ``message`` beside anything already held. ``asked``: a template
-    asking them to reply has just gone."""
+    asking them to reply has just gone.
+
+    The read is locked, so a hold racing another hold, or a delivery clearing
+    what it sent, waits for it rather than writing over it."""
     at = now or datetime.now(UTC)
-    held = await _held(uow, conversation_id) or HeldReplies(asked_at=at)
+    held = await _held(uow, conversation_id, for_update=True) or HeldReplies(
+        asked_at=at
+    )
     await agent_conversations.set_conversation_metadata_value(
         uow,
         conversation_id,
@@ -116,6 +139,7 @@ async def hold_reply(
         HeldReplies(
             asked_at=at if asked else held.asked_at,
             replies=[*held.replies, HeldReply(message=message, held_at=at)],
+            version=uuid4().hex,
         ),
     )
 
@@ -133,8 +157,9 @@ async def stage_held_replies(
     In the transaction that writes their message, so the held messages are on
     record -- and cleared from the conversation -- exactly when the message
     that reopened the window is, and the destination pump sends them ahead of
-    the answer that message will get. Keyed by the set's ``asked_at``, so a
-    retried ingest writes them once.
+    the answer that message will get. Keyed by the set's version, so a
+    retried ingest writes them once. The read is locked, so a hold racing this
+    waits and stays held for the next reply rather than being cleared unsent.
 
     Only on a platform with a reply window: nothing is held anywhere else, and
     every inbound message would otherwise pay a read to find that out.
@@ -144,18 +169,18 @@ async def stage_held_replies(
     )
     if capabilities is None or capabilities.reply_window_hours is None:
         return 0
-    held = await _held(uow, conversation_id)
+    held = await _held(uow, conversation_id, for_update=True)
     if held is None:
         return 0
     fresh_since = (now or datetime.now(UTC)) - HOLD_FOR
-    asked = held.identity()["asked_at"]
+    token = held.claim_token()
     staged = 0
     for index, reply in enumerate(held.replies):
         if reply.held_at < fresh_since:
             continue
         await stage_conversation_message(
             uow,
-            idempotency_key=f"held:{conversation_id}:{asked}:{index}",
+            idempotency_key=f"held:{conversation_id}:{token}:{index}",
             conversation_id=conversation_id,
             pod_id=pod_id,
             content=DeliveryContent(text=reply.message, plain=True, purpose="held"),

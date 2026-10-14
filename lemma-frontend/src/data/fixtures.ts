@@ -2029,7 +2029,7 @@ let RUNTIMES: unknown[] = [
     {
         id: "me:claude-code", name: "Claude Code", kind: "HARNESS", scope: "PERSONAL", status: "ACTIVE",
         harness_id: "h-claude", availability_status: "READY", default_model_name: "sonnet",
-        metadata: { harness_key: "claude-code" },
+        harness_key: "claude-code",
         model_catalog: [{ name: "sonnet", display_name: "Sonnet" }, { name: "opus", display_name: "Opus" }],
     },
     {
@@ -2038,7 +2038,7 @@ let RUNTIMES: unknown[] = [
            the moment somebody asks. */
         id: "me:opencode", name: "OpenCode", kind: "HARNESS", scope: "PERSONAL", status: "ACTIVE",
         harness_id: "h-opencode", availability_status: "OFFLINE", default_model_name: "qwen3-coder",
-        metadata: { harness_key: "opencode" },
+        harness_key: "opencode",
         model_catalog: [{ name: "qwen3-coder", display_name: "Qwen3 Coder" }],
     },
     {
@@ -3256,7 +3256,7 @@ export const fixtureSource: PodSource = {
             harness_id: harnessId, availability_status: "READY",
             default_model_name: agent.model || null,
             config: { config_selections: agent.selections },
-            metadata: { harness_key: found?.harness ?? "" },
+            harness_key: found?.harness ?? null,
             model_catalog: (found?.models ?? []).map((model) => ({ name: model.name, display_name: model.label })),
         }];
     },

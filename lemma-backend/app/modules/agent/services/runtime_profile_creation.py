@@ -35,6 +35,7 @@ from app.modules.agent.domain.agent_host_selections import (
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
+    HARNESS_KEY,
     with_reasoning_declared,
     checked_profile,
     AnthropicCompatibleRuntimeConfig,
@@ -196,7 +197,7 @@ class RuntimeProfileCreation:
             status=RuntimeProfileStatus.ACTIVE,
             metadata={
                 "source": "AGENT_HOST",
-                "harness_key": harness.harness_key,
+                HARNESS_KEY: harness.harness_key,
             },
         )
         return await self.repository.create(profile)

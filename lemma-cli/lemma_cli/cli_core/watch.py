@@ -13,6 +13,7 @@ machinery never loads on a plain ``lemma --help``.
 from __future__ import annotations
 
 import json
+import ssl
 
 from rich.console import Console
 
@@ -46,6 +47,23 @@ _TERMINAL_CLOSES = {
     4403: "No access to this pod's changes.",
     4404: "Pod or table not found.",
 }
+
+
+def _ssl_option(ws_url: str, *, verify_ssl: bool) -> ssl.SSLContext | None:
+    """The ``ssl`` argument ``websockets.connect`` needs for ``ws_url``.
+
+    ``websockets`` refuses ``None`` for a ``wss://`` URI and any value for a
+    ``ws://`` one, and ``False`` is not "TLS without verification" but no TLS
+    at all -- a plaintext handshake sent to a TLS port. So a ``wss://`` URI
+    always gets a context; ``--no-verify-ssl`` only turns its checks off.
+    """
+    if not ws_url.startswith("wss://"):
+        return None
+    context = ssl.create_default_context()
+    if not verify_ssl:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
 
 
 def watch_datastore_changes(
@@ -89,7 +107,7 @@ async def _run(
     base_url = resolve_base_url(state.base_url, state.config, use_env=use_env)
     verify_ssl = resolve_verify_ssl(state.no_verify_ssl)
     ws_url = live_ws_url(base_url, pod_id)
-    ssl_option = None if ws_url.startswith("ws://") or verify_ssl else False
+    ssl_option = _ssl_option(ws_url, verify_ssl=verify_ssl)
 
     session = LiveSession()
     session.add(table=table, since=since)

@@ -7,7 +7,11 @@ checks, and nothing else the service carries.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.conversation_metadata import source_of
+from app.modules.agent.domain.conversation_metadata import (
+    MANUAL_RETRY_SOURCE,
+    SOURCE_KEY,
+    source_of,
+)
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -71,7 +75,7 @@ class RetryCoordinator:
             conversation.id
         )
         if active_run is not None:
-            if source_of(active_run.metadata) == "manual_retry":
+            if source_of(active_run.metadata) == MANUAL_RETRY_SOURCE:
                 return AgentRunStartResult(
                     conversation_id=conversation.id,
                     agent_run_id=active_run.id,
@@ -89,9 +93,7 @@ class RetryCoordinator:
         # Asks about this one run rather than loading every run of the
         # conversation with every message attached to find it again -- the run
         # is already in hand, and only its message roles were ever in question.
-        if not await self.conversation_repository.run_has_only_user_messages(
-            failed_run.id
-        ):
+        if not await self.conversation_repository.run_is_replay_safe(failed_run.id):
             raise ConversationStateError("The failed run cannot be retried safely")
 
         # The runtime the conversation is set to now, not the failed run's: a
@@ -120,7 +122,7 @@ class RetryCoordinator:
             agent_id=conversation.agent_id,
             agent_runtime=runtime,
             metadata={
-                "source": "manual_retry",
+                SOURCE_KEY: MANUAL_RETRY_SOURCE,
                 "retried_agent_run_id": str(failed_run.id),
                 **privacy_of(failed_run.metadata),
             },

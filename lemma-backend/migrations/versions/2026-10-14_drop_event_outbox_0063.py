@@ -12,12 +12,12 @@ PR 3, delete this placeholder before PR 3 merges and let D2 take the next
 free number then. (Was 0061; D1 took 0061 for the pod-bundle cutover, which
 ships with PR 3 either way.)
 
-Revision ID: 0062_drop_event_outbox
-Revises: 0061_pod_bundle_work
+Revision ID: 0063_drop_event_outbox
+Revises: 0062_pod_bundle_work
 """
 
-revision = "0062_drop_event_outbox"
-down_revision = "0061_pod_bundle_work"
+revision = "0063_drop_event_outbox"
+down_revision = "0062_pod_bundle_work"
 branch_labels = None
 depends_on = None
 

@@ -23,15 +23,15 @@ And a sub-agent spawn becomes unique on the call that made it:
 unique partial index per parent, so a resumed turn re-running an interrupted
 ``spawn_subagent`` gets the child it already has.
 
-Revision ID: 0058_agent_turn_work
-Revises: 0057_record_change_log
+Revision ID: 0059_agent_turn_work
+Revises: 0058_record_change_log
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0058_agent_turn_work"
-down_revision = "0057_record_change_log"
+revision = "0059_agent_turn_work"
+down_revision = "0058_record_change_log"
 branch_labels = None
 depends_on = None
 

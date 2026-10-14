@@ -465,8 +465,9 @@ tells the agent to use Lemma's:
   as its server. Every other pairing is a server elsewhere, and a path it names
   is one on its own machine, so its runs get the CLI the Desktop app carries in
   `Contents/Resources/lemma-cli` (staged by
-  `scripts/build_desktop_lemma_cli.py`), or none when the app has none. Either
-  folder is accepted only by the rule host execution uses
+  `scripts/build_desktop_lemma_cli.py`; only the self-contained `make
+  desktop-dmg` build has one), else the one the host downloaded (below), else
+  none. Every folder is accepted only by the rule host execution uses
   ([§6](desktop-host-execution.md#6-the-seatbelt-profile)). From source,
   `LEMMA_AGENT_HOST_CLI_ROOT` names the bundled folder instead; debug builds
   only. Claude Code is
@@ -477,6 +478,70 @@ tells the agent to use Lemma's:
   the command text, and Claude Code refuses a compound command unless every
   part is allowed; the bare name is the same binary because its `bin/` is
   first on the agent's `PATH`.
+
+  That holds for **every** harness, not only Claude Code, and in the shells
+  the agent runs commands in as well as its own process (`src/acp/shell_path.rs`).
+  Harnesses run each command through the person's shell, whose startup files
+  run first: a `~/.zshenv` or `~/.bashrc` that prepends `~/.local/bin` put a
+  globally installed `lemma` back in front, and Codex's shell snapshot dropped
+  the host's entry entirely (found in live QA). So a run with a CLI also gets
+  `ZDOTDIR` -- four zsh startup files that each source the person's own file
+  of that name and then move the CLI's `bin/` to the front -- and `BASH_ENV`,
+  which bash reads after its profile files in every non-interactive shell. The
+  variables they read are `LEMMAHOST_*`, which a server's `LEMMA_*` cannot set.
+  Other shells (fish, nu) get the process `PATH` only. A run with no CLI gets
+  none of this: its `PATH` is the adapter's own.
+
+  Only Claude Code also gets an allow rule. Codex's command approvals live in
+  `~/.codex/rules` (execpolicy), not in anything a session can pass; OpenCode's
+  `permission.bash` matches wildcards over the command text, so `lemma *`
+  would also allow `lemma x; rm -rf ~` -- the prefix-match hole the rules
+  above avoid. Those harnesses ask before `lemma` as before.
+- **The downloaded `lemma`.** The shipped online app does not carry the CLI
+  (about 90 MiB, over `check_online_payload.py`'s gate), so the host fetches
+  its own release's the first time a hosted run would otherwise have none
+  (`src/lemma_cli/download.rs`), and starts that download when a hosted
+  pairing's worker starts, so it is usually ready first.
+  - *The artifact.* `release-desktop.yml` builds the CLI with
+    `scripts/build_desktop_lemma_cli.py --archive`, signs every Mach-O with
+    the app's Developer ID (hardened runtime, timestamp), and attaches
+    `lemma-cli-aarch64-apple-darwin.tar.gz` and its manifest
+    `lemma-cli-aarch64-apple-darwin.json` (`{version, platform, url, sha256,
+    size}`) to the release. Not notarized: the pipeline notarizes the app
+    and the DMG, never loose binaries, and a file the host downloads itself
+    has no quarantine attribute for Gatekeeper to check. macOS arm64 only,
+    as the Desktop release is.
+  - *Trust.* The manifest URL is compiled into the host:
+    `https://github.com/lemma-work/lemma-platform/releases/download/v<host
+    version>/lemma-cli-<platform>.json` for a release build. The nightly
+    (`share-desktop-dmg` in `release-local-images.yml`) sets
+    `LEMMA_AGENT_HOST_CLI_MANIFEST_URL` at compile time to its own
+    `desktop-nightly-*` prerelease and publishes the archive there, versioned
+    as the runtime version, which is the host's `CARGO_PKG_VERSION`. Nothing a
+    paired server sends changes it. The host refuses a manifest for another
+    version or platform and an archive outside the manifest's own release
+    folder, fetches with the system `curl` (`-q`, so no `~/.curlrc`;
+    HTTPS-only, redirects included), and checks the archive's size and
+    SHA-256 before unpacking. The digest proves the archive is the one the
+    release's manifest describes; the release itself (GitHub, over TLS) is
+    the root of trust. Debug builds download only from
+    `LEMMA_AGENT_HOST_CLI_MANIFEST_URL` read at run time, and from nowhere
+    without it.
+  - *Where.* `<data dir>/cli/<version>/`. The download and unpacking happen
+    in `cli/.partial-*`, and the unpacked tree is renamed into place in one
+    step, so a half-written CLI is never resolved. The folder is carved out
+    of Lemma's denied application data for `lemma_cli_root`
+    (`DOWNLOADED_CLI_EXCEPTION`), as the host packs are; nothing else of the
+    host's data is. Other versions and leftover partials are removed when
+    the host starts and after each install.
+  - *Concurrency and failure.* One lock per data directory: twenty runs
+    starting together download once. A run waits at most 15 seconds for a
+    download in flight and otherwise goes on without a CLI, with a warning in
+    the host log; the download carries on for later runs. A failure is
+    retried by a later run after a backoff that doubles from 30 seconds to an
+    hour.
+  - *Version skew.* The CLI is the host's release, not the server's, exactly
+    as the bundled one is; a hosted server may be newer or older.
 - **The person's own permission rules.** Leaving `~/.claude` out also left
   out the person's `permissions.allow`, so a command they had told Claude
   Code never to ask about asked in every Lemma run. `allow`, `deny` and `ask`
@@ -489,6 +554,60 @@ tells the agent to use Lemma's:
 `desktop/agent-host/tests/acp_session_options_e2e.rs` holds the driver to
 delivering each of these, against a scripted agent that records what it is
 sent and the environment it starts in.
+
+## Resilience to agent updates
+
+The coding agents the host drives, and their ACP adapters, release on their
+own schedule -- some weekly. The rule that keeps an agent update from breaking
+Lemma:
+
+**Strict on our protocol, tolerant on agent-originated content.** The
+host↔backend envelope -- frame types, event types, run states, harness
+health, auth, lease epochs, the run spec -- is ours and is held exactly; an
+unknown value there is a bug on one side of the wire, and refusing it keeps
+the two in step. What an *agent* writes -- `session/update` kinds, tool-call
+kinds and statuses, content blocks, plan entries, permission option kinds,
+configuration options and their types, stop reasons, usage counts, `_meta`,
+version strings -- may grow at any time. Something new there is skipped,
+passed through or noted, and never the reason the parts Lemma knows stop
+working.
+
+In practice:
+
+- **The host settles agent output before typing it.**
+  `desktop/agent-host/src/acp/tolerance.rs` is the first handler on every
+  agent connection. An unknown update kind or content block is skipped; an
+  unknown tool status or tool content entry is removed; an unknown plan
+  priority or status is read as the plainest one; `session/prompt` is read
+  field by field, so a new stop reason ends the turn by name. Each unknown is
+  logged once per kind, by its name, never with the content around it.
+- **An unknown permission option is never consent.** It is removed from the
+  request, not mapped to a known kind, so it is neither shown nor selected; a
+  request offering nothing else is answered `cancelled`. An unknown tool kind
+  on a permission request is removed too, rather than read as ACP's `other`,
+  which the scoped-tool check trusts. The backend likewise never selects a
+  kind it does not know (`agent_host_permissions.option_for`).
+- **One option does not cost the harness.** An option of a type Lemma cannot
+  offer (only `select` and `boolean` are), or one it cannot read, is dropped
+  from the snapshot (`AgentHostHarnessSnapshot`) and logged by type; the rest
+  publish. A selection for an option that has disappeared is dropped when the
+  run is dispatched (`carry_agent_host_selections`).
+- **Display text is cut, not refused.** A version banner or label longer than
+  its column is shortened; identifiers a selection names (`id`, `category`)
+  are not, since shortening one names a different option.
+- **A floor, not a pin.** `minimum_upstream_version` refuses an agent older
+  than the one Lemma was certified against; a newer one runs. The adapter
+  itself stays pinned by version and integrity in
+  `agent-adapters.lock.json`, and the security checks -- credentials, the
+  seatbelt policy, the policy-bearing option filter -- do not loosen.
+
+`desktop/agent-host/tests/future_agent.rs` replays every recorded transcript
+with unknown fields injected at every level, unknown update kinds, tool
+content, content blocks, permission option kinds, configuration option types
+and `_meta`, and holds the known parts to the same reviewed events;
+`app/modules/agent/tests/unit/test_agent_host_agent_updates.py` does the same
+for the backend. A change that makes either stricter about agent content has to
+say why here.
 
 ## The link
 
@@ -767,6 +886,25 @@ the worker loop had to do sooner than 25 seconds needed its own arm in the
 `select!`, because the loop spent nearly all of its time waiting on a held
 request. The link's reader, writer and worker are separate tasks joined by
 channels, so work happens when it is due.
+
+### Starting several runs at once
+
+Every run spawns its own adapter process. Conversations started together would
+otherwise cold-start that many copies of one agent at the same moment, and the
+burst itself made them miss their setup deadlines. So a run waits for a
+start-up slot for its agent before its process is spawned and gives it back
+once its session is configured, before the prompt goes out
+(`acp/start_gate.rs`). Codex gets one slot, because concurrent Codex sessions
+opening side by side time out inside Codex; every other agent gets a few. A
+queued run stays `ACCEPTED`, Stop reaches it in the queue, and the setup
+deadlines (`SETUP_REQUEST_TIMEOUT`, per request) start counting only once it has
+a slot. The run's own deadline bounds the whole wait.
+
+A start that fails before the prompt with a timeout — the host's setup deadline
+or a timeout the agent reports itself — is tried once more in a fresh process.
+Sign-in and configuration failures are not retried. A start that times out
+twice ends the run as `FAILED` with a message saying the agent did not start in
+time, not that it is broken.
 
 ### Retired HTTP routes
 

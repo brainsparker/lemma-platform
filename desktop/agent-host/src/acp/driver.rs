@@ -12,7 +12,10 @@ use super::{
     plan_configuration, prompt_blocks, prompt_turn, scoped_mcp_tool_names, session_to_resume,
     steering_advertised, tool_call_id,
 };
-use super::{PreApprovals, session_options};
+use super::{
+    PreApprovals, START_ATTEMPTS, StartGates, StartPermit, is_transient_start_failure,
+    session_options,
+};
 use crate::normalize::{Dialect, Normalizer, RunContext};
 use crate::protocol::RunSpec;
 
@@ -21,8 +24,23 @@ use crate::protocol::RunSpec;
 /// is there because the two handlers are separate closures.
 type SharedNormalizer = Arc<std::sync::Mutex<Normalizer>>;
 
+/// Drives ACP agents: one process per run, started through the host's
+/// start-up gates (see `start_gate`).
 #[derive(Clone, Default)]
-pub struct AcpDriver;
+pub struct AcpDriver {
+    starts: Arc<StartGates>,
+}
+
+impl AcpDriver {
+    /// A driver whose runs start through `starts` rather than the host's
+    /// default per-agent gates.
+    #[must_use]
+    pub fn with_start_gates(starts: StartGates) -> Self {
+        Self {
+            starts: Arc::new(starts),
+        }
+    }
+}
 
 #[async_trait]
 impl AgentDriver for AcpDriver {
@@ -89,188 +107,245 @@ impl AgentDriver for AcpDriver {
         request: AcpRunRequest,
         callbacks: Arc<dyn AcpCallbacks>,
     ) -> anyhow::Result<AcpRunOutcome> {
-        std::fs::create_dir_all(&request.scratch_directory)?;
-        let session_options = session_options(
-            &request.adapter.spec.key,
-            &request.adapter.environment(),
-            &request.run_spec,
-            request.own_settings,
-            request.lemma_cli_bin.as_deref(),
-        );
-        let agent = build_agent(
-            &request.adapter,
-            request.agent_environment.clone(),
-            session_options.environment.clone(),
-        );
-        let (mut supervised, transport, stderr) = SupervisedAgent::spawn(&agent)?;
-        let stderr = capture_stderr(stderr);
-        let AcpRunRequest {
-            adapter,
-            run_spec,
-            scratch_directory,
-            mcp_server,
-            can_load_session,
-            published_config_options,
-            permissions,
-            permission_timeout,
-            mut cancel,
-            cancel_grace,
-            steer,
-            ..
-        } = request;
-        let resume_session_id = session_to_resume(&run_spec, can_load_session);
-        // Instructions given in the session's `_meta` are not repeated as a
-        // `<system>` block opening the prompt.
-        let prompt_spec = if session_options.system_prompt_in_meta {
-            RunSpec {
-                system_prompt: String::new(),
-                ..run_spec.clone()
-            }
-        } else {
-            run_spec.clone()
-        };
-        let normalizer: SharedNormalizer = Arc::new(std::sync::Mutex::new(Normalizer::new(
-            Dialect::for_harness(&adapter.spec.key),
-            RunContext::from_mcp(&run_spec.mcp),
-        )));
-        let updates = UpdateSink {
-            streaming: Arc::new(AtomicBool::new(false)),
-            session: Arc::new(std::sync::OnceLock::new()),
-            callbacks: Arc::clone(&callbacks),
-            normalizer: Arc::clone(&normalizer),
-        };
-        let permission_handler = PermissionHandler {
-            gate: permissions,
-            sequence: Arc::new(AtomicU64::new(0)),
-            timeout: permission_timeout,
-            run_id: run_spec.agent_run_id,
-            // Lemma tells us, in the run-scoped MCP config, exactly which
-            // tools it serves. That is an exact answer to "is this one of
-            // ours?", which the name-shape heuristic can only approximate.
-            scoped_mcp_tools: mcp_server
-                .is_some()
-                .then(|| Arc::new(scoped_mcp_tool_names(&run_spec.mcp))),
-            callbacks: Arc::clone(&callbacks),
-            normalizer: Arc::clone(&normalizer),
-            pre_approvals: PreApprovals::of(&run_spec),
-        };
-        let turn_updates = updates.clone();
-        let owed_callbacks = Arc::clone(&callbacks);
-        let outcome = agent_client_protocol::Client
-            .builder()
-            .name("lemma-agent-host")
-            .on_receive_notification(
-                async move |notification: SessionNotification, _context| {
-                    updates.forward(&notification)
-                },
-                agent_client_protocol::on_receive_notification!(),
+        let harness = request.adapter.spec.key.clone();
+        let mut attempt = 1;
+        loop {
+            let Some(permit) = self.starts.acquire(&harness, request.cancel.clone()).await else {
+                return Ok(cancelled_before_start());
+            };
+            let prompted = Arc::new(AtomicBool::new(false));
+            let error = match run_once(
+                request.clone(),
+                Arc::clone(&callbacks),
+                permit,
+                Arc::clone(&prompted),
             )
-            .on_receive_request(
-                async move |request: RequestPermissionRequest, responder, connection| {
-                    let ask = match permission_handler.triage(&request)? {
-                        Triage::Answer(outcome) => {
-                            return responder.respond(RequestPermissionResponse::new(outcome));
-                        }
-                        Triage::Ask(ask) => ask,
-                    };
-                    // Handlers share the ACP receive loop. Waiting here blocks
-                    // later tool updates, approvals and cancellation responses.
-                    // The connection owns this task and drops it on shutdown.
-                    let gate = permission_handler.gate.clone();
-                    connection.spawn(async move {
-                        let decision = gate
-                            .wait(ask.run_id, ask.request_id, ask.timeout, ask.always)
-                            .await;
-                        responder.respond(RequestPermissionResponse::new(outcome_for_decision(
-                            decision,
-                            &request.options,
-                        )))
-                    })
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
-                let initialization = before_prompt_deadline(
-                    "initialize",
-                    connection
-                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                        .block_task(),
-                )
-                .await?;
-                let steering = TurnSteering::new(
-                    steering_advertised(initialization.meta.as_ref()),
-                    steer.take(),
-                    callbacks.as_ref(),
-                );
-                let mcp_servers: Vec<McpServer> = mcp_server.into_iter().collect();
-                let mut session = open_session(
-                    &connection,
-                    resume_session_id,
-                    scratch_directory,
-                    mcp_servers,
-                    session_options.meta,
-                )
-                .await?;
-                let options = effective_options(
-                    &adapter.spec.key,
-                    session.config_options.take(),
-                    published_config_options,
-                    session.origin,
-                );
-                let mut plan = plan_configuration(
-                    &options,
-                    run_spec.model_name.as_deref(),
-                    &run_spec.config_selections,
-                )
-                .map_err(invalid)?;
-                plan.adapter_key.clone_from(&adapter.spec.key);
-                configure_session(&connection, &session, plan, callbacks.as_ref()).await?;
-                callbacks
-                    .before_prompt(&session.session_id.to_string())
-                    .map_err(internal)?;
-                // Past this point every session update belongs to this turn --
-                // as long as it names this session, which is what the handler
-                // checks.
-                turn_updates.open(&session.session_id.to_string());
-                prompt_turn(
-                    &connection,
-                    session.session_id,
-                    prompt_blocks(&prompt_spec, session.origin),
-                    &mut cancel,
-                    cancel_grace,
-                    steering,
-                )
-                .await
-            })
             .await
-            .map_err(anyhow::Error::from);
-        // Whatever the turn still owes: calls the adapter opened and never
-        // settled -- the turn ended, was cancelled, or the adapter died --
-        // still happened and still get a card, and the adapter's token count
-        // for the turn, when it reported one. Before the terminal event, which
-        // the runtime writes once this returns.
-        let usage = outcome
-            .as_ref()
-            .ok()
-            .and_then(|outcome| outcome.usage.clone());
-        let owed = normalizer
-            .lock()
-            .expect("normalizer poisoned")
-            .finish(usage.as_ref());
-        for event in owed {
-            if let Err(error) =
-                owed_callbacks.event(event.event_type, event.object_id, event.payload)
             {
-                tracing::error!(%error, "could not persist an event the turn still owed");
+                Ok(outcome) => return Ok(outcome),
+                Err(error) => error,
+            };
+            let retry = attempt < START_ATTEMPTS
+                && !prompted.load(Ordering::SeqCst)
+                && !*request.cancel.borrow()
+                && is_transient_start_failure(&format!("{error:#}"));
+            if !retry {
+                return Err(error);
             }
+            tracing::warn!(
+                %harness,
+                attempt,
+                %error,
+                "the agent failed to start in time; starting it once more"
+            );
+            attempt += 1;
         }
-        // See `SupervisedAgent`: the protocol has read to stdout EOF, so every
-        // chunk the agent streamed is already journalled. A non-zero exit
-        // explains the failure; it no longer replaces the answer.
-        match outcome {
-            Ok(outcome) => Ok(outcome),
-            Err(error) => Err(supervised.explain(&error, stderr).await),
+    }
+}
+
+/// The outcome of a run Lemma stopped while it was still waiting to start.
+fn cancelled_before_start() -> AcpRunOutcome {
+    AcpRunOutcome {
+        provider_session_id: String::new(),
+        state: crate::protocol::RunState::Cancelled,
+        stop_reason: "cancelled".to_owned(),
+        message: Some("run cancelled by Lemma before the agent started".to_owned()),
+        usage: None,
+    }
+}
+
+/// One attempt at a run: spawn the agent, open and configure its session,
+/// then -- having given the start-up slot back -- prompt it.
+///
+/// `prompted` is raised just before the prompt is dispatched. Past that point
+/// a failure is never tried again, because the agent may have acted on it.
+async fn run_once(
+    request: AcpRunRequest,
+    callbacks: Arc<dyn AcpCallbacks>,
+    permit: StartPermit,
+    prompted: Arc<AtomicBool>,
+) -> anyhow::Result<AcpRunOutcome> {
+    std::fs::create_dir_all(&request.scratch_directory)?;
+    let session_options = session_options(
+        &request.adapter.spec.key,
+        &request.adapter.environment(),
+        &request.run_spec,
+        request.own_settings,
+        request.lemma_cli_bin.as_deref(),
+    );
+    let agent = build_agent(
+        &request.adapter,
+        request.agent_environment.clone(),
+        session_options.environment.clone(),
+    );
+    let (mut supervised, transport, stderr) = SupervisedAgent::spawn(&agent)?;
+    let stderr = capture_stderr(stderr);
+    let AcpRunRequest {
+        adapter,
+        run_spec,
+        scratch_directory,
+        mcp_server,
+        can_load_session,
+        published_config_options,
+        permissions,
+        permission_timeout,
+        mut cancel,
+        cancel_grace,
+        steer,
+        ..
+    } = request;
+    let resume_session_id = session_to_resume(&run_spec, can_load_session);
+    // Instructions given in the session's `_meta` are not repeated as a
+    // `<system>` block opening the prompt.
+    let prompt_spec = if session_options.system_prompt_in_meta {
+        RunSpec {
+            system_prompt: String::new(),
+            ..run_spec.clone()
         }
+    } else {
+        run_spec.clone()
+    };
+    let normalizer: SharedNormalizer = Arc::new(std::sync::Mutex::new(Normalizer::new(
+        Dialect::for_harness(&adapter.spec.key),
+        RunContext::from_mcp(&run_spec.mcp),
+    )));
+    let updates = UpdateSink {
+        streaming: Arc::new(AtomicBool::new(false)),
+        session: Arc::new(std::sync::OnceLock::new()),
+        callbacks: Arc::clone(&callbacks),
+        normalizer: Arc::clone(&normalizer),
+    };
+    let permission_handler = PermissionHandler {
+        gate: permissions,
+        sequence: Arc::new(AtomicU64::new(0)),
+        timeout: permission_timeout,
+        run_id: run_spec.agent_run_id,
+        // Lemma tells us, in the run-scoped MCP config, exactly which
+        // tools it serves. That is an exact answer to "is this one of
+        // ours?", which the name-shape heuristic can only approximate.
+        scoped_mcp_tools: mcp_server
+            .is_some()
+            .then(|| Arc::new(scoped_mcp_tool_names(&run_spec.mcp))),
+        callbacks: Arc::clone(&callbacks),
+        normalizer: Arc::clone(&normalizer),
+        pre_approvals: PreApprovals::of(&run_spec),
+    };
+    let turn_updates = updates.clone();
+    let owed_callbacks = Arc::clone(&callbacks);
+    let outcome = agent_client_protocol::Client
+        .builder()
+        .name("lemma-agent-host")
+        // First, so nothing typed sees what an agent newer than this host
+        // sent before it has been settled. See `tolerance`.
+        .with_handler(super::Tolerance)
+        .on_receive_notification(
+            async move |notification: SessionNotification, _context| updates.forward(&notification),
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_request(
+            async move |request: RequestPermissionRequest, responder, connection| {
+                let ask = match permission_handler.triage(&request)? {
+                    Triage::Answer(outcome) => {
+                        return responder.respond(RequestPermissionResponse::new(outcome));
+                    }
+                    Triage::Ask(ask) => ask,
+                };
+                // Handlers share the ACP receive loop. Waiting here blocks
+                // later tool updates, approvals and cancellation responses.
+                // The connection owns this task and drops it on shutdown.
+                let gate = permission_handler.gate.clone();
+                connection.spawn(async move {
+                    let decision = gate
+                        .wait(ask.run_id, ask.request_id, ask.timeout, ask.always)
+                        .await;
+                    responder.respond(RequestPermissionResponse::new(outcome_for_decision(
+                        decision,
+                        &request.options,
+                    )))
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
+            let initialization = before_prompt_deadline(
+                "initialize",
+                connection
+                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                    .block_task(),
+            )
+            .await?;
+            let steering_supported = steering_advertised(initialization.meta.as_ref());
+            let mcp_servers: Vec<McpServer> = mcp_server.into_iter().collect();
+            let mut session = open_session(
+                &connection,
+                resume_session_id,
+                scratch_directory,
+                mcp_servers,
+                session_options.meta,
+            )
+            .await?;
+            let options = effective_options(
+                &adapter.spec.key,
+                session.config_options.take(),
+                published_config_options,
+                session.origin,
+            );
+            let mut plan = plan_configuration(
+                &options,
+                run_spec.model_name.as_deref(),
+                &run_spec.config_selections,
+            )
+            .map_err(invalid)?;
+            plan.adapter_key.clone_from(&adapter.spec.key);
+            configure_session(&connection, &session, plan, callbacks.as_ref()).await?;
+            // Started: the next run of this agent may begin its own.
+            drop(permit);
+            // Taken only now, so a start that is tried again still has it.
+            let steering = TurnSteering::new(steering_supported, steer.take(), callbacks.as_ref());
+            prompted.store(true, Ordering::SeqCst);
+            callbacks
+                .before_prompt(&session.session_id.to_string())
+                .map_err(internal)?;
+            // Past this point every session update belongs to this turn --
+            // as long as it names this session, which is what the handler
+            // checks.
+            turn_updates.open(&session.session_id.to_string());
+            prompt_turn(
+                &connection,
+                session.session_id,
+                prompt_blocks(&prompt_spec, session.origin),
+                &mut cancel,
+                cancel_grace,
+                steering,
+            )
+            .await
+        })
+        .await
+        .map_err(anyhow::Error::from);
+    // Whatever the turn still owes: calls the adapter opened and never
+    // settled -- the turn ended, was cancelled, or the adapter died --
+    // still happened and still get a card, and the adapter's token count
+    // for the turn, when it reported one. Before the terminal event, which
+    // the runtime writes once this returns.
+    let usage = outcome
+        .as_ref()
+        .ok()
+        .and_then(|outcome| outcome.usage.clone());
+    let owed = normalizer
+        .lock()
+        .expect("normalizer poisoned")
+        .finish(usage.as_ref());
+    for event in owed {
+        if let Err(error) = owed_callbacks.event(event.event_type, event.object_id, event.payload) {
+            tracing::error!(%error, "could not persist an event the turn still owed");
+        }
+    }
+    // See `SupervisedAgent`: the protocol has read to stdout EOF, so every
+    // chunk the agent streamed is already journalled. A non-zero exit
+    // explains the failure; it no longer replaces the answer.
+    match outcome {
+        Ok(outcome) => Ok(outcome),
+        Err(error) => Err(supervised.explain(&error, stderr).await),
     }
 }
 

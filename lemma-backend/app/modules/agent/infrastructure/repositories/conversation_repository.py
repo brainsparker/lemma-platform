@@ -54,6 +54,7 @@ from app.modules.agent.infrastructure.repositories.conversation_list_page import
 )
 from app.modules.agent.infrastructure.repositories.conversation_run_lifecycle import (
     finish_agent_run as _finish_agent_run,
+    lock_conversation_row as _lock_conversation_row,
     update_conversation_status as _write_conversation_status,
 )
 from app.modules.agent.domain.subagent_spawn import SPAWN_KEY
@@ -312,11 +313,7 @@ class ConversationRepository(
         )
 
     async def lock_conversation(self, conversation_id: UUID) -> None:
-        await self.session.execute(
-            select(ConversationModel.id)
-            .where(ConversationModel.id == conversation_id)
-            .with_for_update()
-        )
+        await _lock_conversation_row(self.session, conversation_id=conversation_id)
 
     async def find_spawned_child(
         self, *, parent_id: UUID, parent_run_id: UUID, spawn_key: str

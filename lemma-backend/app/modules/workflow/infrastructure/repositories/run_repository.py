@@ -63,14 +63,8 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
             "step_history": [s.model_dump(mode="json") for s in entity.step_history],
             "error": entity.error,
             "failed_node_id": entity.failed_node_id,
-            "started_at": (
-                entity.started_at.replace(tzinfo=None) if entity.started_at else None
-            ),
-            "completed_at": (
-                entity.completed_at.replace(tzinfo=None)
-                if entity.completed_at
-                else None
-            ),
+            "started_at": entity.started_at,
+            "completed_at": entity.completed_at,
         }
 
     async def create(self, run: WorkflowRunEntity) -> WorkflowRunEntity:

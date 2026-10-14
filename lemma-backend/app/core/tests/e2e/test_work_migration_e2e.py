@@ -23,8 +23,8 @@ from app.core.tests.e2e.work_support import (
 pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[4]
-BEFORE = "0052_folder_visibility_index"
-REVISION = "0053_work_runtime"
+BEFORE = "0053_folder_visibility_index"
+REVISION = "0054_work_runtime"
 
 _TABLES = {"work_items", "work_queues", "work_rate_buckets"}
 _INDEXES = """

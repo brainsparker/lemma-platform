@@ -74,10 +74,17 @@ pub(crate) fn session_options(
         "opencode" => opencode(&lemma_tools),
         _ => SessionOptions::default(),
     };
-    if let Some(bin) = lemma_cli
-        && let Some(path) = path_with(bin, adapter_environment.get("PATH"))
-    {
-        options.environment.insert("PATH".to_owned(), path);
+    // Every harness alike: the process `PATH`, and the shells the agent runs
+    // commands in, where the person's startup files would otherwise put a
+    // `lemma` they installed themselves back in front (`shell_path`).
+    if let Some(bin) = lemma_cli {
+        if let Some(path) = path_with(bin, adapter_environment.get("PATH")) {
+            options.environment.insert("PATH".to_owned(), path);
+        }
+        options.environment.extend(super::shell_path::environment(
+            bin,
+            &super::shell_path::default_folder(),
+        ));
     }
     options
 }

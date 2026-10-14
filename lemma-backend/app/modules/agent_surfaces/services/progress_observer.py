@@ -26,7 +26,7 @@ from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.rendering import (
     ThinkingStreamFilter,
 )
@@ -56,12 +56,12 @@ from app.modules.agent_surfaces.services.progress_events import (
 
 logger = get_logger(__name__)
 
+
 # What a platform call can raise that must not stop the answer being delivered
 # another way: the transport family, plus the database work around it.
-_DELIVERY_ERRORS: tuple[type[BaseException], ...] = (
-    SQLAlchemyError,
-    *PLATFORM_TRANSPORT_ERRORS,
-)
+def _delivery_errors() -> tuple[type[BaseException], ...]:
+    return (SQLAlchemyError, *platform_transport_errors())
+
 
 # Read from the capability registry once; a mapping so a test can shorten one.
 _TYPING_REFRESH_INTERVAL_SECONDS = {
@@ -272,7 +272,7 @@ class SurfaceAgentRunProgressObserver(
                     conversation_id=conversation_id,
                     progress_handle=handle,
                 )
-        except _DELIVERY_ERRORS:
+        except _delivery_errors():
             # Clearing is cosmetic and the answer that follows it is not, so a
             # failure here must never be the reason the answer is not sent.
             logger.warning(
@@ -325,7 +325,7 @@ class SurfaceAgentRunProgressObserver(
             return False
         try:
             await self._flush_tokens(conversation, final=True)
-        except _DELIVERY_ERRORS:
+        except _delivery_errors():
             # The reply closes the stream with whatever it does not show yet,
             # so a last flush that failed costs nothing but a later chunk.
             logger.warning(

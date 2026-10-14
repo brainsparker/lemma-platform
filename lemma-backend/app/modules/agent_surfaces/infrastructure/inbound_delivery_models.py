@@ -3,7 +3,7 @@
 Their own module because ``models.py`` is at the size ceiling. ``models.py``
 re-exports them, so importing that file still registers the tables on
 ``Base.metadata`` for ``migrations/env.py``. Migration
-``0060_surface_inbound_deliveries`` creates them.
+``0061_surface_inbound_deliveries`` creates them.
 """
 
 from __future__ import annotations

@@ -47,7 +47,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.inbound_message_repo
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.delivery import track_sends
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
@@ -66,12 +66,11 @@ from app.modules.agent_surfaces.services.surface_deliveries import SendResult
 
 logger = get_logger(__name__)
 
-#: What one send can fail with and still be an outcome rather than a bug.
-_SEND_ERRORS: tuple[type[BaseException], ...] = (
-    AgentSurfaceError,
-    SQLAlchemyError,
-    *PLATFORM_TRANSPORT_ERRORS,
-)
+def _send_errors() -> tuple[type[BaseException], ...]:
+    """What one send can fail with and still be an outcome rather than a bug.
+
+    A call, read where it is matched (``platform_transport_errors``)."""
+    return (AgentSurfaceError, SQLAlchemyError, *platform_transport_errors())
 
 #: Sends one claimed row; the seam a test replaces with a fake platform.
 type DeliverySender = Callable[[SurfaceDeliveryModel], Awaitable[SendResult]]
@@ -114,7 +113,7 @@ class PlatformDeliverySender:
                 await SurfaceTurnStarter(uow_factory=self.uow_factory).execute_chat(
                     context
                 )
-        except _SEND_ERRORS as exc:
+        except _send_errors() as exc:
             return SendResult(delivered=False, error=f"{type(exc).__name__}: {exc}")
         return SendResult(
             delivered=True,
@@ -183,7 +182,7 @@ class PlatformDeliverySender:
                             attach_files_of=run,
                         )
                 error = None if delivered else "no surface thread to send to"
-            except _SEND_ERRORS as exc:
+            except _send_errors() as exc:
                 logger.warning(
                     "agent_surfaces.delivery_sender.send_failed.degraded",
                     delivery_id=str(row.id),
@@ -234,7 +233,7 @@ class PlatformDeliverySender:
                     message=remainder,
                     already_streamed=bool(display.streamed.strip()),
                 )
-        except _SEND_ERRORS:
+        except _send_errors():
             logger.warning(
                 "agent_surfaces.delivery_sender.stream_finish_failed.degraded",
                 delivery_id=str(row.id),
@@ -260,7 +259,7 @@ class PlatformDeliverySender:
                 await self.egress_factory(uow).progress.clear_progress(
                     conversation_id=conversation_id, progress_handle=display.handle
                 )
-        except _SEND_ERRORS:
+        except _send_errors():
             logger.warning(
                 "agent_surfaces.delivery_sender.stream_take_down_failed.degraded",
                 conversation_id=str(conversation_id),
@@ -316,7 +315,7 @@ class PlatformDeliverySender:
                         reply_message=content.text,
                     )
                 )
-        except _SEND_ERRORS as exc:
+        except _send_errors() as exc:
             return SendResult(delivered=False, error=f"{type(exc).__name__}: {exc}")
         return SendResult(
             delivered=True,

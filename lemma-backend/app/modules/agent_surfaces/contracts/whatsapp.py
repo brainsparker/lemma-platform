@@ -130,7 +130,7 @@ async def deployment_owns_whatsapp_number(phone_number_id: str) -> bool:
             found = await WhatsAppNumberRepository(
                 SqlAlchemyUnitOfWork(session)
             ).get_by_phone_number_id(phone_number_id)
-    except SQLAlchemyError:
+    except SQLAlchemyError, OSError:
         logger.warning(
             "agent_surfaces.whatsapp_contract.number_ownership_unreadable.degraded",
             exc_info=True,
@@ -154,8 +154,10 @@ async def _shared_row() -> WhatsAppNumberEntity | None:
             return await WhatsAppNumberRepository(
                 SqlAlchemyUnitOfWork(session)
             ).oldest_available_number()
-    except SQLAlchemyError:
+    except SQLAlchemyError, OSError:
         # The database, specifically -- unreachable, or a migration not yet run.
+        # `OSError` because a refused or timed-out connection can surface from
+        # the driver unwrapped, before SQLAlchemy has a DBAPI error to wrap.
         # Not `Exception`: a `TypeError` here is a bug in this resolver, and
         # swallowing it would turn a broken fallback into a silently
         # settings-only deployment that nobody notices until the pool is the

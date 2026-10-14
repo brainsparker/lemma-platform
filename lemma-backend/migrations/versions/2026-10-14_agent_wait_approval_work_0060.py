@@ -24,15 +24,15 @@ execution claim) and acts only on state that is still open.
 The waits' lease and attempt columns go: the item's own lease and attempt
 budget replace them.
 
-Revision ID: 0059_agent_wait_approval_work
-Revises: 0058_agent_turn_work
+Revision ID: 0060_agent_wait_approval_work
+Revises: 0059_agent_turn_work
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0059_agent_wait_approval_work"
-down_revision = "0058_agent_turn_work"
+revision = "0060_agent_wait_approval_work"
+down_revision = "0059_agent_turn_work"
 branch_labels = None
 depends_on = None
 

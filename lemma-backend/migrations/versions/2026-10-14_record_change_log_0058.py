@@ -15,15 +15,15 @@ then converts whatever the old path still held -- datastore outbox rows and
 both groups' unfinished entries -- into change-log rows, after those syncs,
 so nothing the old path owed is lost.
 
-Revision ID: 0057_record_change_log
-Revises: 0056_flow_work_items
+Revision ID: 0058_record_change_log
+Revises: 0057_flow_work_items
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0057_record_change_log"
-down_revision = "0056_flow_work_items"
+revision = "0058_record_change_log"
+down_revision = "0057_flow_work_items"
 branch_labels = None
 depends_on = None
 

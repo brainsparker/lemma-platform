@@ -24,15 +24,15 @@ ends them CANCELLED once nothing is running them.
 
 Also renumbers the D2 placeholder (``drop_event_outbox``) to 0062.
 
-Revision ID: 0061_pod_bundle_work
-Revises: 0060_surface_inbound_deliveries
+Revision ID: 0062_pod_bundle_work
+Revises: 0061_surface_inbound_deliveries
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0061_pod_bundle_work"
-down_revision = "0060_surface_inbound_deliveries"
+revision = "0062_pod_bundle_work"
+down_revision = "0061_surface_inbound_deliveries"
 branch_labels = None
 depends_on = None
 

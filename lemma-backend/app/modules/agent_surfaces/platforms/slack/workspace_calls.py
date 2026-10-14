@@ -10,13 +10,15 @@ here has something better to say to a person than a stack trace.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-
-from slack_sdk.errors import SlackApiError
-from slack_sdk.webhook.async_client import AsyncWebhookClient
+from typing import TYPE_CHECKING
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.credentials import CredentialsLike
 from app.modules.agent_surfaces.platforms.slack.client import build_slack_client
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
+
+if TYPE_CHECKING:
+    from slack_sdk.errors import SlackApiError
 
 logger = get_logger(__name__)
 
@@ -44,7 +46,7 @@ async def publish_home(
     try:
         client = await build_slack_client(credentials)
         await client.views_publish(user_id=user_id, view=dict(view))
-    except SlackApiError as exc:
+    except slack_api_error() as exc:
         logger.info(
             "agent_surfaces.slack_manager.home_publish_failed", error=_error(exc)
         )
@@ -58,7 +60,7 @@ async def open_modal(
     try:
         client = await build_slack_client(credentials)
         await client.views_open(trigger_id=trigger_id, view=dict(view))
-    except SlackApiError as exc:
+    except slack_api_error() as exc:
         logger.info("agent_surfaces.slack_manager.modal_open_failed", error=_error(exc))
         return _error(exc)
     return None
@@ -71,7 +73,7 @@ async def update_view(
     try:
         client = await build_slack_client(credentials)
         await client.views_update(view_id=view_id, view=dict(view))
-    except SlackApiError as exc:
+    except slack_api_error() as exc:
         logger.info(
             "agent_surfaces.slack_manager.view_update_failed", error=_error(exc)
         )
@@ -95,7 +97,7 @@ async def post_ephemeral(
             text=text,
             blocks=_blocks(blocks),
         )
-    except SlackApiError as exc:
+    except slack_api_error() as exc:
         logger.info("agent_surfaces.slack_manager.ephemeral_failed", error=_error(exc))
         return _error(exc)
     return None
@@ -109,7 +111,7 @@ async def post_message(
         await client.chat_postMessage(
             channel=channel, text=text, blocks=_blocks(blocks)
         )
-    except SlackApiError as exc:
+    except slack_api_error() as exc:
         logger.info("agent_surfaces.slack_manager.message_failed", error=_error(exc))
         return _error(exc)
     return None
@@ -120,11 +122,13 @@ async def respond(
 ) -> None:
     """Replace the ephemeral a button was tapped in. Slack's response URL needs
     no token: it is the credential, good for a few uses within 30 minutes."""
+    from slack_sdk.webhook.async_client import AsyncWebhookClient
+
     try:
         await AsyncWebhookClient(response_url).send(
             text=text, blocks=_blocks(blocks), replace_original=True
         )
-    except SlackApiError, OSError:
+    except slack_api_error(), OSError:
         logger.info("agent_surfaces.slack_manager.respond_failed")
 
 
@@ -133,7 +137,7 @@ async def is_private_channel(credentials: Credentials, channel: str) -> bool | N
     try:
         client = await build_slack_client(credentials)
         response = await client.conversations_info(channel=channel)
-    except SlackApiError:
+    except slack_api_error():
         return None
     data = response.data if isinstance(response.data, dict) else {}
     info = data.get("channel")
@@ -145,7 +149,7 @@ async def join_channel(credentials: Credentials, channel: str) -> str | None:
     try:
         client = await build_slack_client(credentials)
         await client.conversations_join(channel=channel)
-    except SlackApiError as exc:
+    except slack_api_error() as exc:
         return _error(exc)
     return None
 
@@ -157,7 +161,7 @@ async def invite(
     try:
         client = await build_slack_client(credentials)
         await client.conversations_invite(channel=channel, users=",".join(user_ids))
-    except SlackApiError as exc:
+    except slack_api_error() as exc:
         if _error(exc) == "already_in_channel":
             return None
         return _error(exc)
@@ -168,7 +172,7 @@ async def leave_channel(credentials: Credentials, channel: str) -> str | None:
     try:
         client = await build_slack_client(credentials)
         await client.conversations_leave(channel=channel)
-    except SlackApiError as exc:
+    except slack_api_error() as exc:
         return _error(exc)
     return None
 
@@ -178,7 +182,7 @@ async def open_dm(credentials: Credentials, user_id: str) -> str | None:
     try:
         client = await build_slack_client(credentials)
         response = await client.conversations_open(users=user_id)
-    except SlackApiError:
+    except slack_api_error():
         return None
     data = response.data if isinstance(response.data, dict) else {}
     channel = data.get("channel")
@@ -194,7 +198,7 @@ async def user_profile(credentials: Credentials, user_id: str) -> dict[str, obje
     try:
         client = await build_slack_client(credentials)
         response = await client.users_info(user=user_id)
-    except SlackApiError:
+    except slack_api_error():
         return {}
     data = response.data if isinstance(response.data, dict) else {}
     user = data.get("user")

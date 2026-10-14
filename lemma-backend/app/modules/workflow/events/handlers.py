@@ -326,22 +326,22 @@ async def check_and_start_flows_for_schedule(
 
 @streaq_cron("4-59/5 * * * *", name="recover_schedule_runs")
 async def recover_schedule_runs() -> None:
+    """Settle dispatched agent runs whose outcome event was lost.
+
+    Only until agent outcomes arrive as work-runtime facts; then this cron and
+    the sweep behind it are deleted.
+    """
     from app.modules.schedule.contracts.run_recovery import recover_schedule_runs
 
     worker_ctx: AppWorkerContext = streaq_worker.context
     async with worker_ctx.uow() as uow:
         result = await recover_schedule_runs(uow)
-    # Still a warning, and deliberately so. This used to fire twelve times an
-    # hour and was read as routine maintenance, but that was the counting: rows
-    # the sweep inspected and correctly left alone were reported as
-    # `reconciled`, so a sweep doing nothing at all looked busy. Now the three
-    # counters below only move when the event-driven outcome path missed
-    # something, a dispatch was lost, or a run was abandoned -- each of which is
-    # the safety net catching a failure somewhere else, and worth a warning.
-    if result.redelivered or result.reconciled or result.dead_lettered:
+    # A warning: these counters only move when the outcome stream lost an
+    # agent's end, which is the safety net catching a failure elsewhere. Rows
+    # left alone because the agent still runs are not counted as work.
+    if result.reconciled or result.dead_lettered:
         logger.warning(
             "schedule.runs.recovered",
-            redelivered=result.redelivered,
             reconciled=result.reconciled,
             dead_lettered=result.dead_lettered,
             still_running=result.still_running,

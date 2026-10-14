@@ -171,7 +171,9 @@ async def start_after_filter(
         await ledger.settle_skipped(
             run_id, llm_output=llm_output, metadata={"skipped_because": "fire_cap"}
         )
-        await pause_at_fire_cap(uow, schedule, source_event_id=source_event_id, work=work)
+        await pause_at_fire_cap(
+            uow, schedule, source_event_id=source_event_id, work=work
+        )
         return FireOutcome.FIRE_CAP
     if not await ledger.promote_filtering(run_id, llm_output=llm_output):
         return FireOutcome.DUPLICATE
@@ -193,7 +195,9 @@ async def start_after_filter(
     return FireOutcome.STARTED
 
 
-async def enqueue_start(work: WorkWriter, schedule: ScheduleEntity, run_id: UUID) -> None:
+async def enqueue_start(
+    work: WorkWriter, schedule: ScheduleEntity, run_id: UUID
+) -> None:
     await work.add(
         SCHEDULE_START,
         schedule_namespace(schedule.pod_id),

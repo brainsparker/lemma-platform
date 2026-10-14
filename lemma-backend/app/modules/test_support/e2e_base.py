@@ -303,9 +303,7 @@ async def _close_e2e_process_clients() -> None:
         "close_workspace_tool_runtimes", close_workspace_tool_runtimes
     )
     await _run_cleanup_step("reset_workspace_store_state", reset_workspace_store_state)
-    await _run_cleanup_step(
-        "close_stranger_reply_window", close_stranger_reply_window
-    )
+    await _run_cleanup_step("close_stranger_reply_window", close_stranger_reply_window)
     await _run_cleanup_step("close_user_cache", close_user_cache)
     await _run_cleanup_step("close_auth_abuse_store", close_auth_abuse_store)
     await _run_cleanup_step("close_telegram_oidc_store", close_telegram_oidc_store)

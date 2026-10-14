@@ -1,15 +1,21 @@
-"""Worker tasks owned by the durable event transport."""
+"""Periodic work owned by the durable event transport, until it is removed.
+
+Both go with the outbox and the consumer groups (PR 3b): until then the outbox
+still fills and groups can still be abandoned.
+"""
+
+from datetime import timedelta
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.events.config import event_transport_settings
 from app.core.infrastructure.events.retention import prune_event_delivery_records
-from app.core.infrastructure.jobs.streaq_runtime import streaq_cron
+from app.core.infrastructure.work import periodic_job
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
 
-@streaq_cron("7 * * * *", name="prune_event_delivery_records")
+@periodic_job("events.prune_delivery_records", every=timedelta(hours=1))
 async def prune_event_delivery_records_task() -> None:
     deleted = await prune_event_delivery_records(async_session_maker)
     if total := sum(deleted.values()):
@@ -19,7 +25,7 @@ async def prune_event_delivery_records_task() -> None:
         )
 
 
-@streaq_cron("23 * * * *", name="reap_abandoned_consumer_groups")
+@periodic_job("events.reap_abandoned_consumer_groups", every=timedelta(hours=1))
 async def reap_abandoned_consumer_groups_task() -> None:
     """Hourly report (and, when enabled, removal) of groups nothing reads.
 

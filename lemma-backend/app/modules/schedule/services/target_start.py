@@ -145,7 +145,9 @@ async def _hand_to_workflow(
                 schedule.id, started.source_event_id
             ),
             trigger=WorkflowTrigger(
-                trigger_type=_WORKFLOW_TRIGGERS.get(schedule.schedule_type, "SCHEDULED"),
+                trigger_type=_WORKFLOW_TRIGGERS.get(
+                    schedule.schedule_type, "SCHEDULED"
+                ),
                 payload=_object(context["payload"]),
                 metadata=_object(context["metadata"]),
                 llm_output=_object(context["llm_output"]),

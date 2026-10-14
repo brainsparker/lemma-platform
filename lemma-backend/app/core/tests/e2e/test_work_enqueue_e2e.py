@@ -189,6 +189,63 @@ async def test_periodic_arming_is_idempotent_and_each_run_rearms_the_next(
     assert await work_db.count("dedup_key = 'periodic:tick' AND state = 'queued'") == 1
 
 
+async def test_two_workers_arming_at_once_start_one_chain(
+    work_db: WorkDb, registry: WorkRegistry
+) -> None:
+    """Two workers booting together: the second waits for the first's arming.
+
+    Without the arming lock the second worker's check runs before the first
+    commits, its insert waits on the first's uncommitted row, and if that row
+    is claimed (``running``) before the insert rechecks, the dedup index no
+    longer sees a conflict -- two chains, each re-arming itself forever.
+    """
+    _fast(registry, "demo.tick")
+    registry.periodic("tick", timedelta(minutes=5), "demo.tick")
+    classes = [WorkClass.EVENTS]
+
+    async with work_db.sessions() as first:
+        assert await arm_periodics(first, registry, classes) == 1
+
+        async def second_worker() -> int:
+            async with work_db.sessions() as session:
+                armed = await arm_periodics(session, registry, classes)
+                await session.commit()
+                return armed
+
+        second = asyncio.create_task(second_worker())
+        await asyncio.sleep(0.3)
+        assert not second.done(), "the second worker must wait for the first"
+        await first.commit()
+    # The first worker's dispatcher claims its item before the second looks.
+    dispatcher = dispatcher_for(work_db.sessions, WorkClass.EVENTS, registry=registry)
+    await make_due(work_db.sessions)
+    claimed = await dispatcher.claim_once()
+    assert await second == 0
+    assert await work_db.count("dedup_key = 'periodic:tick'") == 1
+    await dispatcher.execute(claimed[0])
+
+    # And racing for real, twenty times, with a dispatcher claiming throughout.
+    for _ in range(20):
+        await work_db.execute("DELETE FROM work_items")
+
+        async def arm() -> None:
+            async with work_db.sessions() as session:
+                await arm_periodics(session, registry, classes)
+                await session.commit()
+
+        async def claim() -> None:
+            await make_due(work_db.sessions)
+            await dispatcher.claim_once()
+
+        await asyncio.gather(arm(), arm(), claim(), arm())
+        assert (
+            await work_db.count(
+                "dedup_key = 'periodic:tick' AND state IN ('queued', 'running')"
+            )
+            == 1
+        )
+
+
 async def test_a_dead_periodic_is_recreated_at_the_next_boot(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:

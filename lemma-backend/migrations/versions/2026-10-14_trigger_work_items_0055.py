@@ -92,9 +92,7 @@ def seed_statements() -> list[str]:
 
 
 def upgrade() -> None:
-    op.add_column(
-        "schedules", sa.Column("paused_reason", sa.String(32), nullable=True)
-    )
+    op.add_column("schedules", sa.Column("paused_reason", sa.String(32), nullable=True))
     op.create_table(
         "trigger_skips",
         sa.Column("id", sa.Uuid(), primary_key=True),

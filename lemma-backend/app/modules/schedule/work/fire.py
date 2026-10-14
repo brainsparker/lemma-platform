@@ -121,7 +121,9 @@ async def run_arm(ctx: FastContext, payload: ScheduleRef) -> None:
     if row is None:
         return
     if row.next_fire_at is None:
-        cursor, retire_reason = initial_cursor(row.config, now=datetime.now(timezone.utc))
+        cursor, retire_reason = initial_cursor(
+            row.config, now=datetime.now(timezone.utc)
+        )
         if retire_reason is not None:
             row.is_active = False
             row.paused_reason = retire_reason

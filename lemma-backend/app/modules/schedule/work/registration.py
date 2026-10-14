@@ -24,7 +24,13 @@ from app.core.infrastructure.work import (
     facts as default_facts,
     registry as default_registry,
 )
-from app.modules.schedule.work import fire, filter as filter_work, notify, outcome, start
+from app.modules.schedule.work import (
+    fire,
+    filter as filter_work,
+    notify,
+    outcome,
+    start,
+)
 from app.modules.schedule.work.kinds import (
     SCHEDULE_ARM,
     SCHEDULE_FILTER,
@@ -52,7 +58,9 @@ START_RETRY = RetryPolicy(
     max_attempts=5,
     max_lease_losses=3,
     unavailable_budget=timedelta(hours=6),
-    backoff=Exponential(base=timedelta(seconds=10), cap=timedelta(minutes=10), jitter=0.2),
+    backoff=Exponential(
+        base=timedelta(seconds=10), cap=timedelta(minutes=10), jitter=0.2
+    ),
 )
 #: A provider that answers badly is retried a few times; one that is down is
 #: waited out for half an hour before the event is dead-lettered as an outage.
@@ -60,7 +68,9 @@ FILTER_RETRY = RetryPolicy(
     max_attempts=6,
     max_lease_losses=3,
     unavailable_budget=timedelta(minutes=30),
-    backoff=Exponential(base=timedelta(seconds=10), cap=timedelta(minutes=10), jitter=0.2),
+    backoff=Exponential(
+        base=timedelta(seconds=10), cap=timedelta(minutes=10), jitter=0.2
+    ),
 )
 
 

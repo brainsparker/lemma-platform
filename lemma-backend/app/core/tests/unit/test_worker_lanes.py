@@ -82,8 +82,8 @@ def test_every_task_is_registered_on_exactly_one_lane():
             assert not overlap, f"{lane}/{other} both register: {sorted(overlap)}"
 
 
-def test_a_publisher_only_process_still_routes_to_the_bulk_lane():
-    """The API enqueues bulk work but never imports the handlers that declare it.
+def test_a_publisher_only_process_knows_the_bundle_work_kinds():
+    """The API enqueues bundle work but never imports the bodies that run it.
 
     ``TASK_LANES`` is filled by the ``@streaq_task`` decorators, i.e. as a side
     effect of importing each module's handlers — which the worker does via
@@ -93,6 +93,10 @@ def test_a_publisher_only_process_still_routes_to_the_bulk_lane():
     export, import and GitHub publish are enqueued only from the API, so all
     three silently did nothing: the export sat at QUEUED until it expired.
 
+    They are work items now, and the same trap has the same shape: the API's
+    ``WorkWriter.add`` looks the kind up to learn its class and payload, so a
+    process that never registered it cannot write the job at all.
+
     This has to be a subprocess. The property under test is what a process that
     never imported ``app.events`` sees, and by the time this suite runs, this
     one has.
@@ -100,17 +104,21 @@ def test_a_publisher_only_process_still_routes_to_the_bulk_lane():
     backend_root = Path(__file__).resolve().parents[4]
     script = """
 import app.app  # the API process: controllers, no handlers
-from app.core.infrastructure.jobs.streaq_runtime import Lane, lane_for_task
+from app.core.infrastructure.work import WorkClass, registry
 
-bulk = (
-    "export_pod_bundle",
-    "plan_pod_import",
-    "apply_pod_import",
-    "import_pod_url",
-    "import_pod_github",
-    "publish_pod_github",
+bundle = (
+    "pod_bundle.export",
+    "pod_bundle.plan",
+    "pod_bundle.apply",
+    "pod_bundle.import_url",
+    "pod_bundle.import_github",
+    "pod_bundle.publish",
 )
-wrong = [name for name in bulk if lane_for_task(name) is not Lane.BULK]
+wrong = [
+    kind
+    for kind in bundle
+    if registry.find(kind) is None or registry.get(kind).cls is not WorkClass.ADMIN
+]
 print("MISROUTED:" + ",".join(wrong))
 """
     result = subprocess.run(

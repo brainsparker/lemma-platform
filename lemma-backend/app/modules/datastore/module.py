@@ -226,7 +226,7 @@ def _register_work() -> None:
     import app.modules.datastore.events.pod_provision_work  # noqa: F401
 
 
-def _register_streaq() -> None:
+def _register_periodic_work() -> None:
     import app.modules.datastore.events.handlers  # noqa: F401
     import app.modules.datastore.events.orphan_schema_tasks  # noqa: F401
     import app.modules.datastore.events.outbox_retention_tasks  # noqa: F401
@@ -332,8 +332,8 @@ module = LemmaModule(
     name="datastore",
     resource_names=_resource_names,
     routers=_routers,
-    register_streaq=_register_streaq,
     register_work=_register_work,
+    register_periodic_work=_register_periodic_work,
     # Nothing here may scale with data: see `test_boot_hooks.py`. The query
     # role and its grants are ensured lazily, and the datastore outbox table is
     # created by the first record write or the worker's dispatcher.

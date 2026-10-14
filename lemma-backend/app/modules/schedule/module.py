@@ -72,7 +72,7 @@ def _register_work() -> None:
     import app.modules.schedule.work.agent_outcome  # noqa: F401
 
 
-def _register_streaq() -> None:
+def _register_periodic_work() -> None:
     import app.modules.schedule.events.tasks  # noqa: F401
 
 
@@ -108,10 +108,8 @@ module = LemmaModule(
     resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
-    register_streaq=_register_streaq,
+    register_periodic_work=_register_periodic_work,
     register_work=_register_work,
     worker_lifespans=(_reconcile_failure_breakers,),
-    stream_groups=(
-        ("datastore.events", "schedule-datastore-events"),
-    ),
+    stream_groups=(("datastore.events", "schedule-datastore-events"),),
 )

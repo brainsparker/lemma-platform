@@ -13,9 +13,13 @@ from app.modules.function.api import dependencies
 from app.modules.function.events import handlers
 
 
-def test_only_retention_crons_remain_on_streaq() -> None:
-    """Runs and their deadlines are work items; nothing re-enqueues them."""
-    assert "prune_function_runs" in streaq_worker.registry
+def test_retention_is_periodic_work_and_nothing_is_left_on_streaq() -> None:
+    """Runs and their deadlines are work items; retention is periodic work."""
+    from app.core.infrastructure.work import registry
+
+    periodics = {spec.name for spec in registry.periodics()}
+    assert {"function.runs_prune", "function.revisions_sweep"} <= periodics
+    assert "prune_function_runs" not in streaq_worker.registry
     assert "process_function_run" not in streaq_worker.registry
     assert "reconcile_function_runs" not in streaq_worker.registry
 

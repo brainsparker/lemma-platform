@@ -105,7 +105,5 @@ class ScheduleRunService:
             raise ScheduleRunNotRetryableError()
         schedule_run, created = result
         if created:
-            await enqueue_start(
-                WorkWriter.of(self.uow), schedule, schedule_run.id
-            )
+            await enqueue_start(WorkWriter.of(self.uow), schedule, schedule_run.id)
         return schedule_run

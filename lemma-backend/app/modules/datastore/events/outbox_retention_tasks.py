@@ -19,12 +19,13 @@ same worker slot.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.infrastructure.events.retention import prune_event_delivery_records
-from app.core.infrastructure.jobs.streaq_runtime import Lane, streaq_cron
+from app.core.infrastructure.work import periodic_job
 from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
 
@@ -68,7 +69,7 @@ async def prune_datastore_outbox(
     return await prune(session_maker(), include_inbox=False)
 
 
-@streaq_cron("37 * * * *", name="prune_datastore_outbox", lane=Lane.BULK)
+@periodic_job("datastore.outbox_prune", every=timedelta(hours=1))
 async def prune_datastore_outbox_task() -> None:
     deleted = await prune_datastore_outbox()
     if deleted and (total := sum(deleted.values())):

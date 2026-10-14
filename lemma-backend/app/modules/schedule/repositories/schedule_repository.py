@@ -1,6 +1,6 @@
 """Schedule repository implementation."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, List, Optional
 from uuid import UUID
 

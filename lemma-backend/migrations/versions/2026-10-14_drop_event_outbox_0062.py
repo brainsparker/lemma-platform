@@ -9,14 +9,15 @@ edited.
 Planned: drop ``domain_event_outbox``, ``domain_event_inbox`` and the delivery
 tables; the downgrade recreates them empty. If D2 ships as a separate PR after
 PR 3, delete this placeholder before PR 3 merges and let D2 take the next
-free number then.
+free number then. (Was 0061; D1 took 0061 for the pod-bundle cutover, which
+ships with PR 3 either way.)
 
-Revision ID: 0061_drop_event_outbox
-Revises: 0060_surface_inbound_deliveries
+Revision ID: 0062_drop_event_outbox
+Revises: 0061_pod_bundle_work
 """
 
-revision = "0061_drop_event_outbox"
-down_revision = "0060_surface_inbound_deliveries"
+revision = "0062_drop_event_outbox"
+down_revision = "0061_pod_bundle_work"
 branch_labels = None
 depends_on = None
 

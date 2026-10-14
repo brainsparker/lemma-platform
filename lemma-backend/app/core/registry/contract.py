@@ -85,6 +85,13 @@ subscriptions it can see, so an API process that never imported a subscriber
 would commit a fact with nobody to react to it.
 """
 
+type PeriodicRegistrar = Callable[[], None]
+"""Imports the module's periodic work (``periodic_job``) for side effects.
+
+Worker only: periodics are armed at worker boot and nothing else enqueues them,
+so the API process need not import the sweeps (or pay for their imports).
+"""
+
 type AnalyticsRegistrar = Callable[[], None]
 """Imports the module's analytics projections for side effects.
 
@@ -116,6 +123,8 @@ class LemmaModule:
     # --- Every process ---
     # Work kinds and fact subscriptions; see ``WorkRegistrar``.
     register_work: WorkRegistrar | None = None
+    # Recurring maintenance as periodic work; see ``PeriodicRegistrar``.
+    register_periodic_work: PeriodicRegistrar | None = None
     # Analytics projections of committed domain events; see
     # ``AnalyticsRegistrar``.
     register_analytics: AnalyticsRegistrar | None = None

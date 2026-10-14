@@ -200,24 +200,24 @@ async def test_a_zero_budget_deletes_exactly_one_batch(deleted, monkeypatch) -> 
 
 
 @pytest.mark.anyio
-async def test_the_cron_is_registered_on_the_bulk_lane() -> None:
+async def test_the_sweep_is_admin_periodic_work() -> None:
     """Interactive work must not queue behind a drain."""
-    from app.core.infrastructure.jobs.streaq_runtime import Lane, TASK_LANES
+    from app.core.infrastructure.work import WorkClass, registry
     import app.modules.schedule.events.tasks  # noqa: F401
 
-    assert TASK_LANES.get("prune_schedule_runs") is Lane.BULK
+    assert registry.get("schedule.runs_prune").cls is WorkClass.ADMIN
+    assert "schedule.runs_prune" in {spec.name for spec in registry.periodics()}
 
 
 @pytest.mark.anyio
-async def test_the_module_registers_its_tasks() -> None:
-    """A cron nothing imports never runs — the failure this almost shipped as."""
+async def test_the_module_registers_its_periodic_work() -> None:
+    """A sweep nothing imports never runs — the failure this almost shipped as."""
+    from app.core.infrastructure.work import registry
     from app.modules.schedule.module import module
 
-    assert module.register_streaq is not None
-    module.register_streaq()
-    from app.core.infrastructure.jobs.streaq_runtime import TASK_LANES
-
-    assert "prune_schedule_runs" in TASK_LANES
+    assert module.register_periodic_work is not None
+    module.register_periodic_work()
+    assert "schedule.runs_prune" in {spec.name for spec in registry.periodics()}
 
 
 @pytest.mark.anyio

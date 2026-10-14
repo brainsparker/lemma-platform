@@ -5,7 +5,8 @@ Public surface -- import from here, not from the submodules:
 * ``work_handler`` / ``WorkMode`` / ``WorkClass`` / ``RetryPolicy`` -- register a kind.
 * ``WorkWriter`` -- enqueue on an open unit of work.
 * ``facts`` / ``Fact`` -- typed cross-module reactions, fanned out at write time.
-* ``periodic`` -- recurring work, armed at worker boot.
+* ``periodic`` -- recurring work, armed at worker boot; ``periodic_job`` -- a
+  zero-argument maintenance coroutine as a periodic (what a cron became).
 * ``Rate`` / ``RateUse`` -- named token buckets a kind's items draw from at claim.
 * ``Unavailable`` / ``ItemFailure`` / ``PermanentFailure`` / ``Defer`` /
   ``Released`` / ``LeaseLost`` -- how a handler reports what happened.
@@ -24,6 +25,7 @@ from app.core.infrastructure.work.limits import (
     install_work_limit_port,
     reset_work_limit_port,
 )
+from app.core.infrastructure.work.periodic_jobs import periodic_job
 from app.core.infrastructure.work.rates import Rate, RateUse
 from app.core.infrastructure.work.registry import (
     HandlerSpec,
@@ -93,6 +95,7 @@ __all__ = [
     "install_work_limit_port",
     "org_namespace",
     "periodic",
+    "periodic_job",
     "pod_namespace",
     "registry",
     "reset_work_limit_port",

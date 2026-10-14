@@ -183,7 +183,9 @@ class FireLedger:
         await self._session.flush()
         return model.to_entity()
 
-    async def by_target(self, target_kind: str, target_run_id: str) -> ScheduleRun | None:
+    async def by_target(
+        self, target_kind: str, target_run_id: str
+    ) -> ScheduleRun | None:
         return await self._session.scalar(
             select(ScheduleRun)
             .where(
@@ -211,7 +213,9 @@ class FireLedger:
             .limit(limit)
             .subquery()
         )
-        return int(await self._session.scalar(select(func.count()).select_from(fires)) or 0)
+        return int(
+            await self._session.scalar(select(func.count()).select_from(fires)) or 0
+        )
 
 
 def is_unstarted(model: ScheduleRun | None) -> bool:

@@ -140,6 +140,10 @@ def _register_work() -> None:
     import app.modules.agent.events.wait_work  # noqa: F401
 
 
+def _register_periodic_work() -> None:
+    import app.modules.agent.events.periodic_work  # noqa: F401
+
+
 def _resource_names():
     """How this module's resources are addressed by name in a grant.
 
@@ -165,6 +169,7 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     register_work=_register_work,
+    register_periodic_work=_register_periodic_work,
     api_lifespans=(_report_system_model_pricing, _drain_agent_host_links),
     # The worker is where agent runs actually dispatch, so a deployment
     # whose models cannot back its spend limit has to hear it there too.

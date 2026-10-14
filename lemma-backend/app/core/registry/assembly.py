@@ -107,6 +107,14 @@ def register_module_work(modules: Sequence[LemmaModule]) -> None:
             module.register_analytics()
 
 
+def register_module_periodic_work(modules: Sequence[LemmaModule]) -> None:
+    """Import every module's periodic work: the worker's, armed at its boot."""
+    register_module_work(modules)
+    for module in modules:
+        if module.register_periodic_work is not None:
+            module.register_periodic_work()
+
+
 def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:
     """Include every module's API routers, in module-list then thunk order."""
     register_module_work(modules)
@@ -160,6 +168,7 @@ def wire_module_events(modules: Sequence[LemmaModule], broker: "RedisBroker") ->
     configure_pod_liveness(modules)
     configure_plan_limits(modules)
     configure_namespace_directory(modules)
+    register_module_periodic_work(modules)
     register_streaq_tasks(modules)
     for module in modules:
         if module.event_routers is None:

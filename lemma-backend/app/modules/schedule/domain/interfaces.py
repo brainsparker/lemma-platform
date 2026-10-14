@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Optional, Any, Dict, Protocol
+from typing import List, Optional, Any, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context

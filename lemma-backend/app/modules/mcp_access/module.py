@@ -35,6 +35,9 @@ def _register_work() -> None:
 
 def _register_streaq() -> None:
     import app.modules.mcp_access.events.event_deliveries  # noqa: F401
+
+
+def _register_periodic_work() -> None:
     import app.modules.mcp_access.events.tasks  # noqa: F401
 
 
@@ -44,5 +47,6 @@ module = LemmaModule(
     event_routers=_event_routers,
     register_streaq=_register_streaq,
     register_work=_register_work,
+    register_periodic_work=_register_periodic_work,
     stream_groups=(("datastore.events", "mcp-access-event-deliveries"),),
 )

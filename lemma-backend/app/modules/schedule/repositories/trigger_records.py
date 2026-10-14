@@ -56,11 +56,16 @@ class TriggerRecords:
         await self._session.execute(
             statement.on_conflict_do_update(
                 constraint="uq_trigger_skips_page",
-                set_={"last": statement.excluded.last, "count": statement.excluded.count},
+                set_={
+                    "last": statement.excluded.last,
+                    "count": statement.excluded.count,
+                },
             )
         )
 
-    async def recent_skips(self, schedule_id: UUID, *, limit: int = 50) -> list[SkipRecord]:
+    async def recent_skips(
+        self, schedule_id: UUID, *, limit: int = 50
+    ) -> list[SkipRecord]:
         rows = await self._session.scalars(
             select(TriggerSkip)
             .where(TriggerSkip.schedule_id == schedule_id)

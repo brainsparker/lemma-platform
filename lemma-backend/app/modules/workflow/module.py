@@ -30,6 +30,10 @@ def _register_work() -> None:
     import app.modules.workflow.events.agent_resume_work  # noqa: F401
 
 
+def _register_periodic_work() -> None:
+    import app.modules.workflow.events.periodic_work  # noqa: F401
+
+
 def _resource_names():
     """How this module's resources are addressed by name in a grant.
 
@@ -57,7 +61,6 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     register_work=_register_work,
-    stream_groups=(
-        ("schedule_events", "workflow-schedule-events"),
-    ),
+    register_periodic_work=_register_periodic_work,
+    stream_groups=(("schedule_events", "workflow-schedule-events"),),
 )

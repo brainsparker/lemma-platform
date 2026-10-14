@@ -20,7 +20,7 @@ class FakeStore:
     def __init__(self):
         self.publishes = {}
 
-    async def save_publish(self, state):
+    async def save_publish(self, state, *, uow=None):
         state.touch()
         self.publishes[state.publish_id] = state
 
@@ -33,9 +33,9 @@ class FakeQueue:
         self.calls = []
         self._dup = duplicate
 
-    async def enqueue(self, name, *, context, _job_id):
-        self.calls.append((name, context, _job_id))
-        return None if self._dup else object()
+    async def enqueue(self, uow, kind, payload, *, pod_id, dedup_key):
+        self.calls.append((kind, payload.model_dump(mode="json"), dedup_key))
+        return not self._dup
 
 
 class FakeLock:
@@ -57,6 +57,15 @@ class FakeLock:
 
 class FakeUow:
     session = object()
+
+    async def commit(self):
+        return None
+
+    async def rollback(self):
+        return None
+
+    def after_commit(self, callback):
+        del callback
 
 
 class FakeUowFactory:
@@ -112,7 +121,7 @@ async def test_start_publish_enqueues_with_unique_job_id_and_repo_lock():
         and state.mode is PublishMode.UPDATE
         and state.account_id == account_id
     )
-    assert queue.calls[0][0] == "publish_pod_github"
+    assert queue.calls[0][0] == "pod_bundle.publish"
     assert queue.calls[0][2] == publish_job_id(state.publish_id)
     assert (account_id, "crm") in lock.locked
 

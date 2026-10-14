@@ -66,7 +66,10 @@ class DatastoreEventHandler:
     """
 
     def __init__(
-        self, schedule_repository: ScheduleRepository, *, fire: FireTrigger = fire_trigger
+        self,
+        schedule_repository: ScheduleRepository,
+        *,
+        fire: FireTrigger = fire_trigger,
     ):
         self.schedule_repository = schedule_repository
         self._fire = fire
@@ -163,4 +166,3 @@ class DatastoreEventHandler:
             changed=event.changed,
             previous=event.previous,
         )
-

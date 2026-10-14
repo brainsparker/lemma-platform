@@ -63,14 +63,18 @@ _CLAIMED_BY = "filter_item_id"
 class ScheduleFilter:
     """The model seam, so a test counts calls rather than patching a module."""
 
-    async def judge(self, schedule: ScheduleEntity, event: FilterEvent) -> FilterVerdict:
+    async def judge(
+        self, schedule: ScheduleEntity, event: FilterEvent
+    ) -> FilterVerdict:
         from app.modules.schedule.infrastructure.adapters.decision_filter import (
             DecisionScheduleFilter,
         )
 
         assert schedule.filter_instruction is not None
         return await DecisionScheduleFilter().filter_event(
-            instruction=filter_instruction_for(schedule.filter_instruction, event.metadata),
+            instruction=filter_instruction_for(
+                schedule.filter_instruction, event.metadata
+            ),
             output_schema=schedule.filter_output_schema,
             event_payload=dict(event.payload),
             schedule=schedule,
@@ -246,4 +250,3 @@ def _event(payload: FilterEvent) -> TriggerEvent:
         user_id=payload.user_id,
         source_occurred_at=payload.source_occurred_at,
     )
-

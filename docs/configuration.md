@@ -212,10 +212,11 @@ FUNCTION_IMAGE=ghcr.io/lemma-work/lemma-function@sha256:...
 # bytes. Required for any provider that runs a workspace runtime.
 WORKSPACE_RUNTIME_CREDENTIAL_KEY=...
 
-# Release an idle workspace after this long. The sweep that enforces it runs on
-# WORKSPACE_SWEEP_CRON. Releasing keeps the files; it stops the compute.
+# Release an idle workspace after this long. The sweep that enforces it runs
+# every WORKSPACE_SWEEP_INTERVAL_SECONDS (a periodic work item). Releasing keeps
+# the files; it stops the compute.
 WORKSPACE_IDLE_RELEASE_SECONDS=900
-WORKSPACE_SWEEP_CRON=*/5 * * * *
+WORKSPACE_SWEEP_INTERVAL_SECONDS=300
 ```
 
 ### Making a new sandbox image take effect
@@ -431,7 +432,7 @@ APP_RELEASE_RETENTION_ENABLED=true
 APP_RELEASE_KEEP_LAST=10      # floor: never prune the newest N, whatever their age
 APP_RELEASE_KEEP_DAYS=30      # keep anything younger than this, up to the ceiling
 APP_RELEASE_MAX_KEEP=20       # ceiling: must be >= KEEP_LAST or startup refuses
-APP_RELEASE_RETENTION_CRON="20 4 * * *"
+APP_RELEASE_RETENTION_INTERVAL_SECONDS=86400  # a periodic work item; no wall-clock alignment
 # Apps per round trip. The sweep pages until the candidate set is drained, so
 # this bounds one query rather than deciding which apps ever get swept.
 APP_RELEASE_RETENTION_BATCH=200
@@ -443,7 +444,7 @@ FUNCTION_REVISION_RETENTION_ENABLED=true
 FUNCTION_REVISION_KEEP_LAST=10
 FUNCTION_REVISION_KEEP_DAYS=30
 FUNCTION_REVISION_MAX_KEEP=20
-FUNCTION_REVISION_RETENTION_CRON="40 4 * * *"
+FUNCTION_REVISION_RETENTION_INTERVAL_SECONDS=86400  # a periodic work item; no wall-clock alignment
 FUNCTION_REVISION_RETENTION_BATCH=200
 FUNCTION_REVISION_RETENTION_BUDGET_SECONDS=60
 ```

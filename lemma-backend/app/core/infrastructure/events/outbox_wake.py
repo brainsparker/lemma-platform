@@ -28,16 +28,14 @@ from __future__ import annotations
 
 import asyncio
 import random
-import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
-from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import asyncpg
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.direct_connection import asyncpg_connect_kwargs
 from app.core.infrastructure.events.config import event_transport_settings
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
@@ -49,8 +47,6 @@ logger = get_logger(__name__)
 #: Channel every outbox producer notifies and the dispatcher listens on. A
 #: PostgreSQL identifier, and a constant -- never interpolated from input.
 OUTBOX_WAKE_CHANNEL = "lemma_outbox_wake"
-
-_DRIVER_PREFIX = re.compile(r"^postgresql\+\w+://")
 
 
 async def notify_outbox_wake(session: AsyncSession) -> None:
@@ -70,42 +66,6 @@ async def notify_outbox_wake(session: AsyncSession) -> None:
     await session.execute(
         text("SELECT pg_notify(:channel, '')"), {"channel": OUTBOX_WAKE_CHANNEL}
     )
-
-
-def asyncpg_connect_kwargs(
-    database_url: str, *, application_name: str
-) -> dict[str, Any]:
-    """Translate a SQLAlchemy URL into raw asyncpg connect arguments.
-
-    The listener cannot use the SQLAlchemy pool. ``pool_recycle`` is 300s, so a
-    pooled connection would drop its ``LISTEN`` registration every five minutes
-    and go quiet without erroring -- the dispatcher would silently revert to
-    fallback-poll latency.
-    """
-    dsn = _DRIVER_PREFIX.sub("postgresql://", database_url)
-    parts = urlsplit(dsn)
-    query = parse_qs(parts.query)
-    # SQLAlchemy spells this `ssl`; libpq spells it `sslmode`. asyncpg takes
-    # either spelling's value as its `ssl` argument, but not as a DSN query
-    # parameter, so it has to be lifted out.
-    ssl_mode = (query.get("ssl") or query.get("sslmode") or [None])[0]
-    kwargs: dict[str, Any] = {
-        "dsn": urlunsplit((parts.scheme, parts.netloc, parts.path, "", "")),
-        # Named so an operator can tell a listener from a pooled connection in
-        # pg_stat_activity, which is the first thing you want during a
-        # notification-queue incident.
-        "server_settings": {
-            "application_name": application_name,
-            # The listener never opens a transaction. This is a backstop, not a
-            # mechanism: a backend that holds LISTEN open inside an idle
-            # transaction is the one failure mode that can stall the shared
-            # notification queue and start failing NOTIFY for everyone.
-            "idle_in_transaction_session_timeout": "60000",
-        },
-    }
-    if ssl_mode:
-        kwargs["ssl"] = ssl_mode
-    return kwargs
 
 
 class OutboxWakeListener:

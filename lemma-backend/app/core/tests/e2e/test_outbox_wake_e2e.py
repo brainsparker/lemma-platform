@@ -29,10 +29,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.domain.events import DomainEvent
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.events.models import DomainEventOutbox
+from app.core.infrastructure.db.direct_connection import asyncpg_connect_kwargs
 from app.core.infrastructure.events.outbox_wake import (
     OUTBOX_WAKE_CHANNEL,
     OutboxWakeListener,
-    asyncpg_connect_kwargs,
 )
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 

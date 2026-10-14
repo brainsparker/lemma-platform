@@ -285,7 +285,7 @@ async def test_notify_is_sent_on_the_class_channel_at_commit_only(
 
     import asyncpg
 
-    from app.core.infrastructure.events.outbox_wake import asyncpg_connect_kwargs
+    from app.core.infrastructure.db.direct_connection import asyncpg_connect_kwargs
 
     url = work_db.engine.url.render_as_string(hide_password=False)
     listener = await asyncpg.connect(

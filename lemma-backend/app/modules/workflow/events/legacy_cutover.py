@@ -14,9 +14,8 @@ only.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
-from app.core.infrastructure.cutover.routes import legacy_converter
+from app.core.infrastructure.cutover.routes import LegacyPayload, legacy_converter
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import JobContext
@@ -26,10 +25,10 @@ async def start_legacy_fire(
     *,
     schedule_id: str,
     user_id: str | None,
-    payload: dict[str, Any],
+    payload: dict[str, object],
     schedule_event_id: str,
-    metadata: dict[str, Any] | None = None,
-    llm_output: dict[str, Any] | None = None,
+    metadata: dict[str, object] | None = None,
+    llm_output: dict[str, object] | None = None,
     source_occurred_at: str | None = None,
 ) -> None:
     """The body of the old ``check_and_start_flows_for_schedule`` job."""
@@ -55,7 +54,7 @@ async def start_legacy_fire(
         await uow.commit()
 
 
-def _is_timer_wake(payload: dict[str, Any]) -> bool:
+def _is_timer_wake(payload: dict[str, object]) -> bool:
     """A timer fire for something already waiting: a suspended workflow run's
     (now a ``workflow.resume`` item) or a waiting conversation's (an
     ``agent.wait.fire`` item). Migrations 0057 and 0060 wrote one for every
@@ -64,7 +63,7 @@ def _is_timer_wake(payload: dict[str, Any]) -> bool:
 
 
 @legacy_converter("workflow.schedule-start")
-async def schedule_fired(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def schedule_fired(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del ctx, route
     if not event.get("schedule_id") or _is_timer_wake(event.get("payload") or {}):
         return
@@ -81,7 +80,7 @@ async def schedule_fired(ctx: JobContext, event: dict[str, Any], route: str) -> 
 
 
 @legacy_converter("streaq:check_and_start_flows_for_schedule")
-async def schedule_job(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def schedule_job(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del ctx, route
     kwargs = dict(event.get("kwargs") or {})
     if not kwargs.get("schedule_id") or _is_timer_wake(kwargs.get("payload") or {}):

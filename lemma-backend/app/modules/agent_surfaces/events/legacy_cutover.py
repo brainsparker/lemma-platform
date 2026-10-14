@@ -23,18 +23,18 @@ Worker only.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID
 
 from pydantic import TypeAdapter
 from sqlalchemy import select
 
-from app.core.infrastructure.cutover.routes import legacy_converter
+from app.core.infrastructure.cutover.routes import LegacyPayload, legacy_converter
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.work import JobContext
 from app.core.log.log import get_logger
+from app.modules.agent.contracts.conversation_metadata_records import MetadataRecord
 from app.modules.agent_surfaces.domain.deliveries import DeliveryContent
 from app.modules.agent_surfaces.domain.inbound_messages import SHARED_RECEIVER_SCOPE
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -53,7 +53,7 @@ def _uow_factory() -> SessionUnitOfWorkFactory:
 
 
 @legacy_converter("agent-surfaces.webhook")
-async def webhook(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def webhook(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del ctx, route
     from app.modules.agent_surfaces.services.inbound_acceptor import (
         InboundAcceptor,
@@ -97,7 +97,7 @@ async def webhook(ctx: JobContext, event: dict[str, Any], route: str) -> None:
 
 
 @legacy_converter("agent-surfaces.onboarding")
-async def onboarding_ready(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def onboarding_ready(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del route
     from app.modules.agent_surfaces.services.onboarding_handoff import (
         hand_off_when_ready,
@@ -110,7 +110,7 @@ async def onboarding_ready(ctx: JobContext, event: dict[str, Any], route: str) -
 
 
 @legacy_converter("streaq:process_surface_message")
-async def surface_message(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def surface_message(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del ctx, route
     from app.modules.agent_surfaces.composition import build_surface_turn_starter
     from app.modules.agent_surfaces.domain.ingress_context import (
@@ -128,7 +128,7 @@ async def surface_message(ctx: JobContext, event: dict[str, Any], route: str) ->
 
 
 @legacy_converter("state:surfaces.owed_replies")
-async def owed_replies(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def owed_replies(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del event, route
     from app.modules.agent.contracts import (
         conversation_metadata_records as metadata_records,
@@ -158,7 +158,7 @@ async def owed_replies(ctx: JobContext, event: dict[str, Any], route: str) -> No
 
 @legacy_converter("state:surfaces.notification_expiry")
 async def notification_expiry(
-    ctx: JobContext, event: dict[str, Any], route: str
+    ctx: JobContext, event: LegacyPayload, route: str
 ) -> None:
     del event, route
     from app.modules.agent_surfaces.infrastructure.notification_models import (
@@ -192,12 +192,12 @@ async def notification_expiry(
         after = rows[-1].id
 
 
-def _identity(value: Any) -> dict[str, str | None]:
+def _identity(value: object) -> dict[str, str | None]:
     run = value.get("agent_run_id") if isinstance(value, dict) else None
     return {"agent_run_id": str(run) if run else None}
 
 
-async def _owed_to_delivery(uow: SqlAlchemyUnitOfWork, record: Any) -> bool:
+async def _owed_to_delivery(uow: SqlAlchemyUnitOfWork, record: MetadataRecord) -> bool:
     from app.modules.agent.contracts.conversations_for_surfaces import (
         surface_conversation,
     )

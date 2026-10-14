@@ -131,8 +131,9 @@ async def take_over(
             text(_take_over(route, "domain_event_outbox o")),
             {**_params(route, limit)},
         )
-        if result.rowcount:
-            taken[route.consumer] = int(result.rowcount)
+        count = int(getattr(result, "rowcount", 0) or 0)
+        if count:
+            taken[route.consumer] = count
     return taken
 
 
@@ -153,7 +154,7 @@ async def take_over_rows(
         text(_take_over(route, source)),
         {**_params(route, len(rows)), "rows": _encode(rows)},
     )
-    return int(result.rowcount or 0)
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def count_owed(session: AsyncSession, route: LegacyRoute) -> int:

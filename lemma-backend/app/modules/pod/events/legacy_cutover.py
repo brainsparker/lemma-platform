@@ -9,10 +9,9 @@ already done its part does not do it again. Worker only.
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import UUID
 
-from app.core.infrastructure.cutover.routes import legacy_converter
+from app.core.infrastructure.cutover.routes import LegacyPayload, legacy_converter
 from app.core.infrastructure.work import JobContext, facts
 from app.modules.pod.contracts.lifecycle import (
     PodCreated,
@@ -31,22 +30,20 @@ _DELETION_KINDS = {
 }
 
 
-def _uuid(event: dict[str, Any], key: str) -> UUID | None:
+def _uuid(event: LegacyPayload, key: str) -> UUID | None:
     value = event.get(key)
     return UUID(str(value)) if value else None
 
 
 @legacy_converter("pod.join-request-email")
-async def join_request_email(
-    ctx: JobContext, event: dict[str, Any], route: str
-) -> None:
+async def join_request_email(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     requested = PodJoinRequestedEvent.model_validate(event)
     async with ctx.complete_work() as uow:
         await add_join_request_email_work(uow, requested)
 
 
 @legacy_converter("datastore.pod-schema-bootstrap")
-async def pod_created(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def pod_created(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     fact = PodCreated(
         pod_id=UUID(str(event["pod_id"])),
         organization_id=UUID(str(event["organization_id"])),
@@ -56,7 +53,7 @@ async def pod_created(ctx: JobContext, event: dict[str, Any], route: str) -> Non
 
 
 @legacy_converter(*_DELETION_KINDS)
-async def pod_deleted(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def pod_deleted(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     fact = PodDeleted(
         pod_id=UUID(str(event["pod_id"])),
         organization_id=UUID(str(event["organization_id"])),
@@ -67,7 +64,7 @@ async def pod_deleted(ctx: JobContext, event: dict[str, Any], route: str) -> Non
 
 
 @legacy_converter("agent-surfaces.pod-member-removed")
-async def member_removed(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def member_removed(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     fact = PodMemberRemoved(
         pod_id=UUID(str(event["pod_id"])), user_id=UUID(str(event["user_id"]))
     )

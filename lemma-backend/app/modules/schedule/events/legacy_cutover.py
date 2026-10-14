@@ -19,12 +19,11 @@ Worker only.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select, text
 
-from app.core.infrastructure.cutover.routes import legacy_converter
+from app.core.infrastructure.cutover.routes import LegacyPayload, legacy_converter
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import JobContext, WorkWriter
 from app.modules.schedule.work import registration as _registration  # noqa: F401  registers the kinds written here
@@ -78,7 +77,7 @@ def _text(status: object) -> str:
 
 
 @legacy_converter("schedule-notifications")
-async def paused_notice(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def paused_notice(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del route
     pod_id = UUID(str(event["pod_id"])) if event.get("pod_id") else None
     reason = str(event.get("reason") or "consecutive_failures")
@@ -98,14 +97,14 @@ async def paused_notice(ctx: JobContext, event: dict[str, Any], route: str) -> N
 
 
 @legacy_converter("schedule.workflow-outcomes")
-async def workflow_outcome(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def workflow_outcome(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del route
     async with ctx.complete_work() as uow:
         await _record(uow, "WORKFLOW", str(event["run_id"]), str(event["status"]))
 
 
 @legacy_converter("schedule.agent-outcomes")
-async def agent_outcome(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def agent_outcome(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     """The old consumer read the conversation's state, not the event's: a
     conversation outlives a run, and a run that ended on a pause is not it
     finishing."""
@@ -122,7 +121,7 @@ async def agent_outcome(ctx: JobContext, event: dict[str, Any], route: str) -> N
 
 
 @legacy_converter("state:schedule.dispatched_runs")
-async def dispatched_runs(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def dispatched_runs(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     """Every DISPATCHED run whose target has ended, recorded; in batches."""
     del event, route
     from app.modules.agent.contracts.conversation_outcomes import (
@@ -192,7 +191,7 @@ async def dispatched_runs(ctx: JobContext, event: dict[str, Any], route: str) ->
 
 
 @legacy_converter("streaq:handle_llm_filter_task")
-async def llm_filter(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def llm_filter(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del route
     from app.modules.schedule.contracts.dispatch import get_schedule
 

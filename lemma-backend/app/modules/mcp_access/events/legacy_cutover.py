@@ -12,13 +12,12 @@ reaches the subscriber through the log, is delivered once -- and its
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
-from app.core.infrastructure.cutover.routes import legacy_converter
+from app.core.infrastructure.cutover.routes import LegacyPayload, legacy_converter
 from app.core.infrastructure.work import JobContext, WorkWriter, pod_namespace
 from app.modules.mcp_access.events.event_deliveries import DELIVER, DeliveryRef
 from app.modules.mcp_access.infrastructure.models import (
@@ -28,7 +27,7 @@ from app.modules.mcp_access.infrastructure.models import (
 
 
 @legacy_converter("streaq:deliver_mcp_event")
-async def mcp_delivery(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def mcp_delivery(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del route
     kwargs = dict(event.get("kwargs") or {})
     public_id = str(kwargs.get("subscription_id") or "")

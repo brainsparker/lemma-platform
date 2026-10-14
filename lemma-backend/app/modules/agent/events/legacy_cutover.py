@@ -17,10 +17,9 @@ Worker only.
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import UUID
 
-from app.core.infrastructure.cutover.routes import legacy_converter
+from app.core.infrastructure.cutover.routes import LegacyPayload, legacy_converter
 from app.core.infrastructure.work import JobContext, WorkWriter, facts, pod_namespace
 from app.modules.agent.domain.value_objects import (
     AgentRunFinishResult,
@@ -44,7 +43,7 @@ _FINISHED = frozenset(
 
 
 @legacy_converter("agent.control")
-async def run_completed(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def run_completed(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del route
     from app.modules.agent.infrastructure.repositories import ConversationRepository
     from app.modules.agent.services.run_followups import stage_run_followups
@@ -83,7 +82,7 @@ async def run_completed(ctx: JobContext, event: dict[str, Any], route: str) -> N
 
 @legacy_converter("agent.notification_settled")
 async def notification_settled(
-    ctx: JobContext, event: dict[str, Any], route: str
+    ctx: JobContext, event: LegacyPayload, route: str
 ) -> None:
     del route
     fact = NotificationSettled(
@@ -95,9 +94,7 @@ async def notification_settled(
 
 
 @legacy_converter("streaq:generate_conversation_title")
-async def conversation_title(
-    ctx: JobContext, event: dict[str, Any], route: str
-) -> None:
+async def conversation_title(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del route
     from sqlalchemy import select
 

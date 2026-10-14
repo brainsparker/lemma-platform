@@ -29,14 +29,13 @@ import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.core.config import settings
-from app.core.infrastructure.cutover.routes import legacy_converter
+from app.core.infrastructure.cutover.routes import LegacyPayload, legacy_converter
 from app.core.infrastructure.cutover.work import LegacyOutbox, register_legacy_outbox
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import Defer, JobContext
@@ -63,7 +62,7 @@ _OPS = {"INSERT": "I", "UPDATE": "U", "DELETE": "D"}
 
 
 @legacy_converter(*RECORD_ROUTES)
-async def record_change(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def record_change(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del route
     async with ctx.checkpoint() as uow:
         if await _syncs_outstanding(uow):
@@ -75,14 +74,14 @@ async def record_change(ctx: JobContext, event: dict[str, Any], route: str) -> N
 async def append_events(
     conn: AsyncConnection,
     uow: SqlAlchemyUnitOfWork,
-    events: Sequence[Mapping[str, Any]],
+    events: Sequence[Mapping[str, object]],
 ) -> int:
     """Append record events to their pods' logs; skip ones already appended."""
     from app.modules.datastore.infrastructure.repositories import (
         DatastoreTableRepository,
     )
 
-    by_pod: dict[UUID, list[Mapping[str, Any]]] = defaultdict(list)
+    by_pod: dict[UUID, list[Mapping[str, object]]] = defaultdict(list)
     for event in events:
         if str(event.get("event_type", "")).startswith("datastore.record."):
             by_pod[UUID(str(event["pod_id"]))].append(event)
@@ -141,7 +140,7 @@ def _encode_records(records: list[dict[str, object]]) -> str:
 
 
 def _record(
-    event: Mapping[str, Any], table_ids: Mapping[str, UUID]
+    event: Mapping[str, object], table_ids: Mapping[str, UUID]
 ) -> dict[str, object] | None:
     table_id = table_ids.get(str(event.get("table_name")))
     op = _OPS.get(str(event.get("operation")))
@@ -175,7 +174,7 @@ async def _syncs_outstanding(uow: SqlAlchemyUnitOfWork) -> bool:
 
 
 @legacy_converter("streaq:cleanup_deleted_datastore_paths")
-async def file_cleanup(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def file_cleanup(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del route
     from app.modules.datastore.events.file_work import (
         CleanupFile,

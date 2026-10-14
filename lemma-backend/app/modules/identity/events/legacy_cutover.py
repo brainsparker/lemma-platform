@@ -10,11 +10,10 @@ the old number. Worker only.
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import UUID
 
 from app.core.domain.events import DomainEvent
-from app.core.infrastructure.cutover.routes import legacy_converter
+from app.core.infrastructure.cutover.routes import LegacyPayload, legacy_converter
 from app.core.infrastructure.work import JobContext
 from app.modules.identity.domain.events import (
     OrganizationInvitationAcceptedEvent,
@@ -41,7 +40,7 @@ _EMAIL_EVENTS: dict[str, type[DomainEvent]] = {
 
 
 @legacy_converter("identity-email-events")
-async def identity_email(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def identity_email(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del route
     cls = _EMAIL_EVENTS.get(str(event.get("event_type")))
     if cls is None:
@@ -53,7 +52,7 @@ async def identity_email(ctx: JobContext, event: dict[str, Any], route: str) -> 
 
 @legacy_converter("identity-mobile-verification-events")
 async def whatsapp_verification(
-    ctx: JobContext, event: dict[str, Any], route: str
+    ctx: JobContext, event: LegacyPayload, route: str
 ) -> None:
     del route
     payload = WhatsAppVerificationPayload.model_validate(event)
@@ -62,7 +61,7 @@ async def whatsapp_verification(
 
 
 @legacy_converter("agent-surfaces.identity")
-async def mobile_changed(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def mobile_changed(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del route
     async with ctx.complete_work() as uow:
         await emit_mobile_changed(uow, UUID(str(event["user_id"])))

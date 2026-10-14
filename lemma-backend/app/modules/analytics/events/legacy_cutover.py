@@ -9,10 +9,13 @@ event types do not overlap). Worker only.
 
 from __future__ import annotations
 
-from typing import Any
 
 from app.core.analytics.domain_events import project_payload
-from app.core.infrastructure.cutover.routes import ROUTES, legacy_converter
+from app.core.infrastructure.cutover.routes import (
+    ROUTES,
+    LegacyPayload,
+    legacy_converter,
+)
 from app.core.infrastructure.work import JobContext
 
 ANALYTICS_ROUTES = tuple(
@@ -21,6 +24,6 @@ ANALYTICS_ROUTES = tuple(
 
 
 @legacy_converter(*ANALYTICS_ROUTES)
-async def analytics_event(ctx: JobContext, event: dict[str, Any], route: str) -> None:
+async def analytics_event(ctx: JobContext, event: LegacyPayload, route: str) -> None:
     del ctx, route
     await project_payload(event)

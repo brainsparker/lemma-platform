@@ -39,7 +39,9 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from pydantic import JsonValue
 
 if TYPE_CHECKING:
     from app.core.infrastructure.work import JobContext
@@ -188,9 +190,12 @@ STATE_ROUTES: tuple[str, ...] = (
     "state:schedule.dispatched_runs",
 )
 
-#: ``(ctx, event, route)``: the old event as its consumer received it, and
-#: which route (old consumer) it is owed to.
-type Converter = Callable[["JobContext", dict[str, Any], str], Awaitable[None]]
+#: An old event as its consumer received it: the JSON the unit of work dumped.
+type LegacyPayload = dict[str, JsonValue]
+
+#: ``(ctx, event, route)``: the old event, and which route (old consumer) it
+#: is owed to.
+type Converter = Callable[["JobContext", LegacyPayload, str], Awaitable[None]]
 
 _converters: dict[str, Converter] = {}
 
@@ -229,6 +234,7 @@ __all__ = [
     "STREAQ_SEEDED",
     "TAKEN_OVER_MARK",
     "Converter",
+    "LegacyPayload",
     "LegacyRoute",
     "all_route_names",
     "converter_for",

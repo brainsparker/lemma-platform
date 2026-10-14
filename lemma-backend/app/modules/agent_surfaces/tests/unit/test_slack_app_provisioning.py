@@ -80,8 +80,9 @@ def _rotated(n: int, *, hours: float = 12) -> RotatedConfigurationToken:
 
 
 @pytest.fixture
-def slack(monkeypatch):
-    """Slack's side, recorded. Nothing here reaches the network."""
+def slack():
+    """Slack's side and the connectors module's, recorded and injected. Nothing
+    here reaches the network or another module."""
     calls = SimpleNamespace(rotated=[], created=[], deleted=[], installs=[])
     state = SimpleNamespace(manager=True, install_fails=False, n=0)
 
@@ -112,26 +113,27 @@ def slack(monkeypatch):
         calls.installs.append(kwargs)
         return uuid4()
 
-    monkeypatch.setattr(provisioning.slack, "rotate_configuration_token", rotate)
-    monkeypatch.setattr(provisioning.slack, "workspace_name", workspace_name)
-    monkeypatch.setattr(provisioning.slack, "create_app", create_app)
-    monkeypatch.setattr(provisioning.slack, "delete_app", delete_app)
-    monkeypatch.setattr(provisioning, "may_manage_installs", may_manage)
-    monkeypatch.setattr(provisioning, "create_own_app_install", create_install)
+    state.calls = provisioning.SlackAppCalls(
+        rotate=rotate,
+        workspace_name=workspace_name,
+        create_app=create_app,
+        delete_app=delete_app,
+    )
+    state.installs = provisioning.OrgInstalls(
+        may_manage=may_manage, create_install=create_install
+    )
     return calls, state
 
 
-def _provisioner() -> provisioning.SlackAppProvisioner:
-    uow = _Uow()
-    made = provisioning.SlackAppProvisioner.__new__(provisioning.SlackAppProvisioner)
-    made.uow = uow
-    made.tokens = _Tokens()
-    return made
+def _provisioner(state) -> provisioning.SlackAppProvisioner:
+    return provisioning.SlackAppProvisioner(
+        _Uow(), calls=state.calls, installs=state.installs, tokens=_Tokens()
+    )
 
 
 async def test_saving_a_token_rotates_it_and_names_the_workspace(slack):
-    calls, _ = slack
-    provisioner = _provisioner()
+    calls, state = slack
+    provisioner = _provisioner(state)
 
     saved = await provisioner.save_token(
         organization_id=ORG, user_id=USER, refresh_token="refresh-pasted"
@@ -149,15 +151,15 @@ async def test_only_an_install_manager_may_save_a_token(slack):
     state.manager = False
 
     with pytest.raises(SlackAppCreationForbiddenError):
-        await _provisioner().save_token(
+        await _provisioner(state).save_token(
             organization_id=ORG, user_id=USER, refresh_token="refresh-pasted"
         )
     assert calls.rotated == []
 
 
 async def test_creating_an_app_registers_its_credentials_as_the_orgs_own(slack):
-    calls, _ = slack
-    provisioner = _provisioner()
+    calls, state = slack
+    provisioner = _provisioner(state)
     await provisioner.tokens.save(organization_id=ORG, token=_rotated(0))
 
     created = await provisioner.create_pod_app(
@@ -179,8 +181,8 @@ async def test_creating_an_app_registers_its_credentials_as_the_orgs_own(slack):
 
 
 async def test_a_token_near_expiry_is_rotated_before_use(slack):
-    calls, _ = slack
-    provisioner = _provisioner()
+    calls, state = slack
+    provisioner = _provisioner(state)
     await provisioner.tokens.save(organization_id=ORG, token=_rotated(0, hours=0.05))
 
     await provisioner.create_pod_app(
@@ -196,7 +198,7 @@ async def test_an_app_lemma_could_not_register_is_deleted_again(slack):
     """Otherwise it sits in the workspace under the teammate's name, unconnectable."""
     calls, state = slack
     state.install_fails = True
-    provisioner = _provisioner()
+    provisioner = _provisioner(state)
     await provisioner.tokens.save(organization_id=ORG, token=_rotated(0))
 
     with pytest.raises(AgentSurfaceValidationError):
@@ -209,7 +211,8 @@ async def test_an_app_lemma_could_not_register_is_deleted_again(slack):
 
 
 async def test_no_token_for_the_workspace_says_so(slack):
+    _, state = slack
     with pytest.raises(SlackAppCreationNotSetUpError):
-        await _provisioner().create_pod_app(
+        await _provisioner(state).create_pod_app(
             organization_id=ORG, user_id=USER, team_id="T_OTHER", app_name="Ada"
         )

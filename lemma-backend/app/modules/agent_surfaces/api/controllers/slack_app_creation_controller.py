@@ -20,6 +20,8 @@ from app.core.authorization.permissions import Permissions
 from app.modules.agent_surfaces.api.surface_config_resolver import (
     require_surface_agent_action,
 )
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+from app.modules.pod.contracts.agent_access import pod_organization_id
 from app.modules.agent_surfaces.services.slack_app_provisioning import (
     SlackAppProvisioner,
     SlackAppWorkspace,
@@ -68,6 +70,14 @@ class SlackAppCreateResponse(BaseModel):
     auth_config_id: UUID
 
 
+async def _organization(uow, pod_id: UUID) -> UUID:
+    """The pod's organization: the token and the apps belong to it, not the pod."""
+    organization_id = await pod_organization_id(uow, pod_id)
+    if organization_id is None:
+        raise AgentSurfaceValidationError(f"Pod {pod_id} not found")
+    return organization_id
+
+
 def _workspace(item: SlackAppWorkspace) -> SlackAppWorkspaceResponse:
     return SlackAppWorkspaceResponse(
         team_id=item.team_id, team_name=item.team_name, saved_at=item.saved_at
@@ -83,8 +93,7 @@ async def list_slack_app_workspaces(
     pod_id: UUID, uow: UoWDep, ctx: PodContextDep
 ) -> SlackAppWorkspaceListResponse:
     """The Slack workspaces this pod's organization lets Lemma create apps in."""
-    del pod_id
-    items = await SlackAppProvisioner(uow).workspaces(ctx.organization_id)
+    items = await SlackAppProvisioner(uow).workspaces(await _organization(uow, pod_id))
     return SlackAppWorkspaceListResponse(items=[_workspace(item) for item in items])
 
 
@@ -101,9 +110,8 @@ async def save_slack_configuration_token(
     ctx: PodContextDep,
 ) -> SlackAppWorkspaceResponse:
     """Let Lemma create Slack apps in the workspace this token is for."""
-    del pod_id
     saved = await SlackAppProvisioner(uow).save_token(
-        organization_id=ctx.organization_id,
+        organization_id=await _organization(uow, pod_id),
         user_id=user.id,
         refresh_token=request.refresh_token,
     )
@@ -120,9 +128,10 @@ async def forget_slack_configuration_token(
     pod_id: UUID, team_id: str, user: CurrentUser, uow: UoWDep, ctx: PodContextDep
 ) -> None:
     """Stop Lemma creating apps there. Apps it already made are not touched."""
-    del pod_id
     await SlackAppProvisioner(uow).forget(
-        organization_id=ctx.organization_id, user_id=user.id, team_id=team_id
+        organization_id=await _organization(uow, pod_id),
+        user_id=user.id,
+        team_id=team_id,
     )
 
 
@@ -145,7 +154,7 @@ async def create_slack_app(
         ctx=ctx, pod_id=pod_id, agent_id=pod_id, action=Permissions.AGENT_UPDATE
     )
     created = await SlackAppProvisioner(uow).create_pod_app(
-        organization_id=ctx.organization_id,
+        organization_id=await _organization(uow, pod_id),
         user_id=user.id,
         team_id=request.team_id,
         app_name=request.app_name,

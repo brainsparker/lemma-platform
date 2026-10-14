@@ -17,6 +17,11 @@ from app.modules.agent_surfaces.platforms.slack.app_configuration import (
 )
 
 
+#: An organization keeps a token per Slack workspace it makes apps in: a
+#: handful, so this is a ceiling on the read rather than a page size.
+MAX_WORKSPACES_PER_ORGANIZATION = 50
+
+
 class SlackConfigurationTokenRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -28,6 +33,7 @@ class SlackConfigurationTokenRepository:
             select(SlackConfigurationTokenModel)
             .where(SlackConfigurationTokenModel.organization_id == organization_id)
             .order_by(SlackConfigurationTokenModel.created_at)
+            .limit(MAX_WORKSPACES_PER_ORGANIZATION)
         )
         return list(result.scalars().all())
 

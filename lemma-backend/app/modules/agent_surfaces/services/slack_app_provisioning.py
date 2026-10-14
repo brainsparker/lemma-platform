@@ -15,6 +15,7 @@ encrypted like connector credentials, and moves to the secrets vault with them.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -65,10 +66,41 @@ class ProvisionedSlackApp:
     auth_config_id: UUID
 
 
+@dataclass(frozen=True)
+class SlackAppCalls:
+    """Slack's side of making an app. A seam, so a test can stand in for Slack."""
+
+    rotate: Callable[[str], Awaitable[slack.RotatedConfigurationToken]] = (
+        slack.rotate_configuration_token
+    )
+    workspace_name: Callable[[str], Awaitable[str | None]] = slack.workspace_name
+    create_app: Callable[[str, dict[str, object]], Awaitable[slack.CreatedSlackApp]] = (
+        slack.create_app
+    )
+    delete_app: Callable[[str, str], Awaitable[bool]] = slack.delete_app
+
+
+@dataclass(frozen=True)
+class OrgInstalls:
+    """The connectors module's half: who may add installs, and adding one."""
+
+    may_manage: Callable[..., Awaitable[bool]] = may_manage_installs
+    create_install: Callable[..., Awaitable[UUID]] = create_own_app_install
+
+
 class SlackAppProvisioner:
-    def __init__(self, uow: SqlAlchemyUnitOfWork):
+    def __init__(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        *,
+        calls: SlackAppCalls | None = None,
+        installs: OrgInstalls | None = None,
+        tokens: SlackConfigurationTokenRepository | None = None,
+    ):
         self.uow = uow
-        self.tokens = SlackConfigurationTokenRepository(uow.session)
+        self.slack = calls or SlackAppCalls()
+        self.installs = installs or OrgInstalls()
+        self.tokens = tokens or SlackConfigurationTokenRepository(uow.session)
 
     async def workspaces(self, organization_id: UUID) -> list[SlackAppWorkspace]:
         rows = await self.tokens.list_for_organization(organization_id)
@@ -90,8 +122,8 @@ class SlackAppProvisioner:
         """
         await self._require_install_manager(organization_id, user_id)
         async with connection_released(self.uow.session):
-            rotated = await slack.rotate_configuration_token(refresh_token)
-            team_name = await slack.workspace_name(rotated.access_token)
+            rotated = await self.slack.rotate(refresh_token)
+            team_name = await self.slack.workspace_name(rotated.access_token)
         row = await self.tokens.save(
             organization_id=organization_id,
             token=rotated,
@@ -134,9 +166,9 @@ class SlackAppProvisioner:
         access_token = await self._fresh_access_token(organization_id, team_id)
         manifest = build_slack_app_manifest(agent_name=app_name)
         async with connection_released(self.uow.session):
-            created = await slack.create_app(access_token, manifest)
+            created = await self.slack.create_app(access_token, manifest)
         try:
-            auth_config_id = await create_own_app_install(
+            auth_config_id = await self.installs.create_install(
                 self.uow,
                 user_id=user_id,
                 organization_id=organization_id,
@@ -153,7 +185,7 @@ class SlackAppProvisioner:
         except DomainError, SQLAlchemyError:
             await self.uow.rollback()
             async with connection_released(self.uow.session):
-                deleted = await slack.delete_app(access_token, created.app_id)
+                deleted = await self.slack.delete_app(access_token, created.app_id)
             logger.warning(
                 "agent_surfaces.slack_app_creation.install_failed",
                 organization_id=str(organization_id),
@@ -178,7 +210,7 @@ class SlackAppProvisioner:
         if row.access_expires_at - datetime.now(timezone.utc) > _ROTATE_WITHIN:
             return access_token
         async with connection_released(self.uow.session):
-            rotated = await slack.rotate_configuration_token(refresh_token)
+            rotated = await self.slack.rotate(refresh_token)
         await self.tokens.save(organization_id=organization_id, token=rotated)
         await self.uow.commit()
         return rotated.access_token
@@ -186,7 +218,7 @@ class SlackAppProvisioner:
     async def _require_install_manager(
         self, organization_id: UUID, user_id: UUID
     ) -> None:
-        if not await may_manage_installs(
+        if not await self.installs.may_manage(
             self.uow, user_id=user_id, organization_id=organization_id
         ):
             raise SlackAppCreationForbiddenError()

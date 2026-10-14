@@ -10,7 +10,6 @@ still the one kept.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -96,8 +95,10 @@ async def workspace_name(access_token: str) -> str | None:
 async def create_app(access_token: str, manifest: dict[str, object]) -> CreatedSlackApp:
     """Make a Slack app from a manifest. Its credentials come back once, here."""
     try:
+        # A dict, not a JSON string: the SDK serialises it, and a manifest is
+        # small enough that doing it here would only move the same work.
         response = await AsyncWebClient(token=access_token).apps_manifest_create(
-            manifest=json.dumps(manifest)
+            manifest=dict(manifest)
         )
     except SlackApiError as exc:
         raise AgentSurfacePlatformError(

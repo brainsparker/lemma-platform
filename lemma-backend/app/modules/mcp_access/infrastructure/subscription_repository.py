@@ -10,6 +10,10 @@ from sqlalchemy import case, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.datastore.contracts.changes import (
+    request_subscriber_sync,
+    subscriber_key,
+)
 from app.modules.mcp_access.infrastructure.models import (
     McpEventSubscription,
     McpOAuthGrant,
@@ -76,7 +80,15 @@ def _delivering(now: datetime):
 
 class EventSubscriptionRepository:
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
+        self._uow = uow
         self._session = uow.session
+
+    async def _resync(self, pod_id: UUID, public_id: str) -> None:
+        """Every write that changes whether a subscription listens asks the
+        change log to bring its subscriber row in line, in this transaction."""
+        await request_subscriber_sync(
+            self._uow, pod_id, subscriber_key("mcp", public_id)
+        )
 
     async def upsert(
         self,
@@ -136,6 +148,7 @@ class EventSubscriptionRepository:
             .returning(McpEventSubscription)
         )
         row = (await self._session.execute(statement)).scalar_one()
+        await self._resync(row.pod_id, row.public_id)
         return _stored(row)
 
     async def get(self, public_id: str) -> StoredSubscription | None:
@@ -152,20 +165,28 @@ class EventSubscriptionRepository:
         removed = await self._session.execute(
             delete(McpEventSubscription)
             .where(McpEventSubscription.public_id == public_id)
-            .returning(McpEventSubscription.id)
+            .returning(McpEventSubscription.pod_id)
         )
-        return removed.scalar_one_or_none() is not None
+        pod_id = removed.scalar_one_or_none()
+        if pod_id is not None:
+            await self._resync(pod_id, public_id)
+        return pod_id is not None
 
     async def remove_unless_stopped(self, public_id: str) -> None:
         """The client's `events/unsubscribe`. A stopped row is the person's
         tombstone, so the client cannot clear it by unsubscribing and
         subscribing again."""
-        await self._session.execute(
-            delete(McpEventSubscription).where(
+        removed = await self._session.execute(
+            delete(McpEventSubscription)
+            .where(
                 McpEventSubscription.public_id == public_id,
                 McpEventSubscription.stopped_at.is_(None),
             )
+            .returning(McpEventSubscription.pod_id)
         )
+        pod_id = removed.scalar_one_or_none()
+        if pod_id is not None:
+            await self._resync(pod_id, public_id)
 
     async def lock_grant(self, grant_id: UUID) -> None:
         """Serialize subscribing on one connection, so the cap is counted and
@@ -317,9 +338,12 @@ class EventSubscriptionRepository:
                 McpEventSubscription.public_id == public_id,
             )
             .values(stopped_at=stopped_at, paused_at=None, failures=0)
-            .returning(McpEventSubscription.id)
+            .returning(McpEventSubscription.pod_id)
         )
-        return changed.scalar_one_or_none() is not None
+        pod_id = changed.scalar_one_or_none()
+        if pod_id is not None:
+            await self._resync(pod_id, public_id)
+        return pod_id is not None
 
     async def sweep(self, *, lapsed_before: datetime, batch: int) -> int:
         """Delete what can never deliver again: subscriptions the client let
@@ -340,9 +364,13 @@ class EventSubscriptionRepository:
             )
             .limit(batch)
         )
-        removed = await self._session.execute(
-            delete(McpEventSubscription)
-            .where(McpEventSubscription.id.in_(doomed))
-            .returning(McpEventSubscription.id)
-        )
-        return len(removed.scalars().all())
+        removed = (
+            await self._session.execute(
+                delete(McpEventSubscription)
+                .where(McpEventSubscription.id.in_(doomed))
+                .returning(McpEventSubscription.pod_id, McpEventSubscription.public_id)
+            )
+        ).all()
+        for pod_id, public_id in removed:
+            await self._resync(pod_id, public_id)
+        return len(removed)

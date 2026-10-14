@@ -24,7 +24,7 @@ from app.modules.schedule.domain.schedule import (
 from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
 )
-from app.modules.schedule.services.trigger_fire import enqueue_start
+from app.modules.schedule.services.trigger_fire import add_start_work
 
 
 class ScheduleRunService:
@@ -105,7 +105,5 @@ class ScheduleRunService:
             raise ScheduleRunNotRetryableError()
         schedule_run, created = result
         if created:
-            await enqueue_start(
-                WorkWriter.of(self.uow), schedule, schedule_run.id
-            )
+            await add_start_work(WorkWriter.of(self.uow), schedule, schedule_run.id)
         return schedule_run

@@ -428,6 +428,8 @@ _NAME_TO_MODULE = {
     'PodRoleResourcePermissionRequest': 'pod_role_resource_permission_request',
     'PodRoleResourcePermissionResponse': 'pod_role_resource_permission_response',
     'PodRoleResponse': 'pod_role_response',
+    'PodTriggerSettings': 'pod_trigger_settings',
+    'PodTriggerSettingsBulkWritesDefaultType0': 'pod_trigger_settings_bulk_writes_default_type_0',
     'PodUpdateRequest': 'pod_update_request',
     'PublicAudience': 'public_audience',
     'PublicColumnItem': 'public_column_item',
@@ -645,6 +647,7 @@ _NAME_TO_MODULE = {
     'WorkspaceFileListResponse': 'workspace_file_list_response',
     'WorkspaceStatusResponse': 'workspace_status_response',
     'WorkspaceStatusResponseState': 'workspace_status_response_state',
+    'WriteIntent': 'write_intent',
 }
 
 if TYPE_CHECKING:
@@ -1067,6 +1070,8 @@ if TYPE_CHECKING:
     from .pod_role_resource_permission_request import PodRoleResourcePermissionRequest
     from .pod_role_resource_permission_response import PodRoleResourcePermissionResponse
     from .pod_role_response import PodRoleResponse
+    from .pod_trigger_settings import PodTriggerSettings
+    from .pod_trigger_settings_bulk_writes_default_type_0 import PodTriggerSettingsBulkWritesDefaultType0
     from .pod_update_request import PodUpdateRequest
     from .public_audience import PublicAudience
     from .public_column_item import PublicColumnItem
@@ -1284,6 +1289,7 @@ if TYPE_CHECKING:
     from .workspace_file_list_response import WorkspaceFileListResponse
     from .workspace_status_response import WorkspaceStatusResponse
     from .workspace_status_response_state import WorkspaceStatusResponseState
+    from .write_intent import WriteIntent
 
 
 def __getattr__(name: str):
@@ -1719,6 +1725,8 @@ __all__ = [
     'PodRoleResourcePermissionRequest',
     'PodRoleResourcePermissionResponse',
     'PodRoleResponse',
+    'PodTriggerSettings',
+    'PodTriggerSettingsBulkWritesDefaultType0',
     'PodUpdateRequest',
     'PublicAudience',
     'PublicColumnItem',
@@ -1936,4 +1944,5 @@ __all__ = [
     'WorkspaceFileListResponse',
     'WorkspaceStatusResponse',
     'WorkspaceStatusResponseState',
+    'WriteIntent',
 ]

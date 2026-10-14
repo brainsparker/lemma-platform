@@ -16,6 +16,8 @@ from sqlalchemy import Row, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
+
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work.context import DeadContext
 from app.core.infrastructure.work.registry import HandlerSpec, WorkRegistry
@@ -103,10 +105,17 @@ _LOCK_EXPIRED = text(
 async def lock_owned(
     session: AsyncSession, item_id: object, owner: str
 ) -> AttemptState | None:
-    """Lock the item if this owner still holds it; ``None`` means the lease is lost."""
+    """Lock the item if this owner still holds it; ``None`` means the lease is lost.
+
+    The row lock is the fence, and it dies at commit, so the session is marked
+    as holding one: a connection-release helper the handler reaches (an
+    authorization check commits a read-only session to hand its connection
+    back) must not commit the fenced transaction half way through.
+    """
     row = (await session.execute(_LOCK_OWNED, {"id": item_id, "owner": owner})).first()
     if row is None:
         return None
+    mark_transaction_scoped_lock(session)
     return AttemptState(row.attempts, row.lease_losses, row.first_unavailable_at)
 
 

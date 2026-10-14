@@ -52,6 +52,33 @@ class DatastoreSettings(DocumentWorkSettings):
             "``DATASTORE_ROW_MAX_BYTES``."
         ),
     )
+    datastore_change_log_mode: Literal["auto", "on", "off"] = Field(
+        default="auto",
+        description=(
+            "Whether record writes append to each pod's change log instead of "
+            "staging events in the datastore outbox. ``auto`` switches once "
+            "every pod schema carries the change log (pod-schema version 3) "
+            "and never switches back in that process; ``on`` and ``off`` "
+            "force it. Env: ``DATASTORE_CHANGE_LOG_MODE``."
+        ),
+    )
+    datastore_change_retention_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description=(
+            "How long a pod's change log keeps a change every durable "
+            "subscriber has read: the live catch-up window. A change some "
+            "durable subscriber has not read is never deleted."
+        ),
+    )
+    datastore_change_handoff_poll_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        description=(
+            "Fallback poll of the change-log wake table, for wakes the "
+            "LISTEN connection missed."
+        ),
+    )
     datastore_event_payload_max_bytes: int = Field(
         default=32 * 1024,
         description=(

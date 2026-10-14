@@ -119,4 +119,3 @@ class WebhookHandler:
                 await self._fire(uow, schedule, event)
                 schedule_ids.append(schedule.id)
         return schedule_ids
-

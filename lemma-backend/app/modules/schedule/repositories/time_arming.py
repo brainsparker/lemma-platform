@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.work import WorkWriter
 from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.domain.time_cursor import next_cursor_for
+from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.work import registration as _registration  # noqa: F401  registers the kinds this writes
 from app.modules.schedule.work.kinds import (
     SCHEDULE_ARM,
@@ -47,6 +48,32 @@ def cursor_for(
     if cursor is None or cursor <= now:
         return None
     return cursor
+
+
+async def recompute_cursor(
+    session: AsyncSession, schedule_id: UUID, update_data: dict[str, object]
+) -> Schedule | None:
+    """Put the new cursor in ``update_data`` when what it derives from changes.
+
+    The row is locked before the cursor is computed: a fire holding it commits
+    its own next cursor first, and the edit then computes from that, so the
+    two can never leave two fire chains behind. Returns the locked row, or
+    ``None`` when the edit does not touch the cursor.
+    """
+    if "config" not in update_data and "is_active" not in update_data:
+        return None
+    row = await session.get(
+        Schedule, schedule_id, with_for_update=True, populate_existing=True
+    )
+    if row is not None:
+        config = update_data.get("config", row.config)
+        active = update_data.get("is_active", row.is_active)
+        update_data["next_fire_at"] = cursor_for(
+            config if isinstance(config, Mapping) else None,
+            is_active=bool(active),
+            schedule_type=row.schedule_type,
+        )
+    return row
 
 
 async def arm_time_fire(

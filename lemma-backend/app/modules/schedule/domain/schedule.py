@@ -267,7 +267,10 @@ def normalize_datastore_schedule_config(
         "table_name": cfg.table_name,
         "operations": [op.value for op in cfg.operations],
     }
-    for key, mode in (("bulk_writes", cfg.bulk_writes), ("import_writes", cfg.import_writes)):
+    for key, mode in (
+        ("bulk_writes", cfg.bulk_writes),
+        ("import_writes", cfg.import_writes),
+    ):
         if mode is not None:
             normalized[key] = mode.value
     if cfg.when is not None:

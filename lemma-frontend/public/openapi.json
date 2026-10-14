@@ -3176,6 +3176,11 @@
       "BulkCreateRecordsRequest": {
         "description": "Schema for bulk creating records.",
         "properties": {
+          "intent": {
+            "$ref": "#/components/schemas/WriteIntent",
+            "default": "bulk",
+            "description": "Why these rows are written, as DATASTORE triggers see it: `bulk` (the default) or `import` lets each trigger decide by its `bulk_writes` / `import_writes` setting (by default, skipped and recorded); `normal` fires triggers like single writes do."
+          },
           "records": {
             "description": "List of record payload objects to insert. At most 1000 per request.",
             "items": {
@@ -3202,6 +3207,11 @@
       "BulkDeleteRecordsRequest": {
         "description": "Schema for bulk deleting records.",
         "properties": {
+          "intent": {
+            "$ref": "#/components/schemas/WriteIntent",
+            "default": "bulk",
+            "description": "Why these rows are written, as DATASTORE triggers see it: `bulk` (the default) or `import` lets each trigger decide by its `bulk_writes` / `import_writes` setting (by default, skipped and recorded); `normal` fires triggers like single writes do."
+          },
           "record_ids": {
             "description": "Primary key values to delete. At most 1000 per request.",
             "items": {
@@ -3232,6 +3242,11 @@
       "BulkUpdateRecordsRequest": {
         "description": "Schema for bulk updating records.",
         "properties": {
+          "intent": {
+            "$ref": "#/components/schemas/WriteIntent",
+            "default": "bulk",
+            "description": "Why these rows are written, as DATASTORE triggers see it: `bulk` (the default) or `import` lets each trigger decide by its `bulk_writes` / `import_writes` setting (by default, skipped and recorded); `normal` fires triggers like single writes do."
+          },
           "records": {
             "description": "List of record updates. Each item must include the table primary key field. At most 1000 per request.",
             "items": {
@@ -5335,7 +5350,7 @@
           },
           "config": {
             "additionalProperties": true,
-            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued.",
+            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
             "title": "Config",
             "type": "object"
           },
@@ -13416,6 +13431,16 @@
             },
             "title": "Recipes",
             "type": "array"
+          },
+          "triggers": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodTriggerSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "PodConfig",
@@ -14435,6 +14460,30 @@
           "created_at"
         ],
         "title": "PodRoleResponse",
+        "type": "object"
+      },
+      "PodTriggerSettings": {
+        "description": "Pod-wide defaults for the pod's DATASTORE triggers.",
+        "properties": {
+          "bulk_writes_default": {
+            "anyOf": [
+              {
+                "enum": [
+                  "skip",
+                  "each",
+                  "batch"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What a bulk write does to this pod's triggers that do not say: skip (recorded as skipped), each (fire per matching row) or batch (one fire with the rows). Omitted means skip.",
+            "title": "Bulk Writes Default"
+          }
+        },
+        "title": "PodTriggerSettings",
         "type": "object"
       },
       "PodUpdateRequest": {
@@ -15550,6 +15599,18 @@
             "title": "Paused By Failures",
             "type": "boolean"
           },
+          "paused_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the platform paused this schedule: `fire_cap` (it fired more than its daily ceiling), `consecutive_failures`, or another system reason. Absent while it runs, or when a person paused it. Reactivating clears it.",
+            "title": "Paused Reason"
+          },
           "pod_id": {
             "anyOf": [
               {
@@ -15869,6 +15930,7 @@
       "ScheduleRunStatus": {
         "enum": [
           "RECEIVED",
+          "FILTERING",
           "PROCESSING",
           "DISPATCHED",
           "COMPLETED",
@@ -18780,7 +18842,7 @@
                 "type": "null"
               }
             ],
-            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued.",
+            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
             "title": "Config"
           },
           "filter_instruction": {
@@ -22341,6 +22403,15 @@
         ],
         "title": "WorkspaceStatusResponse",
         "type": "object"
+      },
+      "WriteIntent": {
+        "enum": [
+          "normal",
+          "bulk",
+          "import"
+        ],
+        "title": "WriteIntent",
+        "type": "string"
       },
       "attach": {
         "properties": {

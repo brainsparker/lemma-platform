@@ -99,7 +99,7 @@ class ScheduleRunOutcomeService:
         failure, so the breaker is left alone. Returns whether a row was
         written; a redelivered event writes nothing the second time.
         """
-        recorded = await self.run_repository.insert_filtered(
+        return await self.run_repository.insert_filtered(
             schedule_id=schedule.id,
             user_id=user_id,
             source_event_id=source_event_id,
@@ -107,7 +107,6 @@ class ScheduleRunOutcomeService:
             metadata=metadata,
             llm_output=llm_output,
         )
-        return recorded
 
     async def record_pre_dispatch_failure(
         self,

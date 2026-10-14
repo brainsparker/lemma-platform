@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID, uuid7
 
@@ -61,6 +61,24 @@ _DROP_QUEUED = text("DELETE FROM work_items WHERE ns = :ns AND state = 'queued'"
 
 # Postgres folds identical notifications within one transaction into one.
 _NOTIFY = text("SELECT pg_notify(:channel, '')")
+
+
+#: An item due later than this is found by the dispatchers' poll; waking them
+#: now would only make them look and find nothing due.
+_WAKE_HORIZON = timedelta(seconds=1)
+
+
+def _due_soon(run_at: datetime | None, delay: timedelta | None) -> bool:
+    """Whether an item is due soon enough to be worth a wake.
+
+    NOTIFY takes a database-wide lock at commit, so every notifying commit is
+    serialised behind the others; a burst of transactions that each arm a
+    future timer (a TIME schedule's next fire) paid that for nothing.
+    """
+    later = delay or timedelta(0)
+    if run_at is not None:
+        later += run_at - datetime.now(UTC)
+    return later <= _WAKE_HORIZON
 
 
 def wake_channel(cls: WorkClass) -> str:
@@ -147,7 +165,8 @@ class WorkWriter:
             },
         )
         await self._ensure_queue(spec.cls, ns)
-        await self._notify(spec.cls)
+        if _due_soon(run_at, delay):
+            await self._notify(spec.cls)
         return item_id
 
     async def drop_queued(self, ns: str) -> int:

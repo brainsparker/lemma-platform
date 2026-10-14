@@ -136,10 +136,12 @@ pub(crate) fn without_error_data(error: &str) -> &str {
         })
 }
 
-/// When the limit lifts, if the adapter said: the `resets ...` phrase, up to
-/// the structured data that follows it. Bounded, because it is quoted back.
+/// When the limit lifts, if the adapter said: the `resets ...` phrase in the
+/// message, never in the structured data after it. Bounded, because it is
+/// quoted back.
 fn usage_limit_resets(error: &str) -> Option<String> {
-    let after = &error[error.find("resets ")? + "resets ".len()..];
+    let message = without_error_data(error);
+    let after = &message[message.find("resets ")? + "resets ".len()..];
     let phrase = after
         .split(['{', '\n'])
         .next()?

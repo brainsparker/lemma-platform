@@ -285,6 +285,18 @@ fn a_usage_limit_is_recognised_by_its_kind_whatever_it_says() {
     assert!(super::usage_limit_message("Codex", "You've hit your session limit").is_none());
 }
 
+/// A `resets` inside the structured data is not the adapter telling us when
+/// the limit lifts, and its JSON must not leak into the guidance.
+#[test]
+fn a_reset_time_is_read_from_the_message_not_its_data() {
+    let raw =
+        r#"Internal error: quota gone: {"errorKind": "rate_limit", "detail": "resets tomorrow"}"#;
+    let message = super::usage_limit_message("Claude Code", raw).expect("a usage limit");
+    assert!(message.contains("Try again once it resets"), "{message}");
+    assert!(!message.contains("tomorrow"), "{message}");
+    assert!(!message.contains('"'), "{message}");
+}
+
 #[test]
 fn the_structured_data_is_cut_from_the_message() {
     assert_eq!(

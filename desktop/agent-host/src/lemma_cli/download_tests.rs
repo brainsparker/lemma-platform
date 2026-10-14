@@ -286,6 +286,26 @@ fn an_archive_must_sit_beside_its_manifest() {
     assert!(bad_digest.check(VERSION, PLATFORM, at).is_err());
 }
 
+/// A release build fetches its manifest only over `https`, since the digest
+/// rides in the manifest; a debug build may use a plain-`http` local release.
+#[test]
+fn a_release_build_takes_only_an_https_manifest() {
+    let plain = "http://example.test/release/lemma-cli.json";
+    let secure = "https://example.test/release/lemma-cli.json";
+
+    assert!(super::release_folder_allowing(plain, false).is_err());
+    assert_eq!(
+        super::release_folder_allowing(secure, false).unwrap(),
+        "https://example.test/release/"
+    );
+    assert_eq!(
+        super::release_folder_allowing(plain, true).unwrap(),
+        "http://example.test/release/"
+    );
+    assert!(super::release_folder_allowing("ftp://example.test/r/m.json", true).is_err());
+    assert!(super::release_folder_allowing("https://example.test/r/m.json?x=1", false).is_err());
+}
+
 /// After an upgrade, the previous version's CLI is removed once this one is
 /// in place.
 #[tokio::test(flavor = "multi_thread")]

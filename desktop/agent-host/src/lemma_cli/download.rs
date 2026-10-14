@@ -108,11 +108,20 @@ impl Manifest {
 }
 
 /// The URL of the folder a manifest is in, with its trailing slash.
+///
+/// A release build takes only `https`: the manifest carries the archive's
+/// digest, so a manifest fetched in the clear protects nothing. A debug
+/// build also takes `http`, for a local stand-in release.
 fn release_folder(manifest_url: &str) -> anyhow::Result<&str> {
+    release_folder_allowing(manifest_url, cfg!(debug_assertions))
+}
+
+fn release_folder_allowing(manifest_url: &str, allow_http: bool) -> anyhow::Result<&str> {
     let parsed = url::Url::parse(manifest_url).context("the manifest URL is not a URL")?;
+    let scheme_ok = parsed.scheme() == "https" || (allow_http && parsed.scheme() == "http");
     ensure!(
-        matches!(parsed.scheme(), "https" | "http") && parsed.query().is_none(),
-        "the manifest URL must be a plain http(s) URL"
+        scheme_ok && parsed.query().is_none(),
+        "the manifest URL must be a plain https URL"
     );
     let end = manifest_url
         .rfind('/')

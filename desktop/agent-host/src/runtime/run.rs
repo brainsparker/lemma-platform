@@ -126,9 +126,6 @@ impl TargetWorker {
                 stream_segments: std::sync::Mutex::new(StreamSegments::default()),
                 events_ready: events_ready.clone(),
             });
-            let remaining = (spec.run_deadline - (Utc::now() + clock_offset))
-                .to_std()
-                .unwrap_or(Duration::ZERO);
             // Kept behind, so the failure path below can still ask whether the
             // user pressed Stop.
             let asked_to_stop = cancel_rx.clone();
@@ -143,6 +140,20 @@ impl TargetWorker {
             // Whose pairing this is decides whose word on the CLI is taken.
             let lemma_cli_bin =
                 crate::lemma_cli::cli_bin_for_run(local_pairing, &spec.mcp, &paths.root).await;
+            // Measured only now: choosing the CLI can wait on a download, and
+            // that wait is part of the run's time, not on top of it.
+            let Some(remaining) = time_left(spec.run_deadline, Utc::now() + clock_offset) else {
+                terminal_failure(
+                    &journal,
+                    target_id,
+                    run_id,
+                    lease_epoch,
+                    RunState::Failed,
+                    "Agent Host run deadline elapsed before the agent started",
+                )?;
+                events_ready.notify_one();
+                return Ok(());
+            };
             let request = AcpRunRequest {
                 adapter,
                 run_spec: spec,
@@ -300,4 +311,15 @@ impl TargetWorker {
             },
         );
     }
+}
+
+/// How long a run has left at `now`, or `None` once its deadline has passed.
+pub(super) fn time_left(
+    deadline: chrono::DateTime<Utc>,
+    now: chrono::DateTime<Utc>,
+) -> Option<Duration> {
+    (deadline - now)
+        .to_std()
+        .ok()
+        .filter(|left| !left.is_zero())
 }

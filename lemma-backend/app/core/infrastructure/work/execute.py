@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import DBAPIError
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work.context import FastContext
 from app.core.infrastructure.work.db import SessionMaker, WorkDb
@@ -43,6 +44,7 @@ from app.core.infrastructure.work.types import (
     MaxRuntimeExceeded,
     PermanentFailure,
     Unavailable,
+    UnavailableEvidence,
 )
 from app.core.infrastructure.work.writer import LocalWake, WorkWriter
 from app.core.log.log import get_logger
@@ -98,6 +100,12 @@ def decide(
     policy = spec.retry
     if isinstance(exc, Unavailable):
         return after_unavailable(policy, state, exc, now=now)
+    if is_database_unavailable(exc):
+        # The database itself could not be reached or take a connection: the
+        # same evidence an adapter's ``Unavailable`` carries, so the same
+        # uncharged retry, bounded by the kind's unavailable budget -- not an
+        # attempt the item is blamed for.
+        return after_unavailable(policy, state, _database_down(exc), now=now)
     if isinstance(exc, Defer):
         return after_defer(state, exc.delay, now=now)
     if isinstance(exc, MaxRuntimeExceeded):
@@ -114,6 +122,15 @@ def decide(
     )
 
 
+def _database_down(exc: Exception) -> Unavailable:
+    down = Unavailable(
+        f"database unavailable: {describe_error(exc)}",
+        evidence=UnavailableEvidence.CONNECTION_REFUSED,
+    )
+    down.__cause__ = exc
+    return down
+
+
 def validated_payload(spec: HandlerSpec, item: ClaimedItem) -> BaseModel:
     return spec.payload_type.model_validate(item.payload)
 
@@ -124,7 +141,7 @@ async def settle(
     """Record a failed run, fenced: requeue with backoff, or dead with its hook."""
     async with env.db.handler(item.cls) as session:
         uow = SqlAlchemyUnitOfWork(session)
-        state = await lock_owned(session, item.id, env.owner)
+        state = await lock_owned(session, item, env.owner)
         if state is None:
             return "lease_lost"
         decision = decide(spec, state, exc, env.clock())
@@ -167,7 +184,7 @@ async def _dead_without_hook(
     )
     async with env.db.handler(item.cls) as session:
         uow = SqlAlchemyUnitOfWork(session)
-        if await lock_owned(session, item.id, env.owner) is None:
+        if await lock_owned(session, item, env.owner) is None:
             return
         reason = Dead(
             f"{decision.reason}:on_dead_failed",
@@ -181,7 +198,9 @@ async def _dead_without_hook(
 
 async def release_item(env: ExecEnv, item: ClaimedItem) -> str:
     async with env.db.handler(item.cls) as session:
-        released = await release(session, item.id, env.owner, now=env.clock())
+        released = await release(
+            session, item.id, env.owner, now=env.clock(), epoch=item.lease_epoch
+        )
         await session.commit()
     return "released" if released else "lease_lost"
 
@@ -213,7 +232,7 @@ async def run_fast(env: ExecEnv, spec: HandlerSpec, item: ClaimedItem) -> str:
         if (
             await lock_owned(
                 session,
-                item.id,
+                item,
                 env.owner,
                 statement_timeout_ms=env.statement_timeout_ms,
             )

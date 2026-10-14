@@ -92,6 +92,9 @@ class ClaimedItem:
     first_unavailable_at: datetime | None
     run_at: datetime
     created_at: datetime
+    #: Which claim this is. Every fenced write matches it, so a run whose
+    #: lease was taken over -- by another process or by this one -- cannot.
+    lease_epoch: int
 
 
 class UnavailableEvidence(StrEnum):

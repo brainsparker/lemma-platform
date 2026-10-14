@@ -25,7 +25,7 @@ import pytest
 from app.core.config import settings
 from app.core.infrastructure.work import WorkClass
 from app.core.infrastructure.work.testing import dispatcher_for
-from app.modules.agent.events.turn_work import TurnRunner
+from app.modules.agent.events.turn_work import TurnFences, TurnRunner
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.harness_wiring import (
     build_harness_registry,
@@ -89,11 +89,12 @@ async def test_five_hundred_turns_across_fifty_pods(
     waited: dict[str, list[float]] = defaultdict(list)
     began_wall = datetime.now(UTC)
 
-    def runner(terminal_units) -> TurnRunner:
+    def runner(fences: TurnFences) -> TurnRunner:
         real = AgentRunnerService(
             uow_factory=worker_uow_factory(),
             harness_registry=build_harness_registry(),
-            terminal_units=terminal_units,
+            terminal_units=fences.terminal,
+            step_units=fences.steps,
         )
         execute = real.execute
 

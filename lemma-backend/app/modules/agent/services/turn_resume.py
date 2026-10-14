@@ -16,6 +16,11 @@ by the tool's replay class (``domain/replay.py``):
   row (so it is not resynthesised on every reload) and the model gets a notice
   to check the state before repeating anything.
 
+A turn whose previous attempt committed its answer and then lost the lease
+before its finalize committed is not run again: ``committed_answer`` hands the
+runner that answer to finish the run on, so the model is not asked a second
+time and the run does not answer twice.
+
 Pausing calls are not touched: an open ``ask_user`` is the conversation waiting
 on a person, and the approval machinery owns it. Only in-process (LEMMA) turns
 are settled: an Agent Host run keeps its own resume through the host's stream
@@ -142,6 +147,22 @@ class TurnResume:
         if report.wrote:
             *_, messages = await reload()
         return messages, report.notices()
+
+    async def committed_answer(self, run_id: UUID) -> MessageDraft | None:
+        """The answer this run already committed as its last step, if it did."""
+        async with self.uow_factory() as uow:
+            last = await ConversationRepository(uow).last_run_message(run_id)
+        if last is None or (last.metadata or {}).get("is_final_answer") is not True:
+            return None
+        logger.warning("agent.turn.resumed_answered", agent_run_id=str(run_id))
+        return MessageDraft(
+            role=last.role,
+            kind=last.kind,
+            text=last.text,
+            tool_name=last.tool_name,
+            tool_call_id=last.tool_call_id,
+            metadata=last.metadata,
+        )
 
     async def settle(
         self,

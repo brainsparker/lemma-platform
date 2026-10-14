@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work.execute import (
@@ -88,6 +89,19 @@ class JobContext:
             yield unit
             await unit.commit()
 
+    async def hold_lease(self, session: AsyncSession) -> None:
+        """Fence ``session``'s transaction by this claim, or raise ``LeaseLost``.
+
+        Locks the item's row until that transaction ends, so what it writes
+        commits only while this claim holds the lease: a reaper or a new claim
+        waits for the commit, and a run whose lease was taken over writes
+        nothing. For a job's intermediate effects that must happen once -- an
+        agent turn's steps -- where ``checkpoint()`` would let a zombie write.
+        """
+        if await lock_owned(session, self.item, self._env.owner) is None:
+            self.lease_lost = True
+            raise LeaseLost(str(self.item.id))
+
     @asynccontextmanager
     async def complete_work(self) -> AsyncIterator[SqlAlchemyUnitOfWork]:
         # Stopped first: the completion holds the item's row lock, and a
@@ -96,7 +110,7 @@ class JobContext:
         await self.stop_heartbeat()
         async with self._env.db.handler(self.item.cls) as session:
             unit = SqlAlchemyUnitOfWork(session)
-            if await lock_owned(session, self.item.id, self._env.owner) is None:
+            if await lock_owned(session, self.item, self._env.owner) is None:
                 raise LeaseLost(str(self.item.id))
             yield unit
             await finish_item(session, self.item, self._env.registry)
@@ -135,7 +149,7 @@ class JobContext:
         try:
             async with self._env.db.control() as session:
                 extended = await extend_lease(
-                    session, self.item.id, self._env.owner, lease
+                    session, self.item, self._env.owner, lease
                 )
                 await session.commit()
         except SQLAlchemyError, OSError:

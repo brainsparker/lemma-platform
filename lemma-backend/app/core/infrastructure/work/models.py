@@ -13,6 +13,7 @@ from uuid import UUID, uuid7
 
 from pydantic import JsonValue
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Double,
@@ -62,6 +63,12 @@ class WorkItem(Base):
         DateTime(timezone=True)
     )
     lease_owner: Mapped[str | None] = mapped_column(Text)
+    #: The fencing token: one more on every claim. ``lease_owner`` names a
+    #: process, so a process that claims an item again after its own lease
+    #: expired would otherwise pass every fence its earlier run checks.
+    lease_epoch: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     error_class: Mapped[str | None] = mapped_column(Text)

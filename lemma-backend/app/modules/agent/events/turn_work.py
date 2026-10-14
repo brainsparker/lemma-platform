@@ -12,6 +12,12 @@ of that lost -- is this one item:
   turn while a five-minute tool says nothing, and a worker that dies loses it
   within a lease -- the next claim resumes the run from its last committed step,
   settling the call in flight by its replay class (``services/turn_resume``);
+* **every step fenced**: each step row (a tool call, its return, the answer)
+  commits in a transaction holding the item's row lock under this claim's
+  epoch (``ctx.hold_lease``), so a worker whose lease was taken over -- by
+  another process, or by its own after its heartbeat could not reach the
+  database -- writes nothing more. The reaper and the next claim wait for a
+  step in flight to commit, so the resumed turn reloads it;
 * **finalize fenced**: the run's terminal write, every follow-up it owes and the
   item's deletion commit in ``ctx.complete_work()``. A worker whose lease was
   taken over rolls its finalize back instead of finishing the run twice;
@@ -30,6 +36,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Protocol
 from uuid import UUID
@@ -80,6 +87,16 @@ TITLE_RETRY = RetryPolicy(max_attempts=2, max_lease_losses=2)
 
 INTERRUPTED_RUN_ERROR = "Agent run was interrupted (worker restart or crash)"
 TIMED_OUT_RUN_ERROR = "Agent run ran past its time limit and was stopped"
+#: The turn kept finding Lemma's database (or another dependency it needs)
+#: unreachable for the whole unavailable budget. Nothing about the teammate or
+#: its model was wrong, and the reader should know that.
+UNAVAILABLE_RUN_ERROR = (
+    "Lemma could not finish this turn: a service it depends on, such as its "
+    "database, was unavailable for {minutes} minutes while the turn was "
+    "retried. This has nothing to do with this teammate or its model settings. "
+    "Everything up to the interruption is saved; send your message again to "
+    "continue."
+)
 
 
 class TurnRunner(Protocol):
@@ -95,14 +112,26 @@ class TurnRunner(Protocol):
     ) -> None: ...
 
 
-#: Builds the runner one turn drives, given the transaction its end commits in.
-#: The deployment's is ``_deployment_runner``; a test hands its own harness.
-RunnerFactory = Callable[[UnitOfWorkFactory], TurnRunner]
+@dataclass(frozen=True, slots=True)
+class TurnFences:
+    """The transactions a turn's effects commit in, each fenced by its claim.
+
+    ``terminal``: the run's end, its follow-ups and the item's deletion.
+    ``steps``: every step row, each its own short transaction.
+    """
+
+    terminal: UnitOfWorkFactory
+    steps: UnitOfWorkFactory
+
+
+#: Builds the runner one turn drives, given the fenced transactions its effects
+#: commit in. The deployment's is ``_deployment_runner``; a test hands its own.
+RunnerFactory = Callable[[TurnFences], TurnRunner]
 #: Builds the observer that streams a turn onto the surface watching it.
 ObserverFactory = Callable[[UnitOfWorkFactory], object | None]
 
 
-def _deployment_runner(terminal_units: UnitOfWorkFactory) -> TurnRunner:
+def _deployment_runner(fences: TurnFences) -> TurnRunner:
     from app.modules.agent.services.agent_runner_service import AgentRunnerService
     from app.modules.agent.services.harness_wiring import (
         build_harness_registry,
@@ -112,7 +141,8 @@ def _deployment_runner(terminal_units: UnitOfWorkFactory) -> TurnRunner:
     return AgentRunnerService(
         uow_factory=worker_uow_factory(),
         harness_registry=build_harness_registry(),
-        terminal_units=terminal_units,
+        terminal_units=fences.terminal,
+        step_units=fences.steps,
     )
 
 
@@ -145,6 +175,25 @@ class FencedTerminal:
             yield uow
 
 
+class FencedSteps:
+    """A step's transaction, committed only while this claim holds the lease.
+
+    The fence is taken first, before the step's own writes, so the item's row
+    is always locked before anything a step touches -- the order the fenced
+    completion uses too.
+    """
+
+    def __init__(self, ctx: JobContext, units: UnitOfWorkFactory) -> None:
+        self._ctx = ctx
+        self._units = units
+
+    @asynccontextmanager
+    async def __call__(self) -> AsyncIterator[SqlAlchemyUnitOfWork]:
+        async with self._units() as uow:
+            await self._ctx.hold_lease(uow.session)
+            yield uow
+
+
 def pod_of(ns: str) -> UUID:
     return UUID(ns.removeprefix("pod:"))
 
@@ -164,7 +213,12 @@ def _turn_handler(build_runner: RunnerFactory, build_observer: ObserverFactory):
                 lease_losses=ctx.item.lease_losses,
             )
         uow_factory = worker_uow_factory()
-        runner = build_runner(FencedTerminal(ctx, uow_factory))
+        runner = build_runner(
+            TurnFences(
+                terminal=FencedTerminal(ctx, uow_factory),
+                steps=FencedSteps(ctx, uow_factory),
+            )
+        )
         try:
             await runner.execute(
                 agent_run_id=payload.run_id,
@@ -191,6 +245,9 @@ def dead_error(reason: str, last_error: str | None) -> str:
     """What the person reads on a turn that could not be completed."""
     if reason == "max_runtime":
         return TIMED_OUT_RUN_ERROR
+    if reason == "unavailable_exhausted":
+        minutes = int(TURN_RETRY.unavailable_budget.total_seconds() // 60)
+        return UNAVAILABLE_RUN_ERROR.format(minutes=minutes)
     if reason == "attempts_exhausted" and last_error:
         return f"Agent run failed after repeated errors: {last_error[:500]}"
     return INTERRUPTED_RUN_ERROR
@@ -306,7 +363,9 @@ __all__ = [
     "INTERRUPTED_RUN_ERROR",
     "TURN_MAX_RUNTIME",
     "TURN_RETRY",
+    "FencedSteps",
     "FencedTerminal",
+    "TurnFences",
     "dead_error",
     "on_turn_dead",
     "register_turn_work",

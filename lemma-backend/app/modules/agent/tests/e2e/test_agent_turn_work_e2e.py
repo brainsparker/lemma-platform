@@ -33,7 +33,7 @@ from sqlalchemy.exc import OperationalError
 from app.core.config import settings
 from app.core.infrastructure.work import RetryPolicy, WorkClass
 from app.core.infrastructure.work.testing import dispatcher_for
-from app.modules.agent.events.turn_work import TurnRunner
+from app.modules.agent.events.turn_work import TurnFences, TurnRunner
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.harness_wiring import (
     build_harness_registry,
@@ -252,11 +252,12 @@ def _interrupting_runner(interrupt: BaseException):
     """
     left = {"n": 1}
 
-    def runner(terminal_units) -> TurnRunner:
+    def runner(fences: TurnFences) -> TurnRunner:
         real = AgentRunnerService(
             uow_factory=worker_uow_factory(),
             harness_registry=build_harness_registry(),
-            terminal_units=terminal_units,
+            terminal_units=fences.terminal,
+            step_units=fences.steps,
         )
         staged = real.finalizer.stage_followups
 
@@ -270,6 +271,14 @@ def _interrupting_runner(interrupt: BaseException):
         return real
 
     return runner
+
+
+async def _answers(pod: TurnPod, conversation: str) -> list[str]:
+    return [
+        m["text"]
+        for m in await pod.messages(conversation)
+        if m["role"] == "assistant" and m["kind"] == "TEXT"
+    ]
 
 
 async def _followups_of(run_id: str) -> int:
@@ -318,6 +327,9 @@ async def test_a_worker_dying_mid_finalize_commits_nothing_and_finalizes_once(
 
     assert await pod.run_status(run_id) == "COMPLETED"
     assert await _followups_of(run_id) == 1, "written exactly once"
+    # The answer had committed before the finalize was cut: the reclaimed turn
+    # ends the run on it rather than asking the model for another.
+    assert await _answers(pod, conversation) == ["answered"]
 
 
 @pytest.mark.drives_work
@@ -351,6 +363,7 @@ async def test_a_transient_failure_mid_finalize_retries_from_the_last_step(
 
     assert await pod.run_status(run_id) == "COMPLETED"
     assert await _followups_of(run_id) == 1
+    assert await _answers(pod, conversation) == ["answered"]
 
 
 @pytest.mark.drives_work

@@ -11,6 +11,7 @@ from typing import AsyncIterator, Sequence
 from uuid import UUID
 
 
+from app.core.infrastructure.db.transient_errors import is_transient_database_error
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
     OutstandingToolCalls,
 )
@@ -241,6 +242,13 @@ class PydanticAIHarness:
                 agent_run_id=agent_run_id,
             )
         except Exception as exc:
+            if is_transient_database_error(exc):
+                # Lemma's own database, not the model: a stop check, a step
+                # read or a tool's session could not get a connection. The turn
+                # is interrupted, not over -- its work item retries it and the
+                # resumed turn settles what was in flight. Recorded as the run
+                # failing, this read "check the model settings".
+                raise
             logger.error(
                 "agent.pydantic_ai.pydanticai_harness_type.failed", exc_info=True
             )

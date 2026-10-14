@@ -138,3 +138,7 @@ def test_what_a_person_reads_when_a_turn_gives_up() -> None:
     assert dead_error("max_runtime", None) == TIMED_OUT_RUN_ERROR
     assert dead_error("lease_losses_exhausted", None) == INTERRUPTED_RUN_ERROR
     assert "repeated errors: boom" in dead_error("attempts_exhausted", "boom")
+    unavailable = dead_error("unavailable_exhausted", "Unavailable: database")
+    assert "unavailable for 30 minutes" in unavailable
+    assert "nothing to do with this teammate or its model settings" in unavailable
+    assert unavailable != INTERRUPTED_RUN_ERROR

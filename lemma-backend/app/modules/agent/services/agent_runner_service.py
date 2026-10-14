@@ -38,8 +38,12 @@ from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
+    AgentEvent,
+    AgentEventType,
     AgentRuntimeConfig,
     AgentRunStatus,
+    ConversationStatus,
+    MessageDraft,
     ConversationType,
     HarnessKind,
     JsonObject,
@@ -147,6 +151,7 @@ class AgentRunnerService:
         fixed_usage_limits: UsageLimits | None = None,
         profile_services: ProfileServices = runtime_profile_service_for,
         terminal_units: UnitOfWorkFactory | None = None,
+        step_units: UnitOfWorkFactory | None = None,
     ) -> None:
         self.uow_factory = uow_factory
         self.harness_registry = harness_registry
@@ -157,7 +162,9 @@ class AgentRunnerService:
         self.fixed_usage_limits = fixed_usage_limits or harness_usage_limits()
         self.tool_assembler = RunToolAssembler(uow_factory)
         self.usage_recorder = RunUsageRecorder(uow_factory)
-        self.message_writer = RunMessageWriter(uow_factory)
+        # `step_units`: where each step row commits (a turn's lease-fenced
+        # transaction), so a worker that lost its turn cannot add to it.
+        self.message_writer = RunMessageWriter(step_units or uow_factory)
         # `terminal_units`: where a run's end commits (a turn's fenced completion).
         self.finalizer = RunFinalizer(
             uow_factory, self.usage_recorder, terminal_units=terminal_units
@@ -203,6 +210,10 @@ class AgentRunnerService:
                 ),
                 error=agent_run.error,
             )
+            return
+        answered = await self.turn_resume.committed_answer(agent_run_id)
+        if answered is not None:
+            await self._finish_on(answered, run=run)
             return
         usage_reservation: UsageReservation | None = None
         runtime_profile_snapshot: dict[str, object | None] | None = None
@@ -468,6 +479,24 @@ class AgentRunnerService:
             # like a success, so a deploy ended every conversation in flight.
             if run_is_not_over(exc):
                 raise
+
+    async def _finish_on(self, answer: MessageDraft, *, run: RunIdentity) -> None:
+        """End a resumed run on the answer its previous attempt committed."""
+        event = AgentEvent(
+            type=AgentEventType.MESSAGE, data=answer, agent_run_id=run.agent_run_id
+        )
+        final_status, final_error = self.message_writer.final_status_from_event(event)
+        await self.finalizer.finish(
+            run=run,
+            status=(
+                AgentRunStatus.FAILED
+                if final_status == ConversationStatus.FAILED
+                else AgentRunStatus.COMPLETED
+            ),
+            conversation_status=final_status,
+            error=final_error,
+            output_data=self.message_writer.output_data_from_event(event),
+        )
 
     async def _runtime_for(
         self, conversation: Conversation, agent_run: AgentRun, *, user_id: UUID

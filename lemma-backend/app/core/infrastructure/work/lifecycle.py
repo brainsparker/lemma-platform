@@ -35,7 +35,8 @@ dead_counter = meter.create_counter(
 _LOCK_OWNED = text(
     """
     SELECT attempts, lease_losses, first_unavailable_at FROM work_items
-     WHERE id = :id AND lease_owner = :owner AND state = 'running'
+     WHERE id = :id AND lease_owner = :owner AND lease_epoch = :epoch
+       AND state = 'running'
        FOR UPDATE
     """
 )
@@ -47,7 +48,8 @@ _LOCK_OWNED_WITH_TIMEOUT = text(
     SELECT attempts, lease_losses, first_unavailable_at,
            set_config('statement_timeout', :timeout_ms, true) AS timeout
       FROM work_items
-     WHERE id = :id AND lease_owner = :owner AND state = 'running'
+     WHERE id = :id AND lease_owner = :owner AND lease_epoch = :epoch
+       AND state = 'running'
        FOR UPDATE
     """
 )
@@ -77,7 +79,8 @@ _MARK_DEAD = text(
 _EXTEND = text(
     """
     UPDATE work_items SET lease_until = now() + make_interval(secs => :seconds)
-     WHERE id = :id AND lease_owner = :owner AND state = 'running'
+     WHERE id = :id AND lease_owner = :owner AND lease_epoch = :epoch
+       AND state = 'running'
     RETURNING id
     """
 )
@@ -86,12 +89,15 @@ _OWNED_BY = text(
     SELECT id FROM work_items WHERE lease_owner = :owner AND state = 'running'
     """
 )
+# ``epoch`` NULL: the shutdown release of everything this process owns, after
+# every job of it has stopped.
 _RELEASE_ONE = text(
     """
     SELECT id, ns, class, kind, payload, dedup_key, attempts, lease_losses,
-           first_unavailable_at, run_at, created_at
+           first_unavailable_at, run_at, created_at, lease_epoch
       FROM work_items
      WHERE id = :id AND lease_owner = :owner AND state = 'running'
+       AND (CAST(:epoch AS bigint) IS NULL OR lease_epoch = :epoch)
        FOR UPDATE
     """
 )
@@ -106,7 +112,7 @@ _EXPIRED = text(
 _LOCK_EXPIRED = text(
     """
     SELECT id, ns, class, kind, payload, dedup_key, attempts, lease_losses,
-           first_unavailable_at, run_at, created_at
+           first_unavailable_at, run_at, created_at, lease_epoch
       FROM work_items
      WHERE id = :id AND state = 'running' AND lease_until < now()
        FOR UPDATE SKIP LOCKED
@@ -116,12 +122,16 @@ _LOCK_EXPIRED = text(
 
 async def lock_owned(
     session: AsyncSession,
-    item_id: object,
+    item: ClaimedItem,
     owner: str,
     *,
     statement_timeout_ms: int | None = None,
 ) -> AttemptState | None:
-    """Lock the item if this owner still holds it; ``None`` means the lease is lost.
+    """Lock the item if this claim still holds it; ``None`` means the lease is lost.
+
+    "This claim": the owner *and* the claim's epoch. A process that claimed the
+    item again after its own lease expired is the same owner, and only the
+    epoch tells its new run from the one still running.
 
     The row lock is the fence, and it dies at commit, so the session is marked
     as holding one: a connection-release helper the handler reaches (an
@@ -131,15 +141,16 @@ async def lock_owned(
     ``statement_timeout_ms`` bounds every later statement of the transaction,
     set in the same round trip; only when the lock is held.
     """
+    params: dict[str, object] = {
+        "id": item.id,
+        "owner": owner,
+        "epoch": item.lease_epoch,
+    }
     if statement_timeout_ms is None:
-        statement, params = _LOCK_OWNED, {"id": item_id, "owner": owner}
+        statement = _LOCK_OWNED
     else:
         statement = _LOCK_OWNED_WITH_TIMEOUT
-        params = {
-            "id": item_id,
-            "owner": owner,
-            "timeout_ms": str(statement_timeout_ms),
-        }
+        params["timeout_ms"] = str(statement_timeout_ms)
     row = (await session.execute(statement, params)).first()
     if row is None:
         return None
@@ -271,19 +282,38 @@ async def apply_decision(
 
 
 async def extend_lease(
-    session: AsyncSession, item_id: object, owner: str, lease: timedelta
+    session: AsyncSession, item: ClaimedItem, owner: str, lease: timedelta
 ) -> bool:
     row = await session.scalar(
-        _EXTEND, {"id": item_id, "owner": owner, "seconds": lease.total_seconds()}
+        _EXTEND,
+        {
+            "id": item.id,
+            "owner": owner,
+            "epoch": item.lease_epoch,
+            "seconds": lease.total_seconds(),
+        },
     )
     return row is not None
 
 
 async def release(
-    session: AsyncSession, item_id: object, owner: str, *, now: datetime
+    session: AsyncSession,
+    item_id: object,
+    owner: str,
+    *,
+    now: datetime,
+    epoch: int | None = None,
 ) -> bool:
-    """Hand an owned item back with nothing charged; ``False`` if it was not ours."""
-    row = (await session.execute(_RELEASE_ONE, {"id": item_id, "owner": owner})).first()
+    """Hand an owned item back with nothing charged; ``False`` if it was not ours.
+
+    ``epoch`` names the claim being released; ``None`` releases whatever this
+    owner holds, which only shutdown does, once its jobs have stopped.
+    """
+    row = (
+        await session.execute(
+            _RELEASE_ONE, {"id": item_id, "owner": owner, "epoch": epoch}
+        )
+    ).first()
     if row is None:
         return False
     item = item_from_row(row)
@@ -335,4 +365,5 @@ def item_from_row(row: Row[tuple[object, ...]]) -> ClaimedItem:
         first_unavailable_at=mapping["first_unavailable_at"],
         run_at=mapping["run_at"],
         created_at=mapping["created_at"],
+        lease_epoch=mapping["lease_epoch"],
     )

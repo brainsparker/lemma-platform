@@ -164,6 +164,17 @@ class ConversationRunQueriesMixin:
         )
         return [model.to_entity() for model in result.scalars()]
 
+    async def last_run_message(self, agent_run_id: UUID) -> MessageEntity | None:
+        """The step this run committed last, if any (``ix_agent_message_run_sequence``)."""
+        result = await self.session.execute(
+            select(MessageModel)
+            .where(MessageModel.agent_run_id == agent_run_id)
+            .order_by(MessageModel.sequence.desc())
+            .limit(1)
+        )
+        model = result.scalar_one_or_none()
+        return model.to_entity() if model else None
+
     async def list_agent_runs_with_messages(
         self,
         conversation_id: UUID,

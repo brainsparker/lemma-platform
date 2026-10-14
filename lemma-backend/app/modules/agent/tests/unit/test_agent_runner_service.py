@@ -225,6 +225,10 @@ async def test_execute_re_raises_cancelled_error(monkeypatch) -> None:
         return conversation, agent, agent_run, []
 
     monkeypatch.setattr(service, "_load_run_context", fake_load)
+    # A fresh run: nothing answered yet.
+    monkeypatch.setattr(
+        service.turn_resume, "committed_answer", AsyncMock(return_value=None)
+    )
 
     # Make the harness.run / inner try block raise CancelledError by patching
     # _resolve_agent_runtime to cancel the current task mid-flight.

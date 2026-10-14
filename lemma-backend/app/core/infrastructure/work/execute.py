@@ -45,7 +45,7 @@ from app.core.infrastructure.work.types import (
     PermanentFailure,
     Unavailable,
 )
-from app.core.infrastructure.work.writer import WorkWriter
+from app.core.infrastructure.work.writer import LocalWake, WorkWriter
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -69,6 +69,10 @@ class ExecEnv:
     #: Set when the process starts shutting down; jobs poll it at safe points.
     stopping: asyncio.Event = field(default_factory=asyncio.Event)
     clock: Callable[[], datetime] = utcnow
+    #: Wakes this process's dispatcher of a class; what work a handler
+    #: enqueues uses instead of NOTIFY. A class this process does not run is
+    #: found by its dispatchers' poll.
+    local_wake: LocalWake = field(default=lambda _cls: None)
 
 
 async def capture(awaitable: Awaitable[object]) -> Exception | None:

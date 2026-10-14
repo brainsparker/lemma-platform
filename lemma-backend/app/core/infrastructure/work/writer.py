@@ -8,13 +8,15 @@ the property whose absence made every reconcile cron necessary.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID, uuid7
 
 from pydantic import BaseModel, JsonValue
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.core.infrastructure.work.db import side_connection
@@ -58,6 +60,10 @@ _ENSURE_QUEUE = text(
 )
 
 _DROP_QUEUED = text("DELETE FROM work_items WHERE ns = :ns AND state = 'queued'")
+_CANCEL_QUEUED = text(
+    "DELETE FROM work_items"
+    " WHERE dedup_key = :dedup_key AND state = 'queued' AND ns = :ns"
+)
 
 # Postgres folds identical notifications within one transaction into one.
 _NOTIFY = text("SELECT pg_notify(:channel, '')")
@@ -83,6 +89,28 @@ def _due_soon(run_at: datetime | None, delay: timedelta | None) -> bool:
 
 def wake_channel(cls: WorkClass) -> str:
     return f"work_{cls.value}"
+
+
+#: Set while a work handler runs: how to wake this process's own dispatcher
+#: of a class. Work a handler enqueues wakes that, after its transaction
+#: commits, instead of sending a NOTIFY -- a burst of handler commits that each
+#: notify serialises on NOTIFY's database-wide commit lock, and the
+#: dispatchers it would wake are already looping or will find it on their
+#: poll. Requests from the API are the ones a NOTIFY is for.
+LocalWake = Callable[[WorkClass], None]
+_handler_wake: ContextVar[LocalWake | None] = ContextVar(
+    "work_handler_wake", default=None
+)
+
+
+@contextmanager
+def waking_locally(wake: LocalWake) -> Iterator[None]:
+    """Within this block, enqueued work wakes ``wake`` after commit, never NOTIFY."""
+    token = _handler_wake.set(wake)
+    try:
+        yield
+    finally:
+        _handler_wake.reset(token)
 
 
 class HasSession(Protocol):
@@ -209,11 +237,33 @@ class WorkWriter:
             await connection.execute(_ENSURE_QUEUE, params)
             await connection.commit()
 
+    async def cancel(self, ns: str, dedup_key: str) -> int:
+        """Delete the queued item ``dedup_key`` names, in this transaction.
+
+        For an item whose reason went away -- a wait's expiry once the wait
+        resolved: left queued, it would still be claimed, only to find nothing
+        to do. A running item is left alone; its handler re-checks.
+        """
+        validate_namespace(ns)
+        result = await self._session.execute(
+            _CANCEL_QUEUED, {"ns": ns, "dedup_key": dedup_key}
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]
+
     async def _notify(self, cls: WorkClass) -> None:
         if cls in self._notified:
             return
-        await self._session.execute(_NOTIFY, {"channel": wake_channel(cls)})
         self._notified.add(cls)
+        local = _handler_wake.get()
+        if local is not None:
+            event.listen(
+                self._session.sync_session,
+                "after_commit",
+                lambda _session: local(cls),
+                once=True,
+            )
+            return
+        await self._session.execute(_NOTIFY, {"channel": wake_channel(cls)})
 
 
 def _payload_json(

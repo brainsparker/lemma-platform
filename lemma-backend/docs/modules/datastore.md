@@ -112,8 +112,11 @@ release is described in
 `idle in transaction` session, a long migration, a stuck backfill, or the main
 database if it shares the cluster -- holds the horizon back: DATASTORE triggers
 stop firing, MCP event deliveries stop, and live sockets go quiet, while writes
-keep succeeding. Alert when any transaction on that cluster has been open for
-more than 30 seconds:
+keep succeeding. Every worker exports the age of the oldest open transaction
+as the gauge `lemma.work.oldest_transaction_age` (seconds, label `database` =
+`main` or `datastore`, sampled with the other `lemma.work.*` gauges every
+`WORK_GAUGE_INTERVAL_SECONDS`). Alert when the `datastore` series stays above
+30 seconds. To find the culprit:
 
 ```sql
 SELECT pid, usename, application_name, state, now() - xact_start AS open_for, query

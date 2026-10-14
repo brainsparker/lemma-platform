@@ -231,6 +231,7 @@ def _register_work() -> None:
 
     # Every process: a schedule or MCP subscription change (API) writes
     # `changes.sync_subscribers`; the worker claims every change-log kind.
+    import app.modules.datastore.changes.horizon  # noqa: F401
     import app.modules.datastore.changes.retention  # noqa: F401
     import app.modules.datastore.changes.work  # noqa: F401
 

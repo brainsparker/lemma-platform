@@ -20,6 +20,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.infrastructure.models import AgentModel
 from app.modules.test_support.e2e.builders import E2EScenario
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e]
 
@@ -32,21 +33,29 @@ async def _blocked_behind_the_competitor() -> None:
     Matched on the wait rather than the statement text: a session's ``query``
     column can still show its previous statement while the next one waits.
     """
-    async with async_session_maker() as probe:
-        for _ in range(200):
-            waiting = await probe.scalar(
-                text(
-                    "SELECT count(*) FROM pg_stat_activity "
-                    "WHERE wait_event_type = 'Lock' "
-                    "AND wait_event = 'transactionid' "
-                    "AND datname = current_database() "
-                    "AND pid <> pg_backend_pid()"
+    async with async_session_maker() as session:
+
+        async def waiting_on_a_transaction() -> int:
+            return (
+                await session.scalar(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE wait_event_type = 'Lock' "
+                        "AND wait_event = 'transactionid' "
+                        "AND datname = current_database() "
+                        "AND pid <> pg_backend_pid()"
+                    )
                 )
+                or 0
             )
-            if waiting:
-                return
-            await asyncio.sleep(0.05)
-    raise AssertionError("the create never waited on the competing insert")
+
+        await eventually(
+            label="the create waiting on the competing insert",
+            probe=waiting_on_a_transaction,
+            done=lambda waiting: waiting > 0,
+            timeout_seconds=10.0,
+            interval_seconds=0.05,
+        )
 
 
 async def test_the_create_that_loses_the_race_gets_the_same_409(

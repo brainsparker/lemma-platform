@@ -26,11 +26,14 @@ class FakeStore:
     def __init__(self):
         self.imports: dict = {}
 
-    async def save_import(self, state: ImportState, *, uow=None):
+    async def save_import(self, state: ImportState):
         state.touch()
         self.imports[state.import_id] = state
 
-    async def reopen_import(self, state: ImportState, *, uow=None):
+    async def reopen_import(self, state: ImportState):
+        await self.save_import(state)
+
+    async def stage_import(self, uow, state: ImportState, *, reopen=False):
         await self.save_import(state)
 
     async def get_import(self, import_id):
@@ -57,7 +60,7 @@ class FakeQueue:
         self.calls: list = []
         self._duplicate = duplicate
 
-    async def enqueue(self, uow, kind, payload, *, pod_id, dedup_key):
+    async def queue_job(self, uow, kind, payload, *, pod_id, dedup_key):
         self.calls.append((kind, payload.model_dump(mode="json"), dedup_key))
         return not self._duplicate
 

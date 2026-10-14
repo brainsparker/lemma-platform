@@ -271,8 +271,8 @@ class ImportUseCases:
             )
 
         async with self._uow_factory() as uow:
-            await self._state_store.save_import(state, uow=uow)
-            if not await self._job_queue.enqueue(
+            await self._state_store.stage_import(uow, state)
+            if not await self._job_queue.queue_job(
                 uow, kind, job, pod_id=pod_id, dedup_key=plan_key(import_id)
             ):
                 raise BundleJobConflictError("This import is already being planned.")
@@ -340,10 +340,10 @@ class ImportUseCases:
             state.attempt += 1
         async with self._uow_factory() as uow:
             if retrying_failed_job:
-                await self._state_store.reopen_import(state, uow=uow)
+                await self._state_store.stage_import(uow, state, reopen=True)
             else:
-                await self._state_store.save_import(state, uow=uow)
-            if not await self._job_queue.enqueue(
+                await self._state_store.stage_import(uow, state)
+            if not await self._job_queue.queue_job(
                 uow,
                 APPLY,
                 ImportJob(import_id=import_id, pod_id=pod_id, user_id=user_id),
@@ -383,10 +383,10 @@ class ImportUseCases:
             state.attempt += 1
         async with self._uow_factory() as uow:
             if retrying_failed_job:
-                await self._state_store.reopen_import(state, uow=uow)
+                await self._state_store.stage_import(uow, state, reopen=True)
             else:
-                await self._state_store.save_import(state, uow=uow)
-            if not await self._job_queue.enqueue(
+                await self._state_store.stage_import(uow, state)
+            if not await self._job_queue.queue_job(
                 uow,
                 PLAN,
                 ImportJob(import_id=import_id, pod_id=pod_id, user_id=user_id),
@@ -420,7 +420,7 @@ class ImportUseCases:
         state.cancel_requested_at = datetime.now(timezone.utc)
         finalized = False
         async with self._uow_factory() as uow:
-            await self._state_store.save_import(state, uow=uow)
+            await self._state_store.stage_import(uow, state)
             # Keep the accepted response stable even when an idle cancellation
             # reaches its terminal state before this request returns.
             accepted = state.model_copy(deep=True)
@@ -455,7 +455,7 @@ class ImportUseCases:
                     )
                 state.current_step = None
                 state.completed_at = datetime.now(timezone.utc)
-                await self._state_store.save_import(state, uow=uow)
+                await self._state_store.stage_import(uow, state)
                 finalized = True
             await uow.commit()
         if finalized:

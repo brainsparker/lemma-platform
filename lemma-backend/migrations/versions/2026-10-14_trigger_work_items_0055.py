@@ -53,15 +53,19 @@ _RESERVABLE = (
 def seed_statements() -> list[str]:
     """The cutover, as statements -- importable so a test can run them."""
     queues = [
-        "INSERT INTO work_queues (class, ns, max_running) "
-        f"SELECT DISTINCT 'events', {_NS}, {_EVENTS_DEFAULT_CAP} "
-        f"FROM schedules s WHERE {_ACTIVE_TIME} "
-        "ON CONFLICT (class, ns) DO NOTHING",
-        "INSERT INTO work_queues (class, ns, max_running) "
-        f"SELECT DISTINCT 'automation', {_NS}, {_AUTOMATION_DEFAULT_CAP} "
-        "FROM schedule_runs r JOIN schedules s ON s.id = r.schedule_id "
-        f"WHERE {_RESERVABLE} "
-        "ON CONFLICT (class, ns) DO NOTHING",
+        (
+            "INSERT INTO work_queues (class, ns, max_running) "
+            f"SELECT DISTINCT 'events', {_NS}, {_EVENTS_DEFAULT_CAP} "
+            f"FROM schedules s WHERE {_ACTIVE_TIME} "
+            "ON CONFLICT (class, ns) DO NOTHING"
+        ),
+        (
+            "INSERT INTO work_queues (class, ns, max_running) "
+            f"SELECT DISTINCT 'automation', {_NS}, {_AUTOMATION_DEFAULT_CAP} "
+            "FROM schedule_runs r JOIN schedules s ON s.id = r.schedule_id "
+            f"WHERE {_RESERVABLE} "
+            "ON CONFLICT (class, ns) DO NOTHING"
+        ),
     ]
     arm = (
         "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, run_at) "

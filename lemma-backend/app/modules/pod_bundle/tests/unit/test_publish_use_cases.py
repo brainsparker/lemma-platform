@@ -20,7 +20,10 @@ class FakeStore:
     def __init__(self):
         self.publishes = {}
 
-    async def save_publish(self, state, *, uow=None):
+    async def stage_publish(self, uow, state):
+        await self.save_publish(state)
+
+    async def save_publish(self, state):
         state.touch()
         self.publishes[state.publish_id] = state
 
@@ -33,7 +36,7 @@ class FakeQueue:
         self.calls = []
         self._dup = duplicate
 
-    async def enqueue(self, uow, kind, payload, *, pod_id, dedup_key):
+    async def queue_job(self, uow, kind, payload, *, pod_id, dedup_key):
         self.calls.append((kind, payload.model_dump(mode="json"), dedup_key))
         return not self._dup
 

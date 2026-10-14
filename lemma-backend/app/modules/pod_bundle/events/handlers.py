@@ -7,33 +7,27 @@ Export job phases:
   (c) NO DB: upload the bytes to object storage
   (d) short state write ``READY`` (staging_key, bundle_filename, completed_at) +
       publish completed
-On failure: mark ``FAILED`` + publish error. Domain/bundle errors are terminal
-(swallowed after marking FAILED); an export's infrastructure error re-raises so
-the work item retries — a retry re-plans a fresh export against current pod
-state, so it is always safe. An import's is terminal for the person (they retry
-it), so it is logged and the item ends.
-
-``Released`` (the worker is stopping, raised at a ``yield_point``) always
-propagates untouched: the job is not failed, it is handed to the next worker.
+On failure: mark ``FAILED`` + publish error. Domain errors are terminal; an
+export's infrastructure error re-raises so the item retries (a fresh export is
+always safe), an import's is terminal for the person, who retries it.
+A stopping worker leaves at a ``yield_point``, past every ``except Exception``.
 """
 
 from __future__ import annotations
 
 import tempfile
-from dataclasses import dataclass
 from datetime import timedelta
 from uuid import UUID
 
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
-from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.work import Defer, Released
+from app.core.infrastructure.work import Defer
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.events import analytics as bundle_analytics
-from app.modules.pod_bundle.events.work import yield_point
+from app.modules.pod_bundle.events.work import BundleWorkerContext, yield_point
+from app.modules.pod_bundle.events.work import worker_context as _worker_ctx
 from app.modules.pod_bundle.domain.errors import (
     BundleInvalidError,
     BundleStagingMissingError,
@@ -64,17 +58,6 @@ from app.modules.pod_bundle.infrastructure.state_store import (
 )
 
 logger = get_logger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class BundleWorkerContext:
-    """What the bodies need from the process: a unit-of-work factory."""
-
-    uow_factory: SessionUnitOfWorkFactory
-
-
-def _worker_ctx() -> BundleWorkerContext:
-    return BundleWorkerContext(SessionUnitOfWorkFactory(async_session_maker))
 
 
 class _ImportCancellation(Exception):
@@ -299,8 +282,6 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
                 download_url=state.download_url,
             ),
         )
-    except Released:
-        raise
     except DomainError as exc:
         # Bundle/domain errors are terminal — mark FAILED and swallow (a retry
         # would fail identically).
@@ -356,8 +337,6 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
 
     try:
         await _plan_from_staging(worker_ctx, store, staging, state)
-    except Released:
-        raise
     except _ImportCancellation:
         await _finalize_import_cancellation(store, staging, state)
     except BundleStateConflictError:
@@ -371,8 +350,6 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
             import_id=import_id,
         )
     except Exception:
-        # Terminal for the person, who replans; a retry of this item would
-        # find the job FAILED and do nothing.
         await _fail_import(store, state, "Planning failed due to a transient error.")
         logger.warning(
             "pod_bundle.handlers.pod_bundle_plan_transient.failed",
@@ -474,8 +451,6 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
 
         yield_point()
         await _plan_from_staging(worker_ctx, store, staging, state)
-    except Released:
-        raise
     except _ImportCancellation:
         await _finalize_import_cancellation(store, staging, state)
     except BundleStateConflictError:
@@ -547,8 +522,6 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
 
         yield_point()
         await _plan_from_staging(worker_ctx, store, staging, state)
-    except Released:
-        raise
     except _ImportCancellation:
         await _finalize_import_cancellation(store, staging, state)
     except BundleStateConflictError:
@@ -561,7 +534,6 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
             "pod_bundle.handlers.url_import_s_terminal_s.degraded", import_id=import_id
         )
     except Exception:
-        # Terminal for the person, who starts the import again.
         await _fail_import(store, state, "URL import failed due to a transient error.")
         logger.warning(
             "pod_bundle.handlers.url_import_transient.failed",
@@ -631,9 +603,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             publish_manifest.prepare_published_bundle(bundle_root)
 
             while (step := state.plan.next_pending_step()) is not None:
-                # A step boundary: every step before this one is committed and
-                # checkpointed, so a stopping worker hands the job on here.
-                yield_point()
+                yield_point()  # every earlier step is committed and checkpointed
                 await _raise_if_cancelled(store, import_id)
                 step.status = StepStatus.RUNNING
                 state.current_step = step.index
@@ -755,8 +725,6 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                 "pod_bundle.handlers.delete_staged_import_s_s.diagnostic",
                 import_id=import_id,
             )
-    except Released:
-        raise
     except _ImportCancellation:
         await _finalize_import_cancellation(store, staging, state)
     except BundleStateConflictError:
@@ -770,8 +738,6 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             import_id=import_id,
         )
     except Exception:
-        # Terminal for the person, who re-applies: committed steps stay
-        # committed and the next apply resumes from the failed one.
         await _fail_import(store, state, "Apply failed due to a transient error.")
         logger.warning(
             "pod_bundle.handlers.pod_bundle_apply_transient.failed",

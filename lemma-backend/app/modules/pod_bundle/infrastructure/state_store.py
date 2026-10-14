@@ -33,7 +33,10 @@ from app.modules.pod_bundle.domain.state import (
     ImportStatus,
     PublishState,
     PublishStatus,
-    StepStatus,
+)
+from app.modules.pod_bundle.infrastructure.state_checkpoints import (
+    bundle_checkpoints,
+    validate_transition,
 )
 from app.modules.pod_bundle.infrastructure.models import (
     PodBundleJob,
@@ -54,15 +57,6 @@ _ACTIVE_STATUSES = (
     ExportStatus.EXPORTING.value,
     PublishStatus.PUBLISHING.value,
 )
-_IMMUTABLE_STATUSES = {
-    BundleJobKind.IMPORT: {
-        ImportStatus.COMPLETED.value,
-        ImportStatus.CANCELLED.value,
-        ImportStatus.PARTIALLY_CANCELLED.value,
-    },
-    BundleJobKind.EXPORT: {ExportStatus.READY.value},
-    BundleJobKind.PUBLISH: {PublishStatus.COMPLETED.value},
-}
 logger = get_logger(__name__)
 
 #: A job whose work item is still queued or running is not stale, however long
@@ -79,111 +73,6 @@ _NO_LIVE_ITEM = text(
                    'pod-publish:' || pod_bundle_jobs.id::text))
     """
 )
-
-
-def _import_checkpoints(state: ImportState) -> list[dict]:
-    if state.plan is None:
-        return []
-    return [
-        {
-            "step_index": step.index,
-            "phase": "APPLY",
-            "kind": step.kind.value,
-            "name": step.name,
-            "status": step.status.value,
-            "error": step.error,
-            "committed_at": (
-                state.updated_at
-                if step.status in {StepStatus.DONE, StepStatus.SKIPPED}
-                else None
-            ),
-        }
-        for step in state.plan.steps
-    ]
-
-
-def _export_checkpoints(state: ExportState) -> list[dict]:
-    status = {
-        ExportStatus.QUEUED: StepStatus.PENDING,
-        ExportStatus.EXPORTING: StepStatus.RUNNING,
-        ExportStatus.READY: StepStatus.DONE,
-        ExportStatus.FAILED: StepStatus.FAILED,
-    }[state.status]
-    return [
-        {
-            "step_index": 0,
-            "phase": "EXPORT",
-            "kind": "ARCHIVE",
-            "name": "Export pod bundle",
-            "status": status.value,
-            "error": state.error,
-            "committed_at": (state.completed_at if status is StepStatus.DONE else None),
-        }
-    ]
-
-
-def _publish_checkpoints(state: PublishState) -> list[dict]:
-    export_status = {
-        PublishStatus.QUEUED: StepStatus.PENDING,
-        PublishStatus.EXPORTING: StepStatus.RUNNING,
-        PublishStatus.PUBLISHING: StepStatus.DONE,
-        PublishStatus.COMPLETED: StepStatus.DONE,
-        PublishStatus.FAILED: StepStatus.FAILED,
-    }[state.status]
-    publish_status = {
-        PublishStatus.QUEUED: StepStatus.PENDING,
-        PublishStatus.EXPORTING: StepStatus.PENDING,
-        PublishStatus.PUBLISHING: StepStatus.RUNNING,
-        PublishStatus.COMPLETED: StepStatus.DONE,
-        PublishStatus.FAILED: StepStatus.FAILED,
-    }[state.status]
-    checkpoints = [
-        {
-            "step_index": 0,
-            "phase": "EXPORT",
-            "kind": "ARCHIVE",
-            "name": "Export pod bundle",
-            "status": export_status.value,
-            "error": state.error if export_status is StepStatus.FAILED else None,
-            "committed_at": (
-                state.updated_at if export_status is StepStatus.DONE else None
-            ),
-        },
-        {
-            "step_index": 1,
-            "phase": "PUBLISH",
-            "kind": "REPOSITORY",
-            "name": state.repo_name,
-            "status": publish_status.value,
-            "error": state.error if publish_status is StepStatus.FAILED else None,
-            "committed_at": (
-                state.completed_at if publish_status is StepStatus.DONE else None
-            ),
-        },
-    ]
-    checkpoints.extend(
-        {
-            "step_index": index + 2,
-            "phase": "PUBLISH",
-            "kind": "FILE",
-            "name": file.path,
-            "status": file.status.value,
-            "error": file.error,
-            "committed_at": (
-                state.updated_at if file.status is StepStatus.DONE else None
-            ),
-        }
-        for index, file in enumerate(state.files)
-    )
-    return checkpoints
-
-
-def _bundle_checkpoints(state: BundleState) -> list[dict]:
-    if isinstance(state, ImportState):
-        return _import_checkpoints(state)
-    if isinstance(state, ExportState):
-        return _export_checkpoints(state)
-    return _publish_checkpoints(state)
 
 
 class PodBundleStateStore:
@@ -266,7 +155,6 @@ class PodBundleStateStore:
         *,
         ttl_seconds: int | None = None,
         allow_failed_reopen: bool = False,
-        uow: SqlAlchemyUnitOfWork | None = None,
     ) -> None:
         if not self._durable:
             state.touch()
@@ -283,18 +171,39 @@ class PodBundleStateStore:
             job_id,
             state,
             allow_failed_reopen=allow_failed_reopen,
-            session=uow.session if uow is not None else None,
         )
         self._copy_store_fields(state, persisted)
-        if uow is not None:
-            # The mirror must never show a state the transaction then rolled
-            # back, so it follows the commit.
-            async def mirror() -> None:
-                await self._mirror(kind, job_id, persisted, ttl_seconds=ttl_seconds)
-
-            uow.after_commit(mirror)
-            return
         await self._mirror(kind, job_id, persisted, ttl_seconds=ttl_seconds)
+
+    async def _stage_state(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        kind: BundleJobKind,
+        job_id: UUID,
+        state: BundleState,
+        *,
+        ttl_seconds: int | None = None,
+        allow_failed_reopen: bool = False,
+    ) -> None:
+        """Write the state row on ``uow``'s open transaction; mirror after commit.
+
+        The mirror must never show a state the transaction then rolled back,
+        so it follows the commit -- and nothing here awaits Redis while the
+        caller's connection is held.
+        """
+        persisted = await self._persist_state(
+            kind,
+            job_id,
+            state,
+            allow_failed_reopen=allow_failed_reopen,
+            session=uow.session,
+        )
+        self._copy_store_fields(state, persisted)
+
+        async def mirror() -> None:
+            await self._mirror(kind, job_id, persisted, ttl_seconds=ttl_seconds)
+
+        uow.after_commit(mirror)
 
     async def _mirror(
         self,
@@ -325,7 +234,7 @@ class PodBundleStateStore:
     ) -> BundleState:
         candidate = state.model_copy(deep=True)
         if session is not None:
-            await self._write_state(
+            await self._upsert_job_row(
                 session,
                 kind,
                 job_id,
@@ -334,12 +243,12 @@ class PodBundleStateStore:
             )
             return candidate
         async with async_session_maker() as own, own.begin():
-            await self._write_state(
+            await self._upsert_job_row(
                 own, kind, job_id, candidate, allow_failed_reopen=allow_failed_reopen
             )
         return candidate
 
-    async def _write_state(
+    async def _upsert_job_row(
         self,
         session: AsyncSession,
         kind: BundleJobKind,
@@ -363,7 +272,7 @@ class PodBundleStateStore:
             current = self._parse_snapshot(kind, model.snapshot)
             current.version = model.version
             current.attempt = model.attempt
-            self._validate_transition(
+            validate_transition(
                 kind,
                 current,
                 candidate,
@@ -410,41 +319,6 @@ class PodBundleStateStore:
             model.completed_at = candidate.completed_at
         await self._sync_steps(session, job_id, candidate)
 
-    @staticmethod
-    def _validate_transition(
-        kind: BundleJobKind,
-        current: BundleState,
-        candidate: BundleState,
-        *,
-        allow_failed_reopen: bool,
-    ) -> None:
-        old_status = current.status.value
-        new_status = candidate.status.value
-        if old_status in _IMMUTABLE_STATUSES[kind]:
-            raise BundleStateConflictError("A completed pod bundle job is immutable.")
-        if old_status == "FAILED" and new_status != "FAILED":
-            if not allow_failed_reopen or candidate.attempt != current.attempt + 1:
-                raise BundleStateConflictError(
-                    "A failed pod bundle job requires an explicit retry."
-                )
-        elif current.retryable and not candidate.retryable:
-            if candidate.attempt != current.attempt + 1:
-                raise BundleStateConflictError("A retry must advance exactly once.")
-        elif candidate.attempt != current.attempt:
-            raise BundleStateConflictError("A job attempt can change only on retry.")
-        if old_status == ImportStatus.CANCELLING.value and new_status not in {
-            ImportStatus.CANCELLING.value,
-            ImportStatus.CANCELLED.value,
-            ImportStatus.PARTIALLY_CANCELLED.value,
-        }:
-            raise BundleStateConflictError("Cancellation already won this job.")
-        if (
-            isinstance(current, ImportState)
-            and isinstance(candidate, ImportState)
-            and not set(current.committed_steps).issubset(candidate.committed_steps)
-        ):
-            raise BundleStateConflictError("Committed import steps cannot be removed.")
-
     async def _sync_steps(self, session, job_id: UUID, state: BundleState) -> None:
         checkpoints = self._checkpoints(state)
         existing = {
@@ -479,8 +353,8 @@ class PodBundleStateStore:
             )
 
     @staticmethod
-    def _checkpoints(state: BundleState) -> list[dict]:
-        return _bundle_checkpoints(state)
+    def _checkpoints(state: BundleState) -> list[dict[str, object]]:
+        return bundle_checkpoints(state)
 
     @staticmethod
     def _parse_snapshot(kind: BundleJobKind, snapshot: dict) -> BundleState:
@@ -501,20 +375,27 @@ class PodBundleStateStore:
     async def get_import(self, import_id: UUID) -> ImportState | None:
         return await self._get_state(BundleJobKind.IMPORT, import_id, ImportState)
 
-    async def save_import(
-        self, state: ImportState, *, uow: SqlAlchemyUnitOfWork | None = None
-    ) -> None:
-        await self._save_state(BundleJobKind.IMPORT, state.import_id, state, uow=uow)
+    async def save_import(self, state: ImportState) -> None:
+        await self._save_state(BundleJobKind.IMPORT, state.import_id, state)
 
-    async def reopen_import(
-        self, state: ImportState, *, uow: SqlAlchemyUnitOfWork | None = None
-    ) -> None:
+    async def reopen_import(self, state: ImportState) -> None:
         await self._save_state(
             BundleJobKind.IMPORT,
             state.import_id,
             state,
             allow_failed_reopen=True,
-            uow=uow,
+        )
+
+    async def stage_import(
+        self, uow: SqlAlchemyUnitOfWork, state: ImportState, *, reopen: bool = False
+    ) -> None:
+        """``save_import`` (or ``reopen_import``) on the caller's transaction."""
+        await self._stage_state(
+            uow,
+            BundleJobKind.IMPORT,
+            state.import_id,
+            state,
+            allow_failed_reopen=reopen,
         )
 
     async def get_export(self, export_id: UUID) -> ExportState | None:
@@ -525,44 +406,44 @@ class PodBundleStateStore:
         state: ExportState,
         *,
         ttl_seconds: int | None = None,
-        uow: SqlAlchemyUnitOfWork | None = None,
     ) -> None:
         await self._save_state(
             BundleJobKind.EXPORT,
             state.export_id,
             state,
             ttl_seconds=ttl_seconds,
-            uow=uow,
         )
 
-    async def reopen_export(
-        self, state: ExportState, *, uow: SqlAlchemyUnitOfWork | None = None
-    ) -> None:
+    async def stage_export(self, uow: SqlAlchemyUnitOfWork, state: ExportState) -> None:
+        """``save_export`` on the caller's transaction."""
+        await self._stage_state(uow, BundleJobKind.EXPORT, state.export_id, state)
+
+    async def reopen_export(self, state: ExportState) -> None:
         await self._save_state(
             BundleJobKind.EXPORT,
             state.export_id,
             state,
             allow_failed_reopen=True,
-            uow=uow,
         )
 
     async def get_publish(self, publish_id: UUID) -> PublishState | None:
         return await self._get_state(BundleJobKind.PUBLISH, publish_id, PublishState)
 
-    async def save_publish(
-        self, state: PublishState, *, uow: SqlAlchemyUnitOfWork | None = None
-    ) -> None:
-        await self._save_state(BundleJobKind.PUBLISH, state.publish_id, state, uow=uow)
+    async def save_publish(self, state: PublishState) -> None:
+        await self._save_state(BundleJobKind.PUBLISH, state.publish_id, state)
 
-    async def reopen_publish(
-        self, state: PublishState, *, uow: SqlAlchemyUnitOfWork | None = None
+    async def stage_publish(
+        self, uow: SqlAlchemyUnitOfWork, state: PublishState
     ) -> None:
+        """``save_publish`` on the caller's transaction."""
+        await self._stage_state(uow, BundleJobKind.PUBLISH, state.publish_id, state)
+
+    async def reopen_publish(self, state: PublishState) -> None:
         await self._save_state(
             BundleJobKind.PUBLISH,
             state.publish_id,
             state,
             allow_failed_reopen=True,
-            uow=uow,
         )
 
     async def recover_stale_jobs(

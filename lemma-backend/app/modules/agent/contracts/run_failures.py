@@ -9,7 +9,7 @@ rebuilt there.
 
 from __future__ import annotations
 
-from functools import cache
+from functools import lru_cache
 
 # The classifier lives beside the runner, which imports every harness and the
 # model SDKs behind them (``openai`` alone is ~500 modules). Imported when a
@@ -23,7 +23,7 @@ def _run_failure_message(exc: BaseException) -> str:
     return run_failure_message(exc)
 
 
-@cache
+@lru_cache(maxsize=1)
 def _unclassified() -> str:
     # What `run_failure_message` says about an exception it has no sentence
     # for. That line points at the model settings, which is advice for the

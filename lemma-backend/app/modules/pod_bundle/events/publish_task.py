@@ -12,11 +12,14 @@ from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.concurrency.offload import run_blocking
 from app.core.domain.errors import DomainError
-from app.core.infrastructure.work import Defer, Released
+from app.core.infrastructure.work import Defer
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import BundleStagingMissingError
-from app.modules.pod_bundle.events.handlers import BundleWorkerContext, _worker_ctx
-from app.modules.pod_bundle.events.work import yield_point
+from app.modules.pod_bundle.events.work import (
+    BundleWorkerContext,
+    worker_context as _worker_ctx,
+    yield_point,
+)
 from app.modules.pod_bundle.domain.state import (
     PublishFileProgress,
     PublishState,
@@ -415,8 +418,6 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
             completed_payload(state.status.value, state.seq, repo_url=repo.html_url),
         )
         await _release_publish_lock(state)
-    except Released:
-        raise
     except DomainError as exc:
         if _is_retryable_publish_error(exc) and state.attempt < 3:
             await _record_publish_retry(store, state, exc)

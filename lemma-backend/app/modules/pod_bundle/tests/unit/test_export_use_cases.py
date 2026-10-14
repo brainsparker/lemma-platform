@@ -51,7 +51,10 @@ class _FakeStore:
     def __init__(self):
         self.exports: dict = {}
 
-    async def save_export(self, state: ExportState, *, uow=None) -> None:
+    async def stage_export(self, uow, state: ExportState) -> None:
+        await self.save_export(state)
+
+    async def save_export(self, state: ExportState) -> None:
         state.touch()
         self.exports[state.export_id] = state
 
@@ -67,7 +70,7 @@ class _FakeQueue:
         self.calls: list[dict] = []
         self._return_none = return_none
 
-    async def enqueue(self, uow, kind, payload, *, pod_id, dedup_key):
+    async def queue_job(self, uow, kind, payload, *, pod_id, dedup_key):
         self.calls.append(
             {
                 "job_name": kind,

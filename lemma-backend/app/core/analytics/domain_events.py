@@ -59,7 +59,7 @@ DEFAULT_INTERVAL_SECONDS = 2.0
 _PROJECTION_TIMEOUT_SECONDS = 10.0
 _CLOSE_TIMEOUT_SECONDS = 10.0
 
-_projections: dict[str, list[Projection]] = {}
+_projections: dict[str, list[Projection]] = {}  # memory: bounded one per event type
 
 
 def projection(*event_types: str) -> Callable[[Projection], Projection]:
@@ -105,21 +105,24 @@ class DomainEventSink:
         return self._dropped
 
     def offer(self, events: Sequence[DomainEvent]) -> None:
-        """Queue the events some projection wants. Never raises, never waits."""
+        """Queue the events some projection wants. Never waits."""
+        wanted = [e for e in events if e.event_type in _projections]
+        if not wanted:
+            return
+        for event in wanted:
+            if len(self._queue) == self._queue.maxlen:
+                self._dropped += 1
+                dropped_counter.add(1)
+            self._queue.append(event)
         try:
-            wanted = [e for e in events if e.event_type in _projections]
-            if not wanted:
-                return
-            for event in wanted:
-                if len(self._queue) == self._queue.maxlen:
-                    self._dropped += 1
-                    dropped_counter.add(1)
-                self._queue.append(event)
             self._ensure_started()
-            if self._wake is not None and len(self._queue) >= self._batch:
-                self._wake.set()
-        except Exception:  # noqa: BLE001 - analytics never fails a commit
+        except RuntimeError:
+            # A loop shutting down refuses new tasks: what is queued is
+            # projected by the next process-wide flush (``aclose``).
             logger.warning("analytics.sink.offer_failed", exc_info=True)
+            return
+        if self._wake is not None and len(self._queue) >= self._batch:
+            self._wake.set()
 
     def _ensure_started(self) -> None:
         try:
@@ -164,20 +167,11 @@ class DomainEventSink:
 
     async def _project(self, event: DomainEvent) -> None:
         handlers = _projections.get(event.event_type, ())
-        if not handlers:
-            return
-        try:
-            payload = event.model_dump(mode="json")
-        except Exception:  # noqa: BLE001 - one bad event is not the batch
-            failed_counter.add(1)
-            logger.warning(
-                "analytics.sink.projection_failed",
-                event_type=event.event_type,
-                exc_info=True,
-            )
-            return
+        payload: dict[str, Any] | None = None
         for handler in handlers:
             try:
+                if payload is None:
+                    payload = event.model_dump(mode="json")
                 # The event's origin, as the inbox bound it: a projection that
                 # raises its own events inherits how the work arrived.
                 with origin_scope(origin_from_payload(payload)):

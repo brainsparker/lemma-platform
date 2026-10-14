@@ -77,8 +77,8 @@ async def test_an_export_request_commits_its_state_and_its_item_together(
 
 
 class _QueueThatFailsAfterWriting(bundle_work.BundleJobQueue):
-    async def enqueue(self, uow, kind, payload, *, pod_id, dedup_key) -> bool:
-        await super().enqueue(uow, kind, payload, pod_id=pod_id, dedup_key=dedup_key)
+    async def queue_job(self, uow, kind, payload, *, pod_id, dedup_key) -> bool:
+        await super().queue_job(uow, kind, payload, pod_id=pod_id, dedup_key=dedup_key)
         raise RuntimeError("the request died after writing both")
 
 
@@ -124,21 +124,21 @@ async def test_a_second_identical_request_is_refused_while_the_first_is_queued(
     user_id = UUID(str(fixed_test_user["id"]))
     export_id = uuid4()
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        await store.save_export(
-            ExportState(export_id=export_id, pod_id=pod_id, user_id=user_id), uow=uow
+        await store.stage_export(
+            uow, ExportState(export_id=export_id, pod_id=pod_id, user_id=user_id)
         )
         payload = bundle_work.ExportJob(
             export_id=export_id, pod_id=pod_id, user_id=user_id
         )
         queue = bundle_work.BundleJobQueue()
-        first = await queue.enqueue(
+        first = await queue.queue_job(
             uow,
             bundle_work.EXPORT,
             payload,
             pod_id=pod_id,
             dedup_key=bundle_work.export_key(export_id),
         )
-        second = await queue.enqueue(
+        second = await queue.queue_job(
             uow,
             bundle_work.EXPORT,
             payload,
@@ -203,8 +203,8 @@ async def test_a_dead_item_ends_its_job_failed_in_the_dead_transaction(
         on_dead=bundle_work.end_dead_job,
     )(doomed)
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        await get_pod_bundle_state_store().save_export(
-            ExportState(export_id=export_id, pod_id=pod_id, user_id=user_id), uow=uow
+        await get_pod_bundle_state_store().stage_export(
+            uow, ExportState(export_id=export_id, pod_id=pod_id, user_id=user_id)
         )
         from app.core.infrastructure.work import WorkWriter, pod_namespace
 
@@ -242,11 +242,11 @@ async def test_the_sweep_leaves_a_job_with_a_live_item_alone(
     live, orphan = uuid4(), uuid4()
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         for export_id in (live, orphan):
-            await store.save_export(
+            await store.stage_export(
+                uow,
                 ExportState(export_id=export_id, pod_id=pod_id, user_id=user_id),
-                uow=uow,
             )
-        await bundle_work.BundleJobQueue().enqueue(
+        await bundle_work.BundleJobQueue().queue_job(
             uow,
             bundle_work.EXPORT,
             bundle_work.ExportJob(export_id=live, pod_id=pod_id, user_id=user_id),

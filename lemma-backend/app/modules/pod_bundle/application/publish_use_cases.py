@@ -94,8 +94,8 @@ class PublishUseCases:
             )
         try:
             async with self._uow_factory() as uow:
-                await self._state_store.save_publish(state, uow=uow)
-                queued = await self._job_queue.enqueue(
+                await self._state_store.stage_publish(uow, state)
+                queued = await self._job_queue.queue_job(
                     uow,
                     PUBLISH,
                     PublishJob(

@@ -112,8 +112,8 @@ class ExportUseCases:
             ttl_seconds=resolved_ttl,
         )
         async with self._uow_factory() as uow:
-            await self._state_store.save_export(state, uow=uow)
-            queued = await self._job_queue.enqueue(
+            await self._state_store.stage_export(uow, state)
+            queued = await self._job_queue.queue_job(
                 uow,
                 EXPORT,
                 ExportJob(

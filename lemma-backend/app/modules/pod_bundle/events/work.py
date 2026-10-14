@@ -32,16 +32,20 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.work import (
     DeadContext,
     JobContext,
+    Released,
     RetryPolicy,
     WorkClass,
     WorkMode,
@@ -146,20 +150,40 @@ class PublishJob(_Carried):
     user_id: UUID
 
 
+@dataclass(frozen=True, slots=True)
+class BundleWorkerContext:
+    """What the job bodies need from the process: a unit-of-work factory."""
+
+    uow_factory: SessionUnitOfWorkFactory
+
+
+def worker_context() -> BundleWorkerContext:
+    return BundleWorkerContext(SessionUnitOfWorkFactory(async_session_maker))
+
+
 # --- the running item, for the bodies' yield points ---------------------------
 
 _running: ContextVar[JobContext | None] = ContextVar("pod_bundle_job", default=None)
 
 
+class _Yielding(BaseException):
+    """A stopping worker unwinding a job body to its ``_run`` frame.
+
+    A ``BaseException`` on purpose, like ``CancelledError``: the bodies end in
+    ``except Exception`` blocks that mark the job FAILED, and a shutdown is not
+    a failure. ``_run`` turns it into the runtime's ``Released``.
+    """
+
+
 def yield_point() -> None:
     """A step boundary: hand the job back now if the worker is stopping.
 
-    Raises ``Released`` (requeued, nothing charged); the next worker resumes
-    from the state row. A no-op outside a work item (unit tests).
+    Requeued, nothing charged; the next worker resumes from the state row. A
+    no-op outside a work item (unit tests).
     """
     job = _running.get()
-    if job is not None:
-        job.raise_if_stopping()
+    if job is not None and job.stopping:
+        raise _Yielding
 
 
 type _Body = Callable[[dict[str, Any]], Awaitable[None]]
@@ -172,6 +196,8 @@ async def _run(
     try:
         with origin_scope(origin):
             await body(payload.model_dump(mode="json"))
+    except _Yielding:
+        raise Released() from None
     finally:
         _running.reset(token)
 
@@ -296,7 +322,7 @@ register_bundle_work(default_registry)
 class BundleJobQueue:
     """Writes a bundle job's item on the request's open transaction."""
 
-    async def enqueue(
+    async def queue_job(
         self,
         uow: SqlAlchemyUnitOfWork,
         kind: str,

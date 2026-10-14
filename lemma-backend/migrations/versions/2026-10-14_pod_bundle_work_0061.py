@@ -75,8 +75,10 @@ _SEEDS = (
         "import_id",
         "pod-import-plan:",
         ", 'owner', NULL, 'repo', NULL, 'account_id', j.snapshot->>'account_id'",
-        f"{_IMPORT_PLANNING} AND j.snapshot->>'staging_key' IS NULL "
-        "AND j.snapshot->'source'->>'kind' = 'GITHUB'",
+        (
+            f"{_IMPORT_PLANNING} AND j.snapshot->>'staging_key' IS NULL "
+            "AND j.snapshot->'source'->>'kind' = 'GITHUB'"
+        ),
     ),
     (
         "pod_bundle.publish",

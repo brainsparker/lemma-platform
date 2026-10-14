@@ -30,7 +30,8 @@ from app.modules.agent.infrastructure.unavailable_models import (
     unavailable_models,
 )
 from app.modules.agent.services.pod_runtime_defaults import (
-    default_agent_runtime_for_pod,
+    organization_or_system_runtime,
+    pod_default_runtime,
 )
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
@@ -38,6 +39,9 @@ from app.modules.agent.services.runtime_profile_service import (
     runtime_profile_unavailable_error,
 )
 from app.modules.agent.services.runtime_resolution import selected_model
+from app.modules.agent.services.runtime_selection_check import (
+    check_runtime_config_selections,
+)
 from app.modules.agent.services.runtime_system_profiles import (
     SYSTEM_LEMMA_PROFILE_ID,
     is_model_not_configured,
@@ -139,13 +143,25 @@ async def check_runtime_for_pod(
     pod_id: UUID,
     user_id: UUID,
 ) -> None:
-    """The save-time check: the runtime an agent or conversation is given."""
+    """The save-time check: the runtime an agent or conversation is given.
+
+    Its coding-agent selections too, which only a save checks strictly; a turn
+    drops one the harness has stopped offering instead.
+    """
     if runtime is None:
         return
+    profiles = profile_service(uow)
+    organization_id = await pod_organization_id(uow, pod_id)
     await check_runtime_selection(
         runtime,
-        profiles=profile_service(uow),
-        organization_id=await pod_organization_id(uow, pod_id),
+        profiles=profiles,
+        organization_id=organization_id,
+        user_id=user_id,
+    )
+    await check_runtime_config_selections(
+        runtime,
+        profiles=profiles,
+        organization_id=organization_id,
         user_id=user_id,
     )
 
@@ -158,13 +174,22 @@ async def turn_runtime(
     A conversation that picked its own model keeps the agent's generation
     settings unless it chose its own: switching the model for one chat is not
     a decision to forget how the agent was told to think.
+
+    The runtime is the narrowest one set, but a coding agent's selections
+    layer: a conversation that picks only an effort keeps the teammate's mode
+    and the pod's defaults (``AgentRuntimeConfig.layered_over``). So the pod's
+    own default is read even when something narrower names the runtime.
     """
+    pod_runtime = await pod_default_runtime(uow, pod_id=conversation.pod_id)
     selected = (
         conversation.agent_runtime
         or agent.agent_runtime
-        or await default_agent_runtime_for_pod(uow, pod_id=conversation.pod_id)
+        or pod_runtime
+        or await organization_or_system_runtime(uow, pod_id=conversation.pod_id)
     )
-    return selected.inheriting_settings_from(agent.agent_runtime)
+    return selected.inheriting_settings_from(agent.agent_runtime).layered_over(
+        [pod_runtime, agent.agent_runtime]
+    )
 
 
 class TurnRuntimeCheck(Protocol):

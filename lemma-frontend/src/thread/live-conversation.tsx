@@ -6,7 +6,7 @@ import { NEW_CONVERSATION, saidAboutSending, source } from "@/data";
 import { initialsOf } from "@/data/agent-names";
 import type { ApprovalDecision } from "./approval";
 import type { Pod } from "@/data";
-import { buildTurns, openInteraction, openSignIn, type RawMessage, type Turn } from "./turns";
+import { buildTurns, openInteraction, openSignIn, withRuntimeNotes, type RawMessage, type RuntimeNote, type Turn } from "./turns";
 import { messageIds, runTouched } from "./run-touched";
 import { InteractionDock } from "./interaction-dock";
 import type { AnswerWith } from "./interaction-card";
@@ -141,6 +141,14 @@ export function LiveConversation({
        read from inside the options that construct it. */
     const streamingIn = useRef<string | null>(null);
 
+    /* What the agent's runtime said while a run went — a model it no longer
+       offers, a session it lost. These arrive on the stream and nowhere else,
+       so they are held here, each with the conversation and the turn it came
+       during, and laid onto the turns below. `lastTurnId` is read from the
+       callback, which the session owns and cannot see this render's turns. */
+    const [runtimeNotes, setRuntimeNotes] = useState<(RuntimeNote & { conversationId: string | null })[]>([]);
+    const lastTurnId = useRef("");
+
     const historyRequestFailed = useRef(false);
     /* Set below, once the session it reloads exists; read here from the
        session's own error callback. */
@@ -166,6 +174,10 @@ export function LiveConversation({
             const target = id ?? streamingIn.current;
             if (!target) return;
             patchConversationLists(queryClient, pod.id, (list) => applyTitle(list, target, title));
+        },
+        onNotice: (text) => {
+            const note = { text, turnId: lastTurnId.current, conversationId: streamingIn.current };
+            setRuntimeNotes((was) => [...was, note]);
         },
         // Omit agentName: creation uses the pod default when no named agent is supplied.
         conversationId: conversationId === NEW_CONVERSATION ? null : conversationId,
@@ -396,11 +408,17 @@ export function LiveConversation({
     /* Every turn that did not change keeps the object already on screen, so
        its row can skip drawing again when a message lands elsewhere. */
     const shownTurns = useRef<Turn[]>([]);
+    const liveConversationId = session.conversationId ?? null;
+    const notesHere = useMemo(
+        () => runtimeNotes.filter((note) => note.conversationId === liveConversationId),
+        [runtimeNotes, liveConversationId],
+    );
     const turns = useMemo(() => {
-        const next = keepUnchanged(shownTurns.current, buildTurns(transcript));
+        const next = keepUnchanged(shownTurns.current, withRuntimeNotes(buildTurns(transcript), notesHere));
         shownTurns.current = next;
         return next;
-    }, [transcript]);
+    }, [transcript, notesHere]);
+    useEffect(() => { lastTurnId.current = turns.at(-1)?.id ?? ""; }, [turns]);
 
     /* What the run is blocked on, read straight out of the transcript.
        An approval IS a tool call: `request_approval` streams in like any

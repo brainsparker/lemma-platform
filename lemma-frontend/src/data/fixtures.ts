@@ -2058,6 +2058,18 @@ const COMPUTERS: unknown[] = [
     },
 ];
 
+const CLAUDE_EFFORT = {
+    id: "effort", category: "thought_level", name: "Effort", current_value: "medium",
+    options: [{ value: "low", name: "Low" }, { value: "medium", name: "Medium" }, { value: "high", name: "High" }],
+};
+const CLAUDE_EFFORT_MAX = { ...CLAUDE_EFFORT, options: [...CLAUDE_EFFORT.options, { value: "max", name: "Max" }] };
+/* The host has already taken the modes Lemma refuses out of this list, and
+   marked it `policy`. */
+const CLAUDE_MODE = {
+    id: "mode", category: "mode", name: "Mode", current_value: "default", metadata: { policy: true },
+    options: [{ value: "default", name: "Ask before edits" }, { value: "plan", name: "Plan" }],
+};
+
 const AGENTS_ON: Record<string, unknown[]> = {
     "c-mac": [
         {
@@ -2066,14 +2078,15 @@ const AGENTS_ON: Record<string, unknown[]> = {
             config_options: [
                 {
                     id: "model", category: "model", current_value: "sonnet",
-                    options: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }],
+                    /* Opus publishes its own set, with an effort Sonnet does
+                       not have — the case that makes options per model. */
+                    options: [
+                        { value: "sonnet", name: "Sonnet" },
+                        { value: "opus", name: "Opus", lemma_options: [CLAUDE_EFFORT_MAX, CLAUDE_MODE] },
+                    ],
                 },
-                /* The host has already taken the modes Lemma refuses out of
-                   this list, and marked it `policy`. */
-                {
-                    id: "mode", category: "mode", name: "Mode", current_value: "default", metadata: { policy: true },
-                    options: [{ value: "default", name: "Ask before edits" }, { value: "plan", name: "Plan" }],
-                },
+                CLAUDE_EFFORT,
+                CLAUDE_MODE,
             ],
         },
         {
@@ -2202,8 +2215,8 @@ let AGENTS: Record<string, unknown>[] = [
 
 /** What each sample pod has been told to run on. Most have been told
  *  nothing, which is the common case and the one worth drawing. */
-const POD_RUNTIME: Record<string, { profile_id: string; model_name?: string | null }> = {
-    marketing: { profile_id: "me:claude-code", model_name: "opus" },
+const POD_RUNTIME: Record<string, { profile_id: string; model_name?: string | null; config_selections?: Record<string, string> }> = {
+    marketing: { profile_id: "me:claude-code", model_name: "opus", config_selections: { effort: "high" } },
 };
 
 /** And who each has been told may let themselves in. Most have been told
@@ -3201,6 +3214,17 @@ export const fixtureSource: PodSource = {
         await wait(110);
         return RUNTIMES.map(readRuntime).filter((entry): entry is Runtime => entry !== null);
     },
+    async getRuntime(_orgId: string, runtimeId: string) {
+        await wait(90);
+        const raw = RUNTIMES.find((entry) => (entry as { id?: string }).id === runtimeId) as { harness_id?: string } | undefined;
+        if (!raw) return null;
+        /* The detail endpoint's `harness`, from the same sample computers the
+           ledger reads, so the per-model options are the ones it shows. */
+        const harness = raw.harness_id
+            ? Object.values(AGENTS_ON).flat().find((one) => (one as { id?: string }).id === raw.harness_id)
+            : undefined;
+        return readRuntime(harness ? { ...raw, harness } : raw);
+    },
     async defaultRuntime() {
         await wait(60);
         return ORG_DEFAULT ?? { runtimeId: "system:lemma", model: "" };
@@ -3290,7 +3314,13 @@ export const fixtureSource: PodSource = {
     },
     async setPodRuntime(podId: string, choice) {
         await wait(400);
-        if (choice) POD_RUNTIME[podId] = { profile_id: choice.runtimeId, model_name: choice.model };
+        if (choice) {
+            POD_RUNTIME[podId] = {
+                profile_id: choice.runtimeId,
+                model_name: choice.model,
+                ...(choice.selections && Object.keys(choice.selections).length ? { config_selections: choice.selections } : {}),
+            };
+        }
         else delete POD_RUNTIME[podId];
     },
     async getOrgJoin(orgId: string) {

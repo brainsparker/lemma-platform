@@ -54,6 +54,7 @@ _NAME_TO_MODULE = {
     'AgentRunStartResponse': 'agent_run_start_response',
     'AgentRunStatus': 'agent_run_status',
     'AgentRuntimeConfig': 'agent_runtime_config',
+    'AgentRuntimeConfigConfigSelectionsType0': 'agent_runtime_config_config_selections_type_0',
     'AgentRuntimeProfileDetailResponse': 'agent_runtime_profile_detail_response',
     'AgentRuntimeProfileDetailResponseConfig': 'agent_runtime_profile_detail_response_config',
     'AgentRuntimeProfileDetailResponseMetadata': 'agent_runtime_profile_detail_response_metadata',
@@ -693,6 +694,7 @@ if TYPE_CHECKING:
     from .agent_run_start_response import AgentRunStartResponse
     from .agent_run_status import AgentRunStatus
     from .agent_runtime_config import AgentRuntimeConfig
+    from .agent_runtime_config_config_selections_type_0 import AgentRuntimeConfigConfigSelectionsType0
     from .agent_runtime_profile_detail_response import AgentRuntimeProfileDetailResponse
     from .agent_runtime_profile_detail_response_config import AgentRuntimeProfileDetailResponseConfig
     from .agent_runtime_profile_detail_response_metadata import AgentRuntimeProfileDetailResponseMetadata
@@ -1345,6 +1347,7 @@ __all__ = [
     'AgentRunStartResponse',
     'AgentRunStatus',
     'AgentRuntimeConfig',
+    'AgentRuntimeConfigConfigSelectionsType0',
     'AgentRuntimeProfileDetailResponse',
     'AgentRuntimeProfileDetailResponseConfig',
     'AgentRuntimeProfileDetailResponseMetadata',

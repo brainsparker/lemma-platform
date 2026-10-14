@@ -24,6 +24,7 @@ from app.modules.agent.domain.value_objects import (
 )
 import app.modules.agent.services.conversation_retry_service as retry_service_module
 from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.test_support.fakes import EmptyResultSession
 
 
 def _run(
@@ -84,7 +85,12 @@ def _service(
         create_agent_run=AsyncMock(),
         conversations_with_pending_interaction=AsyncMock(return_value=set()),
     )
-    uow = SimpleNamespace(collect_events=MagicMock(), commit=AsyncMock())
+    uow = SimpleNamespace(
+        collect_events=MagicMock(),
+        commit=AsyncMock(),
+        # The pod names no default runtime of its own.
+        session=EmptyResultSession(),
+    )
     service = ConversationService(
         uow=uow,
         conversation_repository=repository,

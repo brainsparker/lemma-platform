@@ -541,7 +541,7 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 `op` is the one request Lemma makes of the host: a host-execution operation,
 answered with `re` set to its `id`. Lemma's ids and the host's are separate
 namespaces; each side matches `re` only against requests it sent. The host
-runs each `op` in a task of its own, at most `MAX_CONCURRENT_OPS` (32) at once,
+runs each `op` in a task of its own, at most `MAX_CONCURRENT_OPS` (64) at once,
 so a `process.read` long-waiting for output never holds up the reader, the
 heartbeat, or another op. An op with no answer by its `deadline_ms` is answered
 `timeout` by the host itself. A link opened without host execution (pairing,
@@ -561,6 +561,25 @@ the switch is that local pairing's own (`host_execution` on the target in
 `control` as well as `hello`, so turning it on or off reaches Lemma within
 seconds without a reconnect. Lemma routes a run of the host's paired user to it only when
 both booleans are true.
+
+`capacity` is `{max_runs, active_runs, available_runs}`. One pool of run
+slots serves every pairing on the computer, sized when the host starts: 20 by
+default, or what the person chose, 1 to 128 (`MAX_SUPPORTED_RUNS`, Lemma's own
+ceiling), with `lemma-agent-host max-runs [N]`. That is `max_runs` in
+`config.json`, with `max_runs_chosen` recording that the person set it, and a
+new value applies when the host next starts. Older builds wrote their default
+of 2 into every config; a 2 nobody chose is lifted to the current default when
+the config is read. A draining or paused pairing reports `available_runs` 0.
+A start beyond the free slots waits in Lemma's queue.
+
+`harnesses` publishes each agent's probe, `config_options` among it. Those
+are what `session/new` reported, so the options beside the model are the
+machine's default model's. Each value of the model option may also carry
+`lemma_options`: that model's own options, read by choosing it on the probe's
+session, the model option itself left out. Absent means the same as the top
+level -- which is also what a model the probe could not read, or one past the
+first 32, is published as. The harness revision ignores `current_value` at
+both levels.
 
 The first frame on a connection is `pair` (no `Authorization` header) or
 `hello` (with `Authorization: Bearer <host secret>`). Anything else first is a
@@ -628,6 +647,16 @@ guarantee:
   alongside its traffic. A run start or a `control` frame that Postgres still
   picks as a deadlock victim is retried once, and a failure that escapes is
   reported as the database being busy, not as the teammate's model settings.
+- **A run is always ended.** A run task that stops without writing the
+  run's final state -- a journal write it could not make, a panic -- would
+  leave the run heartbeating as live for ever, and its turn in Lemma never
+  ending. Reaping the task ends it the way restart recovery does:
+  `DISPATCH_UNKNOWN` once the prompt may have reached the agent -- unless
+  the agent had taken it and the run was being stopped, which is `CANCELLED`
+  -- and `FAILED` before, with a terminal event and checkpoint like any other. Nor does a journal or `config.json` error in the
+  worker's bookkeeping end the worker, which would abort every run on the
+  pairing: it is logged and tried again, and an unreadable config leaves the
+  last settings read in force.
 - **Control updates** are idempotent and stale ones are ignored.
   `control_ok.refused` names any update Lemma could not parse, and it is the
   only way one is refused. Lemma applies each update separately, so one bad
@@ -692,8 +721,8 @@ guarantee:
 - **The host's MCP relay** (`mcp_relay.rs`) is a loopback port every account
   on the Mac can reach, so a connection must present the relay token on its
   first line within 5 seconds and in at most 64 KiB, later lines are bounded
-  at 8 MiB without being read whole first, and at most 64 connections are
-  held. It serves only runs the journal says are still going, and ends a
+  at 8 MiB without being read whole first, and at most 128 connections are
+  held -- one per run, at the most runs a host may take. It serves only runs the journal says are still going, and ends a
   parked wait itself when its run does. An answer too large for the bridge
   goes as an error saying so, not as a line the bridge would hang up on. The
   bridge (`mcp_bridge`) sends the token first on each connection, marks a

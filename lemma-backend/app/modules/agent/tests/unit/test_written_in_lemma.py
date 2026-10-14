@@ -50,6 +50,7 @@ from app.modules.agent.services.outsider_brief import render_outsider_brief
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.messaging.models import MessageUserRequest
 from app.modules.agent.tools.messaging.pydantic_adapter import message_user
+from app.modules.test_support.fakes import EmptyResultSession
 
 pytestmark = pytest.mark.unit
 
@@ -136,7 +137,11 @@ def _coordinator(conversation: Conversation):
         )
     )
     uow = SimpleNamespace(
-        collect_events=MagicMock(), commit=AsyncMock(), after_commit=MagicMock()
+        collect_events=MagicMock(),
+        commit=AsyncMock(),
+        after_commit=MagicMock(),
+        # The pod names no default runtime of its own.
+        session=EmptyResultSession(),
     )
     coordinator = turns.TurnCoordinator(
         uow,

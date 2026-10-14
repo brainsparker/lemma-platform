@@ -164,12 +164,15 @@ class ScheduleRunRecoveryService:
                     ScheduleRun.last_inspected_at < reinspect_cutoff,
                 ),
                 or_(
-                    # A reservation not yet handed to anyone (``started_at``
-                    # NULL) belongs to its ``schedule.start_target`` item,
+                    # A reservation not yet handed to anyone (no attempt, no
+                    # ``started_at``) belongs to its ``schedule.start_target`` item,
                     # which may be waiting on the trigger's fire rate; the
                     # item's lease recovers it, not this sweep.
                     (ScheduleRun.status == ScheduleRunStatus.PROCESSING.value)
-                    & (ScheduleRun.started_at < retry_cutoff),
+                    & or_(
+                        ScheduleRun.started_at < retry_cutoff,
+                        ScheduleRun.started_at.is_(None) & (ScheduleRun.attempts > 0),
+                    ),
                     (ScheduleRun.status == ScheduleRunStatus.FAILED.value)
                     & (ScheduleRun.updated_at < retry_cutoff),
                     (ScheduleRun.status == ScheduleRunStatus.DISPATCHED.value)

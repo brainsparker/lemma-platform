@@ -23,7 +23,6 @@ from uuid import UUID
 import pytest
 from httpx import AsyncClient
 
-from app.core.config import settings
 from app.core.infrastructure.work import WorkClass
 from app.core.infrastructure.work.testing import dispatcher_for, make_due
 from app.core.infrastructure.db.session import async_session_maker
@@ -47,17 +46,24 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 
 @pytest.fixture(autouse=True)
-def _drive_the_runtime_alone():
+async def _drive_the_runtime_alone(db_manager):
+    del db_manager  # truncated before the worker is held, not while
     from app.modules.schedule.tests.e2e.trigger_work_support import worker_held
 
-    with worker_held():
+    async with worker_held():
         yield
+
 
 _BACKEND = Path(__file__).resolve().parents[5]
 
 
 async def _kill_inside(stage: str, tmp_path: Path) -> Path:
     marker, calls = tmp_path / f"{stage}.reached", tmp_path / f"{stage}.calls"
+    # The database this test's own sessions use, whatever the settings say.
+    async with async_session_maker() as session:
+        bind = session.get_bind()
+    database_url = bind.url.render_as_string(hide_password=False)
+    log = (tmp_path / f"{stage}.log").open("w")
     process = subprocess.Popen(
         [
             sys.executable,
@@ -73,9 +79,11 @@ async def _kill_inside(stage: str, tmp_path: Path) -> Path:
             "PYTHONPATH": os.pathsep.join(
                 part for part in (".", os.environ.get("PYTHONPATH")) if part
             ),
-            "DATABASE_URL": settings.database_url,
+            "DATABASE_URL": database_url,
             "ENVIRONMENT": "testing",
         },
+        stdout=log,
+        stderr=subprocess.STDOUT,
     )
     try:
 
@@ -88,7 +96,10 @@ async def _kill_inside(stage: str, tmp_path: Path) -> Path:
             done=bool,
             timeout_seconds=90,
         )
-        assert process.poll() is None, f"{stage} worker exited early"
+        assert process.poll() is None, (
+            f"{stage} worker exited early: "
+            + (tmp_path / f"{stage}.log").read_text()[-2000:]
+        )
         process.send_signal(signal.SIGKILL)
         process.wait(timeout=10)
     finally:

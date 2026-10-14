@@ -64,6 +64,14 @@ case-insensitive filesystem.
 The poller owns the concrete time job set: `next_fire_at` is the whole index,
 claimed with `FOR UPDATE SKIP LOCKED` and advanced in the claiming transaction.
 
+`trigger_skips` records what a DATASTORE trigger let pass without firing --
+the changes of a bulk write or import it skips, or fires past its daily
+ceiling -- one row per delivered page and reason with a count, so a bulk write
+of thousands of rows is a handful of rows; `GET .../schedules/{id}/skips`
+pages them for run history. `trigger_batches` holds each window a `batch`-mode
+trigger planned before firing it, so a replay after a crash fires that same
+window rather than a differently cut one.
+
 ## API groups
 
 | Routes | What they do |

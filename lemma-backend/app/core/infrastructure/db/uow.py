@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
+from app.core.analytics.domain_events import offer_committed
 from app.core.infrastructure.db.session_uow import SESSION_UOW_KEY
 from app.core.infrastructure.db.transaction_locks import (
     clear_transaction_scoped_lock,
@@ -25,7 +26,10 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
 
     Collected domain events are inserted into the outbox before the database
     commit. A separate dispatcher publishes them, so a Redis outage cannot lose
-    a successfully committed domain change.
+    a successfully committed domain change. After the commit the same events go
+    to the analytics sink (``app.core.analytics.domain_events``), which is how
+    product analytics sees them now that no analytics consumer group reads the
+    streams.
     Repositories call `collect_events()` after saving aggregates.
     """
 
@@ -88,7 +92,10 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
         # The transaction that held any advisory lock has ended, so a later
         # release in this request is free to commit again.
         clear_transaction_scoped_lock(self.session)
-        self._pending_events.clear()
+        committed, self._pending_events = self._pending_events, []
+        # Product analytics projects committed events after the commit, in
+        # batches, off this task: it can neither block nor fail the commit.
+        offer_committed(committed)
         callbacks, self._after_commit = self._after_commit, []
         for callback in callbacks:
             await callback()

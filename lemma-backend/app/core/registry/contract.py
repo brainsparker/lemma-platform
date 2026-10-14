@@ -85,6 +85,14 @@ subscriptions it can see, so an API process that never imported a subscriber
 would commit a fact with nobody to react to it.
 """
 
+type AnalyticsRegistrar = Callable[[], None]
+"""Imports the module's analytics projections for side effects.
+
+They register on the after-commit analytics sink
+(``app.core.analytics.domain_events``) by event type. Called in every process,
+because whichever process commits a domain event is the one that projects it.
+"""
+
 # Lifespan hooks are ``@asynccontextmanager`` functions entered inside an
 # ``AsyncExitStack``; teardown happens automatically (LIFO) on stack unwind.
 type ApiLifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
@@ -108,6 +116,9 @@ class LemmaModule:
     # --- Every process ---
     # Work kinds and fact subscriptions; see ``WorkRegistrar``.
     register_work: WorkRegistrar | None = None
+    # Analytics projections of committed domain events; see
+    # ``AnalyticsRegistrar``.
+    register_analytics: AnalyticsRegistrar | None = None
 
     # Redis Streams owned by this module's durable consumers. Publishers use
     # this topology before XADD, even in processes that never import handlers.

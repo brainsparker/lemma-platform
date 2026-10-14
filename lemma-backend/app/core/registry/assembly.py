@@ -93,7 +93,7 @@ def configure_namespace_directory(modules: Sequence[LemmaModule]) -> None:
 
 
 def register_module_work(modules: Sequence[LemmaModule]) -> None:
-    """Import every module's work kinds and fact subscriptions.
+    """Import every module's work kinds, fact subscriptions and analytics projections.
 
     Both the API and the worker need them: the API enqueues kinds and emits
     facts, the worker claims them. Idempotent, because importing is.
@@ -101,6 +101,10 @@ def register_module_work(modules: Sequence[LemmaModule]) -> None:
     for module in modules:
         if module.register_work is not None:
             module.register_work()
+        # Same reach, same reason: the process that commits a domain event is
+        # the one whose sink projects it.
+        if module.register_analytics is not None:
+            module.register_analytics()
 
 
 def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:

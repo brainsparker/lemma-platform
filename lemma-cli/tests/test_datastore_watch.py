@@ -280,3 +280,84 @@ def test_a_forbidden_or_not_found_close_stops_without_retrying(
 
     assert excinfo.value.exit_code != 0
     assert attempts["n"] == 1
+
+
+# --- TLS -----------------------------------------------------------------------
+
+
+def test_a_plain_ws_url_passes_no_ssl_argument() -> None:
+    from lemma_cli.cli_core.watch import _ssl_option
+
+    assert _ssl_option("ws://localhost:8711/x", verify_ssl=True) is None
+    assert _ssl_option("ws://localhost:8711/x", verify_ssl=False) is None
+
+
+def test_a_wss_url_always_gets_a_tls_context() -> None:
+    """``None`` makes websockets refuse a wss:// URI outright, and ``False``
+    would mean no TLS at all rather than TLS without checks."""
+    import ssl
+
+    from lemma_cli.cli_core.watch import _ssl_option
+
+    verified = _ssl_option("wss://api.example.test/x", verify_ssl=True)
+    unverified = _ssl_option("wss://api.example.test/x", verify_ssl=False)
+
+    assert isinstance(verified, ssl.SSLContext)
+    assert verified.verify_mode is ssl.CERT_REQUIRED and verified.check_hostname
+    assert isinstance(unverified, ssl.SSLContext)
+    assert unverified.verify_mode is ssl.CERT_NONE
+    assert not unverified.check_hostname
+
+
+@pytest.fixture
+def self_signed_tls_server(tmp_path):
+    """A server-side TLS context behind a certificate nobody trusts."""
+    import shutil
+    import ssl
+    import subprocess
+
+    if shutil.which("openssl") is None:
+        pytest.skip("openssl is needed to mint the test certificate")
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", str(key), "-out", str(cert), "-days", "1",
+            "-subj", "/CN=localhost",
+            "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+        ],
+        check=True,
+        capture_output=True,
+    )  # fmt: skip
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    return context
+
+
+async def test_watch_connects_to_a_wss_server_with_verification_off(
+    self_signed_tls_server,
+) -> None:
+    """Against a real TLS websocket server on loopback, not a stub."""
+    import ssl
+
+    from websockets.asyncio.client import connect
+    from websockets.asyncio.server import serve
+
+    from lemma_cli.cli_core.watch import _ssl_option
+
+    async def _echo(websocket) -> None:
+        async for message in websocket:
+            await websocket.send(message)
+
+    async with serve(_echo, "127.0.0.1", 0, ssl=self_signed_tls_server) as server:
+        port = server.sockets[0].getsockname()[1]
+        url = f"wss://127.0.0.1:{port}/"
+
+        async with connect(url, ssl=_ssl_option(url, verify_ssl=False)) as ws:
+            await ws.send("ping")
+            assert await ws.recv() == "ping"
+
+        # Verification on is really on: the untrusted certificate is refused.
+        with pytest.raises(ssl.SSLCertVerificationError):
+            async with connect(url, ssl=_ssl_option(url, verify_ssl=True)):
+                pass

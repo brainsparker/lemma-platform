@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import random
+import ssl
 from urllib.parse import urlencode
 
 from rich.console import Console
@@ -49,6 +50,23 @@ def _reconnect_delay(attempt: int) -> float:
         _RECONNECT_BASE_DELAY_SECONDS * (2 ** max(0, attempt)),
     )
     return random.uniform(0.0, ceiling)
+
+
+def _ssl_option(ws_url: str, *, verify_ssl: bool) -> ssl.SSLContext | None:
+    """The ``ssl`` argument ``websockets.connect`` needs for ``ws_url``.
+
+    ``websockets`` refuses ``None`` for a ``wss://`` URI and any value for a
+    ``ws://`` one, and ``False`` is not "TLS without verification" but no TLS
+    at all -- a plaintext handshake sent to a TLS port. So a ``wss://`` URI
+    always gets a context; ``--no-verify-ssl`` only turns its checks off.
+    """
+    if not ws_url.startswith("wss://"):
+        return None
+    context = ssl.create_default_context()
+    if not verify_ssl:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
 
 
 def _changes_ws_url(
@@ -132,7 +150,7 @@ async def _run(
             return
 
         ws_url = _changes_ws_url(base_url, pod_id, table, cursor)
-        ssl_option = None if ws_url.startswith("ws://") or verify_ssl else False
+        ssl_option = _ssl_option(ws_url, verify_ssl=verify_ssl)
         auth_rejected = False
         try:
             async with websockets.connect(

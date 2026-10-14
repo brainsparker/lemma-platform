@@ -12,8 +12,8 @@ vault with everything else when it lands. The access token lasts 12 hours and
 is rotated from the refresh token before use, so `access_expires_at` is what
 says whether it is still good.
 
-Revision ID: 0052_slack_configuration_tokens
-Revises: 0051_agent_run_reliability
+Revision ID: 0053_slack_configuration_tokens
+Revises: 0052_workflow_run_times_utc
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0052_slack_configuration_tokens"
-down_revision = "0051_agent_run_reliability"
+revision = "0053_slack_configuration_tokens"
+down_revision = "0052_workflow_run_times_utc"
 branch_labels = None
 depends_on = None
 

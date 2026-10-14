@@ -1,6 +1,6 @@
 """The table of Slack app configuration tokens, one per org and workspace.
 
-Mirrors ``migrations/versions/2026-10-14_slack_configuration_tokens_0052.py``
+Mirrors ``migrations/versions/2026-10-14_slack_configuration_tokens_0053.py``
 column for column, for the reason ``whatsapp_pool_models`` gives: a schema built
 from metadata must carry the migration's guarantees, or autogenerate offers to
 drop the difference.

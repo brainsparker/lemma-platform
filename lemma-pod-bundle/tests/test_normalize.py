@@ -157,6 +157,36 @@ def test_normalize_surface_payload_channels_identity_telegram_and_status():
     }
 
 
+def test_normalize_surface_payload_carries_the_whatsapp_reengage_template():
+    payload = _normalize_surface_payload(
+        {
+            "platform": "whatsapp",
+            "config": {
+                "whatsapp": {
+                    "reengage_template": "lemma_reengage",
+                    "language": "pt_BR",
+                    "other": 1,
+                }
+            },
+        }
+    )
+    assert payload["config"] == {
+        "whatsapp": {"reengage_template": "lemma_reengage", "language": "pt_BR"}
+    }
+
+
+def test_normalize_surface_payload_leaves_out_an_unset_whatsapp_template():
+    """A surface with no template exports no whatsapp block, not the default
+    language on its own."""
+    payload = _normalize_surface_payload(
+        {
+            "platform": "whatsapp",
+            "config": {"whatsapp": {"reengage_template": None, "language": "en_US"}},
+        }
+    )
+    assert "config" not in payload
+
+
 def test_normalize_surface_payload_carries_connector_identity():
     surface = {
         "platform": "slack",

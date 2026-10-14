@@ -77,7 +77,7 @@ class DurableSubscriber(Protocol):
         ...
 
 
-_registry: dict[str, DurableSubscriber] = {}  # memory: bounded one per module prefix, at import
+_registry: dict[str, DurableSubscriber] = {}  # memory: bounded per module prefix
 
 
 def register_durable_subscriber(prefix: str, subscriber: DurableSubscriber) -> None:

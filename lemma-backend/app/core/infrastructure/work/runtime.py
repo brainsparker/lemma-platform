@@ -21,6 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.work import maintenance
 from app.core.infrastructure.work.config import (
+    class_shutdown_grace,
     class_slots,
     enabled_classes,
     work_settings,
@@ -99,7 +100,8 @@ class WorkRuntime:
         self._tasks: list[asyncio.Task[None]] = []
         self._loops: list[asyncio.Task[None]] = []
         self._stop_task: asyncio.Task[None] | None = None
-        self._grace = work_settings.work_shutdown_grace_seconds
+        #: Per class; one explicit ``grace_seconds`` on stop replaces them all.
+        self._grace = {cls: class_shutdown_grace(cls) for cls in classes}
 
     @property
     def classes(self) -> list[WorkClass]:
@@ -172,11 +174,13 @@ class WorkRuntime:
         if self._stop_task is not None or not self.dispatchers:
             return
         if grace_seconds is not None:
-            self._grace = grace_seconds
+            self._grace = dict.fromkeys(self._grace, grace_seconds)
         self.stopping.set()
         for dispatcher in self.dispatchers.values():
             dispatcher.wake()
-        logger.info("work.runtime.stopping", grace_seconds=self._grace)
+        logger.info(
+            "work.runtime.stopping", grace_seconds=max(self._grace.values(), default=0)
+        )
         self._stop_task = create_background_task(self._drain(), name="work-drain")
 
     async def stop(self, grace_seconds: float | None = None) -> None:
@@ -190,7 +194,7 @@ class WorkRuntime:
         if self._tasks:
             await asyncio.wait(self._tasks)
         released = await asyncio.gather(
-            *(d.drain(self._grace) for d in self.dispatchers.values())
+            *(d.drain(self._grace[cls]) for cls, d in self.dispatchers.items())
         )
         for task in self._loops:
             task.cancel()

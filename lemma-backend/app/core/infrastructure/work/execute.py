@@ -42,6 +42,7 @@ from app.core.infrastructure.work.retry import (
 from app.core.infrastructure.work.types import (
     ClaimedItem,
     Defer,
+    MaxRuntimeExceeded,
     PermanentFailure,
     Unavailable,
 )
@@ -97,6 +98,8 @@ def decide(
         return after_unavailable(policy, state, exc, now=now)
     if isinstance(exc, Defer):
         return after_defer(state, exc.delay, now=now)
+    if isinstance(exc, MaxRuntimeExceeded):
+        return after_permanent(state, reason="max_runtime", error=describe_error(exc))
     if isinstance(exc, PermanentFailure):
         return after_permanent(state, reason="permanent", error=describe_error(exc))
     if isinstance(exc, ValidationError):

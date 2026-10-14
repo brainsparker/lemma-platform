@@ -40,6 +40,7 @@ from app.core.infrastructure.work.types import (
     Defer,
     ItemFailure,
     LeaseLost,
+    MaxRuntimeExceeded,
     PermanentFailure,
     Released,
     Unavailable,
@@ -49,11 +50,16 @@ from app.core.infrastructure.work.types import (
     org_namespace,
     pod_namespace,
 )
-from app.core.infrastructure.work.writer import WorkWriter
+from app.core.infrastructure.work.writer import (
+    CancelOutcome,
+    RescheduleOutcome,
+    WorkWriter,
+)
 
 __all__ = [
     "DEFAULT_RETRY",
     "SYSTEM_NAMESPACE",
+    "CancelOutcome",
     "ClaimedItem",
     "ConfiguredWorkLimitPort",
     "DeadContext",
@@ -66,11 +72,13 @@ __all__ = [
     "ItemFailure",
     "JobContext",
     "LeaseLost",
+    "MaxRuntimeExceeded",
     "NamespaceDirectory",
     "PermanentFailure",
     "Rate",
     "RateUse",
     "Released",
+    "RescheduleOutcome",
     "RetryPolicy",
     "Unavailable",
     "UnavailableEvidence",

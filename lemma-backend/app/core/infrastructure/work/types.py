@@ -160,5 +160,19 @@ class Released(Exception):
     """
 
 
+class MaxRuntimeExceeded(Exception):
+    """A job ran past its kind's ``max_runtime`` and was cancelled; it goes dead.
+
+    Raised by the runtime, never by a handler. Dead rather than retried: a run
+    that used its whole wall-clock allowance would most likely use it again.
+    The kind's ``on_dead`` records the terminal state, with reason
+    ``max_runtime``.
+    """
+
+    def __init__(self, limit: timedelta) -> None:
+        super().__init__(f"ran past its {limit} time limit")
+        self.limit = limit
+
+
 class LeaseLost(Exception):
     """This process no longer owns the item; another worker has it or it is gone."""

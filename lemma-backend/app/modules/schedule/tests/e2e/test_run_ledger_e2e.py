@@ -631,8 +631,7 @@ async def test_the_cutover_leaves_runs_whose_targets_are_still_alive(
     )
     stale = datetime.now(timezone.utc) - timedelta(minutes=30)
     running_conversation, finished_conversation = uuid4(), uuid4()
-    # uuid7: both rows tie on `last_inspected_at` (NULL), so the id tie-break
-    # decides which one a `limit=1` sweep reaches first.
+    # uuid7: the id order decides which one a `limit=1` sweep reaches first.
     parked_id = uuid7()
     behind_it_id = uuid7()
 

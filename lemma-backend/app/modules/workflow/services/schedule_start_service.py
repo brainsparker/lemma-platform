@@ -376,7 +376,7 @@ class ScheduleStartService:
         its payload is empty (nothing writes one) and its metadata was `None`,
         so a cron-started run was handed three empty objects and had to infer
         from its instruction alone that it had been woken by a clock, let alone
-        which occurrence. `scheduled_at` has ridden on `ScheduleFired` the whole
+        which occurrence. `scheduled_at` has ridden on the fire the whole
         time and simply never reached the target.
 
         Into `metadata` rather than `payload`: `payload` is the event body and

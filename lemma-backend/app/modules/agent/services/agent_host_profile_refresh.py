@@ -6,12 +6,15 @@ model kept offering the old list in every picker, and one that dropped a model
 kept a profile pinned to it -- refused at every turn as unavailable until
 somebody happened to open the profile and press Save.
 
-So every publish rewrites the profiles of the harnesses it reported, with the
-rules a run already applies when a harness changes under it
-(``command_remint``): a pinned model the harness no longer offers is cleared,
-leaving the harness to use its default, and a selection the effective model no
-longer offers is dropped. Nothing is refused -- a publish is news about the
-machine, not a request anybody can correct.
+So every publish rewrites what the machine owns on the profiles of the
+harnesses it reported: the model list and the harness revision. What a person
+chose is left alone. A pinned model the harness stopped offering stays pinned,
+and the next turn on it is refused with that reason -- the rule
+``selected_model`` keeps, because swapping a pin for the harness default ran a
+teammate on another model with nobody told. A selection the model stopped
+offering stays saved too, and dispatch drops it from the run it no longer
+fits. Nothing is refused here: a publish is news about the machine, not a
+request anybody can correct.
 """
 
 from __future__ import annotations
@@ -22,10 +25,6 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.log.log import get_logger
-from app.modules.agent.domain.agent_host_selections import (
-    carry_agent_host_model,
-    carry_agent_host_selections,
-)
 from app.modules.agent.domain.runtime_profiles import HarnessRuntimeConfig
 from app.modules.agent.infrastructure.agent_host.harness_profiles import (
     agent_host_profiles_for_update,
@@ -82,35 +81,21 @@ def _refresh_profile(
             supports_images=(harness.capabilities or {}).get("images") is True,
         )
     ]
-    model_name = carry_agent_host_model(
-        config_options=config_options, model_name=profile.default_model_name
-    )
-    selections = carry_agent_host_selections(
-        config_options=config_options,
-        selections=dict(stored.config_selections),
-        model_name=model_name,
-    )
     config = stored.model_copy(
-        update={
-            "harness_snapshot_revision": harness.config_revision,
-            "config_selections": selections,
-        }
+        update={"harness_snapshot_revision": harness.config_revision}
     ).model_dump(mode="json")
-    if (
-        catalog == list(profile.model_catalog or [])
-        and model_name == profile.default_model_name
-        and config == dict(profile.config or {})
+    if catalog == list(profile.model_catalog or []) and config == dict(
+        profile.config or {}
     ):
         return
+    offered = {entry["name"] for entry in catalog}
     logger.info(
         "agent.agent_host_profile_refresh.profile_refreshed",
         profile_id=str(profile.id),
         harness_id=str(harness.id),
-        model_cleared=profile.default_model_name is not None and model_name is None,
-        dropped_selections=sorted(set(stored.config_selections) - set(selections))
-        or None,
+        pinned_model_withdrawn=profile.default_model_name is not None
+        and profile.default_model_name not in offered,
     )
     # Fresh containers, so the JSONB columns are seen as changed.
     profile.model_catalog = catalog
-    profile.default_model_name = model_name
     profile.config = config

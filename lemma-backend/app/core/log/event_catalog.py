@@ -43,7 +43,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.agent_host_link.tool_call_unavailable.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent.agent_host_link.tool_call_unrecorded.degraded': EventSpec('warning', frozenset()),
     'agent.agent_host_ops.request_unavailable.degraded': EventSpec('warning', frozenset({'host_id', 'method'})),
-    'agent.agent_host_profile_refresh.profile_refreshed': EventSpec('info', frozenset({'dropped_selections', 'harness_id', 'model_cleared', 'profile_id'})),
+    'agent.agent_host_profile_refresh.profile_refreshed': EventSpec('info', frozenset({'harness_id', 'pinned_model_withdrawn', 'profile_id'})),
     'agent.agent_host_profile_refresh.unreadable_profile_skipped.degraded': EventSpec('warning', frozenset({'harness_id', 'profile_id'})),
     'agent.agent_runner_service.agent_run_cancelled_timeout_or.timeout': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),

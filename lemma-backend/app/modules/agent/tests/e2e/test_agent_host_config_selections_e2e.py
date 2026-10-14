@@ -494,10 +494,11 @@ async def test_a_publish_refreshes_the_profiles_of_the_harness_it_reported_only(
     }
     after = rows[refreshed.id]
     assert [entry["name"] for entry in after.model_catalog] == ["sonnet", "haiku"]
-    # The pin the harness dropped is cleared, as a run already treats it, and
-    # `max` -- which only opus offered -- goes with it; `plan` is still offered.
-    assert after.default_model_name is None
-    assert after.config["config_selections"] == {"mode": "plan"}
+    # Only what the machine owns moves. The pin and the selections are the
+    # person's: a turn on the withdrawn pin is refused with that reason, and
+    # dispatch drops `max` from a run whose model does not offer it.
+    assert after.default_model_name == "opus"
+    assert after.config["config_selections"] == {"effort": "max", "mode": "plan"}
     assert after.config["harness_snapshot_revision"] == "rev-2"
 
     other = rows[untouched.id]

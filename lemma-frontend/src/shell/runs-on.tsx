@@ -94,7 +94,7 @@ function useAgentOptions(orgId: string, runtime: Runtime | undefined, choice: Ch
         () => (agent && sets ? optionsFor(sets, chosenModel(agent, choice)) : []),
         [agent, sets, choice],
     );
-    return { options, sets };
+    return { options, sets, unreadable: detail.isError };
 }
 
 /** What a newly picked row keeps of the choice before it. Only the same
@@ -112,13 +112,23 @@ function carried(next: Choice, before: Choice | null, runtime: Runtime | undefin
  *  one — it sends nothing, and the agent runs as its computer has it. Compact
  *  selects rather than rows: these are adjustments to the pick above, not
  *  picks of their own. */
-function AgentOptionFields({ options, choice, disabled, onChange, className }: {
+function AgentOptionFields({ options, choice, disabled, onChange, className, unreadable }: {
     options: AgentOption[];
     choice: Choice;
     disabled: boolean;
     onChange: (next: Choice) => void;
     className?: string;
+    /** The agent's options could not be read. Said, because nothing drawn
+     *  reads as "this agent has no options", which is a different thing. */
+    unreadable?: boolean;
 }) {
+    if (unreadable) {
+        return (
+            <p className="pick__note" role="status">
+                <WarningIcon size={13} /> Couldn’t read this agent’s options, so its effort stays as its computer has it.
+            </p>
+        );
+    }
     if (options.length === 0) return null;
     const selections = choice.selections ?? {};
     const choose = (key: string, value: string) => {
@@ -191,7 +201,7 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
     const queryClient = useQueryClient();
     const { open, setOpen, wrap, menuClass } = usePicker();
     const { runtimes, current, live, choice, chosen, inheritedName, setup, said } = useRunsOn(podId, orgId);
-    const { options, sets } = useAgentOptions(orgId, chosen, choice);
+    const { options, sets, unreadable } = useAgentOptions(orgId, chosen, choice);
 
     const set = useMutation({
         mutationFn: (choice: Choice | null) => source.setPodRuntime(podId, choice),
@@ -222,7 +232,7 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
             </button>
 
             {choice && (
-                <AgentOptionFields options={options} choice={choice} disabled={set.isPending} onChange={(next) => set.mutate(next)} />
+                <AgentOptionFields options={options} choice={choice} disabled={set.isPending} onChange={(next) => set.mutate(next)} unreadable={unreadable} />
             )}
 
             {/* A pin to something unreachable is the one case worth saying out
@@ -344,7 +354,7 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
 export function ModelChoice({ podId, orgId, orgName }: { podId: string; orgId: string; orgName: string }) {
     const queryClient = useQueryClient();
     const { runtimes, current, live, choice, chosen, inheritedName, setup } = useRunsOn(podId, orgId);
-    const { options, sets } = useAgentOptions(orgId, chosen, choice);
+    const { options, sets, unreadable } = useAgentOptions(orgId, chosen, choice);
     const set = useMutation({
         mutationFn: (next: Choice | null) => source.setPodRuntime(podId, next),
         onSuccess: (_answer, next) => {
@@ -430,6 +440,7 @@ export function ModelChoice({ podId, orgId, orgName }: { podId: string; orgId: s
                                 choice={choice}
                                 disabled={set.isPending}
                                 onChange={(next) => set.mutate(next)}
+                                unreadable={unreadable}
                             />
                         )}
                     </div>

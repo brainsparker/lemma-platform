@@ -476,6 +476,13 @@ export function Editor({ podId, orgId, detail, onDone }: {
             {/* A coding agent's own options, in place of the generation
                 settings it would ignore. Each starts at "Agent's default",
                 which sends nothing and leaves it as the runtime has it. */}
+            {/* Said rather than left blank: an empty section reads as "this
+                agent has no options", which is a different thing. */}
+            {pinned && agent && agentDetail.isError && (
+                <p className="empty-row" role="alert">
+                    Couldn’t read {agent.name}’s options from its computer, so its effort stays as that computer has it.
+                </p>
+            )}
             {pinned && agent && agentOptions.length > 0 && (
                 <div className="agents-generation">
                     {agentOptions.map((option) => (

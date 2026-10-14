@@ -220,22 +220,6 @@ def test_schedule_create_connector_trigger_dispatches_api(monkeypatch):
     assert req["agent_name"] == "my-agent"
 
 
-def _create_capture(monkeypatch):
-    captured: dict = {}
-
-    class FakeSchedules:
-        def create(self, request):
-            captured["request"] = request.to_dict()
-            return {"id": "sched-new"}
-
-    monkeypatch.setattr(
-        schedules,
-        "run_with_client",
-        _make_fake_client_and_run(FakeSchedules(), captured),
-    )
-    return captured
-
-
 def _create(*args: str):
     return runner.invoke(app, ["--pod", "pod-1", "schedules", "create", *args])
 
@@ -363,10 +347,14 @@ def test_schedules_list_json_is_untouched_by_the_target_column(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _update_capture(monkeypatch):
+def _schedules_capture(monkeypatch):
     captured = {}
 
     class FakeSchedules:
+        def create(self, request):
+            captured["request"] = request.to_dict()
+            return {"id": "sched-new"}
+
         def update(self, schedule, request):
             captured["schedule"] = schedule
             captured["payload"] = request.to_dict()
@@ -378,6 +366,9 @@ def _update_capture(monkeypatch):
         _make_fake_client_and_run(FakeSchedules(), captured),
     )
     return captured
+
+
+_create_capture = _update_capture = _schedules_capture
 
 
 def test_schedules_update_takes_the_instruction_as_a_flag(monkeypatch):

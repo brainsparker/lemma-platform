@@ -156,6 +156,23 @@ async def check_runtime_for_pod(
     )
 
 
+async def check_conversation_runtime_for_pod(
+    uow: SqlAlchemyUnitOfWork,
+    runtime: AgentRuntimeConfig | None,
+    *,
+    pod_id: UUID,
+    user_id: UUID,
+) -> None:
+    """The save-time check, for the runtime a conversation is given."""
+    await check_runtime_for_pod(
+        uow,
+        runtime,
+        pod_id=pod_id,
+        user_id=user_id,
+        saving_for=RuntimeHolder.CONVERSATION,
+    )
+
+
 async def turn_runtime(
     uow: SqlAlchemyUnitOfWork, conversation: Conversation, agent: Agent
 ) -> AgentRuntimeConfig:

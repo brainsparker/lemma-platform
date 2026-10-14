@@ -35,6 +35,9 @@ from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
     ConversationStatus,
 )
+from app.modules.agent.infrastructure.repositories.conversation_run_lifecycle import (
+    lock_conversation_row,
+)
 from app.modules.agent.infrastructure.runtime_history_queries import (
     RuntimeHistoryQueries,
 )
@@ -93,6 +96,14 @@ class ConversationRunQueriesMixin:
         self,
         conversation_id: UUID,
     ) -> AgentRunEntity | None:
+        """The conversation's active run, locked -- after the conversation itself.
+
+        The conversation first, because that is the order ``finish_agent_run``
+        and every turn transaction take the two in; a Stop that locked the run
+        and then finished it would take them the other way round. A caller
+        already holding the conversation re-takes a lock it has.
+        """
+        await lock_conversation_row(self.session, conversation_id=conversation_id)
         result = await self.session.execute(
             select(AgentRunModel)
             .where(

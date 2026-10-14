@@ -1,29 +1,23 @@
-"""``python -m app.cutover_check``: is the old transport drained? (design §13 rule 4)
+"""``python -m app.cutover_check``: how far is the cutover from the old transport?
 
-Migration ``0063_drop_event_outbox`` removes what is left of the old event
-transport: the ``domain_event_outbox`` and ``domain_event_inbox`` tables, and
-with the release that carries it, the cutover converters and the datastore
-outbox write path. Run this against the deployment **before** deploying that
-release, with the previous release's image (it ships in both). It exits 0 only
-when nothing the old transport held is still owed:
+Migration ``0063_drop_event_outbox`` queues the cutover sweep
+(``app/core/infrastructure/cutover``), which takes over everything the old
+event transport still owes and drops its tables once the previous release has
+stopped. Nothing waits on this check -- the sweep needs no operator -- but it
+says where the sweep is:
 
-* every *owed* legacy consumer group -- one whose unfinished entries are work
-  nothing else holds (``cutover/legacy_streams.OWED_GROUPS``) -- is gone or
-  has nothing pending or unread (its converter destroys it when done);
-* no streaq job is left in Redis;
-* no converter (``changes.drain``, ``surfaces.drain_events``,
-  ``workflow.drain_schedule_fires``) is queued, running or dead;
-* the main outbox has no unpublished row of an owed type, and the datastore
-  database's outbox has no record event;
-* record writes are on the change log everywhere (no pod schema blocks the
-  switch).
+* whether ``domain_event_outbox`` / ``domain_event_inbox`` still exist, and how
+  many deliveries each route is still owed in them;
+* the sweep item (queued, running, dead, or absent once it finished) and the
+  ``cutover.legacy_event`` items still queued, running or dead, per route;
+* streaq jobs still in Redis, by function, and each legacy group's backlog
+  (informational: what they owed is read from the outbox);
+* a separately configured datastore database's leftover outbox, and the pod
+  schemas the change-log backfill has not reached yet.
 
-Other groups' backlogs (analytics, and flows whose work was seeded from domain
-state) and other unpublished outbox rows are reported, not gated: nothing reads
-them any more. ``--json`` prints the report as JSON.
-
-The migration repeats the database half of this (it cannot reach Redis or a
-separate datastore database) and refuses to run while it fails.
+``finished`` is true once the tables are gone, the sweep has completed and no
+converted delivery is left. Exits 0 unless the check itself fails;
+``--json`` prints the report as JSON.
 """
 
 from __future__ import annotations
@@ -32,35 +26,33 @@ import argparse
 import asyncio
 import json
 import sys
-from dataclasses import asdict, dataclass, field
-
 from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-CONVERTER_KINDS = (
-    "changes.drain",
-    "surfaces.drain_events",
-    "workflow.drain_schedule_fires",
-)
-
 
 @dataclass
 class Report:
-    owed_groups: dict[str, int | None] = field(default_factory=dict)
-    other_groups: dict[str, int | None] = field(default_factory=dict)
+    legacy_tables: bool = False
+    owed: dict[str, int] = field(default_factory=dict)
+    sweep: str = "absent"
+    converted_left: dict[str, dict[str, int]] = field(default_factory=dict)
     streaq_jobs: dict[str, int] = field(default_factory=dict)
-    converters: dict[str, int] = field(default_factory=dict)
-    main_outbox_owed: int = 0
-    main_outbox_other: int = 0
-    datastore_outbox_records: int = 0
+    legacy_groups: dict[str, int | None] = field(default_factory=dict)
+    datastore_outbox: bool = False
     schemas_blocking_change_log: int = 0
-    problems: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     @property
-    def ready(self) -> bool:
-        return not self.problems
+    def finished(self) -> bool:
+        return (
+            not self.legacy_tables
+            and self.sweep == "absent"
+            and not self.converted_left
+            and not self.datastore_outbox
+        )
 
 
 async def cutover_report(
@@ -80,102 +72,77 @@ async def cutover_report(
 
 
 async def _check_redis(report: Report) -> None:
+    from redis.exceptions import RedisError
+
     from app.core.infrastructure.cutover.legacy_streams import (
         LEGACY_GROUPS,
-        OWED_GROUPS,
         group_backlog,
     )
     from app.core.infrastructure.cutover.streaq_jobs import jobs_by_function
     from app.core.infrastructure.redis.client import get_redis
 
     redis = get_redis(decode_responses=False)
-    for stream, group in LEGACY_GROUPS:
-        backlog = await group_backlog(redis, stream, group)
-        name = f"{stream}/{group}"
-        converter = OWED_GROUPS.get((stream, group))
-        if converter is None:
-            report.other_groups[name] = backlog
-            continue
-        report.owed_groups[name] = backlog
-        if backlog:
-            report.problems.append(
-                f"{name}: {backlog} entries not drained (converter {converter})"
-            )
-    report.streaq_jobs = await jobs_by_function(redis)
-    if report.streaq_jobs:
-        report.problems.append(f"streaq jobs left in Redis: {report.streaq_jobs}")
+    try:
+        for stream, group in LEGACY_GROUPS:
+            backlog = await group_backlog(redis, stream, group)
+            if backlog is not None:
+                report.legacy_groups[f"{stream}/{group}"] = backlog
+        report.streaq_jobs = await jobs_by_function(redis)
+    except (RedisError, OSError) as exc:
+        report.notes.append(f"redis unreadable: {type(exc).__name__}")
 
 
 async def _check_main_database(
     report: Report, session_maker: Callable[[], AsyncSession]
 ) -> None:
-    from app.core.infrastructure.cutover.legacy_streams import OWED_OUTBOX_TYPES
+    from app.core.infrastructure.cutover.routes import ROUTES
+    from app.core.infrastructure.cutover.takeover import (
+        LEGACY_EVENT,
+        LEGACY_SWEEP,
+        count_owed,
+    )
+    from app.core.infrastructure.cutover.work import legacy_tables_present
 
     async with session_maker() as session:
-        counts = await session.execute(
-            text(
-                "SELECT kind, count(*) FROM work_items "
-                "WHERE kind = ANY(:kinds) GROUP BY kind"
-            ),
-            {"kinds": list(CONVERTER_KINDS)},
+        report.legacy_tables = await legacy_tables_present(session)
+        if report.legacy_tables:
+            for route in ROUTES:
+                owed = await count_owed(session, route)
+                if owed:
+                    report.owed[route.consumer] = owed
+        sweep = await session.scalar(
+            text("SELECT state FROM work_items WHERE kind = :kind LIMIT 1"),
+            {"kind": LEGACY_SWEEP},
         )
-        report.converters = dict.fromkeys(CONVERTER_KINDS, 0) | {
-            kind: int(count) for kind, count in counts.all()
-        }
-        unpublished: list[tuple[bool, int]] = []
-        if await session.scalar(
-            text("SELECT to_regclass('domain_event_outbox') IS NOT NULL")
-        ):
-            rows = await session.execute(
-                text(
-                    "SELECT event_type = ANY(:owed) AS owed, count(*) "
-                    "FROM domain_event_outbox WHERE published_at IS NULL "
-                    "AND dead_lettered_at IS NULL GROUP BY 1"
-                ),
-                {"owed": list(OWED_OUTBOX_TYPES)},
-            )
-            unpublished = [(bool(owed), int(count)) for owed, count in rows.all()]
-    for kind, count in report.converters.items():
-        if count:
-            report.problems.append(
-                f"converter {kind} has {count} item(s) queued, running or dead"
-            )
-    for owed, count in unpublished:
-        if owed:
-            report.main_outbox_owed = count
-            report.problems.append(f"main outbox: {count} unpublished owed event(s)")
-        else:
-            report.main_outbox_other = count
+        report.sweep = str(sweep) if sweep else "absent"
+        rows = await session.execute(
+            text(
+                "SELECT payload->>'route', state, count(*) FROM work_items "
+                "WHERE kind = :kind GROUP BY 1, 2"
+            ),
+            {"kind": LEGACY_EVENT},
+        )
+        for route, state, count in rows.all():
+            report.converted_left.setdefault(str(route), {})[str(state)] = int(count)
+    if report.sweep == "dead":
+        report.notes.append(
+            "the sweep is dead: `python -m app.core.infrastructure.work.admin retry "
+            f"--kind {LEGACY_SWEEP}` once its error is fixed"
+        )
 
 
 async def _check_datastore_database(report: Report, engine: AsyncEngine) -> None:
     from app.modules.datastore.changes.gate import schemas_blocking_switch
 
     async with engine.connect() as conn:
-        if await conn.scalar(
-            text("SELECT to_regclass('domain_event_outbox') IS NOT NULL")
-        ):
-            report.datastore_outbox_records = int(
-                await conn.scalar(
-                    text(
-                        "SELECT count(*) FROM domain_event_outbox "
-                        "WHERE event_type LIKE 'datastore.record.%' "
-                        "AND published_at IS NULL AND dead_lettered_at IS NULL"
-                    )
-                )
-                or 0
+        present = bool(
+            await conn.scalar(
+                text("SELECT to_regclass('domain_event_outbox') IS NOT NULL")
             )
-    if report.datastore_outbox_records:
-        report.problems.append(
-            f"datastore outbox: {report.datastore_outbox_records} record "
-            "event(s) not yet in a change log"
         )
+    # On a shared database that table is the main outbox, reported above.
+    report.datastore_outbox = present and not report.legacy_tables
     report.schemas_blocking_change_log = await schemas_blocking_switch(engine)
-    if report.schemas_blocking_change_log:
-        report.problems.append(
-            f"{report.schemas_blocking_change_log} pod schema(s) not yet on the "
-            "change log (pod_schema.migrate backfill still running)"
-        )
 
 
 def _out(line: str) -> None:
@@ -183,8 +150,8 @@ def _out(line: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from app.core.log.log import setup_logging
     from app.core.config import settings
+    from app.core.log.log import setup_logging
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--json", action="store_true")
@@ -192,19 +159,23 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(settings.environment, service_name="lemma-cutover-check")
     report = asyncio.run(cutover_report())
     if args.json:
-        _out(json.dumps({**asdict(report), "ready": report.ready}, indent=2))
-    else:
-        _out("ready" if report.ready else "NOT READY")
-        for problem in report.problems:
-            _out(f"  - {problem}")
-        _out(f"  owed groups: {report.owed_groups}")
-        _out(f"  converters live: {report.converters}")
-        _out(
-            f"  unpublished outbox rows not gated: {report.main_outbox_other}; "
-            f"other groups' backlog (not gated): "
-            f"{ {k: v for k, v in report.other_groups.items() if v} }"
-        )
-    return 0 if report.ready else 1
+        _out(json.dumps({**asdict(report), "finished": report.finished}, indent=2))
+        return 0
+    backlog = {k: v for k, v in report.legacy_groups.items() if v}
+    _out("finished" if report.finished else "in progress")
+    _out(f"  legacy tables present: {report.legacy_tables}")
+    _out(f"  still owed in the outbox, per route: {report.owed}")
+    _out(f"  sweep: {report.sweep}")
+    _out(f"  converted deliveries left: {report.converted_left}")
+    _out(f"  streaq jobs in Redis: {report.streaq_jobs}")
+    _out(f"  legacy groups' backlog: {backlog}")
+    _out(f"  datastore database outbox left: {report.datastore_outbox}")
+    _out(
+        f"  pod schemas not yet on the change log: {report.schemas_blocking_change_log}"
+    )
+    for note in report.notes:
+        _out(f"  note: {note}")
+    return 0
 
 
 if __name__ == "__main__":

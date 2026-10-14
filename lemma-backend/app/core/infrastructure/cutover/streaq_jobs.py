@@ -2,7 +2,8 @@
 
 streaq kept each queued job's data under ``streaq:<queue>:task:data:<id>`` as a
 pickled ``{"f": <function>, "a": args, "k": kwargs, ...}`` written by this
-application. The operator check counts every job left, by function.
+application. The cutover sweep converts the jobs whose work existed only here
+and deletes them; the cutover check counts every job left, by function.
 """
 
 from __future__ import annotations
@@ -44,6 +45,11 @@ async def queued_jobs(redis: Redis) -> AsyncIterator[QueuedJob]:
             args=tuple(data.get("a") or ()),
             kwargs=dict(data.get("k") or {}),
         )
+
+
+async def forget_job(redis: Redis, job: QueuedJob) -> None:
+    """Delete a job's data once it is converted (or its work seeded elsewhere)."""
+    await redis.delete(job.key)
 
 
 async def jobs_by_function(redis: Redis) -> dict[str, int]:

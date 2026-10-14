@@ -250,7 +250,7 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
     run_repo.claim = AsyncMock(return_value=None)
     _stub_run_operations(monkeypatch, run_repo)
 
-    await svc.handle_schedule_fired(
+    await svc.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},
@@ -282,7 +282,7 @@ async def test_emitted_one_time_fire_runs_after_schedule_is_marked_inactive(
     _stub_schedule_operations(monkeypatch, schedule_repo)
     _stub_run_operations(monkeypatch, run_repo)
 
-    await ScheduleStartService(engine).handle_schedule_fired(
+    await ScheduleStartService(engine).start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},
@@ -327,7 +327,7 @@ async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
     service._build_user_context = AsyncMock(return_value=context)
     service._record_fire = AsyncMock()
 
-    await service.handle_schedule_fired(
+    await service.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=row_owner_id,
         payload={"id": "row-1"},
@@ -378,7 +378,7 @@ async def test_workflow_schedule_run_uses_event_user(monkeypatch):
     service._start_workflow_for_schedule = AsyncMock(return_value="workflow-run-1")
     service._record_fire = AsyncMock()
 
-    await service.handle_schedule_fired(
+    await service.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=row_owner_id,
         payload={"id": "row-1"},
@@ -431,7 +431,7 @@ async def test_unauthorized_event_user_fails_agent_schedule_without_fallback(
     service._record_fire = AsyncMock()
 
     with pytest.raises(PermissionError, match="agent.execute denied"):
-        await service.handle_schedule_fired(
+        await service.start_for_fire(
             schedule_id=str(schedule.id),
             user_id=row_owner_id,
             payload={"id": "row-1"},
@@ -480,7 +480,7 @@ async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
         return_value=schedule_run.target_run_id
     )
 
-    await service.handle_schedule_fired(
+    await service.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=None,
         payload={},
@@ -535,7 +535,7 @@ async def test_an_assistant_schedule_dispatches_down_the_ordinary_agent_path(
     service._build_user_context = AsyncMock(return_value=context)
     service._record_fire = AsyncMock()
 
-    await service.handle_schedule_fired(
+    await service.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},
@@ -609,7 +609,7 @@ async def test_pod_default_schedule_authorizes_against_the_pod_not_an_agent(
     service._build_user_context = AsyncMock(return_value=context)
     service._record_fire = AsyncMock()
 
-    await service.handle_schedule_fired(
+    await service.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},
@@ -648,7 +648,7 @@ async def test_a_schedule_whose_target_was_deleted_records_the_firing_as_failed(
         _ignoring_uow(outcome_service.record_pre_dispatch_failure),
     )
 
-    await ScheduleStartService(engine).handle_schedule_fired(
+    await ScheduleStartService(engine).start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},
@@ -684,7 +684,7 @@ async def test_an_internal_wait_timer_with_no_target_records_nothing(monkeypatch
         _ignoring_uow(outcome_service.record_pre_dispatch_failure),
     )
 
-    await ScheduleStartService(engine).handle_schedule_fired(
+    await ScheduleStartService(engine).start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},
@@ -693,22 +693,3 @@ async def test_an_internal_wait_timer_with_no_target_records_nothing(monkeypatch
 
     outcome_service.record_pre_dispatch_failure.assert_not_awaited()
     schedule_repo.record_fire.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_a_legacy_workflow_timer_fire_is_absorbed_without_a_start() -> None:
-    """Workflow timers are ``workflow.resume`` items now. A fire the old poller
-    left in flight is already covered by the cutover's item for its wait, so it
-    must neither resume anything nor be mistaken for a schedule."""
-    engine = _engine_with_mocks()
-    engine.resume_internal = AsyncMock()
-    service = ScheduleStartService(engine)
-
-    await service.handle_schedule_fired(
-        schedule_id=str(uuid4()),
-        user_id=None,
-        payload={"workflow_run_id": str(uuid4()), "wait_ref": str(uuid4())},
-        schedule_event_id="timer:legacy-1",
-    )
-
-    engine.resume_internal.assert_not_awaited()

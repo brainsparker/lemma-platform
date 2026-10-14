@@ -35,21 +35,6 @@ class ScheduleSettings(BaseSettings):
             "retried forever."
         ),
     )
-    schedule_run_reinspect_after_minutes: int = Field(
-        default=60,
-        ge=1,
-        description=(
-            "How long before the recovery sweep looks at an in-flight run it has "
-            "already inspected. Sets the worst-case delay on noticing a *lost* "
-            "outcome event, so it trades detection latency against wasted target "
-            "reads. Note the ceiling it competes with: the sweep reads 100 rows "
-            "every 5 minutes, so a standing backlog of runs parked on human form "
-            "waits already takes over an hour to work through whatever this is "
-            "set to. Below that it stops the sweep hot-looping on a "
-            "small in-flight set; it cannot make detection faster than the "
-            "backlog allows. Env: ``SCHEDULE_RUN_REINSPECT_AFTER_MINUTES``."
-        ),
-    )
     schedule_minimum_interval_minutes: int = Field(
         default=15,
         ge=1,

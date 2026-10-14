@@ -89,51 +89,50 @@ uv run python -m app.core.infrastructure.work.admin retry [--ns NS] [--kind K] [
 
 Earlier releases moved background work through Redis Streams (FastStream
 consumer groups), streaq queues and a transactional outbox
-(`domain_event_outbox`, `domain_event_inbox`). Removing them takes two
-deploys.
+(`domain_event_outbox`, `domain_event_inbox`). One deploy retires them, from
+any earlier release, with no operator step:
 
-1. **Deploy the release before migration `0063_drop_event_outbox`.**
-   Migrations `0059` to `0062` seed work items from domain state for
-   everything that has state behind it: running agent turns, active waits,
-   decided approvals and in-flight bundle jobs. They also queue three
-   converters for backlogs that exist nowhere else:
-   - `changes.drain` moves record changes still in the datastore outbox, or in
-     the `schedule-datastore-events` and `mcp-access-event-deliveries` groups,
-     into each pod's change log (see [datastore](../modules/datastore.md));
-   - `surfaces.drain_events` converts webhooks, onboarding hand-offs and
-     settled notifications still in `surface_events`, and owed replies kept in
-     conversation metadata (see [agent_surfaces](../modules/agent_surfaces.md));
-   - `workflow.drain_schedule_fires` starts what `schedule.fired` entries in
-     the `workflow-schedule-events` group, unpublished outbox rows and queued
-     `check_and_start_flows_for_schedule` streaq jobs would have started (see
-     [workflow](../modules/workflow.md)).
+1. **Migrations `0055` to `0062`** seed work items from domain state for
+   everything that has state behind it: files to process, TIME schedules,
+   flow waits and function runs, running agent turns, active waits, decided
+   approvals and in-flight bundle jobs.
+2. **Migration `0063_drop_event_outbox`** queues the cutover sweep
+   (`cutover.legacy_sweep`, `app/core/infrastructure/cutover`). On a fresh
+   install, where both tables are empty, it drops them itself.
+3. **The sweep runs from the first worker boot.** Every 30 s it takes over
+   what the old transport still owes. A delivery is owed to an old consumer
+   while its outbox row is not dead and that consumer's inbox has no settled
+   row for it; the outbox keeps published rows longer than any group could
+   still deliver them, so Redis holds nothing it does not. Each owed delivery
+   becomes one `cutover.legacy_event` item, run through the converter its
+   module registered (which writes what the new code writes for that event,
+   keyed the same way), and the consumer's inbox row is settled in the same
+   statement so an old worker still running does not do it as well.
+   A separately configured datastore database's outbox is read the same way.
+4. **Once neither table has been written for ten minutes** (the previous
+   release has stopped), the sweep converts the streaq jobs whose work existed
+   only in Redis, gives owed replies, open notifications and still-dispatched
+   schedule runs their work, takes over the last rows and drops both tables in
+   one locked transaction, drops the datastore database's outbox, and
+   destroys the legacy consumer groups and streams.
 
-   Each converter keeps polling while old processes may still hand it work,
-   destroys its groups when it is done, and finishes.
-2. **Run the operator check** against that deployment, with that release's
-   image:
+The tables are dropped by the sweep, not the migration, because the migration
+runs before the rollout: the previous release keeps writing them until its
+last process stops.
 
-   ```bash
-   uv run python -m app.cutover_check          # human-readable; --json for JSON
-   ```
+To see where it is:
 
-   It exits 0 only when all of these hold:
-   - every owed legacy group is gone or has nothing pending or unread;
-   - no streaq job data is left in Redis;
-   - no converter item is queued, running or dead;
-   - the main outbox has no unpublished row of an owed type, and the datastore
-     database's outbox has no record event;
-   - no pod schema blocks the change log, meaning the `pod_schema.migrate`
-     backfill is done.
+```bash
+uv run python -m app.cutover_check          # human-readable; --json for JSON
+```
 
-   It also reports two things it does not gate, because nothing reads them any
-   more: the backlog of the other legacy groups (analytics, and flows whose
-   work was seeded from state), and the other unpublished outbox rows.
-3. **Deploy the release with `0063`.** The migration repeats the database half
-   of the check and refuses to run while it fails. It drops
-   `domain_event_outbox` and `domain_event_inbox`. In that release record
-   writes always append to the change log, and the converters and the
-   datastore outbox write path are gone.
+It reports the tables, what each route is still owed, the sweep's state, the
+converted deliveries left per route, streaq leftovers, the legacy groups'
+backlog and the pod schemas the change-log backfill has not reached. It gates
+nothing. A dead sweep (`sweep: dead`) needs its error fixed and
+`python -m app.core.infrastructure.work.admin retry --kind cutover.legacy_sweep`;
+nothing is lost meanwhile, the tables stay.
 
-The legacy Redis streams are left in place. Delete them by hand after the
-deploy if their memory matters.
+Runbooks that counted `domain_event_outbox` rows (backlog, restore checks)
+should read `work_items` instead: queued, running and dead items per class
+(`python -m app.core.infrastructure.work.admin ls`).

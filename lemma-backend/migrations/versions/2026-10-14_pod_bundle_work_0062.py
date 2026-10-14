@@ -22,11 +22,6 @@ from its own checkpoint (committed steps, uploaded files) and a job that
 finished meanwhile is a no-op. CANCELLING jobs are left to the sweep, which
 ends them CANCELLED once nothing is running them.
 
-And one more converter for a stateless backlog (design §13 rule 2): the
-``workflow.drain_schedule_fires`` job, which reads what the
-``workflow-schedule-events`` group and its streaq job still hold -- Redis, which
-a migration cannot. This only queues it, once.
-
 Revision ID: 0062_pod_bundle_work
 Revises: 0061_surface_inbound_deliveries
 """
@@ -114,23 +109,8 @@ def seed_statements() -> list[str]:
     return statements
 
 
-#: The schedule-fire converter (``workflow/events/schedule_fire_drain.py``).
-_DRAIN = (
-    (
-        "INSERT INTO work_queues (class, ns, max_running) "
-        "VALUES ('admin', 'system', 4) ON CONFLICT (class, ns) DO NOTHING"
-    ),
-    (
-        "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, run_at) "
-        "VALUES (gen_random_uuid(), 'system', 'admin', "
-        "'workflow.drain_schedule_fires', '{}'::jsonb, "
-        "'workflow.drain_schedule_fires', now()) " + _ON_CONFLICT
-    ),
-)
-
-
 def upgrade() -> None:
-    for statement in (*seed_statements(), *_DRAIN):
+    for statement in seed_statements():
         op.execute(sa.text(statement))
 
 
@@ -139,13 +119,7 @@ def downgrade() -> None:
     op.execute(
         sa.text(
             "DELETE FROM work_items WHERE kind IN ("
-            + ", ".join(
-                f"'{kind}'"
-                for kind in (
-                    *(kind for kind, *_ in _SEEDS),
-                    "workflow.drain_schedule_fires",
-                )
-            )
+            + ", ".join(f"'{kind}'" for kind in (kind for kind, *_ in _SEEDS))
             + ") AND state = 'queued'"
         )
     )

@@ -34,6 +34,9 @@ def _register_work() -> None:
 def _register_periodic_work() -> None:
     import app.modules.mcp_access.events.tasks  # noqa: F401
 
+    # Worker only: what the old event transport still owed, converted (cutover).
+    import app.modules.mcp_access.events.legacy_cutover  # noqa: F401
+
 
 module = LemmaModule(
     name="mcp_access",

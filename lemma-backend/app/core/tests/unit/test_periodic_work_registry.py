@@ -34,7 +34,6 @@ FORMER_CRONS = {
     "schedule.runs_prune": WorkClass.ADMIN,
     "schedule.mcp_listening_reconcile": WorkClass.AUTOMATION,
     "workflow.waits_prune": WorkClass.ADMIN,
-    "workflow.schedule_runs_recover": WorkClass.AUTOMATION,
     "workspace.sandboxes_sweep": WorkClass.AUTOMATION,
     # Already periodic before PR 3 D1.
     "work.retention": WorkClass.ADMIN,

@@ -21,10 +21,10 @@ Surfaces move off the event stream and Redis onto the main database:
   Resend cursor, Telegram manager offset), written in the transaction that
   stores what it read. Replaces the Redis keys that held them with no TTL.
 
-What the old transport still holds (the stream's unread webhooks, owed
+What the old transport still owes the surfaces (webhooks in the outbox, owed
 replies in conversation metadata, open notifications with no expiry item) is
-converted by the ``surfaces.drain_events`` job, which reads Redis -- a
-migration cannot. This migration only queues that job, once.
+converted by the cutover sweep that migration 0063 queues
+(``app/core/infrastructure/cutover``).
 
 Revision ID: 0061_surface_inbound_deliveries
 Revises: 0060_agent_wait_approval_work
@@ -47,28 +47,6 @@ def _now(name: str, *, nullable: bool = False) -> sa.Column:
         nullable=nullable,
         server_default=sa.text("now()"),
     )
-
-
-#: The admin class's per-namespace cap; the runtime refreshes it from the limits
-#: port within a minute, so this only has to be a sane starting value.
-_ADMIN_DEFAULT_CAP = 1
-
-
-def seed_statements() -> list[str]:
-    """The cutover job, as statements -- importable so a test can run them."""
-    queue = (
-        "INSERT INTO work_queues (class, ns, max_running) "
-        f"VALUES ('admin', 'system', {_ADMIN_DEFAULT_CAP}) "
-        "ON CONFLICT (class, ns) DO NOTHING"
-    )
-    item = (
-        "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, run_at) "
-        "VALUES (gen_random_uuid(), 'system', 'admin', 'surfaces.drain_events', "
-        "'{}'::jsonb, 'surfaces-drain-events', now()) "
-        "ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL AND state = 'queued' "
-        "DO NOTHING"
-    )
-    return [queue, item]
 
 
 def upgrade() -> None:
@@ -178,12 +156,9 @@ def upgrade() -> None:
         sa.Column("cursor", sa.Text(), nullable=True),
         _now("updated_at"),
     )
-    for statement in seed_statements():
-        op.execute(statement)
 
 
 def downgrade() -> None:
-    op.execute("DELETE FROM work_items WHERE kind = 'surfaces.drain_events'")
     op.drop_table("surface_receiver_state")
     op.drop_index(
         "ix_surface_deliveries_status_created", table_name="surface_deliveries"

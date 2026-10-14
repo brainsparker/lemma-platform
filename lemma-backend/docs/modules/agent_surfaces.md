@@ -21,7 +21,7 @@ Resend address.
 | Request-time intake | Every webhook route and receiver classifies a delivery, answers provider-deadline interactions in the request, and writes each message as a `surface_inbound_messages` row plus a `surface.ingest` item in one transaction |
 | Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination) and `surface.reply_for_run` (subscribes `AgentRunFinished`), `surface.receiver` (`receivers`, one leased item per polling credential), `notification.expire`, `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
 | Periodic work | `surfaces.receivers.reconcile` (15 s), `surfaces.onboarding_cleanup` (1 min), `surfaces.web_visitors` (hourly), `surfaces.retention` (daily) |
-| Cutover converter | `surfaces.drain_events` (`admin`, queued once by migration `0061`): converts what `surface_events` and unpublished outbox rows still held, and owed replies kept in conversation metadata, then destroys its three groups and finishes. See [the cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13) |
+| Cutover converters | `events/legacy_cutover.py`, run by `cutover.legacy_event`: owed webhooks (through `InboundAcceptor`), onboarding hand-offs, `process_surface_message` jobs only Redis held, and, once at the end, owed replies kept in conversation metadata and open notifications' expiry items. See [the cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13) |
 
 ## Main data model
 

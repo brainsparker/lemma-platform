@@ -1,9 +1,6 @@
 """The workflow module's periodic work.
 
 * ``workflow.waits_prune`` (1 h, admin) -- finished machine waits.
-* ``workflow.schedule_runs_recover`` (5 min, automation) -- schedule fires the
-  event path lost. Goes when schedules write ``workflow.start`` in the fire's
-  own transaction; until then it is the backstop for that stream.
 
 Worker only (``register_periodic_work``).
 """
@@ -13,8 +10,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.work import WorkClass, periodic_job
+from app.core.infrastructure.work import periodic_job
 from app.core.log.log import get_logger
 from app.modules.workflow.config import workflow_settings
 
@@ -52,32 +48,4 @@ async def prune_workflow_run_waits() -> None:
         logger.debug(
             "workflow.handlers.prune_workflow_run_waits.observed",
             deleted_count=deleted,
-        )
-
-
-# Automation: it redelivers schedule fires the event path lost.
-@periodic_job(
-    "workflow.schedule_runs_recover",
-    every=timedelta(minutes=5),
-    cls=WorkClass.AUTOMATION,
-)
-async def recover_schedule_runs() -> None:
-    from app.modules.schedule.contracts.run_recovery import recover_schedule_runs
-
-    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        result = await recover_schedule_runs(uow)
-    # Still a warning, and deliberately so. This used to fire twelve times an
-    # hour and was read as routine maintenance, but that was the counting: rows
-    # the sweep inspected and correctly left alone were reported as
-    # `reconciled`, so a sweep doing nothing at all looked busy. Now the three
-    # counters below only move when the event-driven outcome path missed
-    # something, a dispatch was lost, or a run was abandoned -- each of which is
-    # the safety net catching a failure somewhere else, and worth a warning.
-    if result.redelivered or result.reconciled or result.dead_lettered:
-        logger.warning(
-            "schedule.runs.recovered",
-            redelivered=result.redelivered,
-            reconciled=result.reconciled,
-            dead_lettered=result.dead_lettered,
-            still_running=result.still_running,
         )

@@ -87,6 +87,10 @@ def register_worker_modules(modules: Sequence[LemmaModule]) -> None:
         register_module_periodic_work,
     )
 
+    # The cutover from the old transport: its sweep and the kind that runs
+    # each owed delivery through the converter a module registered.
+    import app.core.infrastructure.cutover.work  # noqa: F401
+
     configure_resource_names(modules)
     configure_pod_liveness(modules)
     configure_plan_limits(modules)

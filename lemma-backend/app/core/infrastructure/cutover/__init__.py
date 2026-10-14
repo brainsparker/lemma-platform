@@ -1,6 +1,7 @@
-"""What the cutover check (``app/cutover_check.py``) reads of the old transport.
+"""The cutover from the old event transport (outbox, inbox, streams, streaq).
 
-FastStream, streaq and the outbox are gone; their leftovers in Redis are read
-here with plain Redis commands, so an operator can confirm nothing owed is
-left before migration ``0063_drop_event_outbox`` (design §13 rule 4).
+``routes`` names what the old consumers could still owe and who converts it;
+``takeover`` turns owed outbox rows into work items in SQL; ``work`` is the
+sweep that runs it from the first worker boot until the old tables are
+dropped. ``legacy_streams`` and ``streaq_jobs`` read the Redis leftovers.
 """

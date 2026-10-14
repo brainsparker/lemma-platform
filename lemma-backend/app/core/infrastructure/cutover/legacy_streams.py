@@ -1,12 +1,10 @@
-"""The legacy Redis streams and consumer groups, as the cutover check reads them.
+"""The legacy Redis streams and consumer groups.
 
-Every group the old transport ever declared (``LEGACY_GROUPS``), and which of
-them were *owed* work that exists nowhere else (``OWED_GROUPS``, design §13
-rule 2): a webhook already answered 200, a record change, a schedule fire. The
-rest moved to work seeded from domain state (rule 1) or are analytics, so
-their backlog is redundant once their consumer is gone. The converters that
-drained the owed groups shipped in the release before migration 0063 and
-destroyed each group when done.
+Every group the old transport ever declared (``LEGACY_GROUPS``). Nothing reads
+them any more: what they still owed is read from the outbox and the inbox,
+which outlive every entry a group could still deliver (``routes.py``). The
+cutover check reports their backlog; the sweep destroys the groups and
+deletes the streams once the old release is gone.
 """
 
 from __future__ import annotations
@@ -55,25 +53,13 @@ LEGACY_GROUPS: tuple[tuple[str, str], ...] = (
     ("workflow_run_events", "schedule-workflow-outcomes"),
 )
 
-#: The groups whose unfinished entries are work nothing else holds, and the
-#: converter (work kind) that drains each. The gate needs each absent (the
-#: converter destroys it when done) or with nothing pending or unread.
-OWED_GROUPS: dict[tuple[str, str], str] = {
-    ("datastore.events", "schedule-datastore-events"): "changes.drain",
-    ("datastore.events", "mcp-access-event-deliveries"): "changes.drain",
-    ("surface_events", "surface-webhook-events"): "surfaces.drain_events",
-    ("surface_events", "agent-surfaces.onboarding"): "surfaces.drain_events",
-    ("surface_events", "agent-notification-settled"): "surfaces.drain_events",
-    ("schedule_events", "workflow-schedule-events"): "workflow.drain_schedule_fires",
-}
 
-#: The outbox event types those converters also take from unpublished rows.
-OWED_OUTBOX_TYPES: tuple[str, ...] = (
-    "surface.webhook.received",
-    "surface.onboarding.ready",
-    "notification.settled",
-    "schedule.fired",
-)
+async def destroy_group(redis: Redis, stream: str, group: str) -> bool:
+    """Remove a group; False when it (or its stream) was already gone."""
+    try:
+        return bool(await redis.xgroup_destroy(stream, group))
+    except ResponseError:
+        return False
 
 
 async def group_backlog(redis: Redis, stream: str, group: str) -> int | None:

@@ -30,9 +30,10 @@
       plus teardown, or it SIGKILLs the worker mid-drain and those items wait
       out their leases (60 s for a turn) instead. Say in the notes whether a
       release is expected to interrupt runs, not whether it drains.
-- [ ] A release that carries migration `0063_drop_event_outbox` follows a
-      deploy of the release before it, and `python -m app.cutover_check` passed
-      against that deployment (see
+- [ ] After the first deploy of a release that carries migration
+      `0063_drop_event_outbox`, `python -m app.cutover_check` reports
+      `finished` once the previous release has stopped (about ten minutes after
+      the rollout); a dead `cutover.legacy_sweep` is retried, not ignored (see
       [reliability operations](../../lemma-backend/docs/operators/reliability.md#cutover-from-the-old-transport-design-13)).
 - [ ] Every resolved issue entry contains implementation and exact test evidence.
 - [ ] Rollback, replay, DLQ, partial cancellation, and support guidance are ready.

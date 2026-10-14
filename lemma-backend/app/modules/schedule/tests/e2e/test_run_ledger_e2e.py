@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4, uuid7
@@ -8,11 +10,9 @@ import pytest
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.infrastructure.models.conversation import ConversationModel
-from app.modules.schedule.services.run_recovery_service import (
-    ScheduleRunRecoveryService,
-)
 from app.modules.schedule.domain.schedule import ScheduleRunStatus
 from app.modules.schedule.infrastructure.models.schedule import Schedule
+from app.modules.schedule.events.legacy_cutover import dispatched_runs
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
@@ -506,18 +506,40 @@ def _ledger_row(
     )
 
 
-async def test_recovery_settles_only_dispatched_agent_runs_whose_outcome_was_lost(
+class _Ctx:
+    """The parts of a ``JobContext`` the state converter uses."""
+
+    def __init__(self, session_factory) -> None:
+        self._uows = SessionUnitOfWorkFactory(session_factory)
+
+    @asynccontextmanager
+    async def checkpoint(self):
+        async with self._uows() as uow:
+            yield uow
+            await uow.commit()
+
+    def raise_if_stopping(self) -> None:
+        return None
+
+
+async def _settle_dispatched_runs(db_manager) -> None:
+    await dispatched_runs(
+        _Ctx(db_manager.session_factory),  # type: ignore[arg-type]
+        {},
+        "state:schedule.dispatched_runs",
+    )
+
+
+async def test_the_cutover_settles_dispatched_runs_whose_outcome_was_lost(
     authenticated_client,
     fixed_test_org,
     db_manager,
 ):
-    """The sweep is now only the net under the agent outcome stream.
-
-    A lost terminal outcome is reconciled and a conversation that no longer
-    exists is dead-lettered. Rows other owners now settle -- a workflow target
-    (its end is a fact in the run's own transaction), and PROCESSING or FAILED
-    reservations (their ``schedule.start_target`` item retries them) -- are not
-    touched at all.
+    """Outcomes are facts written with the target's terminal status now, so
+    no sweep runs. The cutover settles, once, what the old outcome stream left:
+    a lost terminal outcome is recorded and a conversation that no longer
+    exists is dead-lettered. A workflow target whose run is not terminal, and
+    PROCESSING or FAILED reservations, are not touched.
     """
     pod_id, schedule_id, user_id = await _agent_schedule(
         authenticated_client, fixed_test_org
@@ -577,11 +599,8 @@ async def test_recovery_settles_only_dispatched_agent_runs_whose_outcome_was_los
             ]
         )
 
-    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
-    async with factory() as uow:
-        result = await ScheduleRunRecoveryService(uow).recover()
+    await _settle_dispatched_runs(db_manager)
 
-    assert (result.reconciled, result.dead_lettered, result.still_running) == (1, 1, 0)
     async with db_manager.session_factory() as session:
         lost = await session.get(ScheduleRun, lost_id)
         gone = await session.get(ScheduleRun, gone_id)
@@ -598,21 +617,15 @@ async def test_recovery_settles_only_dispatched_agent_runs_whose_outcome_was_los
             assert row is not None
             assert row.status == status
             assert row.target_outcome is None
-            assert row.last_inspected_at is None, "the sweep must not even look"
 
 
-async def test_recovery_advances_past_runs_whose_targets_are_still_alive(
+async def test_the_cutover_leaves_runs_whose_targets_are_still_alive(
     authenticated_client,
     fixed_test_org,
     db_manager,
 ):
-    """The sweep must not spend every tick on the same in-flight runs.
-
-    A run whose agent is alive but unfinished needs no change, so without the
-    inspection stamp no UPDATE fires and the next tick selects the same rows:
-    a standing set of long-running agents would hold the batch while lost
-    outcomes waited behind it forever.
-    """
+    """A run whose agent is still working gets its outcome from the agent's
+    own finish (a fact); the cutover records only the one that already ended."""
     pod_id, schedule_id, user_id = await _agent_schedule(
         authenticated_client, fixed_test_org
     )
@@ -662,21 +675,12 @@ async def test_recovery_advances_past_runs_whose_targets_are_still_alive(
             ]
         )
 
-    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
-    async with factory() as uow:
-        first = await ScheduleRunRecoveryService(uow).recover(limit=1)
-    assert first.still_running == 1, "the parked run is in flight, not reconciled"
-    assert first.reconciled == 0, "nothing was reconciled, so nothing may claim it was"
-
-    async with factory() as uow:
-        second = await ScheduleRunRecoveryService(uow).recover(limit=1)
-    assert second.reconciled == 1, "the second tick must get past the parked run"
+    await _settle_dispatched_runs(db_manager)
 
     async with db_manager.session_factory() as session:
         parked = await session.get(ScheduleRun, parked_id)
         behind = await session.get(ScheduleRun, behind_it_id)
         assert parked is not None
-        assert parked.last_inspected_at is not None, "an inspection must be recorded"
         assert parked.target_outcome is None, "a live target has no outcome yet"
         assert behind is not None
         assert behind.target_outcome == "COMPLETED", "the lost outcome was recovered"

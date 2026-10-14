@@ -184,32 +184,6 @@ class ScheduleStartService:
             conversation_metadata=_conversation_metadata(schedule, metadata),
         )
 
-    async def handle_schedule_fired(
-        self,
-        *,
-        schedule_id: str,
-        user_id: UUID | str | None,
-        payload: dict,
-        schedule_event_id: str,
-        metadata: dict | None = None,
-        llm_output: dict | None = None,
-        source_occurred_at: datetime | None = None,
-    ) -> None:
-        # 1. A wake for one already-suspended execution, rather than a schedule.
-        if self._is_stale_wake(payload):
-            return
-
-        # 2. A schedule targeting a workflow or agent.
-        await self.start_for_fire(
-            schedule_id=schedule_id,
-            user_id=user_id,
-            payload=payload,
-            schedule_event_id=schedule_event_id,
-            metadata=metadata,
-            llm_output=llm_output,
-            source_occurred_at=source_occurred_at,
-        )
-
     async def start_for_fire(
         self,
         *,
@@ -232,7 +206,7 @@ class ScheduleStartService:
             return
         if not schedule.has_target:
             # An internal schedule is a wait timer and never had a target; if
-            # `_is_stale_wake` did not claim it there is nothing to record.
+            # a legacy timer fire reaches here there is nothing to record.
             # A schedule a person made always had one -- creation refuses
             # without it -- so a missing target means the workflow or agent was
             # deleted out from under it. PS-SCHED-030: record the firing as
@@ -439,18 +413,6 @@ class ScheduleStartService:
             metadata=fire_metadata,
             llm_output=llm_output or {},
         )
-
-    @staticmethod
-    def _is_stale_wake(payload: dict) -> bool:
-        """Absorb a timer fire for something already waiting. True if handled.
-
-        Neither kind arrives this way any more: a suspended workflow run's
-        timer is a ``workflow.resume`` item and a waiting conversation's an
-        ``agent.wait.fire`` item, and each cutover wrote one for every wait
-        that was active. A fire the old poller published before the deploy is
-        already covered by those, so it is dropped here rather than routed.
-        """
-        return bool(payload.get("conversation_id") or payload.get("workflow_run_id"))
 
     async def _start_workflow_for_schedule(
         self,

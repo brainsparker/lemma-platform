@@ -19,7 +19,7 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | Periodic work | Daily, drop the schemas of pods deleted more than `DATASTORE_ORPHAN_SCHEMA_RETENTION_DAYS` ago (0 disables, `datastore.orphan_schemas_reap`) and purge expired signed-link rows (`datastore.signed_links_purge`) |
 | API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily |
 | Worker lifespan | Runs the change-log handoff (LISTEN on the datastore database plus a poll), which turns a watched write's wake row into a `changes.deliver` item |
-| Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly) and `changes.drain` (cutover) (`admin`); see [Record change log](#record-change-log) |
+| Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly, `admin`); record events the old transport still owed are appended by the cutover converter `changes/legacy_cutover.py`; see [Record change log](#record-change-log) |
 
 ## Storage model
 
@@ -98,14 +98,15 @@ transaction on the datastore database's cluster**, whatever it is doing.
 **Cutover.** Record writes used to stage events in the datastore database's
 `domain_event_outbox`, which a dispatcher published to `datastore.events` for
 the `schedule-datastore-events` and `mcp-access-event-deliveries` consumer
-groups. Until every pod schema carried the change log, writes kept that path,
-and the `changes.drain` converter (queued once by migration `0058`) appended
-what the outbox and the two groups still held to each pod's log, under the
-event's own id so nothing is appended twice. It finishes, destroying the two
-groups, once both are empty with the log on everywhere. From the release with
-migration `0063_drop_event_outbox` on, every write appends to the change log and
-the outbox path and the converter are gone; the operator check that gates that
-release is described in
+groups. Every write appends to the change log now. A record event the old
+transport still owed -- an outbox row for a pod with an active DATASTORE
+trigger or a live MCP subscription, with no settled inbox row for that
+consumer -- is appended to its pod's log by the cutover
+(`changes/legacy_cutover.py`, run by `cutover.legacy_event`), under the event's
+own id, so it is appended once however many consumers owed it. It waits until
+no `changes.sync_subscribers` item is outstanding, so the subscribers exist
+first. A separately configured datastore database's outbox is read by the
+cutover sweep and dropped once the previous release has stopped; see
 [the cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13).
 
 **Operating it.** A transaction left open on the datastore database -- an

@@ -56,11 +56,18 @@ async def retire_uninstalled_app(
             tenant_id=parsed.tenant_id,
         )
         return 0
-    surfaces = await surfaces_repo.list_active_for_routing(
-        parsed.platform.value,
-        surface_ids=receiver_ids,
-        external_workspace_id=parsed.tenant_id,
-    )
+    # By id, not through the routing read: that one is live surfaces only,
+    # and a surface paused when its app was removed is one somebody will turn
+    # back on -- to an app that is gone, still reading as connected.
+    surfaces = [
+        surface
+        for surface in [
+            await surfaces_repo.get(surface_id) for surface_id in receiver_ids
+        ]
+        if surface is not None
+        and surface.surface_type is parsed.platform
+        and surface.external_workspace_id == parsed.tenant_id
+    ]
     revoked = parsed.revoked_identity_ids
     account_ids = {
         surface.account_id

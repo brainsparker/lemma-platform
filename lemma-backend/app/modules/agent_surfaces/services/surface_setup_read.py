@@ -118,5 +118,10 @@ class SurfaceSetupReadMixin:
             or self._account_port is None
         ):
             return False
-        account = await self._account_port.get_account(surface.account_id)
+        # The summary, not the account: one status field needs no credentials
+        # decrypted, and a setup read should hold none.
+        summaries = await self._account_port.list_account_summaries(
+            [surface.account_id]
+        )
+        account = summaries.get(surface.account_id)
         return account is not None and account.status == "REAUTH_REQUIRED"

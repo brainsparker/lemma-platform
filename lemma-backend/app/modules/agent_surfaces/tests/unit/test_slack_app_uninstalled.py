@@ -82,12 +82,12 @@ async def test_the_manifest_subscribes_to_both():
 
 class _Surfaces:
     def __init__(self, surfaces):
-        self.surfaces = surfaces
-        self.asked = None
+        self.surfaces = {surface.id: surface for surface in surfaces}
+        self.asked: list = []
 
-    async def list_active_for_routing(self, surface_type, **kwargs):
-        self.asked = (surface_type, kwargs)
-        return self.surfaces
+    async def get(self, surface_id):
+        self.asked.append(surface_id)
+        return self.surfaces.get(surface_id)
 
 
 class _Uow:
@@ -100,8 +100,15 @@ class _Uow:
         self.committed = True
 
 
-def _surface(identity: str):
-    return SimpleNamespace(id=uuid4(), account_id=uuid4(), surface_identity_id=identity)
+def _surface(identity: str, *, workspace: str = "T1", status: str = "ACTIVE"):
+    return SimpleNamespace(
+        id=uuid4(),
+        account_id=uuid4(),
+        surface_identity_id=identity,
+        surface_type=SurfacePlatform.SLACK,
+        external_workspace_id=workspace,
+        status=status,
+    )
 
 
 async def _retire(monkeypatch, *, surfaces, receivers, revoked=None):
@@ -143,12 +150,31 @@ async def test_uninstall_retires_the_accounts_of_the_app_that_signed_it(monkeypa
     assert changed == 2
     assert retired["connector_id"] == "slack"
     assert retired["account_ids"] == {s.account_id for s in surfaces}
-    # Scoped to what the signature check proved, in the workspace it named.
-    assert repo.asked == (
-        "SLACK",
-        {"surface_ids": receivers, "external_workspace_id": "T1"},
-    )
+    # Scoped to what the signature check proved, and nothing else read.
+    assert repo.asked == receivers
     assert uow.committed
+
+
+async def test_a_paused_surface_is_stood_down_too(monkeypatch):
+    """Turned back on later, it would read as connected to an app that is gone."""
+    paused = _surface("U_BOT_A", status="INACTIVE")
+
+    changed, retired, _, _ = await _retire(
+        monkeypatch, surfaces=[paused], receivers=[paused.id]
+    )
+
+    assert changed == 1
+    assert retired["account_ids"] == {paused.account_id}
+
+
+async def test_a_receiver_in_another_workspace_is_not_stood_down(monkeypatch):
+    elsewhere = _surface("U_BOT_A", workspace="T2")
+
+    changed, retired, _, _ = await _retire(
+        monkeypatch, surfaces=[elsewhere], receivers=[elsewhere.id]
+    )
+
+    assert changed == 0
 
 
 async def test_a_revoked_bot_retires_only_its_own_surface(monkeypatch):
@@ -173,7 +199,7 @@ async def test_without_verified_receivers_nothing_is_retired(monkeypatch):
 
     assert changed == 0
     assert retired == {}
-    assert repo.asked is None
+    assert repo.asked == []
 
 
 async def test_setup_asks_for_a_reinstall_even_on_lemmas_own_app():

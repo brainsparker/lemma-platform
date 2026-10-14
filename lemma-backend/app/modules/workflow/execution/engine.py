@@ -42,6 +42,7 @@ from app.modules.workflow.execution.form_submission import (
 )
 from app.modules.workflow.execution.run_admission import queue_wait_if_full
 from app.modules.workflow.execution.run_publication import RunPublication
+from app.modules.workflow.execution.resume_target import ResumeTarget
 from app.modules.workflow.execution.stepper import RunStepper, StepResult
 from app.modules.workflow.domain.ports import (
     AgentPort,
@@ -145,8 +146,9 @@ class WorkflowEngine(RunPublication):
         trigger: TriggerContext | None = None,
         schedule_event_id: str | None = None,
         ctx: Context | None = None,
+        flow: WorkflowEntity | None = None,
     ) -> WorkflowRunEntity:
-        """Create and advance a new run.
+        """Create and advance a new run (of ``flow``, when the caller read it).
 
         Manual runs take no inputs: if the entry node is a form the run is
         persisted WAITING on it in the same transaction. Machine waits such
@@ -154,7 +156,8 @@ class WorkflowEngine(RunPublication):
         active wait row tracks resumability. `trigger` is set only for
         scheduled/event/datastore starts and populates `start.*`.
         """
-        flow = await self.flow_repo.get(flow_id)
+        if flow is None or flow.id != flow_id:
+            flow = await self.flow_repo.get(flow_id)
         if not flow:
             raise ValueError(f"Workflow {flow_id} not found")
         ctx = await self._require_action(
@@ -167,12 +170,9 @@ class WorkflowEngine(RunPublication):
 
         entry_node_id = self._entry_node_id(flow)
 
-        if run_id is not None:
-            existing = await self.run_repo.get(run_id)
-            if existing is not None:
-                self._validate_reserved_run(existing, flow_id=flow.id, user_id=user_id)
-                return existing
-
+        # A known run_id is not looked up first: its insert below conflicts
+        # instead, and that path returns the existing run. A redelivery pays a
+        # savepoint rollback; every first delivery saves a read.
         if schedule_event_id is not None:
             existing = await self.run_repo.find_by_schedule_event(
                 flow_id=flow.id,
@@ -315,19 +315,32 @@ class WorkflowEngine(RunPublication):
         *,
         ctx: Context | None = None,
         next_node_id: str | None = None,
+        found: ResumeTarget | None = None,
     ) -> WorkflowRunEntity | None:
         """Resume the run waiting on (wait_type, external_ref).
 
         Returns None when no ACTIVE wait matches — stale or duplicate
         completion events are no-ops by construction. `next_node_id` is the
         branch a decision's answer chose; otherwise the run follows the edge.
+        `found` is what a caller already read for the same wait, so a step's
+        transaction does not read its rows twice.
         """
-        wait = await self.wait_repo.find_active_by_external_ref(wait_type, external_ref)
+        wait = (
+            found.wait
+            if found is not None
+            else await self.wait_repo.find_active_by_external_ref(
+                wait_type, external_ref
+            )
+        )
         if wait is None:
             logger.debug("workflow.resume.stale_event", wait_type=wait_type.value)
             return None
 
-        run = await self.run_repo.get_for_update(wait.run_id)
+        run = (
+            found.locked_run
+            if found is not None and found.locked_run is not None
+            else await self.run_repo.get_for_update(wait.run_id)
+        )
         if run is None or run.status not in (
             WorkflowRunStatus.WAITING,
             WorkflowRunStatus.RUNNING,
@@ -339,7 +352,11 @@ class WorkflowEngine(RunPublication):
             )
             return None
 
-        flow = await self.flow_repo.get(run.flow_id)
+        flow = (
+            found.flow
+            if found is not None and found.flow is not None
+            else await self.flow_repo.get(run.flow_id)
+        )
         if not flow:
             raise ValueError("Workflow definition not found")
 

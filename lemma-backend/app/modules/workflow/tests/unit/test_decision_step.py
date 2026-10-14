@@ -464,7 +464,7 @@ class _Engine:
         self.failed: list[dict] = []
 
     async def resume_internal(
-        self, wait_type, external_ref, output, *, ctx, next_node_id
+        self, wait_type, external_ref, output, *, ctx, next_node_id, found=None
     ):
         self.resumed.append({"output": output, "next_node_id": next_node_id})
 

@@ -25,6 +25,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     ConversationType,
     ParsedInboundSurfaceEvent,
+    SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.envelope import (
     DeliveryReceipt,
@@ -294,6 +295,7 @@ async def test_a_message_for_one_person_on_an_email_thread_drops_the_copies():
     conversation_id = uuid4()
     event = _slack_event().model_copy(
         update={
+            "platform": SurfacePlatform.RESEND,
             "reply_target": {
                 "recipient_email": "asha@acme.test",
                 "cc": ["tom@client.test"],

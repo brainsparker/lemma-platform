@@ -12,6 +12,10 @@ from typing import Any
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
+from app.modules.agent_surfaces.domain.reply_targets import (
+    WhatsAppReplyTarget,
+    reply_target_as,
+)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -41,7 +45,9 @@ logger = get_logger(__name__)
 
 def recipient_of(event: ParsedInboundSurfaceEvent) -> WhatsAppRecipient | None:
     """Who a reply to this event goes to: its group, else the person."""
-    return whatsapp_recipient(event.reply_target, fallback_wa_id=event.sender_phone)
+    return whatsapp_recipient(
+        reply_target_as(event, WhatsAppReplyTarget), fallback_wa_id=event.sender_phone
+    )
 
 
 class WhatsAppInteractiveRenders:

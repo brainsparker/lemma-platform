@@ -124,6 +124,14 @@ def reply_target_as[T: _ReplyTarget](
     return target if isinstance(target, model) else model()
 
 
+def copied_on_reply(event: ParsedInboundSurfaceEvent) -> tuple[str, ...]:
+    """Everybody else on an email thread, copied on a reply to it.
+
+    Empty on every other platform: only an email reply copies anyone.
+    """
+    return reply_target_as(event, EmailReplyTarget).cc
+
+
 def reply_target_of(event: ParsedInboundSurfaceEvent) -> ReplyTarget:
     """The event's reply target, read for its own platform."""
     return reply_target_for(str(event.platform), event.reply_target)
@@ -151,6 +159,7 @@ __all__ = [
     "TeamsReplyTarget",
     "TelegramReplyTarget",
     "WhatsAppReplyTarget",
+    "copied_on_reply",
     "reply_target_as",
     "reply_target_for",
     "reply_target_of",

@@ -38,6 +38,7 @@ mod pre_approval;
 mod prompt;
 mod session_options;
 mod session_setup;
+mod shell_path;
 mod steering;
 mod supervision;
 

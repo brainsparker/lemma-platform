@@ -478,6 +478,25 @@ tells the agent to use Lemma's:
   the command text, and Claude Code refuses a compound command unless every
   part is allowed; the bare name is the same binary because its `bin/` is
   first on the agent's `PATH`.
+
+  That holds for **every** harness, not only Claude Code, and in the shells
+  the agent runs commands in as well as its own process (`src/acp/shell_path.rs`).
+  Harnesses run each command through the person's shell, whose startup files
+  run first: a `~/.zshenv` or `~/.bashrc` that prepends `~/.local/bin` put a
+  globally installed `lemma` back in front, and Codex's shell snapshot dropped
+  the host's entry entirely (found in live QA). So a run with a CLI also gets
+  `ZDOTDIR` -- four zsh startup files that each source the person's own file
+  of that name and then move the CLI's `bin/` to the front -- and `BASH_ENV`,
+  which bash reads after its profile files in every non-interactive shell. The
+  variables they read are `LEMMAHOST_*`, which a server's `LEMMA_*` cannot set.
+  Other shells (fish, nu) get the process `PATH` only. A run with no CLI gets
+  none of this: its `PATH` is the adapter's own.
+
+  Only Claude Code also gets an allow rule. Codex's command approvals live in
+  `~/.codex/rules` (execpolicy), not in anything a session can pass; OpenCode's
+  `permission.bash` matches wildcards over the command text, so `lemma *`
+  would also allow `lemma x; rm -rf ~` -- the prefix-match hole the rules
+  above avoid. Those harnesses ask before `lemma` as before.
 - **The downloaded `lemma`.** The shipped online app does not carry the CLI
   (about 90 MiB, over `check_online_payload.py`'s gate), so the host fetches
   its own release's the first time a hosted run would otherwise have none

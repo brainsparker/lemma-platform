@@ -4,6 +4,7 @@
 import json
 import os
 import pathlib
+import subprocess
 import sys
 
 # ACP uses UTF-8 even when Windows gives redirected Python pipes a legacy codec.
@@ -46,11 +47,36 @@ for raw_line in sys.stdin:
                     name: value
                     for name, value in os.environ.items()
                     if name
-                    in {"CODEX_CONFIG", "CODEX_HOME", "PATH", "XDG_CONFIG_HOME"}
-                    or name.startswith(("OPENCODE_", "CLAUDE_CODE_", "LEMMA_"))
+                    in {
+                        "BASH_ENV",
+                        "CODEX_CONFIG",
+                        "CODEX_HOME",
+                        "PATH",
+                        "XDG_CONFIG_HOME",
+                        "ZDOTDIR",
+                    }
+                    or name.startswith(
+                        ("OPENCODE_", "CLAUDE_CODE_", "LEMMA_", "LEMMAHOST_")
+                    )
                 }
             }
         )
+        # Which `lemma` a command finds in this agent's shells, as a harness
+        # runs it: through the person's shell and its startup files.
+        if os.environ.get("FAKE_ACP_PROBE_LEMMA"):
+            found = {}
+            for shell, flag in (
+                ("/bin/zsh", "-c"),
+                ("/bin/zsh", "-lc"),
+                ("/bin/bash", "-lc"),
+            ):
+                if os.path.isfile(shell):
+                    found[f"{shell} {flag}"] = subprocess.run(
+                        [shell, flag, "command -v lemma"],
+                        capture_output=True,
+                        text=True,
+                    ).stdout.strip()
+            record({"shell_lemma": found})
         result(
             request_id,
             {

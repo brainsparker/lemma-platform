@@ -517,7 +517,14 @@ class RemoteHarness:
                 terminal_detail=lease_terminal_detail(lease),
             )
 
-        if getattr(lease, "state", None) == AgentHostRunState.QUEUED_FOR_HOST.value:
+        # Not once a stop is sent: a stopped run that kept its place would be
+        # handed to the computer when a slot freed, after the cancel that was
+        # meant for it, and start then.
+        if (
+            not state.stop_sent
+            and lease is not None
+            and lease.state is AgentHostRunState.QUEUED_FOR_HOST
+        ):
             held, notice = await state.slot_wait.check(
                 self.uow_factory, agent_run_id=agent_run_id
             )

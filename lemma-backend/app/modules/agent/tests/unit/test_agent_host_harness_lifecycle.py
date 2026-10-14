@@ -449,6 +449,7 @@ class TestARunQueuedBehindAFullComputer:
                 return SimpleNamespace(
                     state=AgentHostRunState.QUEUED_FOR_HOST.value,
                     accepted_at=None,
+                    error_detail=None,
                 )
 
             async def hold_for_busy_host(self, *, run_id, wait_seconds):
@@ -461,7 +462,9 @@ class TestARunQueuedBehindAFullComputer:
 
         return _Repository
 
-    async def _events(self, monkeypatch: pytest.MonkeyPatch, *, busy: bool):
+    async def _events(
+        self, monkeypatch: pytest.MonkeyPatch, *, busy: bool, stopped: bool = False
+    ):
         expired: list = []
         harness = _harness(
             _RecordingStream(),
@@ -482,7 +485,13 @@ class TestARunQueuedBehindAFullComputer:
 
         monkeypatch.setattr(harness, "_enqueue_host_cancel", _cancel)
         options = _options()
-        options.extra["runtime_profile"]["config"]["host_wait_timeout_seconds"] = 1
+        options.runtime_profile.config["host_wait_timeout_seconds"] = 1
+        if stopped:
+
+            async def _stop() -> bool:
+                return True
+
+            options.should_stop = _stop
         run = harness.run(
             agent=SimpleNamespace(),
             conversation=SimpleNamespace(id=uuid7()),
@@ -516,3 +525,12 @@ class TestARunQueuedBehindAFullComputer:
         assert events[-1].data == (
             "No Agent Host received the run before its wait deadline"
         )
+
+    async def test_a_stopped_run_does_not_keep_its_place(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Held, it would be handed out once a slot freed -- after its cancel."""
+        events, expired = await self._events(monkeypatch, busy=True, stopped=True)
+
+        assert len(expired) == 1
+        assert not any(event.type is AgentEventType.STATUS for event in events)

@@ -734,11 +734,24 @@ class TestGivingUpOnARunTellsTheHostToStop:
 
 
 class _HoldSession:
-    """``get`` answers the lease or the host by model; ``execute`` is recorded."""
+    """``get`` answers the lease or the host by model; ``execute`` is recorded.
 
-    def __init__(self, lease: AgentHostRunLeaseModel | None, host) -> None:
+    The START_RUN select answers ``commands``: the rows the database would hand
+    back, which ``locked`` stands in for as SKIP LOCKED leaving out.
+    """
+
+    def __init__(
+        self,
+        lease: AgentHostRunLeaseModel | None,
+        host,
+        commands: list[AgentHostCommandModel] | None = None,
+        *,
+        locked: bool = False,
+    ) -> None:
         self.lease = lease
         self.host = host
+        self.commands = commands or []
+        self.locked = locked
         self.execute_calls: list = []
         self.flushed = False
 
@@ -748,6 +761,7 @@ class _HoldSession:
 
     async def execute(self, stmt):
         self.execute_calls.append(stmt)
+        return _CommandScalars([] if self.locked else self.commands)
 
     async def flush(self):
         self.flushed = True
@@ -777,10 +791,17 @@ def _host(
 WAIT = 300
 
 
+def _start_run(lease: AgentHostRunLeaseModel, *, expires_at: datetime):
+    command = _command(run_id=lease.run_id)
+    command.expires_at = expires_at
+    return command
+
+
 @pytest.mark.asyncio
 async def test_a_run_queued_on_a_full_online_computer_keeps_its_place() -> None:
     lease = _lease(lease_expires_at=NOW + timedelta(seconds=5))
-    session = _HoldSession(lease, _host())
+    start = _start_run(lease, expires_at=NOW + timedelta(seconds=5))
+    session = _HoldSession(lease, _host(), [start])
 
     busy = await recovery.hold_for_busy_host(
         session, run_id=lease.run_id, wait_seconds=WAIT, now=NOW
@@ -788,11 +809,34 @@ async def test_a_run_queued_on_a_full_online_computer_keeps_its_place() -> None:
 
     assert busy == recovery.BusyHost(name="My Mac", active_runs=2)
     assert lease.lease_expires_at == NOW + timedelta(seconds=WAIT)
+    assert start.expires_at == NOW + timedelta(seconds=WAIT)
     (stmt,) = session.execute_calls
     sql = _compile(stmt)
-    assert "UPDATE agent_host_commands" in sql
+    assert "FROM agent_host_commands" in sql
     assert "START_RUN" in sql and "QUEUED" in sql
     assert session.flushed
+
+
+@pytest.mark.asyncio
+async def test_the_hold_never_waits_for_a_start_run_while_holding_the_lease() -> None:
+    """The control frame locks the command, then the lease; this the reverse.
+
+    Waiting for the command here would be the other half of that cycle, so a
+    command someone else holds is skipped, and the next check renews it.
+    """
+    lease = _lease(lease_expires_at=NOW + timedelta(seconds=5))
+    start = _start_run(lease, expires_at=NOW + timedelta(seconds=5))
+    session = _HoldSession(lease, _host(), [start], locked=True)
+
+    busy = await recovery.hold_for_busy_host(
+        session, run_id=lease.run_id, wait_seconds=WAIT, now=NOW
+    )
+
+    assert busy is not None
+    (stmt,) = session.execute_calls
+    assert "FOR UPDATE SKIP LOCKED" in _compile(stmt)
+    assert start.expires_at == NOW + timedelta(seconds=5)
+    assert lease.lease_expires_at == NOW + timedelta(seconds=WAIT)
 
 
 @pytest.mark.asyncio
@@ -808,7 +852,10 @@ async def test_a_hold_with_time_left_does_not_write_again() -> None:
 
     assert busy is not None
     assert lease.lease_expires_at == expires
-    assert session.execute_calls == []
+    # Only commands that are themselves due are selected, so one with time
+    # left is never locked or rewritten.
+    (stmt,) = session.execute_calls
+    assert "agent_host_commands.expires_at <" in _compile(stmt)
 
 
 @pytest.mark.parametrize(

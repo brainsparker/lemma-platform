@@ -109,20 +109,31 @@ async def hold_for_busy_host(
     held_until = timestamp + timedelta(seconds=wait_seconds)
     # Renewed at half the window rather than on every check, so a run waiting
     # an hour writes a few rows, not one every few seconds.
-    if lease.lease_expires_at < timestamp + timedelta(seconds=wait_seconds / 2):
+    renew_by = timestamp + timedelta(seconds=wait_seconds / 2)
+    if lease.lease_expires_at < renew_by:
         lease.lease_expires_at = held_until
         lease.updated_at = timestamp
-        await session.execute(
-            update(AgentHostCommandModel)
-            .where(
-                AgentHostCommandModel.run_id == run_id,
-                AgentHostCommandModel.kind == AgentHostCommandKind.START_RUN.value,
-                AgentHostCommandModel.lease_epoch == lease.lease_epoch,
-                AgentHostCommandModel.state == AgentHostCommandState.QUEUED.value,
-            )
-            .values(expires_at=held_until)
+    # SKIP LOCKED, because this already holds the lease. A host's control
+    # frame locks the START_RUN first and then waits for the lease (handing
+    # it out, or applying a rejection of it), so waiting here for the command
+    # would close that cycle and Postgres would abort one side. A command that
+    # is locked is being acted on right now; the next check renews it if it
+    # is still queued. Judged on the command's own expiry, not the lease's, so
+    # a requeue that left an old expiry is caught up on that next check.
+    commands = await session.execute(
+        select(AgentHostCommandModel)
+        .where(
+            AgentHostCommandModel.run_id == run_id,
+            AgentHostCommandModel.kind == AgentHostCommandKind.START_RUN.value,
+            AgentHostCommandModel.lease_epoch == lease.lease_epoch,
+            AgentHostCommandModel.state == AgentHostCommandState.QUEUED.value,
+            AgentHostCommandModel.expires_at < renew_by,
         )
-        await session.flush()
+        .with_for_update(skip_locked=True)
+    )
+    for command in commands.scalars():
+        command.expires_at = held_until
+    await session.flush()
     active = capacity.get("active_runs")
     return BusyHost(
         name=host.display_name,

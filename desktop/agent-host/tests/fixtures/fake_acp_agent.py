@@ -182,6 +182,56 @@ for raw_line in sys.stdin:
             },
         )
     elif method == "session/prompt":
+        future = MODE == "future"
+        if future:
+            # An agent newer than the host: an update kind, a content block
+            # type and a permission option kind ACP did not define when the
+            # host was built. The first two are skipped; a request offering
+            # only the third is answered `cancelled` without asking anyone.
+            for update in (
+                {"sessionUpdate": "agent_reflection", "text": "do not log me"},
+                {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "hologram", "data": "do not log me"},
+                },
+            ):
+                emit(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "session/update",
+                        "params": {"sessionId": "fake-session", "update": update},
+                    }
+                )
+            emit(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 901,
+                    "method": "session/request_permission",
+                    "params": {
+                        "sessionId": "fake-session",
+                        "toolCall": {"toolCallId": "future-tool", "kind": "browse"},
+                        "options": [
+                            {
+                                "optionId": "forever",
+                                "name": "Allow for the session",
+                                "kind": "allow_session",
+                            }
+                        ],
+                    },
+                }
+            )
+            record(json.loads(sys.stdin.readline()))
+        options = [
+            {
+                "optionId": "allow_once",
+                "name": "Allow once",
+                "kind": "allow_once",
+            }
+        ]
+        if future:
+            options.append(
+                {"optionId": "forever", "name": "Always", "kind": "allow_session"}
+            )
         emit(
             {
                 "jsonrpc": "2.0",
@@ -194,13 +244,7 @@ for raw_line in sys.stdin:
                         "status": "pending",
                         "title": "Run native shell",
                     },
-                    "options": [
-                        {
-                            "optionId": "allow_once",
-                            "name": "Allow once",
-                            "kind": "allow_once",
-                        }
-                    ],
+                    "options": options,
                 },
             }
         )
@@ -232,7 +276,17 @@ for raw_line in sys.stdin:
                 },
             }
         )
-        result(request_id, {"stopReason": "end_turn"})
+        if future:
+            result(
+                request_id,
+                {
+                    "stopReason": "budget_exhausted",
+                    "usage": {"inputTokens": 3, "outputTokens": 2.0},
+                    "brandNew": {"x": 1},
+                },
+            )
+        else:
+            result(request_id, {"stopReason": "end_turn"})
     else:
         result(
             request_id,

@@ -235,6 +235,9 @@ async fn run_once(
     let outcome = agent_client_protocol::Client
         .builder()
         .name("lemma-agent-host")
+        // First, so nothing typed sees what an agent newer than this host
+        // sent before it has been settled. See `tolerance`.
+        .with_handler(super::Tolerance)
         .on_receive_notification(
             async move |notification: SessionNotification, _context| updates.forward(&notification),
             agent_client_protocol::on_receive_notification!(),

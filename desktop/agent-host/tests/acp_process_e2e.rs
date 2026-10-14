@@ -478,3 +478,81 @@ async fn a_misconfigured_agent_is_not_started_twice() {
     assert!(!callbacks.dispatched.load(Ordering::SeqCst));
     assert_eq!(processes_started(&log), 1);
 }
+
+/// An agent released after this host, through the real driver: what it adds
+/// is skipped, what the host knows still arrives, and a permission it offers
+/// only in a kind the host does not know is refused, never allowed.
+#[tokio::test]
+async fn a_newer_agent_runs_and_its_unknowns_are_skipped_not_fatal() {
+    let directory = TempDir::new().unwrap();
+    let (adapter, log) = fake_adapter_in_mode(&directory, Some("future"));
+    let callbacks = std::sync::Arc::new(CapturingCallbacks::default());
+    let outcome = AcpDriver::default()
+        .run(
+            AcpRunRequest {
+                adapter,
+                agent_environment: std::collections::BTreeMap::default(),
+                own_settings: false,
+                lemma_cli_bin: None,
+                run_spec: RunSpec {
+                    agent_run_id: Uuid::new_v4(),
+                    conversation_id: Uuid::new_v4(),
+                    harness_id: Uuid::new_v4(),
+                    profile_revision: "revision".into(),
+                    model_name: None,
+                    config_selections: JsonMap::new(),
+                    system_prompt: String::new(),
+                    prompt: vec![serde_json::json!({"type": "text", "text": "hello"})],
+                    resume_session_id: None,
+                    workspace_cwd: None,
+                    context: BTreeMap::new(),
+                    mcp: Value::Null,
+                    run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),
+                    system_prompt_delivery: None,
+                    pre_approvals: Vec::new(),
+                },
+                scratch_directory: directory.path().join("run"),
+                mcp_server: None,
+                can_load_session: false,
+                published_config_options: Vec::new(),
+                permissions: PermissionGate::new(),
+                permission_timeout: Duration::ZERO,
+                cancel: lemma_agent_host::acp::never_cancelled(),
+                cancel_grace: Duration::from_secs(5),
+                steer: lemma_agent_host::acp::SteerInbox::default(),
+            },
+            callbacks.clone(),
+        )
+        .await
+        .expect("a newer agent's turn ends as a turn, not a protocol error");
+    // A stop reason ACP did not have is reported by name.
+    assert_eq!(outcome.state, RunState::Failed);
+    assert_eq!(outcome.stop_reason, "budget_exhausted");
+    assert!(outcome.message.unwrap().contains("budget_exhausted"));
+
+    let events = callbacks.events.lock().unwrap();
+    let chunks: Vec<_> = events
+        .iter()
+        .filter(|(kind, _)| *kind == EventType::AgentMessageChunk)
+        .collect();
+    assert_eq!(chunks.len(), 1, "only the chunk this host can read");
+    assert_eq!(chunks[0].1["text"], "hello from fake");
+    // Only the request offering a known option was put to anyone, and the
+    // unknown option it also offered was not part of the card.
+    let asked: Vec<_> = events
+        .iter()
+        .filter(|(kind, _)| *kind == EventType::PermissionRequest)
+        .collect();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].1["options"].as_array().unwrap().len(), 1);
+    let usage = events
+        .iter()
+        .find(|(kind, _)| *kind == EventType::Usage)
+        .expect("the turn's usage, read count by count");
+    assert_eq!(usage.1["output_tokens"], 2);
+    drop(events);
+
+    let messages = std::fs::read_to_string(log).unwrap();
+    assert!(messages.contains("\"id\":901,\"result\":{\"outcome\":{\"outcome\":\"cancelled\"}}"));
+    assert!(!messages.contains("\"optionId\":\"forever\"}"));
+}

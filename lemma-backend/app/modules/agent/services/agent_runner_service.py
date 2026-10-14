@@ -6,7 +6,7 @@ from collections.abc import Callable
 from functools import partial
 from app.modules.agent.contracts.run_observer import RunObserver
 from uuid import UUID
-from pydantic_ai.output import OutputSpec
+from pydantic_ai.output import OutputSpec, ToolOutput
 from pydantic_ai.capabilities import AgentCapability
 from pydantic_ai.toolsets import AbstractToolset
 
@@ -537,8 +537,12 @@ class AgentRunnerService:
         # The output *schema* is only applied when the agent configures one — see
         # get_final_answer_tool, which uses `output: str` otherwise (no schema is
         # pushed to the model when output_schema is absent).
+        #
+        # A tool, named rather than left to the model's default: a model that
+        # thinks by default would otherwise be asked for native JSON-schema
+        # output, which some Anthropic-compatible gateways refuse.
         if conversation.type == ConversationType.TASK:
-            return get_final_answer_tool(agent)
+            return ToolOutput(get_final_answer_tool(agent))
         return None
 
     async def _resolve_configured_accounts(

@@ -38,7 +38,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
 )
@@ -208,7 +208,7 @@ async def start_group(
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(refused)
             ) from refused
-        except (GroupNotOpened, WhatsAppApiError, *PLATFORM_TRANSPORT_ERRORS) as exc:
+        except (GroupNotOpened, WhatsAppApiError, *platform_transport_errors()) as exc:
             raise HTTPException(
                 status.HTTP_502_BAD_GATEWAY,
                 detail="WhatsApp would not start the group. Try again shortly.",

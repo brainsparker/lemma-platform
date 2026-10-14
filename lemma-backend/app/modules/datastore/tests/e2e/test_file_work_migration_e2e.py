@@ -1,4 +1,4 @@
-"""Migration 0054 goes down only while no file's bytes are keyed by its id.
+"""Migration 0055 goes down only while no file's bytes are keyed by its id.
 
 Once the object layout is on, ``storage_layout`` is the only record of where a
 file's bytes are. A downgrade that dropped it would leave those files reading
@@ -25,8 +25,8 @@ pytestmark = pytest.mark.e2e
 postgres_only_container = e2e_fixtures.postgres_only_container
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0053_work_runtime"
-REVISION = "0054_file_work_items"
+BEFORE = "0054_work_runtime"
+REVISION = "0055_file_work_items"
 
 _COLUMNS = (
     "SELECT count(*) FROM information_schema.columns WHERE table_name = "

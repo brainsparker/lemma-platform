@@ -10,8 +10,8 @@ pay nothing for it.
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0052_folder_visibility_index"
-down_revision = "0051_agent_run_reliability"
+revision = "0053_folder_visibility_index"
+down_revision = "0052_workflow_run_times_utc"
 branch_labels = None
 depends_on = None
 

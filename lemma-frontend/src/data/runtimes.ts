@@ -5,7 +5,7 @@
  *  profiles*: same list, same id, same shape, same slot in a conversation.
  *  There is no `HarnessKind` per coding tool — Codex, Claude Code, Cursor and
  *  OpenCode all arrive as `HARNESS`, and which one it is comes from
- *  `metadata.harness_key`. So the ledger is one list, and a computer is a
+ *  `harness_key`. So the ledger is one list, and a computer is a
  *  heading inside it rather than a second list beside it.
  *
  *  Pure, and tested, for the reason `accounts.ts` is: every field here is a
@@ -339,7 +339,7 @@ export function readRuntime(raw: unknown): Runtime | null {
         availability_status?: string | null;
         default_model_name?: string | null;
         model_catalog?: unknown[];
-        metadata?: Record<string, unknown> | null;
+        harness_key?: string | null;
         config?: Record<string, unknown> | null;
     };
     const id = asString(entry.id);
@@ -349,9 +349,9 @@ export function readRuntime(raw: unknown): Runtime | null {
     const models = (entry.model_catalog ?? []).map(readModel).filter((model): model is RuntimeModel => model !== null);
     const defaultModel = asString(entry.default_model_name);
 
-    /* A saved profile keeps the harness it was made from in its metadata, so
-       a row can wear the right logo without re-reading the computer. */
-    const harness = asString(entry.metadata?.["harness_key"]);
+    /* A saved profile keeps the harness it was made from, so a row can wear
+       the right logo without re-reading the computer. */
+    const harness = asString(entry.harness_key);
 
     return {
         id,

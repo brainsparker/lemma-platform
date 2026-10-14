@@ -9,12 +9,17 @@ conversation delivers what was held before anything else is said.
 
 Held for a week. A message nobody came back for in that time is dropped when
 they finally do, rather than delivered as if it were news.
+
+Adding and clearing are both conditional. Each write locks the conversation row
+and stamps a new ``version``; a delivery clears only the messages it sent, so a
+message held while the earlier ones were going out stays held for the next
+reply instead of being cleared unsent.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, ValidationError
 from redis.exceptions import RedisError
@@ -33,7 +38,7 @@ from app.modules.agent_surfaces.caches import HELD_REPLY_CLAIMS, surface_caches
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
@@ -62,14 +67,27 @@ class HeldReplies(BaseModel):
     #: set from a later one, so clearing it cannot clear a newer.
     asked_at: datetime
     replies: list[HeldReply] = Field(default_factory=list)
+    #: Stamped afresh on every write, so a set a hold has added to since it was
+    #: read is told from the one that was. None on a record written before
+    #: versions, which ``asked_at`` stands in for.
+    version: str | None = None
 
     def identity(self) -> dict[str, str | None]:
+        if self.version is not None:
+            return {"version": self.version}
         return {"asked_at": self.model_dump(mode="json")["asked_at"]}
 
+    def claim_token(self) -> str:
+        """What a delivery claims, so two deliveries of this set are one."""
+        token = self.identity()
+        return str(token.get("version") or token.get("asked_at"))
 
-async def _held(uow: SqlAlchemyUnitOfWork, conversation_id: UUID) -> HeldReplies | None:
+
+async def _held(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, *, for_update: bool = False
+) -> HeldReplies | None:
     stored = await metadata_records.conversation_metadata_record(
-        uow, conversation_id, HELD_REPLIES_KEY
+        uow, conversation_id, HELD_REPLIES_KEY, for_update=for_update
     )
     if stored is None:
         return None
@@ -108,9 +126,14 @@ async def hold_reply(
     now: datetime | None = None,
 ) -> None:
     """Hold ``message`` beside anything already held. ``asked``: a template
-    asking them to reply has just gone."""
+    asking them to reply has just gone.
+
+    The read is locked, so a hold racing another hold, or a delivery clearing
+    what it sent, waits for it rather than writing over it."""
     at = now or datetime.now(UTC)
-    held = await _held(uow, conversation_id) or HeldReplies(asked_at=at)
+    held = await _held(uow, conversation_id, for_update=True) or HeldReplies(
+        asked_at=at
+    )
     await agent_conversations.set_conversation_metadata_value(
         uow,
         conversation_id,
@@ -118,6 +141,7 @@ async def hold_reply(
         HeldReplies(
             asked_at=at if asked else held.asked_at,
             replies=[*held.replies, HeldReply(message=message, held_at=at)],
+            version=uuid4().hex,
         ),
     )
 
@@ -148,7 +172,7 @@ async def deliver_held_replies(
     if held is None:
         return
     claims = surface_caches.get(HELD_REPLY_CLAIMS)
-    claim = f"{conversation_id}:{held.identity()['asked_at']}"
+    claim = f"{conversation_id}:{held.claim_token()}"
     try:
         if not await claims.set_raw_if_absent(claim, "delivering"):
             return
@@ -167,7 +191,7 @@ async def deliver_held_replies(
             await adapter.send_message(
                 credentials=credentials, event=event, message=reply.message
             )
-    except PLATFORM_TRANSPORT_ERRORS:
+    except platform_transport_errors():
         logger.warning(
             "agent_surfaces.held_replies.not_delivered.degraded",
             conversation_id=str(conversation_id),
@@ -179,12 +203,32 @@ async def deliver_held_replies(
 
 
 async def _forget(
-    held: HeldReplies, conversation_id: UUID, uow_factory: UnitOfWorkFactory
+    delivered: HeldReplies, conversation_id: UUID, uow_factory: UnitOfWorkFactory
 ) -> None:
+    """Clear what ``delivered`` sent, and only that.
+
+    Read again under the row lock: a message held since ``delivered`` was read
+    is in the record now and not in ``delivered``, and stays held -- under a
+    new version, so its delivery is not refused by the claim this one took.
+    """
     try:
         async with uow_factory() as uow:
-            await metadata_records.forget_conversation_metadata_record(
-                uow, conversation_id, HELD_REPLIES_KEY, matching=held.identity()
+            current = await _held(uow, conversation_id, for_update=True)
+            if current is None:
+                return
+            left = [
+                reply for reply in current.replies if reply not in delivered.replies
+            ]
+            if not left:
+                await metadata_records.forget_conversation_metadata_record(
+                    uow, conversation_id, HELD_REPLIES_KEY, matching=current.identity()
+                )
+                return
+            await agent_conversations.set_conversation_metadata_value(
+                uow,
+                conversation_id,
+                HELD_REPLIES_KEY,
+                current.model_copy(update={"replies": left, "version": uuid4().hex}),
             )
     except SQLAlchemyError:
         # Delivered, and the claim stands for its lifetime; past that, the

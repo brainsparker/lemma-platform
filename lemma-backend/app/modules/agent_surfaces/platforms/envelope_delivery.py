@@ -25,7 +25,7 @@ from app.modules.agent_surfaces.domain.envelope import (
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfacePlatformError
 from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 
 logger = get_logger(__name__)
 
@@ -253,7 +253,7 @@ class EnvelopeDeliveryMixin:
             await self.send_message(
                 credentials=credentials, event=event, message=text, metadata=metadata
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.delivery.part_reached_nobody.degraded",
                 platform=self.platform,
@@ -275,7 +275,7 @@ class EnvelopeDeliveryMixin:
             await self.send_message(
                 credentials=credentials, event=event, message=text, metadata=metadata
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.delivery.part_reached_nobody.degraded",
                 platform=self.platform,
@@ -312,7 +312,7 @@ class EnvelopeDeliveryMixin:
                 return PartDelivery.DEGRADED
             if rendered:
                 return PartDelivery.NATIVE
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             # A warning with the traceback: the text fallback below usually
             # serves the person, which is exactly why a native render that keeps
             # failing (a rejected payload, a dead callback store) goes unnoticed
@@ -348,7 +348,7 @@ class EnvelopeDeliveryMixin:
                 metadata=metadata,
             ):
                 return PartDelivery.NATIVE
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.delivery.native_decision_unavailable.degraded",
                 platform=self.platform,
@@ -377,7 +377,7 @@ class EnvelopeDeliveryMixin:
                 render_plan=render_plan,
                 metadata=metadata,
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.delivery.native_resource_unavailable.degraded",
                 platform=self.platform,
@@ -413,7 +413,7 @@ class EnvelopeDeliveryMixin:
                 caption=attachment.caption,
             ):
                 return PartDelivery.NATIVE
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.debug(
                 "agent_surfaces.delivery.native_attachment_unavailable.diagnostic",
                 platform=self.platform,
@@ -460,7 +460,7 @@ class EnvelopeDeliveryMixin:
                 caption=voice.caption,
             ):
                 return PartDelivery.NATIVE
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.debug(
                 "agent_surfaces.delivery.native_voice_unavailable.diagnostic",
                 platform=self.platform,

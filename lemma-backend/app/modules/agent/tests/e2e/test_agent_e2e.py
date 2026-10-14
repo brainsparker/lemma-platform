@@ -2747,10 +2747,10 @@ class TestAgentRuntimeConfigApis:
             "openai/gpt-5.1",
             "deepseek/deepseek-chat-v3.2",
         }
-        assert openrouter_payload["metadata"] == {
-            "source": "openai_compatible",
-            "catalog_discovered": True,
-        }
+        # Internal bookkeeping stays internal; the typed fields replace it.
+        assert "metadata" not in openrouter_payload
+        assert openrouter_payload["harness_key"] is None
+        assert openrouter_payload["organization_default"] is False
 
         vendor = await authenticated_client.post(
             f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
@@ -2768,10 +2768,10 @@ class TestAgentRuntimeConfigApis:
         )
         assert vendor.status_code == 201, vendor.text
         vendor_payload = vendor.json()
-        assert vendor_payload["metadata"] == {
-            "source": "openai_compatible",
-            "catalog_discovered": False,
-        }
+        # Internal bookkeeping stays internal; the typed fields replace it.
+        assert "metadata" not in vendor_payload
+        assert vendor_payload["harness_key"] is None
+        assert vendor_payload["organization_default"] is False
         assert vendor_payload["default_model_name"] == "vendor/model-pro"
         assert {
             item["name"]: "VISION" in item["capabilities"]

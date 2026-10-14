@@ -68,7 +68,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
     replays_prior_run_reasoning,
 )
 from app.modules.agent.infrastructure.harnesses.provider_error_log import (
-    user_facing_error_message,
+    failure_event,
     log_model_http_error,
 )
 from app.modules.agent.config import agent_settings
@@ -205,11 +205,7 @@ class PydanticAIHarness:
             await remember_provider_refusal(
                 options.runtime_profile, status_code=exc.status_code
             )
-            terminal = AgentEvent(
-                type=AgentEventType.ERROR,
-                data=user_facing_error_message(exc),
-                agent_run_id=agent_run_id,
-            )
+            terminal = failure_event(exc, agent_run_id=agent_run_id)
         except UnexpectedModelBehavior as exc:
             # Two causes, told apart by `classify_run_failure`: a tool that kept
             # getting invalid arguments past every retry (GracefulToolset turns
@@ -219,20 +215,12 @@ class PydanticAIHarness:
                 "agent.pydantic_ai.agent_run_ended_on_unusable_response.degraded",
                 exc_info=True,
             )
-            terminal = AgentEvent(
-                type=AgentEventType.ERROR,
-                data=user_facing_error_message(exc),
-                agent_run_id=agent_run_id,
-            )
+            terminal = failure_event(exc, agent_run_id=agent_run_id)
         except UsageLimitExceeded as exc:
             logger.warning(
                 "agent.pydantic_ai.agent_run_hit_usage_limit.degraded", exc_info=True
             )
-            terminal = AgentEvent(
-                type=AgentEventType.ERROR,
-                data=user_facing_error_message(exc),
-                agent_run_id=agent_run_id,
-            )
+            terminal = failure_event(exc, agent_run_id=agent_run_id)
         except AgentInputRequired as exc:
             # The agent called ask_user / request_approval: pause the run cleanly
             # rather than failing. The tool call is already persisted; the runner
@@ -256,11 +244,7 @@ class PydanticAIHarness:
             logger.error(
                 "agent.pydantic_ai.pydanticai_harness_type.failed", exc_info=True
             )
-            terminal = AgentEvent(
-                type=AgentEventType.ERROR,
-                data=user_facing_error_message(exc),
-                agent_run_id=agent_run_id,
-            )
+            terminal = failure_event(exc, agent_run_id=agent_run_id)
 
         if terminal is None:
             terminal = AgentEvent(

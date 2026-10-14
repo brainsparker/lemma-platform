@@ -262,8 +262,7 @@ async def _seed_in_progress_function_waits(
                     user_id=user_id,
                     status="RUNNING",
                     current_node_id="approve",
-                    # The run columns are naive timestamps, unlike the wait's.
-                    started_at=created_at.replace(tzinfo=None),
+                    started_at=created_at,
                 )
             )
             session.add(

@@ -137,6 +137,8 @@ class RunEventPump:
             await self.finalizer.finish(
                 status=AgentRunStatus.FAILED,
                 error=str(event.data),
+                error_code=event.error_code,
+                error_reason=event.error_reason,
                 usage_data=outcome.usage_data,
                 run=run,
             )

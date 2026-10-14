@@ -19,15 +19,15 @@ a backoff, and ``FAILED_PERMANENT`` is the one terminal failure. A row that
 an old worker is still processing during a rolling deploy is fenced by its
 claim token, so the overlap is harmless.
 
-Revision ID: 0054_file_work_items
-Revises: 0053_work_runtime
+Revision ID: 0055_file_work_items
+Revises: 0054_work_runtime
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0054_file_work_items"
-down_revision = "0053_work_runtime"
+revision = "0055_file_work_items"
+down_revision = "0054_work_runtime"
 branch_labels = None
 depends_on = None
 
@@ -131,7 +131,7 @@ def downgrade() -> None:
     moved = op.get_bind().scalar(sa.text(object_layout_guard()))
     if moved:
         raise ObjectLayoutRowsExist(
-            f"Refusing to downgrade 0054_file_work_items: {moved} datastore "
+            f"Refusing to downgrade 0055_file_work_items: {moved} datastore "
             "file(s) are stored in the object layout (storage_layout = 'object'), "
             "and dropping the column would leave their bytes unreachable. There "
             "is no reverse copy; downgrading past this revision is only possible "

@@ -25,7 +25,7 @@ from app.modules.agent_surfaces.domain.envelope import (
     PartDelivery,
     SurfaceEnvelope,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 
 logger = get_logger(__name__)
 
@@ -106,7 +106,7 @@ class EmailOneReplyMixin:
                 message=body or " ",
                 metadata=send_metadata,
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.delivery.one_reply_reached_nobody.degraded",
                 platform=self.platform,

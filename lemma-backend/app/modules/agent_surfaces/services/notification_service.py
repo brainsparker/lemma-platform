@@ -299,7 +299,6 @@ class NotificationService:
             channels=channels,
             message=message,
             agent_name=agent_name,
-            actor_display_name=actor_display_name,
             uow=self.uow,
             notifications=self.notifications,
             egress=self.egress,

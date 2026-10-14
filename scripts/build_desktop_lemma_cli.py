@@ -151,7 +151,9 @@ def write_archive(root: Path, output: Path) -> tuple[str, int]:
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as raw:
         with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as zipped:
-            with tarfile.open(fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT) as tar:
+            with tarfile.open(
+                fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT
+            ) as tar:
                 for path in sorted(root.rglob("*")):
                     tar.add(
                         path,

@@ -465,8 +465,9 @@ tells the agent to use Lemma's:
   as its server. Every other pairing is a server elsewhere, and a path it names
   is one on its own machine, so its runs get the CLI the Desktop app carries in
   `Contents/Resources/lemma-cli` (staged by
-  `scripts/build_desktop_lemma_cli.py`), or none when the app has none. Either
-  folder is accepted only by the rule host execution uses
+  `scripts/build_desktop_lemma_cli.py`; only the self-contained `make
+  desktop-dmg` build has one), else the one the host downloaded (below), else
+  none. Every folder is accepted only by the rule host execution uses
   ([§6](desktop-host-execution.md#6-the-seatbelt-profile)). From source,
   `LEMMA_AGENT_HOST_CLI_ROOT` names the bundled folder instead; debug builds
   only. Claude Code is
@@ -477,6 +478,48 @@ tells the agent to use Lemma's:
   the command text, and Claude Code refuses a compound command unless every
   part is allowed; the bare name is the same binary because its `bin/` is
   first on the agent's `PATH`.
+- **The downloaded `lemma`.** The shipped online app does not carry the CLI
+  (about 90 MiB, over `check_online_payload.py`'s gate), so the host fetches
+  its own release's the first time a hosted run would otherwise have none
+  (`src/lemma_cli/download.rs`), and starts that download when a hosted
+  pairing's worker starts, so it is usually ready first.
+  - *The artifact.* `release-desktop.yml` builds the CLI with
+    `scripts/build_desktop_lemma_cli.py --archive`, signs every Mach-O with
+    the app's Developer ID (hardened runtime, timestamp), and attaches
+    `lemma-cli-aarch64-apple-darwin.tar.gz` and its manifest
+    `lemma-cli-aarch64-apple-darwin.json` (`{version, platform, url, sha256,
+    size}`) to the release. Not notarized: the pipeline notarizes the app
+    and the DMG, never loose binaries, and a file the host downloads itself
+    has no quarantine attribute for Gatekeeper to check. macOS arm64 only,
+    as the Desktop release is.
+  - *Trust.* The manifest URL is compiled into the host:
+    `https://github.com/lemma-work/lemma-platform/releases/download/v<host
+    version>/lemma-cli-<platform>.json` for a release build (another channel
+    sets `LEMMA_AGENT_HOST_CLI_MANIFEST_URL` at compile time). Nothing a
+    paired server sends changes it. The host refuses a manifest for another
+    version or platform and an archive outside the manifest's own release
+    folder, fetches with the system `curl` (`-q`, so no `~/.curlrc`;
+    HTTPS-only, redirects included), and checks the archive's size and
+    SHA-256 before unpacking. The digest proves the archive is the one the
+    release's manifest describes; the release itself (GitHub, over TLS) is
+    the root of trust. Debug builds download only from
+    `LEMMA_AGENT_HOST_CLI_MANIFEST_URL` read at run time, and from nowhere
+    without it.
+  - *Where.* `<data dir>/cli/<version>/`. The download and unpacking happen
+    in `cli/.partial-*`, and the unpacked tree is renamed into place in one
+    step, so a half-written CLI is never resolved. The folder is carved out
+    of Lemma's denied application data for `lemma_cli_root`
+    (`DOWNLOADED_CLI_EXCEPTION`), as the host packs are; nothing else of the
+    host's data is. Other versions and leftover partials are removed when
+    the host starts and after each install.
+  - *Concurrency and failure.* One lock per data directory: twenty runs
+    starting together download once. A run waits at most 15 seconds for a
+    download in flight and otherwise goes on without a CLI, with a warning in
+    the host log; the download carries on for later runs. A failure is
+    retried by a later run after a backoff that doubles from 30 seconds to an
+    hour.
+  - *Version skew.* The CLI is the host's release, not the server's, exactly
+    as the bundled one is; a hosted server may be newer or older.
 - **The person's own permission rules.** Leaving `~/.claude` out also left
   out the person's `permissions.allow`, so a command they had told Claude
   Code never to ask about asked in every Lemma run. `allow`, `deny` and `ask`

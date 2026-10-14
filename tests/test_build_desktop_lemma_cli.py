@@ -35,7 +35,9 @@ def _touch(path: Path, content: bytes = b"") -> Path:
 
 
 def test_every_mach_o_is_found_for_signing_and_nothing_else(tmp_path: Path) -> None:
-    thin = _touch(tmp_path / "python/bin/python3.14", bytes.fromhex("cffaedfe") + b"rest")
+    thin = _touch(
+        tmp_path / "python/bin/python3.14", bytes.fromhex("cffaedfe") + b"rest"
+    )
     universal = _touch(
         tmp_path / "cli/pydantic_core/_pydantic_core.so", bytes.fromhex("cafebabe")
     )

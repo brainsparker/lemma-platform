@@ -32,7 +32,7 @@ def _seed_statements() -> list[str]:
         / "versions"
         / "2026-10-14_flow_work_items_0057.py"
     )
-    spec = importlib.util.spec_from_file_location("flow_work_items_0056", path)
+    spec = importlib.util.spec_from_file_location("flow_work_items_0057", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

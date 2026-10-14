@@ -1,4 +1,4 @@
-"""Migration 0054 goes down only while no file's bytes are keyed by its id.
+"""Migration 0055 goes down only while no file's bytes are keyed by its id.
 
 Once the object layout is on, ``storage_layout`` is the only record of where a
 file's bytes are. A downgrade that dropped it would leave those files reading

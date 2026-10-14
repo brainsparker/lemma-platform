@@ -6,7 +6,8 @@ use super::{
     OwnedSemaphorePermit, OwnedTask, PERMISSION_DECISION_TIMEOUT, ResolvedAdapter, RunSpec,
     RunState, SteerInbox, StreamSegments, TargetWorker, Utc, Value, adapter_failure_message,
     authentication_hint, host_directory_instructions, prepare_run_directory,
-    publish_generated_images, redact_error, terminal_failure, terminal_failure_detail, watch,
+    publish_generated_images, redact_error, terminal_failure, terminal_failure_detail,
+    usage_limit_message, watch, without_error_data,
 };
 
 impl TargetWorker {
@@ -239,12 +240,17 @@ impl TargetWorker {
                         Some("run cancelled by Lemma; the agent did not stop on request".to_owned())
                     } else {
                         authentication_hint(&adapter_name, &raw)
+                            .or_else(|| usage_limit_message(&adapter_name, &redact_error(&raw)))
                             .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)))
                     };
                     // Rewriting an internal error does not mean the text it
-                    // interrupted was an error. Drop only a proven duplicate.
-                    let supersedes =
-                        rewritten.is_some() && callbacks.stream_matches_failure(&raw)?;
+                    // interrupted was an error. Drop only a proven duplicate:
+                    // the streamed text, with or without the structured data
+                    // the error carries after it. A usage limit is retryable,
+                    // and a leftover copy of it would take Retry away.
+                    let supersedes = rewritten.is_some()
+                        && (callbacks.stream_matches_failure(&raw)?
+                            || callbacks.stream_matches_failure(without_error_data(&raw))?);
                     let message = rewritten.unwrap_or_else(|| redact_error(&raw));
                     terminal_failure_detail(
                         &journal,

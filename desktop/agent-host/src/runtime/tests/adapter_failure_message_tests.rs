@@ -239,3 +239,60 @@ fn an_unfamiliar_failure_is_left_exactly_as_it_came() {
         assert!(authentication_hint("OpenCode", raw).is_none(), "{raw:?}");
     }
 }
+
+/// A coding agent out of quota is not broken, and a terminal will not help.
+///
+/// Verbatim shape from Claude Code: an internal error whose structured data
+/// names the kind. The kind decides it, not the wording.
+#[test]
+fn an_agent_at_its_usage_limit_is_told_when_it_resets() {
+    let raw = concat!(
+        "Internal error: You've hit your session limit · resets 2pm (Asia/Calcutta): ",
+        r#"{"errorKind": "rate_limit"}"#
+    );
+
+    let message = super::usage_limit_message("Claude Code", raw).expect("a usage limit");
+
+    assert!(
+        message.starts_with("Claude Code has reached its usage limit on this computer"),
+        "{message}"
+    );
+    assert!(message.contains("resets 2pm (Asia/Calcutta)"), "{message}");
+    assert!(message.contains("another runtime"), "{message}");
+    assert!(!message.contains("terminal"), "{message}");
+    assert!(!message.contains("errorKind"), "no adapter internals");
+    assert!(
+        super::authentication_hint("Claude Code", raw).is_none(),
+        "not a sign-in problem"
+    );
+}
+
+#[test]
+fn a_usage_limit_is_recognised_by_its_kind_whatever_it_says() {
+    // Pretty-printed data, as an ACP error formats it, and no reset time.
+    let raw = "Internal error: quota gone: {\n  \"errorKind\": \"usage_limit\"\n}";
+    let message = super::usage_limit_message("OpenCode", raw).expect("a usage limit");
+    assert!(message.contains("Try again once it resets"), "{message}");
+
+    // The same words with another kind, or none, are not a usage limit.
+    assert!(
+        super::usage_limit_message(
+            "Codex",
+            r#"Internal error: resets later: {"errorKind": "authentication_failed"}"#
+        )
+        .is_none()
+    );
+    assert!(super::usage_limit_message("Codex", "You've hit your session limit").is_none());
+}
+
+#[test]
+fn the_structured_data_is_cut_from_the_message() {
+    assert_eq!(
+        super::without_error_data(r#"Internal error: limit hit: {"errorKind": "rate_limit"}"#),
+        "Internal error: limit hit"
+    );
+    assert_eq!(
+        super::without_error_data("plain {not json"),
+        "plain {not json"
+    );
+}

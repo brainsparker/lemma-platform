@@ -39,6 +39,7 @@ from app.modules.datastore.tests.e2e.change_log_support import (
     runs,
 )
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio, pytest.mark.drives_work]
 
@@ -70,7 +71,16 @@ async def test_a_lower_seq_that_commits_last_is_not_skipped(pod_api: DatastoreAp
 
         await slow_txn.commit()
 
-    page = await read_after(pod_id, cursor)
+    # Both are final once every transaction older than them has ended, and
+    # that horizon is the whole database's: on a shared e2e database another
+    # test's transaction can hold it for a moment after this commit.
+    page = await eventually(
+        label="the slow and fast changes become final",
+        probe=lambda: read_after(pod_id, cursor),
+        done=lambda read: bool(read.changes),
+        timeout_seconds=15,
+        interval_seconds=0.1,
+    )
     assert [change.record_id for change in page.changes] == ["slow", "fast"]
 
 

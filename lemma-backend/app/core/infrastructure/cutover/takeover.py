@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -71,12 +72,14 @@ def owed_predicate(route: LegacyRoute) -> str:
     )
 
 
-def _take_over(route: LegacyRoute, source: str) -> str:
-    """``source`` yields ``o(id, event_type, payload, occurred_at)``."""
+def _take_over(route: LegacyRoute, source: str, *, since: bool = False) -> str:
+    """``source`` yields ``o(id, event_type, payload, occurred_at)``;
+    ``since``: only rows that occurred from ``:since`` on."""
+    window = "AND o.occurred_at >= CAST(:since AS timestamptz)" if since else ""
     return f"""
 WITH owed AS (
     SELECT o.id, o.event_type, o.payload, o.occurred_at FROM {source}
-    WHERE {owed_predicate(route)}
+    WHERE {owed_predicate(route)} {window}
     ORDER BY o.occurred_at, o.id
     LIMIT CAST(:limit AS integer)
 ), taken AS (
@@ -119,17 +122,25 @@ async def take_over(
     *,
     routes: Sequence[LegacyRoute] = ROUTES,
     limit: int = 5_000,
+    since: datetime | None = None,
 ) -> dict[str, int]:
     """One batch per route from the main outbox; items written per route.
 
+    ``since`` narrows the scan to rows that occurred from then on: after a
+    full pass, what can newly become owed is what the previous release is
+    still writing. (A row a live old worker had claimed becomes owed only if
+    that worker died with it; the final pass, which is full, takes those.)
     Runs on ``session``'s transaction; the caller commits.
     """
     await session.execute(ENSURE_QUEUE)
     taken: dict[str, int] = {}
     for route in routes:
+        params = _params(route, limit)
+        if since is not None:
+            params["since"] = since
         result = await session.execute(
-            text(_take_over(route, "domain_event_outbox o")),
-            {**_params(route, limit)},
+            text(_take_over(route, "domain_event_outbox o", since=since is not None)),
+            params,
         )
         count = int(getattr(result, "rowcount", 0) or 0)
         if count:

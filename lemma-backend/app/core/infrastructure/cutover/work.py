@@ -87,6 +87,7 @@ BATCH = 5_000
 #: taken to be gone: longer than a rolling deploy's slowest step.
 QUIET_SECONDS = 600
 POLL_SECONDS = 30
+SINCE_SLACK = timedelta(minutes=5)
 _TABLES = ("domain_event_outbox", "domain_event_inbox")
 
 
@@ -98,6 +99,8 @@ class LegacyEvent(BaseModel):
 class SweepState(BaseModel):
     quiet_seconds: int = QUIET_SECONDS
     poll_seconds: int = POLL_SECONDS
+    #: After a full pass, later passes read only rows that occurred from here.
+    since: datetime | None = None
     #: Per other outbox: how far its rows have been read ([occurred_at, id]).
     cursors: dict[str, list[str]] = Field(default_factory=dict)
 
@@ -136,10 +139,21 @@ async def run_legacy_event(ctx: JobContext, payload: LegacyEvent) -> None:
 
 
 async def run_sweep(ctx: JobContext, state: SweepState) -> None:
+    taken: dict[str, int] = {}
+    last = None
     async with ctx.checkpoint() as uow:
         present = await legacy_tables_present(uow.session)
-        taken = await take_over(uow.session, limit=BATCH) if present else {}
-        last = await last_activity(uow.session) if present else None
+        if present:
+            newest_row = await uow.session.scalar(
+                text("SELECT max(occurred_at) FROM domain_event_outbox")
+            )
+            taken = await take_over(uow.session, limit=BATCH, since=state.since)
+            last = await last_activity(uow.session)
+            if newest_row is not None and not _full(taken):
+                # Everything that occurred before this pass began is taken
+                # over (no route filled its batch); a few minutes of slack for
+                # rows committed after others that occurred later.
+                state.since = newest_row - SINCE_SLACK
     other_taken, other_last = await _sweep_other_outboxes(ctx, state, final=False)
     busy = sum(taken.values()) + other_taken
     if busy:
@@ -150,17 +164,23 @@ async def run_sweep(ctx: JobContext, state: SweepState) -> None:
     )
     # A full batch means more is waiting now; otherwise, once quiet, the last
     # take-over happens under the lock in ``finish``.
-    if busy >= BATCH or not quiet:
+    full = _full(taken) or other_taken >= BATCH
+    if full or not quiet:
         async with ctx.complete_work() as uow:
             await WorkWriter.of(uow).add(
                 LEGACY_SWEEP,
                 SYSTEM_NAMESPACE,
                 state,
                 dedup_key=LEGACY_SWEEP,
-                delay=timedelta(seconds=0 if busy >= BATCH else state.poll_seconds),
+                delay=timedelta(seconds=0 if full else state.poll_seconds),
             )
         return
     await finish(ctx, state)
+
+
+def _full(taken: dict[str, int]) -> bool:
+    """Some route filled its batch: more is waiting right now."""
+    return any(count >= BATCH for count in taken.values())
 
 
 async def finish(ctx: JobContext, state: SweepState) -> None:

@@ -167,6 +167,23 @@ async def test_an_install_with_owed_deliveries_upgrades_in_one_step() -> None:
                 assert await take_over(AsyncSession(bind=conn)) == {}, (
                     "the second pass finds nothing"
                 )
+            # What the previous release writes meanwhile is found by a pass
+            # that reads only from its watermark on.
+            async with engine.begin() as conn:
+                await outbox_row(conn, event("pod.join_request.requested"))
+                await outbox_row(conn, event("pod.member.removed"), occurred_at=old)
+            async with engine.begin() as conn:
+                since = datetime.now(UTC) - timedelta(minutes=5)
+                assert await take_over(AsyncSession(bind=conn), since=since) == {
+                    "pod.join-request-email": 1
+                }
+            async with engine.begin() as conn:
+                # The final pass reads everything.
+                assert await take_over(AsyncSession(bind=conn)) == {
+                    "agent-surfaces.pod-member-removed": 1
+                }
+            expected["pod.join-request-email"] += 1
+            expected["agent-surfaces.pod-member-removed"] += 1
         finally:
             await engine.dispose()
 

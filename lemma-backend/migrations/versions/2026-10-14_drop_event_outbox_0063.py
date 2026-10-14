@@ -98,6 +98,18 @@ def upgrade() -> None:
     if _empty("domain_event_outbox") and _empty("domain_event_inbox"):
         op.execute(sa.text("DROP TABLE IF EXISTS domain_event_inbox"))
         op.execute(sa.text("DROP TABLE IF EXISTS domain_event_outbox"))
+        return
+    # The sweep reads owed rows per event type, oldest first; the old
+    # transport never needed that order. Concurrently: the previous release
+    # is still writing the table.
+    with op.get_context().autocommit_block():
+        op.create_index(
+            "ix_domain_event_outbox_cutover",
+            "domain_event_outbox",
+            ["event_type", "occurred_at"],
+            postgresql_concurrently=True,
+            if_not_exists=True,
+        )
 
 
 def downgrade() -> None:

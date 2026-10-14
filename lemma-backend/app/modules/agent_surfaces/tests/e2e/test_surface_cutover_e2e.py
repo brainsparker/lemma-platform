@@ -56,7 +56,6 @@ pytestmark = [
 ]
 
 
-
 @pytest.fixture(autouse=True)
 def _worker_registrations() -> None:
     """Every module's converters and fact subscribers, as a worker has them."""
@@ -64,6 +63,7 @@ def _worker_registrations() -> None:
     from app.core.registry.installed import OSS_MODULES
 
     register_worker_modules(OSS_MODULES)
+
 
 CONSUMER = "agent-surfaces.webhook"
 

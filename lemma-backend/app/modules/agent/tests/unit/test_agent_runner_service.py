@@ -112,6 +112,8 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
     )
     publish_usage = AsyncMock()
     monkeypatch.setattr(service.finalizer, "publish_usage", publish_usage)
+    followups = AsyncMock()
+    monkeypatch.setattr(service.finalizer, "stage_followups", followups)
     identity = RunIdentity(
         conversation_id=UUID("00000000-0000-0000-0000-000000000101"),
         agent_run_id=UUID("00000000-0000-0000-0000-000000000102"),
@@ -150,6 +152,10 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
     assert publish.await_count == 1
     assert publish.await_args.args[1]["type"] == "completed"
     publish_usage.assert_awaited_once()
+    # Every follow-up is written in the transaction that ended the run.
+    followups.assert_awaited_once()
+    assert followups.await_args.args == (uow,)
+    assert followups.await_args.kwargs["finish"] is finish_result
 
 
 @pytest.mark.asyncio

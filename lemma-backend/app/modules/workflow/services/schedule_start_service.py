@@ -196,12 +196,7 @@ class ScheduleStartService:
         source_occurred_at: datetime | None = None,
     ) -> None:
         # 1. A wake for one already-suspended execution, rather than a schedule.
-        if await self._dispatch_wake(
-            payload=payload,
-            user_id=user_id,
-            metadata=metadata,
-            llm_output=llm_output,
-        ):
+        if self._is_stale_wake(payload):
             return
 
         # 2. A schedule targeting a workflow or agent.
@@ -237,7 +232,7 @@ class ScheduleStartService:
             return
         if not schedule.has_target:
             # An internal schedule is a wait timer and never had a target; if
-            # `_dispatch_wake` did not claim it there is nothing to record.
+            # `_is_stale_wake` did not claim it there is nothing to record.
             # A schedule a person made always had one -- creation refuses
             # without it -- so a missing target means the workflow or agent was
             # deleted out from under it. PS-SCHED-030: record the firing as
@@ -445,55 +440,17 @@ class ScheduleStartService:
             llm_output=llm_output or {},
         )
 
-    async def _dispatch_wake(
-        self,
-        *,
-        payload: dict,
-        user_id: UUID | str | None,
-        metadata: dict | None,
-        llm_output: dict | None,
-    ) -> bool:
-        """Route a timer that resumes something already waiting. True if handled.
+    @staticmethod
+    def _is_stale_wake(payload: dict) -> bool:
+        """Absorb a timer fire for something already waiting. True if handled.
 
-        Only a waiting conversation's timer still arrives this way; a suspended
-        workflow run's is a work item.
+        Neither kind arrives this way any more: a suspended workflow run's
+        timer is a ``workflow.resume`` item and a waiting conversation's an
+        ``agent.wait.fire`` item, and each cutover wrote one for every wait
+        that was active. A fire the old poller published before the deploy is
+        already covered by those, so it is dropped here rather than routed.
         """
-        if payload.get("conversation_id"):
-            await self._resolve_conversation_wait(external_ref=payload.get("wait_ref"))
-            return True
-        if payload.get("workflow_run_id"):
-            # A workflow timer fired by the old poller. Timers are
-            # ``workflow.resume`` items now, and the cutover wrote one for every
-            # wait that was active, so this one is already covered.
-            return True
-        return False
-
-    async def _resolve_conversation_wait(self, *, external_ref: str | None) -> None:
-        """Hand a fired conversation wait to the agent module to interpret.
-
-        `resolve`, not `wake`: only a TIME wait means "your time is up" when its
-        timer fires. For the others the timer is a *check* — has the process
-        exited, has the child finished — and may well end in the wait re-arming
-        itself rather than the agent waking at all. This file deliberately does
-        not know which; the branch belongs in the module that owns the wait.
-        """
-        if not external_ref:
-            logger.debug("workflow.schedule_start_service.wait_fire_no_ref.observed")
-            return
-        from app.modules.agent.infrastructure.wait_repository import (
-            AgentConversationWaitRepository,
-        )
-        from app.modules.agent.services.wait_wake_service import AgentWaitService
-
-        wait = await AgentConversationWaitRepository(
-            self._uow
-        ).find_active_by_external_ref(external_ref)
-        if wait is None:
-            # Already resolved by the reconciliation sweep, cancelled, or long
-            # gone. Duplicate and stale timer fires are no-ops by construction.
-            logger.debug("workflow.schedule_start_service.wait_fire_stale.observed")
-            return
-        await AgentWaitService(self._uow).resolve(wait=wait)
+        return bool(payload.get("conversation_id") or payload.get("workflow_run_id"))
 
     async def _start_workflow_for_schedule(
         self,

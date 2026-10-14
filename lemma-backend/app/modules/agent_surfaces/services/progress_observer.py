@@ -43,8 +43,14 @@ from app.modules.agent_surfaces.services.progress_plan import (
     plan_from_event,
 )
 from app.modules.agent_surfaces.services.progress_reply import (
+    TAKEN,
+    DeliveryReplyLedger,
+    ReplyClaim,
+    ReplyLedger,
+    claim_reply,
     deliver_final_answer,
     deliver_run_error,
+    settle_reply,
 )
 from app.modules.agent_surfaces.services.token_stream import TokenStreamMixin
 from app.modules.agent_surfaces.services.progress_events import (
@@ -115,9 +121,15 @@ class SurfaceAgentRunProgressObserver(
         *,
         uow_factory: UnitOfWorkFactory,
         egress_factory: Callable[[SqlAlchemyUnitOfWork], SurfaceEgress],
+        reply_ledger: ReplyLedger | None = None,
     ) -> None:
         self.uow_factory = uow_factory
         self.egress_factory = egress_factory
+        # Where the run's one reply is claimed before it is sent: the row the
+        # finished run wrote as a backstop, so only one of the two sends it.
+        self.reply_ledger: ReplyLedger = reply_ledger or DeliveryReplyLedger(
+            uow_factory
+        )
         self._typing_task: asyncio.Task[None] | None = None
         self._last_text_progress_at = 0.0
         self._last_text_progress: str | None = None
@@ -129,10 +141,13 @@ class SurfaceAgentRunProgressObserver(
         self._buffered_text: str | None = None
         self._reset_text_on_next = False
         self._final_delivered = False
-        # The reply was attempted and did not go out. The run's held files stay
-        # for the deferred retry of that reply (`owed_reply`) instead of being
-        # discarded with the run.
+        # The reply was attempted, did not go out, and is retried by the
+        # destination pump: the run's held files stay for that retry instead of
+        # being discarded with the run.
         self._final_send_failed = False
+        # This run's ``surface_deliveries`` row, once claimed for sending here
+        # -- or ``TAKEN`` when the backstop got there first.
+        self._reply_claim: ReplyClaim | None = None
         # Whose held files this observer's replies carry; set from the run's
         # context, which is the only place the run's id is known.
         self._run_files = RunFiles(None)
@@ -289,6 +304,15 @@ class SurfaceAgentRunProgressObserver(
         message = (self._final_answer_text or self._buffered_text or "").strip()
         if not message:
             return False
+        # The reply is claimed before the stream is closed with it: closing it
+        # *is* the send, and the backstop the finished run wrote must not send
+        # it a second time. Taken by the backstop already, the stream is only
+        # closed (the caller clears it) and the answer is theirs to send.
+        claim = await claim_reply(self, conversation, text=message, purpose="answer")
+        if claim == TAKEN:
+            self._final_delivered = True
+            self._final_send_failed = True
+            return False
         # Whatever already streamed is on screen. Send only what is left, or the
         # user reads the answer twice.
         if self._streamed_text:
@@ -322,6 +346,7 @@ class SurfaceAgentRunProgressObserver(
             return False
         if not delivered:
             return False
+        await settle_reply(self, conversation, delivered=True)
         self._progress_handle = None
         self._final_delivered = True
         return True
@@ -381,8 +406,8 @@ class SurfaceAgentRunProgressObserver(
         # Anything display_resource held for a single reply belongs to this run,
         # and is released with the reply that carried it. It is discarded here
         # only when nothing is left to recover: a reply that failed to send keeps
-        # its files, under this run's key, for the deferred retry `owed_reply`
-        # makes of a transient failure -- which discards them when it is done.
+        # its files, under this run's key, for the destination pump's retry of
+        # a transient failure -- which discards them when it is done.
         # No other run reads them, and a reply nobody retries lets them expire.
         if not self._final_send_failed:
             await discard_display_paths(conversation.id, self._run_files)

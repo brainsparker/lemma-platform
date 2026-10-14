@@ -39,7 +39,6 @@ class ConversationPauses:
         decision: AgentRunApprovalDecision,
         response: dict[str, object] | None = None,
         agent_name: str | None = None,
-        defer_reconciliation: bool = False,
     ) -> ApprovalResolution:
         """Record the user's decision and resume the paused agent run.
 
@@ -71,7 +70,6 @@ class ConversationPauses:
             decision=decision,
             response=response,
             agent_name=agent_name,
-            defer_reconciliation=defer_reconciliation,
         )
 
     async def resolve_user_approval_internal(
@@ -84,7 +82,6 @@ class ConversationPauses:
         decision: AgentRunApprovalDecision,
         response: dict[str, object] | None = None,
         agent_name: str | None = None,
-        defer_reconciliation: bool = False,
     ) -> ApprovalResolution:
         """Resume a paused run for an already-authorized + loaded conversation.
 
@@ -100,7 +97,6 @@ class ConversationPauses:
             decision=decision,
             response=response,
             agent_name=agent_name,
-            defer_reconciliation=defer_reconciliation,
         )
 
     async def get_pending_ask_user(

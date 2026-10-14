@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.tests.unit.surface_doubles import MemoryReplyLedger
 from app.modules.agent_surfaces.domain.models import (
     ProgressHandle,
     ProgressHandleKind,
@@ -124,6 +125,7 @@ def _observer(service: _SurfaceService) -> SurfaceAgentRunProgressObserver:
     return SurfaceAgentRunProgressObserver(
         uow_factory=_UowFactory(),
         egress_factory=lambda _uow: service,
+        reply_ledger=MemoryReplyLedger(),
     )
 
 

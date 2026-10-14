@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 import fakeredis
 import pytest
 
+from app.modules.agent_surfaces.tests.unit.surface_doubles import MemoryReplyLedger
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.caches import (
@@ -209,7 +210,9 @@ def _email_world(conversation_id: UUID):
 
 def _observer_for(egress) -> SurfaceAgentRunProgressObserver:
     return SurfaceAgentRunProgressObserver(
-        uow_factory=_UowFactory(), egress_factory=lambda _uow: egress
+        uow_factory=_UowFactory(),
+        egress_factory=lambda _uow: egress,
+        reply_ledger=MemoryReplyLedger(),
     )
 
 

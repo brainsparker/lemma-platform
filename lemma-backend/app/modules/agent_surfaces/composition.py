@@ -237,7 +237,7 @@ def build_surface_ingress(uow: SqlAlchemyUnitOfWork) -> AgentSurfaceIngressServi
 def build_surface_turn_starter(uow_factory: UnitOfWorkFactory) -> SurfaceTurnStarter:
     """The worker's half: scope your own short units of work around long I/O.
 
-    `process_surface_message` runs platform APIs, file ingest and voice
+    `surface.ingest` runs platform APIs, file ingest and voice
     transcription before it writes anything, and none of that may hold a pooled
     connection. This used to be the same class as `build_surface_ingress`,
     handed a factory instead of a session, with seven collaborators left `None`.

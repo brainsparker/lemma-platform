@@ -38,7 +38,7 @@ test_redis_url = e2e_fixtures.test_redis_url
 #: the point: the reaper only ever looks at `owned_streams()`, so a test that
 #: replaced that set would prove nothing about which streams it actually visits.
 _STREAM = "agent_events"
-_LIVE = "agent-events"
+_LIVE = "analytics-agent"
 _DEAD = "reaper-probe-abandoned"
 _WINDOW = 3600
 

@@ -394,6 +394,9 @@ async def test_a_failed_run_on_email_says_so_instead_of_vanishing() -> None:
     observer = SurfaceAgentRunProgressObserver.__new__(SurfaceAgentRunProgressObserver)
     observer._error_delivered = False
     observer._run_error_text = "I couldn't finish that request."
+    # No run to key the reply by: it goes out unrecorded.
+    observer._reply_claim = None
+    observer._run_files = SimpleNamespace(agent_run_id=None)
     sent: list[str] = []
     observer._send_agent_message = AsyncMock(  # type: ignore[method-assign]
         side_effect=lambda **kwargs: sent.append(kwargs["message"])

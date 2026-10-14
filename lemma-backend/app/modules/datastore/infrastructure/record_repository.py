@@ -210,7 +210,14 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         *,
         event_factory: RecordEventFactory | None = None,
+        existing_on_conflict: bool = False,
     ) -> RecordEntity:
+        """Insert one row; ``existing_on_conflict`` returns the row a repeat hits.
+
+        With it, a create whose primary key is already taken is not an error:
+        it is the same create again (``services/record_idempotency``), and the
+        stored row comes back with no second change event.
+        """
         converted_data = convert_record(ctx.columns, data, skip_auto=False)
         if event_factory is not None:
             await ensure_datastore_event_outbox()
@@ -223,9 +230,15 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             columns.append(f'"{key}"')
             placeholders.append(f":{key}")
 
+        conflict = (
+            f'ON CONFLICT ("{ctx.primary_key_column}") DO NOTHING '
+            if existing_on_conflict and ctx.primary_key_column in values
+            else ""
+        )
         sql = (
             f'INSERT INTO "{ctx.schema_name}"."{ctx.table_name}" '
-            f"({', '.join(columns)}) VALUES ({', '.join(placeholders)}) RETURNING *"
+            f"({', '.join(columns)}) VALUES ({', '.join(placeholders)}) "
+            f"{conflict}RETURNING *"
         )
 
         try:
@@ -236,12 +249,24 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                     )
                 result = await session.execute(text(sql), values)
                 row = result.fetchone()
+                created = row is not None
+                if row is None and conflict:
+                    row = (
+                        await session.execute(
+                            text(
+                                f'SELECT * FROM "{ctx.schema_name}".'
+                                f'"{ctx.table_name}" '
+                                f'WHERE "{ctx.primary_key_column}" = :pk'
+                            ),
+                            {"pk": values[ctx.primary_key_column]},
+                        )
+                    ).fetchone()
 
                 if not row:
                     raise DatastoreInfrastructureError("Failed to create record")
 
                 entity = self._row_to_entity(dict(row._mapping), ctx)
-                if event_factory is not None:
+                if event_factory is not None and created:
                     await stage_domain_events(session, [event_factory(entity)])
                 await session.commit()
                 return entity

@@ -376,7 +376,6 @@ async def resolve_pending_interaction(
     pod_id: UUID | None = None,
     decision: AgentRunApprovalDecision,
     response: dict[str, object] | None = None,
-    defer_reconciliation: bool = True,
 ) -> ApprovalResolution | None:
     """Record a person's decision and resume the run it paused.
 
@@ -396,8 +395,9 @@ async def resolve_pending_interaction(
     Skips the authorization the HTTP entry point does, exactly as the service
     method it replaces did: a surface has already matched the person who tapped
     against the conversation's owner, and it is holding a webhook deadline while
-    it does. ``defer_reconciliation`` is on by default for the same reason --
-    an approved command outlives the webhook that approved it.
+    it does. An approved command outlives the webhook that approved it, so it
+    is a worker's: the decision commits with its ``agent.approval.execute``
+    item and the status comes back ``"queued"``.
 
     ``pod_id`` is optional because the conversation is loaded here anyway and
     knows its own pod. A caller that holds one passes it; one that holds only
@@ -414,7 +414,6 @@ async def resolve_pending_interaction(
         pod_id=pod_id if pod_id is not None else entity.pod_id,
         decision=decision,
         response=response or {},
-        defer_reconciliation=defer_reconciliation,
     )
 
 

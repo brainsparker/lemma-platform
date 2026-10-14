@@ -35,8 +35,6 @@ TEAMS_CONSENT_NONCES = CacheNamespace("surface:teams-consent-nonce", 3600)
 TEAMS_CONSENT_CHECKS = CacheNamespace("surface:teams-consent", 60)
 WHATSAPP_SENT_MESSAGES = CacheNamespace("surface:whatsapp-sent", 7 * _DAY)
 PENDING_DISPLAY_PATHS = CacheNamespace("surface:pending-display-paths", 6 * 60 * 60)
-OWED_REPLY_CLAIMS = CacheNamespace("surface:owed-reply", 2 * _DAY)
-HELD_REPLY_CLAIMS = CacheNamespace("surface:held-reply", 2 * _DAY)
 INGESTED_ATTACHMENTS = CacheNamespace("surface:ingested", _DAY)
 WEB_WIDGET_KEYS = CacheNamespace("web-widget:key", 60)
 

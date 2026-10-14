@@ -48,7 +48,6 @@ ALLOWED_BOOT_HOOKS: dict[str, str] = {
         "reads only schedules already past the failure threshold, which the "
         "breaker keeps near empty"
     ),
-    "worker:schedule._schedule_poller": "starts one background poller task",
     "worker:agent._report_system_model_pricing": (
         "compares the static model catalog with the static price table"
     ),

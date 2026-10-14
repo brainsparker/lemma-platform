@@ -635,7 +635,7 @@ class TestResolutionRouting:
     async def test_host_permissions_are_never_deferred_to_a_worker(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Deferral exists for tools that run for minutes. A queued command plus
+        """The worker is for tools that run for minutes. A queued command plus
         a wake-up is milliseconds, and someone is watching the agent wait."""
         dispatched: list = []
         service, repository, _ = self._service(monkeypatch, dispatched)
@@ -653,7 +653,6 @@ class TestResolutionRouting:
             user_id=conversation.user_id,
             pod_id=conversation.pod_id,
             decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            defer_reconciliation=True,
         )
 
         assert resolution.status == "resolved"

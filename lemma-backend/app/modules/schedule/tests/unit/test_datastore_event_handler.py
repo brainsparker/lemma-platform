@@ -28,7 +28,11 @@ class _Fired:
     async def __call__(self, uow, schedule, event) -> FireOutcome:
         del uow
         self.calls.append((schedule, event))
-        return FireOutcome.FILTERING if schedule.filter_instruction else FireOutcome.STARTED
+        return (
+            FireOutcome.FILTERING
+            if schedule.filter_instruction
+            else FireOutcome.STARTED
+        )
 
     @property
     def events(self) -> list[TriggerEvent]:
@@ -49,13 +53,19 @@ def _handler(schedules: list[ScheduleEntity]) -> tuple[DatastoreEventHandler, _F
     return DatastoreEventHandler(_Repository(schedules), fire=fired), fired
 
 
-def _schedule(table: str = "users", operations=("INSERT",), **overrides) -> ScheduleEntity:
+def _schedule(
+    table: str = "users", operations=("INSERT",), **overrides
+) -> ScheduleEntity:
     return ScheduleEntity(
         id=uuid4(),
         user_id=uuid4(),
         pod_id=uuid4(),
         schedule_type=ScheduleType.DATASTORE,
-        config={"table_name": table, "operations": list(operations), **overrides.pop("config", {})},
+        config={
+            "table_name": table,
+            "operations": list(operations),
+            **overrides.pop("config", {}),
+        },
         **overrides,
     )
 

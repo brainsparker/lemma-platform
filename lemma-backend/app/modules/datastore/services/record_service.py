@@ -30,6 +30,7 @@ from app.modules.datastore.services.record_validator import (
     convert_record,
 )
 from app.modules.datastore.services.sql_introspection import analyze_query
+from app.modules.datastore.services.record_idempotency import keyed_primary_key
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.record_query_scope import resolve_query_row_scope
 
@@ -171,13 +172,19 @@ class RecordService:
         ctx: TableContext,
         data: dict[str, Any],
         user_id: UUID,
+        *,
+        idempotency_key: str | None = None,
     ):
+        """Insert one record; ``idempotency_key`` makes a repeat return the first
+        (``services/record_idempotency``)."""
         await self._require_record_write(user_id=user_id, ctx=ctx, creates=True)
 
         validator = RecordValidator(ctx)
         sanitized_data = self._stamp_contact(
             ctx, validator.strip_system_write_overrides(data)
         )
+        if idempotency_key is not None:
+            sanitized_data = keyed_primary_key(ctx, sanitized_data, idempotency_key)
 
         is_valid, errors, error_details = validator.validate(
             sanitized_data, is_creation=True
@@ -199,6 +206,7 @@ class RecordService:
             sanitized_data,
             user_id,
             event_factory=event_factory,
+            **({"existing_on_conflict": True} if idempotency_key else {}),
         )
         if event_factory is not None:
             await self.events.dispatch()

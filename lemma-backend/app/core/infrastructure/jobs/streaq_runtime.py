@@ -53,9 +53,6 @@ from app.core.infrastructure.jobs.lane_watchdog import (
     watch_lanes,
 )
 from app.core.infrastructure.jobs.task_dump import install_task_dump_handler
-from app.core.infrastructure.jobs.job_liveness import (
-    register_job_liveness_middleware,
-)
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
@@ -207,23 +204,6 @@ _SECONDARY_LANE_SHUTDOWN_SECONDS = 10.0
 _SHUTDOWN_STEP_TIMEOUT_SECONDS = 5.0
 
 JOB_TIMEOUT_SECONDS = 1800
-# An agent run is the one task whose ceiling is not ours to pick freely: it
-# advertises a deadline to something outside this process (an Agent Host on a
-# user's machine). If the task dies first, Lemma reports the run failed while
-# the remote agent keeps executing tools for it. This must therefore stay above
-# the Agent Host run window (DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS) with
-# enough margin for the harness to cancel the host run and finalize.
-#
-# It used to also have to stay under the one-hour validity of the MCP
-# credential minted at dispatch. That stopped being true when the harness
-# started refreshing that credential mid-run, and the note saying otherwise
-# outlived the constraint it described -- long enough to hold every run to
-# fifty minutes for a reason that no longer applied.
-#
-# A task this long occupies an interactive-lane slot for its whole life. That
-# is affordable at the default concurrency of 50 and is the real thing to watch
-# if these runs ever become common.
-AGENT_RUN_JOB_TIMEOUT_SECONDS = 14700
 JOB_MAX_RETRIES = 3
 # Keep completed task metadata around long enough for the UI to be useful.
 JOB_RESULT_TTL_SECONDS = 60 * 60 * 24
@@ -581,7 +561,7 @@ def create_streaq_worker(
         # cancellation. Lets an interrupted agent run finalize its status in the
         # DB (via the shielded finalization in AgentRunnerService.execute) before
         # worker_lifespan's finally disposes the engine — otherwise the run can
-        # be left stuck in RUNNING. Backstopped by reconcile_orphaned_agent_runs.
+        # be left stuck in RUNNING. Backstopped by the agent turn's own lease.
         grace_period=settings.worker_shutdown_grace_period_seconds,
     )
 
@@ -803,11 +783,10 @@ def _register_observability_middleware(
     registered = worker.middleware(observability_context_middleware)
 
 
-# Every lane gets the same two wrappers — a job must be traced the same way, and
-# must report the same liveness, regardless of which queue carried it.
+# Every lane gets the same wrapper — a job must be traced the same way
+# regardless of which queue carried it.
 for _lane_worker in LANE_WORKERS.values():
     _register_observability_middleware(_lane_worker)
-    register_job_liveness_middleware(_lane_worker)
 
 
 def _register_lane(name: str | None, lane: Lane) -> None:

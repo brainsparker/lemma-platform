@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
 from uuid import uuid4
 
-from app.core.domain.events import DomainEvent
 from app.core.infrastructure.work import WorkClass
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.contracts.turns import (
@@ -13,44 +12,68 @@ from app.modules.agent.contracts.turns import (
     stage_agent_turn,
     turn_class_for,
 )
-from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.events import work_kinds
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
+from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
 
 
 class _Uow:
-    def __init__(self) -> None:
-        self.events: list[DomainEvent] = []
-
-    def collect_events(self, events: Sequence[DomainEvent]) -> None:
-        self.events.extend(events)
+    def __init__(self, *, title: str | None = "A title") -> None:
+        self.session = RecordingWorkSession(title=title)
 
 
-def _start() -> AgentTurnStart:
+def _start(**changes: object) -> AgentTurnStart:
     return AgentTurnStart(
-        conversation_id=uuid4(), run_id=uuid4(), pod_id=uuid4(), user_id=uuid4()
+        conversation_id=uuid4(),
+        run_id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        **changes,  # type: ignore[arg-type]
     )
 
 
-async def test_stage_agent_turn_hands_the_run_to_the_existing_dispatch() -> None:
+async def test_stage_agent_turn_writes_the_turn_in_the_callers_transaction() -> None:
     uow = _Uow()
     run = _start()
 
     await stage_agent_turn(uow, run)  # type: ignore[arg-type]
 
-    [event] = uow.events
-    assert isinstance(event, AgentRunStartedEvent)
-    assert (event.agent_run_id, event.conversation_id) == (
-        run.run_id,
-        run.conversation_id,
-    )
+    turn = uow.session.item(work_kinds.AGENT_TURN)
+    assert turn["ns"] == f"pod:{run.pod_id}"
+    assert turn["cls"] == "interactive"
+    assert turn["dedup_key"] == work_kinds.turn_key(run.run_id)
+    assert turn["concurrency_key"] == f"conversation:{run.conversation_id}"
+    assert turn["concurrency_limit"] == 1
+    assert json.loads(turn["payload"])["run_id"] == str(run.run_id)
+    # A conversation that already has a title gets no title job.
+    assert uow.session.kinds() == [work_kinds.AGENT_TURN]
+
+
+async def test_an_untitled_conversation_gets_its_title_item() -> None:
+    uow = _Uow(title=None)
+    run = _start()
+
+    await stage_agent_turn(uow, run)  # type: ignore[arg-type]
+
+    title = uow.session.item(work_kinds.AGENT_TITLE)
+    assert title["dedup_key"] == work_kinds.title_key(run.conversation_id)
+    assert title["cls"] == "automation"
+
+
+async def test_an_automation_turn_lands_in_the_automation_class() -> None:
+    uow = _Uow()
+
+    await stage_agent_turn(uow, _start(origin="schedule"))  # type: ignore[arg-type]
+
+    turn = uow.session.item(work_kinds.AGENT_TURN_AUTOMATION)
+    assert turn["cls"] == "automation"
 
 
 async def test_stage_agent_turn_honours_an_inline_caller() -> None:
     uow = _Uow()
     with suppress_agent_run_enqueue():
         await stage_agent_turn(uow, _start())  # type: ignore[arg-type]
-    assert uow.events == []
+    assert uow.session.items == []
 
 
 def test_automation_origins_run_in_the_automation_class() -> None:

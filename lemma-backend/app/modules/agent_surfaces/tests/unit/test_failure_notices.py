@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.exc import OperationalError
 
+from app.modules.agent_surfaces.tests.unit.surface_doubles import MemoryReplyLedger
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
 from app.modules.agent_surfaces.domain.entities import (
@@ -70,7 +71,9 @@ class _Egress:
 
 def _observer(egress: _Egress) -> SurfaceAgentRunProgressObserver:
     return SurfaceAgentRunProgressObserver(
-        uow_factory=_UowFactory(), egress_factory=lambda _uow: egress
+        uow_factory=_UowFactory(),
+        egress_factory=lambda _uow: egress,
+        reply_ledger=MemoryReplyLedger(),
     )
 
 

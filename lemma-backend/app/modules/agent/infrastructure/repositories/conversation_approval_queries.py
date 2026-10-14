@@ -9,7 +9,6 @@ repository that the approval reconciliation path uses on its own.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import Select, func, select, update
@@ -113,27 +112,18 @@ class ConversationApprovalQueriesMixin:
         )
         return result.scalar_one_or_none() is not None
 
-    async def approval_execution_claim_expired(
+    async def approval_execution_claimed(
         self,
         *,
         conversation_id: UUID,
         approval_id: str,
-        stale_after_seconds: int,
     ) -> bool:
-        """Whether this approval's execution claim is old enough to be dead.
-
-        Read against the database's clock for the same reason the claim is
-        written with it: a claim compared against a server whose clock has
-        drifted is not a claim. ``False`` for an unclaimed approval -- there is
-        nothing abandoned about a claim nobody took.
-        """
+        """Whether an executor ever took this approval's one-shot claim."""
         result = await self.session.execute(
             select(AgentApprovalDecisionModel.id).where(
                 AgentApprovalDecisionModel.conversation_id == conversation_id,
                 AgentApprovalDecisionModel.approval_id == approval_id,
                 AgentApprovalDecisionModel.execution_claimed_at.is_not(None),
-                AgentApprovalDecisionModel.execution_claimed_at
-                < func.now() - timedelta(seconds=stale_after_seconds),
             )
         )
         return result.scalar_one_or_none() is not None

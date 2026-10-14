@@ -297,18 +297,16 @@ class SurfaceInteractionMixin:
         # the claim used to be spent first, so a failure left the person's next
         # tap looking like a replay and being ignored in silence.
         #
-        # The connection goes back for it. This is a Redis round trip in the
-        # middle of the interaction path, and everything above it has only
-        # read -- the writes start below, so `safe_to_release` genuinely
-        # releases here rather than quietly declining.
-        async with connection_released(self.uow.session):
-            claimed = await self.event_dedup_store.claim_message(
-                surface_installation_id=surface.id,
-                platform=surface.surface_type,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_message_id=parsed.dedup_id,
-            )
+        # A durable claim on this request's own session: it commits with the
+        # answer it guards, and a failure that rolls the answer back takes the
+        # claim with it.
+        claimed = await self.event_dedup_store.claim_message(
+            surface_installation_id=surface.id,
+            platform=surface.surface_type,
+            external_channel_id=parsed.external_channel_id,
+            external_thread_id=parsed.external_thread_id,
+            external_message_id=parsed.dedup_id,
+        )
         if not claimed:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_interaction_ignored_replay_duplicate.observed",

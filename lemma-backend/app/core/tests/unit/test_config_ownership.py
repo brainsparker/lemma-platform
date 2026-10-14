@@ -150,7 +150,6 @@ def test_moved_settings_actually_arrived_on_their_new_class() -> None:
     from app.modules.apps.config import AppsSettings
     from app.modules.datastore.config import DatastoreSettings
     from app.modules.identity.config import IdentitySettings
-    from app.modules.schedule.config import ScheduleSettings
     from app.modules.usage.config import UsageSettings
     from app.modules.workflow.config import WorkflowSettings
     from app.modules.workspace.config import WorkspaceSettings
@@ -170,7 +169,6 @@ def test_moved_settings_actually_arrived_on_their_new_class() -> None:
         UsageSettings: {"usage_org_monthly_limit_usd"},
         WorkspaceSettings: {"workspace_callback_api_url"},
         AppsSettings: {"app_branding_enabled"},
-        ScheduleSettings: {"schedule_poll_interval_seconds"},
         DatastoreSettings: {"e2e_disable_worker_file_autoindex"},
     }
     for cls, fields in arrived.items():

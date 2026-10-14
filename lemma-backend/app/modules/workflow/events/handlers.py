@@ -1,10 +1,9 @@
 """The workflow module's remaining stream consumers, streaq tasks and crons.
 
-Function-step resumes, timers, decisions, expiries and admission are work items
-now (``run_work.py``, ``step_jobs.py``). What is left here moves in the next
-step of the cutover: AGENT-step resumes ride ``workflow-agent-events`` until the
-agent's finalize emits facts, and schedule fires ride ``workflow-schedule-events``
-until schedules write ``workflow.start``.
+Function-step and AGENT-step resumes, timers, decisions, expiries and admission
+are work items now (``run_work.py``, ``step_jobs.py``, ``agent_resume_work.py``).
+What is left here moves in the next step of the cutover: schedule fires ride
+``workflow-schedule-events`` until schedules write ``workflow.start``.
 """
 
 from datetime import datetime
@@ -35,17 +34,8 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_worker,
 )
 
-from app.modules.agent.domain.events import (
-    AGENT_EVENTS_STREAM,
-    AgentRunCompletedEvent,
-)
 from app.modules.schedule.domain.events.schedule import ScheduleFired
 from app.modules.workflow.api.dependencies import build_workflow_engine
-from app.modules.workflow.domain.wait import WorkflowRunWaitType
-from app.modules.workflow.infrastructure.repositories import (
-    SqlAlchemyWorkflowRunWaitRepository,
-)
-from app.modules.workflow.services.run_resume_service import RunResumeService
 from app.modules.workflow.services.schedule_start_service import ScheduleStartService
 from app.core.log.log import get_logger
 from app.modules.workflow.config import workflow_settings
@@ -62,82 +52,6 @@ def provide_job_queue() -> SharedStreaqJobQueue:
 
 def provide_uow_factory() -> UnitOfWorkFactory:
     return SessionUnitOfWorkFactory(async_session_maker)
-
-
-@reliable_redis_stream_subscriber(
-    router,
-    AGENT_EVENTS_STREAM,
-    group="workflow-agent-events",
-    consumer="workflow-agent-events-consumer",
-)
-async def handle_agent_run_event(
-    event: dict,
-    fs_logger: Logger,
-    job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
-):
-    """Handle completed agent executions for workflow resumption."""
-
-    if event.get("event_type") != AgentRunCompletedEvent.get_event_type():
-        return
-
-    async def process() -> None:
-        parsed = AgentRunCompletedEvent.model_validate(event)
-        async with uow_factory() as uow:
-            waiting = await SqlAlchemyWorkflowRunWaitRepository(
-                uow
-            ).find_active_by_external_ref(
-                WorkflowRunWaitType.AGENT, str(parsed.conversation_id)
-            )
-        if waiting is None:
-            logger.debug(
-                "workflow.handlers.ignoring_agentruncompleted_non_workflow_conversation.observed",
-                conversation_id=parsed.conversation_id,
-            )
-            return
-
-        await job_queue.enqueue(
-            "resume_workflow_run_for_agent",
-            agent_conversation_id=str(parsed.conversation_id),
-            _job_id=f"workflow-resume-agent:{parsed.agent_run_id}",
-        )
-
-    await inbox.process("workflow.agent-resume", event, process)
-
-
-@streaq_task(name="resume_workflow_run_for_agent")
-async def resume_workflow_run_for_agent(
-    agent_conversation_id: str,
-    attempt: int | None = None,
-):
-    """Resume a workflow waiting for an agent conversation execution."""
-    worker_ctx: AppWorkerContext = streaq_worker.context
-
-    _ = attempt
-    logger.debug(
-        "workflow.handlers.job_resuming_workflow_run_waiting.observed",
-        agent_conversation_id=agent_conversation_id,
-    )
-
-    async with worker_ctx.uow() as uow:
-        service = RunResumeService(build_workflow_engine(uow))
-        await service.resume_for_agent_conversation(
-            conversation_id=agent_conversation_id,
-        )
-
-
-@streaq_cron("1-59/5 * * * *", name="reconcile_workflow_waits")
-async def reconcile_workflow_waits():
-    """Self-heal AGENT waits whose completion event was lost, and expire hung ones.
-
-    Agent waits only: every other wait is woken or expired by the work items
-    written with it. This goes when agent finalize emits ``AgentRunFinished``.
-    """
-    worker_ctx: AppWorkerContext = streaq_worker.context
-    async with worker_ctx.uow() as uow:
-        service = RunResumeService(build_workflow_engine(uow))
-        await service.reconcile_stale_waits()
 
 
 @streaq_cron("41 * * * *", name="prune_workflow_run_waits")
@@ -172,24 +86,6 @@ async def prune_workflow_run_waits() -> None:
             "workflow.handlers.prune_workflow_run_waits.observed",
             deleted_count=deleted,
         )
-
-
-@streaq_cron("2-59/5 * * * *", name="reconcile_agent_waits")
-async def reconcile_agent_waits():
-    """Resolve waiting conversations whose scheduler event was lost.
-
-    Unlike an agent or function wait there is no external system to poll — a
-    timer only has to elapse — so a wait overdue by more than the sweep's grace
-    period is simply fired here. Waking is idempotent (the wake claims the row
-    under a lock), which makes a duplicate with the primary timer harmless.
-    """
-    from app.modules.agent.services.wait_reconcile_service import (
-        WaitReconcileService,
-    )
-
-    # Opens a session per step itself: one wait's failed wake must not roll back
-    # the transaction the rest of the batch is running in.
-    await WaitReconcileService().reconcile_due_waits()
 
 
 @streaq_cron("3-59/5 * * * *", name="expire_past_due_notifications")

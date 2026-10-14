@@ -17,6 +17,9 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
+from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (
+    SlackManagerRepository,
+)
 from app.modules.agent_surfaces.contracts.whatsapp import (
     deployment_owns_whatsapp_number,
 )
@@ -176,6 +179,7 @@ async def _slack_candidates(uow_factory: UnitOfWorkFactory, payload: dict):
         return await slack_candidates_for_workspace(
             service=get_surface_service(uow),
             team_id=slack_team_id(payload),
+            managers=SlackManagerRepository(uow.session),
             also_paused=is_uninstall_delivery(payload),
         )
 
@@ -208,7 +212,10 @@ async def _verify_inbound_request(
             api_app_id=slack_api_app_id(payload),
             candidates=await _slack_candidates(uow_factory, payload),
         )
-        return list(verified.receiver_surface_ids) or None
+        # An empty list is a real answer, not "unknown": Lemma's own app as a
+        # workspace's manager verifies with no teammate's surface receiving.
+        # None stays what it always meant, an unscoped fan-in.
+        return list(verified.receiver_surface_ids)
     await security_service.verify_platform_request(
         platform=platform,
         headers=headers,

@@ -25,6 +25,7 @@ from app.modules.agent_surfaces.domain.credentials import (
     ResendCredentials,
 )
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
@@ -174,7 +175,7 @@ class ResendPlatformService:
         if not email_id:
             raise AgentSurfaceValidationError("Resend receive requires an email id.")
         await assert_safe_api_base(self._api_base, platform="Resend")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with outbound_http(30.0) as client:
             response = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving/{email_id}",
                 headers={"Authorization": f"Bearer {self._api_key}"},
@@ -198,7 +199,7 @@ class ResendPlatformService:
         if after:
             params["after"] = after
         await assert_safe_api_base(self._api_base, platform="Resend")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with outbound_http(30.0) as client:
             response = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving",
                 headers={"Authorization": f"Bearer {self._api_key}"},
@@ -225,7 +226,7 @@ class ResendPlatformService:
             return None
 
         await assert_safe_api_base(self._api_base, platform="Resend")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with outbound_http(30.0) as client:
             described = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving/"
                 f"{email_id}/attachments/{attachment_id}",
@@ -366,7 +367,7 @@ class ResendPlatformService:
         idempotency_key = str(uuid4())
 
         async def post_email_once() -> dict[str, Any]:
-            async with httpx.AsyncClient(timeout=_SEND_TIMEOUT) as client:
+            async with outbound_http(_SEND_TIMEOUT) as client:
                 resp = await client.post(
                     f"{self._api_base.rstrip('/')}/emails",
                     json=payload,

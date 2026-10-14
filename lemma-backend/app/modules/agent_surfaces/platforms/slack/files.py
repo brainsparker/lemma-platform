@@ -19,8 +19,8 @@ from app.modules.agent_surfaces.domain.credentials import SlackCredentials
 
 import mimetypes
 
-import httpx
 from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 
 from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
@@ -103,7 +103,7 @@ class SlackFilesMixin:
         always send one, and a declared size is the sender's claim rather than a
         limit on what actually arrives.
         """
-        async with httpx.AsyncClient(timeout=60.0) as http_client:
+        async with outbound_http(60.0) as http_client:
             async with http_client.stream(
                 "GET",
                 url,
@@ -136,7 +136,7 @@ class SlackFilesMixin:
         )
         upload_url = str(upload_ticket["upload_url"])
         file_id = str(upload_ticket["file_id"])
-        async with httpx.AsyncClient(timeout=60.0) as http_client:
+        async with outbound_http(60.0) as http_client:
             upload_response = await http_client.post(
                 upload_url, files={"file": (file_name, file_bytes)}
             )

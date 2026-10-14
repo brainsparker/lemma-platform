@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import httpx
+
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 from app.modules.agent_surfaces.platforms.slack.reply_blocks import reply_blocks
 from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
@@ -296,7 +298,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
         if not response_url:
             return
         try:
-            async with httpx.AsyncClient(timeout=10.0) as http_client:
+            async with outbound_http(10.0) as http_client:
                 await http_client.post(
                     response_url,
                     json=slack_acknowledgement_body(

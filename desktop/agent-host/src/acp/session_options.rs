@@ -278,17 +278,29 @@ fn codex(
     }
     let server = mcp_server.and_then(codex_mcp_server);
     let mcp_server_in_environment = server.is_some();
-    if let Some((name, entry)) = server {
-        overrides.insert("mcp_servers".to_owned(), json!({ name: entry }));
-    }
     let mut environment = BTreeMap::new();
-    if !overrides.is_empty() {
+    if !overrides.is_empty() || server.is_some() {
         let mut config = adapter_environment
             .get("CODEX_CONFIG")
             .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
             .filter(Value::is_object)
             .unwrap_or_else(|| Value::Object(Map::new()));
         merge(&mut config, &Value::Object(overrides));
+        // Replaced whole, not merged: a pinned entry of the same name keeps
+        // none of its keys -- an `enabled: false` there would switch Lemma's
+        // server off for a run that no longer offers it through ACP either.
+        // Any other server in the pinned table stays.
+        if let (Some((name, entry)), Some(config)) = (server, config.as_object_mut()) {
+            let servers = config
+                .entry("mcp_servers".to_owned())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if !servers.is_object() {
+                *servers = Value::Object(Map::new());
+            }
+            if let Some(servers) = servers.as_object_mut() {
+                servers.insert(name, entry);
+            }
+        }
         environment.insert("CODEX_CONFIG".to_owned(), config.to_string());
     }
     SessionOptions {
@@ -659,6 +671,29 @@ mod tests {
             config["plugins"]["browser@openai-bundled"]["enabled"],
             json!(false)
         );
+
+        // A pinned entry of the same name is replaced whole -- its `enabled:
+        // false` would switch Lemma's server off -- and other servers stay.
+        let pinned = BTreeMap::from([(
+            "CODEX_CONFIG".to_owned(),
+            json!({ "mcp_servers": {
+                "lemma_tools": { "enabled": false, "command": "old" },
+                "theirs": { "command": "keep" },
+            } })
+            .to_string(),
+        )]);
+        let options = codex(&pinned, &no_web_tools(), Some(&bridge("lemma_tools")));
+        let config: Value = serde_json::from_str(&options.environment["CODEX_CONFIG"]).unwrap();
+        assert!(
+            config["mcp_servers"]["lemma_tools"]
+                .get("enabled")
+                .is_none()
+        );
+        assert_eq!(
+            config["mcp_servers"]["lemma_tools"]["tool_timeout_sec"],
+            1800
+        );
+        assert_eq!(config["mcp_servers"]["theirs"]["command"], "keep");
 
         // Not a key Codex's config takes: the server stays in the session.
         let options = codex(

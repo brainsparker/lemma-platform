@@ -20,11 +20,15 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.infrastructure.mcp import (
     LEMMA_MCP_SERVER_NAME,
+    MAX_LOCAL_TOOL_NAME_LENGTH,
     exported_tool_name,
     normalize_local_mcp_tool_name,
     resource_tool_name,
 )
-from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
+from app.modules.agent.tools.callable_tool_factory import (
+    AgentCallableToolFactory,
+    distinct_tool_names,
+)
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 
@@ -161,3 +165,23 @@ async def test_a_long_agent_name_is_listed_and_called_by_the_same_tool_name() ->
             arguments={"input": "go"},
             toolsets=[toolset],
         )
+
+
+def test_a_resource_named_like_anothers_sanitized_form_gets_its_own_tool():
+    """`x.y` sanitizes to `agent_x_y_<digest>`; an agent literally named that
+    keeps its name. One toolset refuses two tools of one name, which failed the
+    whole run, so the later one takes a counter and both build."""
+    from pydantic_ai import Tool
+
+    dotted = resource_tool_name("agent_", "x.y")
+    literal = resource_tool_name("agent_", dotted.removeprefix("agent_"))
+    assert dotted == literal
+
+    def answer() -> str:
+        return "ok"
+
+    tools = distinct_tool_names([Tool(answer, name=dotted), Tool(answer, name=literal)])
+    names = [tool.name for tool in tools]
+    assert names == [dotted, dotted + "_2"]
+    assert all(len(name) <= MAX_LOCAL_TOOL_NAME_LENGTH for name in names)
+    FunctionToolset(tools=tools)

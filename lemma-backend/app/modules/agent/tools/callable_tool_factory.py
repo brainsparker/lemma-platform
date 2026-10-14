@@ -25,7 +25,10 @@ from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent
-from app.modules.agent.infrastructure.mcp import resource_tool_name
+from app.modules.agent.infrastructure.mcp import (
+    MAX_LOCAL_TOOL_NAME_LENGTH,
+    resource_tool_name,
+)
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
@@ -214,7 +217,7 @@ class AgentCallableToolFactory:
         # AgentToolset.SUBAGENTS enum and resolved by RunToolAssembler — not
         # appended here — so it is opt-in for user agents and gated to top-level
         # conversations.
-        return [FunctionToolset[BaseAgentContext](tools=tools)]
+        return [FunctionToolset[BaseAgentContext](tools=distinct_tool_names(tools))]
 
     async def load_grant_summary(
         self, *, pod_id: UUID, agent_id: UUID
@@ -507,3 +510,25 @@ class AgentCallableToolFactory:
             takes_ctx=True,
             is_async=True,
         )
+
+
+def distinct_tool_names(tools: list[Tool]) -> list[Tool]:
+    """The same tools, no two sharing a name.
+
+    `resource_tool_name` keeps a valid name as it is and gives any other a
+    digest suffix, so a resource literally named like another's sanitized form
+    can land on the same tool name. A toolset refuses two tools of one name,
+    and that refusal failed the whole run before it listed anything. A later
+    duplicate takes a counter instead, in grant order, so the name is the same
+    from turn to turn.
+    """
+    seen: set[str] = set()
+    for tool in tools:
+        name, counter = tool.name, 2
+        while name in seen:
+            suffix = f"_{counter}"
+            name = tool.name[: MAX_LOCAL_TOOL_NAME_LENGTH - len(suffix)] + suffix
+            counter += 1
+        tool.name = name
+        seen.add(name)
+    return tools

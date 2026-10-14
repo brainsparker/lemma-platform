@@ -61,8 +61,9 @@ def _refuse_other_agents_conversation(
     The server posts into the conversation whatever agent is named, so without
     this `lemma chat builder --conversation <someone else's>` is answered by the
     conversation's own agent while the caller believes the builder replied.
-    Only a definite mismatch refuses: a conversation with no recorded agent (the
-    pod assistant's) is left to the server.
+    A conversation with no recorded agent is the pod assistant's, so it is
+    refused too unless the agent named is that assistant: the send carries only
+    the conversation, and the assistant -- not the agent named -- would answer.
     """
 
     def lookup(client, s):  # type: ignore[no-untyped-def]
@@ -81,7 +82,13 @@ def _refuse_other_agents_conversation(
         else None
     )
     named = agent_payload.get("id") if isinstance(agent_payload, dict) else None
-    if owner and named and str(owner) != str(named):
+    named_is_assistant = (
+        isinstance(agent_payload, dict)
+        and str(agent_payload.get("kind") or "").upper() == "POD_DEFAULT"
+    )
+    if named and (
+        (owner and str(owner) != str(named)) or (not owner and not named_is_assistant)
+    ):
         fail(
             f"Conversation {conversation} belongs to a different agent, not "
             f"'{agent}'. Drop --conversation to start a new conversation with "

@@ -55,6 +55,8 @@ class FakeConversations:
 
 class FakeAgents:
     def get(self, pod_id, name):
+        if name == "pod_default":
+            return {"id": "pod-1", "name": name, "kind": "POD_DEFAULT"}
         return {"id": {"builder": BUILDER_ID}.get(name, f"agent-{name}"), "name": name}
 
 
@@ -62,6 +64,7 @@ class FakeAgents:
 def captured(monkeypatch):
     captured: dict[str, object] = {}
     owners = {AMBIENT: OTHER_ID, "builder-conversation": BUILDER_ID}
+    # "assistant-conversation" is absent: the pod assistant's records no agent.
     client = SimpleNamespace(
         conversations=FakeConversations(captured, owners), agents=FakeAgents()
     )
@@ -127,6 +130,46 @@ def test_explicit_conversation_of_another_agent_is_refused(captured):
     assert "belongs to a different agent" in result.output
     assert "send" not in captured
     assert "create" not in captured
+
+
+def test_the_assistants_conversation_is_refused_to_a_named_agent(captured):
+    # The send carries only the conversation, so the assistant would answer.
+    result = runner.invoke(
+        app,
+        [
+            "--pod",
+            "pod-1",
+            "chat",
+            "builder",
+            "-m",
+            "hi",
+            "--conversation",
+            "assistant-conversation",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "belongs to a different agent" in result.output
+    assert "send" not in captured
+
+
+def test_the_assistants_conversation_is_continued_when_the_assistant_is_named(captured):
+    result = runner.invoke(
+        app,
+        [
+            "--pod",
+            "pod-1",
+            "chat",
+            "pod_default",
+            "-m",
+            "hi",
+            "--conversation",
+            "assistant-conversation",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["send"] == ("assistant-conversation", "hi")
 
 
 def test_explicit_conversation_without_an_agent_is_used_unchecked(captured):

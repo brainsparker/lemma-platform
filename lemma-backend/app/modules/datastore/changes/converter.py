@@ -33,6 +33,7 @@ from redis.exceptions import ResponseError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.redis.client import get_redis
@@ -213,7 +214,7 @@ async def append_events(
                 "at timestamptz) ORDER BY at "
                 "ON CONFLICT (event_id) WHERE event_id IS NOT NULL DO NOTHING"
             ),
-            {"records": json.dumps(kept, default=str)},
+            {"records": await run_blocking(_encode_records, kept)},
         )
         appended += int(result.rowcount or 0)
         await conn.execute(
@@ -223,6 +224,10 @@ async def append_events(
     if appended:
         await conn.execute(text("SELECT pg_notify(:c, '')"), {"c": PENDING_CHANNEL})
     return appended
+
+
+def _encode_records(records: list[dict[str, object]]) -> str:
+    return json.dumps(records, default=str)
 
 
 def _record(event: Event, table_ids: Mapping[str, UUID]) -> dict[str, object] | None:

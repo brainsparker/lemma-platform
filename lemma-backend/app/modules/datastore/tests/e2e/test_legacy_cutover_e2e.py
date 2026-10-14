@@ -139,7 +139,11 @@ async def _dedup(kind: str, key: str) -> int:
 
 
 async def _run_cutover() -> int:
-    return await run_until_idle(async_session_maker, registry=_cutover_registry())
+    # Each converter holds its session while its writer may open a side
+    # connection for a new namespace's queue row: stay inside the test pool.
+    return await run_until_idle(
+        async_session_maker, registry=_cutover_registry(), slots=4
+    )
 
 
 async def _deliver_changes() -> None:
@@ -446,7 +450,14 @@ async def test_every_owed_delivery_takes_effect_once(
             "replies": await _items(
                 "agent.replies_arrived", conversation_id=str(conversation_id)
             ),
-            "emails": await _items("identity.email"),
+            "emails": sum(
+                [
+                    await _dedup(
+                        "identity.email", f"identity-email:{owed[key]['event_id']}"
+                    )
+                    for key in ("signed_up", "phone", "invited", "accepted")
+                ]
+            ),
             "whatsapp": await _dedup(
                 "identity.whatsapp_verification", "whatsapp-verification:wamid.legacy"
             ),

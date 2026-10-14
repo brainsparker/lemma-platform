@@ -60,8 +60,10 @@ def _matches(route: LegacyRoute) -> str:
 
 def owed_predicate(route: LegacyRoute) -> str:
     """SQL on outbox row ``o``: owed to ``route.consumer`` (``:consumer``)."""
+    # A dead-lettered row never reached any consumer: the old publisher gave
+    # up on it and only an operator's replay sent it again. It stays dead.
     return (
-        f"{_matches(route)} AND NOT EXISTS ("
+        f"o.dead_lettered_at IS NULL AND {_matches(route)} AND NOT EXISTS ("
         "SELECT 1 FROM domain_event_inbox i "
         "WHERE i.consumer = CAST(:consumer AS text) AND i.event_id = o.id "
         f"AND (i.status IN {_SETTLED} OR (i.status = 'PROCESSING' "
@@ -144,7 +146,8 @@ async def take_over_rows(
     await session.execute(ENSURE_QUEUE)
     source = (
         "jsonb_to_recordset(CAST(:rows AS jsonb)) "
-        "AS o(id uuid, event_type text, payload jsonb, occurred_at timestamptz)"
+        "AS o(id uuid, event_type text, payload jsonb, occurred_at timestamptz, "
+        "dead_lettered_at timestamptz)"
     )
     result = await session.execute(
         text(_take_over(route, source)),

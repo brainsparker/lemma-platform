@@ -98,8 +98,8 @@ async def outbox_row(
             "INSERT INTO domain_event_outbox (id, stream, event_type, producer, "
             "payload, occurred_at, available_at, published_at, dead_lettered_at, "
             "created_at) VALUES (:id, :stream, :type, 'test', CAST(:payload AS jsonb), "
-            ":at, :at, CASE WHEN :published THEN now() END, "
-            "CASE WHEN :dead THEN now() END, now())"
+            ":at, :at, CASE WHEN CAST(:published AS boolean) THEN now() END, "
+            "CASE WHEN CAST(:dead AS boolean) THEN now() END, now())"
         ),
         {
             "id": row_id,
@@ -131,8 +131,9 @@ async def inbox_row(
             "INSERT INTO domain_event_inbox (id, consumer, event_id, event_type, "
             "status, first_received_at, last_received_at, completed_at, "
             "last_error_type, created_at) VALUES (gen_random_uuid(), :consumer, "
-            ":event_id, :type, :status, :at, :at, "
-            "CASE WHEN :status = 'COMPLETED' THEN :at END, :mark, now())"
+            ":event_id, :type, CAST(:status AS text), :at, :at, "
+            "CASE WHEN CAST(:status AS text) = 'COMPLETED' THEN "
+            "CAST(:at AS timestamptz) END, CAST(:mark AS text), now())"
         ),
         {
             "consumer": consumer,

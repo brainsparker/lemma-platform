@@ -55,10 +55,15 @@ pytestmark = [
     pytest.mark.usefixtures("clean_surface_work"),
 ]
 
-# The converters, and the agent's subscriber to ``NotificationSettled``.
-import app.modules.agent.events.legacy_cutover  # noqa: E402,F401
-import app.modules.agent.events.run_followup_work  # noqa: E402,F401
-import app.modules.agent_surfaces.events.legacy_cutover  # noqa: E402,F401
+
+
+@pytest.fixture(autouse=True)
+def _worker_registrations() -> None:
+    """Every module's converters and fact subscribers, as a worker has them."""
+    from app.core.infrastructure.work.process import register_worker_modules
+    from app.core.registry.installed import OSS_MODULES
+
+    register_worker_modules(OSS_MODULES)
 
 CONSUMER = "agent-surfaces.webhook"
 
@@ -91,7 +96,7 @@ async def _sweep() -> None:
         await session.commit()
     registry = WorkRegistry()
     register_cutover_work(registry)
-    await run_until_idle(async_session_maker, registry=registry)
+    await run_until_idle(async_session_maker, registry=registry, slots=4)
 
 
 async def test_the_cutover_converts_what_was_owed_once(
@@ -196,7 +201,8 @@ async def test_the_cutover_converts_what_was_owed_once(
         "AND to_regclass('domain_event_inbox') IS NULL"
     ), "the previous release is gone, so the tables are"
     stored = await scalar(
-        "SELECT string_agg(payload->'message'->>'text', '|' ORDER BY received_at) "
+        "SELECT string_agg(payload->'message'->>'text', '|' "
+        "ORDER BY payload->'message'->>'text') "
         "FROM surface_inbound_messages WHERE surface_id = :s",
         s=surface_id,
     )

@@ -15,6 +15,8 @@ step instead of losing one.
 * ``workflow.wait_expire`` -- a wait outlived its ceiling (``wait_ceiling.py``):
   the run fails and the work it waited on is cancelled. Replaces the expiry
   branches of the reconciliation sweep.
+* ``workflow.admit`` -- admit a workflow's parked runs into room that did not
+  come from a run ending (a raised limit, the cutover).
 * ``workflow.start`` -- start a run another module asked for (a schedule's
   fire), idempotent on the reserved run id. See ``contracts/run_work.py``.
 
@@ -64,9 +66,12 @@ from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.execution.wait_ceiling import ceiling_seconds, expiry_error
 from app.modules.workflow.services.schedule_start_service import ScheduleStartService
+from app.modules.workflow.execution.run_admission import admit_queued_runs
 from app.modules.workflow.execution.wait_work import (
+    WORKFLOW_ADMIT,
     WORKFLOW_RESUME,
     WORKFLOW_WAIT_EXPIRE,
+    AdmitWork,
     ResumeWork,
     WaitWork,
 )
@@ -293,7 +298,18 @@ async def on_start_dead(ctx: DeadContext) -> None:
     )
 
 
+async def admit_parked_runs(ctx: FastContext, payload: AdmitWork) -> None:
+    await admit_queued_runs(_engine(ctx.uow, ctx.work), payload.flow_id)
+
+
 def register_run_work(registry: WorkRegistry) -> None:
+    registry.handler(
+        kind=WORKFLOW_ADMIT,
+        cls=WorkClass.EVENTS,
+        mode=WorkMode.FAST,
+        payload=AdmitWork,
+        retry=RetryPolicy(max_attempts=5),
+    )(admit_parked_runs)
     registry.handler(
         kind=WORKFLOW_RESUME,
         cls=WorkClass.EVENTS,

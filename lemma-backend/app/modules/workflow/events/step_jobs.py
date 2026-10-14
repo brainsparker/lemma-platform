@@ -18,6 +18,7 @@ notification is keyed on (run, node), so a repeated item sends nothing twice.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 
 from app.core.infrastructure.work import (
@@ -100,17 +101,20 @@ class AskedByWorkflowStep:
             return await self._maker.decide(request, caller)
 
 
-async def decide_step(ctx: JobContext, payload: DecisionWork) -> None:
-    retry = await ask_waiting_decision(
-        payload.external_ref,
-        attempt=ctx.item.attempts + 1,
-        waits=WorkDecisionWaits(ctx),
-        maker=AskedByWorkflowStep(decision_maker()),
-    )
-    if retry is not None:
-        # Charged: the runtime's backoff spaces the attempts, and the last one
-        # fails the run itself rather than going dead.
-        raise ItemFailure(f"the decision was not answered; asking again ({retry})")
+def _decide_handler(maker: Callable[[], DecisionMaker]):
+    async def decide_step(ctx: JobContext, payload: DecisionWork) -> None:
+        retry = await ask_waiting_decision(
+            payload.external_ref,
+            attempt=ctx.item.attempts + 1,
+            waits=WorkDecisionWaits(ctx),
+            maker=AskedByWorkflowStep(maker()),
+        )
+        if retry is not None:
+            # Charged: the runtime's backoff spaces the attempts, and the last
+            # one fails the run itself rather than going dead.
+            raise ItemFailure(f"the decision was not answered; asking again ({retry})")
+
+    return decide_step
 
 
 async def on_decide_dead(ctx: DeadContext) -> None:
@@ -156,7 +160,10 @@ async def notify_form(ctx: JobContext, payload: WaitWork) -> None:
         )
 
 
-def register_step_jobs(registry: WorkRegistry) -> None:
+def register_step_jobs(
+    registry: WorkRegistry, *, maker: Callable[[], DecisionMaker] | None = None
+) -> None:
+    """Register both kinds; a test passes its own registry and decision maker."""
     registry.handler(
         kind=WORKFLOW_DECIDE,
         cls=WorkClass.AUTOMATION,
@@ -170,7 +177,7 @@ def register_step_jobs(registry: WorkRegistry) -> None:
             ),
         ),
         on_dead=on_decide_dead,
-    )(decide_step)
+    )(_decide_handler(maker or decision_maker))
     registry.handler(
         kind=WORKFLOW_NOTIFY_FORM,
         cls=WorkClass.DELIVERY,

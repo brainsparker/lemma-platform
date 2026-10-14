@@ -1,0 +1,246 @@
+"""Load: many three-step workflow runs across many pods on one work runtime.
+
+Each run is FUNCTION (a loopback runtime that accepts and calls back) -> TIME
+(one second) -> DECISION (a fixed answer) -> end, started by ``workflow.start``
+items the way a burst of schedule fires starts them. One ``WorkRuntime`` --
+the worker's own dispatch loops, its own sized pool -- runs everything.
+
+Measured, and printed as one JSON line (``WORKFLOW_LOAD_RESULT``): runs per
+second, per-step latency percentiles, end-to-end run latency, and the peak
+number of database connections. Sized by ``WORKFLOW_LOAD_RUNS`` and
+``WORKFLOW_LOAD_PODS``; the default is small enough for the protected lane, and
+``WORKFLOW_LOAD_RUNS=10000 WORKFLOW_LOAD_PODS=100`` is the full measurement.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import time
+from uuid import UUID
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.core.infrastructure.work.db import DbBudget
+from app.core.infrastructure.work.runtime import WorkRuntime
+from app.modules.test_support.e2e.waiters import eventually
+from app.modules.workflow.tests.e2e.workflow_work_support import (
+    CLASSES,
+    FlowWork,
+    flow_work,
+)
+
+pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+
+RUNS = int(os.environ.get("WORKFLOW_LOAD_RUNS", "400"))
+PODS = int(os.environ.get("WORKFLOW_LOAD_PODS", "8"))
+
+THREE_STEPS_EDGES = [
+    {"id": "e1", "source": "fetch", "target": "pause"},
+    {"id": "e2", "source": "pause", "target": "triage"},
+    {"id": "e3", "source": "triage", "target": "end"},
+]
+
+
+def _nodes(function_name: str) -> list[dict]:
+    return [
+        {
+            "id": "fetch",
+            "type": "FUNCTION",
+            "config": {"function_name": function_name, "input_mapping": {}},
+        },
+        {"id": "pause", "type": "WAIT_UNTIL", "config": {"timeout_seconds": 1}},
+        {
+            "id": "triage",
+            "type": "DECISION",
+            "config": {
+                "question": {
+                    "instruction": "Is this fine?",
+                    "evidence": {"type": "expression", "value": "fetch"},
+                    "answer": {
+                        "type": "string",
+                        "enum": ["yes", "no"],
+                        "description": "Is it fine?",
+                    },
+                    "routes": {"yes": "end", "no": "end"},
+                }
+            },
+        },
+        {"id": "end", "type": "END"},
+    ]
+
+
+async def _new_pod(flows: FlowWork, org_id: str) -> str:
+    response = await flows.client.post(
+        "/pods",
+        json={
+            "name": f"load {len(org_id)}-{time.monotonic_ns()}",
+            "organization_id": org_id,
+            "type": "HYBRID",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def _enqueue_starts(flows: FlowWork, flows_by_pod: dict[str, UUID]) -> None:
+    """``workflow.start`` items, as a burst of fires writes them."""
+    per_pod = RUNS // len(flows_by_pod)
+    async with flows.sessions() as session:  # type: ignore[operator]
+        for pod_id, flow_id in flows_by_pod.items():
+            ns = f"pod:{pod_id}"
+            for cls, cap in (("events", 16), ("automation", 32), ("delivery", 8)):
+                await session.execute(
+                    text(
+                        "INSERT INTO work_queues (class, ns, max_running) "
+                        "VALUES (:cls, :ns, :cap) ON CONFLICT DO NOTHING"
+                    ),
+                    {"cls": cls, "ns": ns, "cap": cap},
+                )
+            await session.execute(
+                text(
+                    "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key) "
+                    "SELECT gen_random_uuid(), :ns, 'events', 'workflow.start', "
+                    "jsonb_build_object('flow_id', CAST(:flow AS text), "
+                    "'user_id', CAST(:user AS text), 'run_id', r::text), "
+                    "'workflow-start:' || r::text "
+                    "FROM (SELECT gen_random_uuid() AS r "
+                    "FROM generate_series(1, :n)) AS runs"
+                ),
+                {
+                    "ns": ns,
+                    "flow": str(flow_id),
+                    "user": str(flows.user_id),
+                    "n": per_pod,
+                },
+            )
+        await session.commit()
+
+
+async def _percentiles(flows: FlowWork, sql: str) -> dict[str, float]:
+    row = await flows.scalar(
+        "SELECT json_build_object("
+        "'p50', percentile_cont(0.5) WITHIN GROUP (ORDER BY s), "
+        "'p95', percentile_cont(0.95) WITHIN GROUP (ORDER BY s), "
+        "'p99', percentile_cont(0.99) WITHIN GROUP (ORDER BY s), "
+        "'max', max(s), 'n', count(*)) FROM (" + sql + ") t"
+    )
+    assert isinstance(row, dict)
+    return {key: round(float(value or 0), 3) for key, value in row.items()}
+
+
+async def test_thousands_of_three_step_runs_across_pods(
+    e2e_settings,
+    db_manager,
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+) -> None:
+    async with flow_work(
+        authenticated_client,
+        db_manager,
+        org_id=fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
+    ) as flows:
+        flows_by_pod: dict[str, UUID] = {}
+        for _ in range(PODS):
+            flows.pod_id = await _new_pod(flows, fixed_test_org["id"])
+            name = await flows.workflow(
+                _nodes(await flows.function("complete")), THREE_STEPS_EDGES
+            )
+            flows_by_pod[flows.pod_id] = UUID(
+                str(
+                    await flows.scalar(
+                        "SELECT id FROM workflow_flows WHERE name = :name", name=name
+                    )
+                )
+            )
+
+        budget = DbBudget.from_settings(CLASSES)
+        engine = create_async_engine(
+            e2e_settings.database_url, pool_size=budget.total, max_overflow=0
+        )
+        runtime = WorkRuntime(
+            async_sessionmaker(engine, expire_on_commit=False),
+            classes=CLASSES,
+            registry=flows.registry,
+            budget=budget,
+        )
+        peak_connections = 0
+        sampling = True
+
+        async def sample() -> None:
+            nonlocal peak_connections
+            while sampling:
+                count = await flows.scalar(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname = current_database()"
+                )
+                peak_connections = max(peak_connections, int(count))  # type: ignore[arg-type]
+                await asyncio.sleep(0.5)
+
+        await _enqueue_starts(flows, flows_by_pod)
+        total = (RUNS // PODS) * PODS
+        sampler = asyncio.create_task(sample())
+        began = time.monotonic()
+        await runtime.start()
+        try:
+            await eventually(
+                label="every run completed",
+                probe=lambda: flows.scalar(
+                    "SELECT count(*) FROM workflow_flow_runs WHERE status = 'COMPLETED'"
+                ),
+                done=lambda n: int(n) >= total,  # type: ignore[call-overload]
+                timeout_seconds=max(600, total / 5),
+                interval_seconds=1.0,
+                fail_fast=lambda _: None,
+            )
+            elapsed = time.monotonic() - began
+        finally:
+            sampling = False
+            await runtime.stop()
+            await sampler
+            await engine.dispose()
+
+        steps = {
+            wait_type: await _percentiles(
+                flows,
+                "SELECT extract(epoch FROM w.completed_at - "
+                + ("w.scheduled_at" if wait_type == "TIME" else "w.created_at")
+                + f") AS s FROM workflow_run_waits w WHERE w.wait_type = '{wait_type}'",
+            )
+            for wait_type in ("FUNCTION", "TIME", "DECISION")
+        }
+        runs = await _percentiles(
+            flows,
+            "SELECT extract(epoch FROM completed_at - created_at) AS s "
+            "FROM workflow_flow_runs WHERE status = 'COMPLETED'",
+        )
+        failed = await flows.scalar(
+            "SELECT count(*) FROM workflow_flow_runs WHERE status <> 'COMPLETED'"
+        )
+        dead = await flows.scalar(
+            "SELECT count(*) FROM work_items WHERE state = 'dead'"
+        )
+        result = {
+            "runs": total,
+            "pods": PODS,
+            "seconds": round(elapsed, 1),
+            "runs_per_second": round(total / elapsed, 1),
+            "steps_per_second": round(3 * total / elapsed, 1),
+            "step_latency_seconds": steps,
+            "run_latency_seconds": runs,
+            "runtime_pool": budget.total,
+            "peak_db_connections": peak_connections,
+            "not_completed": failed,
+            "dead_items": dead,
+            "function_invocations": flows.runtime.invocations.total(),
+        }
+        print("WORKFLOW_LOAD_RESULT " + json.dumps(result))
+        assert failed == 0
+        assert dead == 0
+        assert flows.runtime.invocations.total() == total
+        assert flows.decisions.asked == total

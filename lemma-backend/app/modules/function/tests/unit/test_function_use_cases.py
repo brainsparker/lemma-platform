@@ -398,5 +398,3 @@ async def test_execute_job_returns_pending_without_running_sandbox():
     assert result.job_id == f"function:{run.id}"
     assert factory.state["opens"] == 1
     dispatcher.execute.assert_not_awaited()
-
-

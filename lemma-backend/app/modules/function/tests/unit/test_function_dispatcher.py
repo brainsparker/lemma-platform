@@ -3,6 +3,7 @@ from __future__ import annotations
 from sandbox_runtime.errors import SandboxUnavailable
 
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -32,10 +33,17 @@ from app.modules.function.domain.entities import (
 )
 
 
+class _IdlePod:
+    """A session over a pod with nothing running: the gate's count is zero."""
+
+    async def scalar(self, _statement):
+        return 0
+
+
 class _UowFactory:
     @asynccontextmanager
     async def __call__(self):
-        yield object()
+        yield SimpleNamespace(session=_IdlePod())
 
 
 async def _token_minter(**_kwargs) -> FunctionSessionToken:
@@ -112,7 +120,7 @@ def _run(
 
 
 def _dispatcher(runtime_client) -> FunctionDispatcher:
-    dispatcher = FunctionDispatcher(
+    return FunctionDispatcher(
         uow_factory=_UowFactory(),
         sandbox_client_factory=AsyncMock,
         token_minter=_token_minter,
@@ -123,9 +131,6 @@ def _dispatcher(runtime_client) -> FunctionDispatcher:
         delegated_tokens_enabled=True,
         max_running_per_pod=1_000,
     )
-    # The pod gate's count is a database read; these tests start no other run.
-    dispatcher._pod_has_room = AsyncMock(return_value=True)  # type: ignore[method-assign]
-    return dispatcher
 
 
 @pytest.mark.asyncio

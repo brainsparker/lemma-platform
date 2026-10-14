@@ -27,7 +27,9 @@ run's state does not depend on it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -49,8 +51,14 @@ from app.core.infrastructure.work import (
     pod_namespace,
     registry as default_registry,
 )
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.function.config import function_settings
 from app.modules.function.events import run_deadline as _run_deadline  # noqa: F401  registers function.deadline
+
+if TYPE_CHECKING:
+    from app.modules.function.application.function_dispatcher import (
+        FunctionDispatcher,
+    )
 
 FUNCTION_RUN = "function.run"
 FUNCTION_CANCEL = "function.cancel"
@@ -79,7 +87,7 @@ def run_retry() -> RetryPolicy:
     )
 
 
-async def enqueue_function_run(
+async def add_function_run_work(
     session: AsyncSession,
     *,
     pod_id: UUID,
@@ -95,7 +103,7 @@ async def enqueue_function_run(
     )
 
 
-async def enqueue_function_cancel(
+async def add_function_cancel(
     session: AsyncSession,
     *,
     pod_id: UUID,
@@ -110,24 +118,47 @@ async def enqueue_function_cancel(
     )
 
 
-async def run_queued_function(ctx: JobContext, payload: FunctionRunWork) -> None:
-    from app.modules.function.api.dependencies import build_function_dispatcher
-    from app.modules.function.domain.errors import (
-        PodAtCapacity,
-        SandboxNotReady,
-    )
+#: Builds the dispatcher a job drives, from the job's checkpoint factory. The
+#: deployment's is ``api.dependencies.build_function_dispatcher``; a test
+#: hands its own, with the sandbox seam replaced and nothing else.
+DispatcherFactory = Callable[[UnitOfWorkFactory], "FunctionDispatcher"]
 
-    dispatcher = build_function_dispatcher(ctx.checkpoint)
-    try:
-        await dispatcher.run_queued(payload.run_id, before_start=ctx.raise_if_stopping)
-    except PodAtCapacity:
-        raise Defer(CAPACITY_RETRY) from None
-    except SandboxNotReady as exc:
-        raise Unavailable(
-            str(exc), evidence=UnavailableEvidence.HEALTH_CHECK_FAILING
-        ) from exc
-    except LookupError as exc:
-        raise PermanentFailure(str(exc)) from exc
+
+def _deployment_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatcher:
+    from app.modules.function.api.dependencies import build_function_dispatcher
+
+    return build_function_dispatcher(uow_factory)
+
+
+def _run_handler(build: DispatcherFactory):
+    async def run_queued_function(ctx: JobContext, payload: FunctionRunWork) -> None:
+        from app.modules.function.application.dispatch_failures import (
+            PodAtCapacity,
+            SandboxNotReady,
+        )
+
+        dispatcher = build(ctx.checkpoint)
+        try:
+            await dispatcher.run_queued(
+                payload.run_id, before_start=ctx.raise_if_stopping
+            )
+        except PodAtCapacity:
+            raise Defer(CAPACITY_RETRY) from None
+        except SandboxNotReady as exc:
+            raise Unavailable(
+                str(exc), evidence=UnavailableEvidence.HEALTH_CHECK_FAILING
+            ) from exc
+        except LookupError as exc:
+            raise PermanentFailure(str(exc)) from exc
+
+    return run_queued_function
+
+
+def _cancel_handler(build: DispatcherFactory):
+    async def cancel_in_runtime(ctx: JobContext, payload: FunctionRunWork) -> None:
+        await build(ctx.checkpoint).cancel_in_runtime(payload.run_id)
+
+    return cancel_in_runtime
 
 
 def dead_message(reason: str, last_error: str | None) -> str:
@@ -164,19 +195,15 @@ async def on_function_run_dead(ctx: DeadContext) -> None:
     )
 
 
-async def cancel_in_runtime(ctx: JobContext, payload: FunctionRunWork) -> None:
-    from app.modules.function.api.dependencies import build_function_dispatcher
-
-    await build_function_dispatcher(ctx.checkpoint).cancel_in_runtime(payload.run_id)
-
-
 def register_function_run_work(
     registry: WorkRegistry,
     *,
     retry: RetryPolicy | None = None,
     lease: timedelta | None = None,
+    dispatcher_factory: DispatcherFactory | None = None,
 ) -> None:
-    """Register both kinds; a test passes its own registry and budgets."""
+    """Register both kinds; a test passes its own registry, budgets and sandbox."""
+    build = dispatcher_factory or _deployment_dispatcher
     registry.handler(
         kind=FUNCTION_RUN,
         cls=WorkClass.AUTOMATION,
@@ -185,7 +212,7 @@ def register_function_run_work(
         retry=retry or run_retry(),
         lease=lease,
         on_dead=on_function_run_dead,
-    )(run_queued_function)
+    )(_run_handler(build))
     registry.handler(
         kind=FUNCTION_CANCEL,
         cls=WorkClass.AUTOMATION,
@@ -193,7 +220,7 @@ def register_function_run_work(
         payload=FunctionRunWork,
         retry=RetryPolicy(max_attempts=2, unavailable_budget=timedelta(minutes=5)),
         lease=lease,
-    )(cancel_in_runtime)
+    )(_cancel_handler(build))
 
 
 register_function_run_work(default_registry)

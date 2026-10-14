@@ -8,7 +8,7 @@ item are covered with the work runtime in ``test_function_run_work_e2e.py``.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid7
+from uuid import UUID, uuid4, uuid7
 
 import httpx
 import pytest

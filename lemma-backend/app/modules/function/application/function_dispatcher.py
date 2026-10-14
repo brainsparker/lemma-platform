@@ -25,7 +25,10 @@ from app.modules.function.application.dispatch_failures import (
 )
 from app.modules.function.application.function_run_token import function_run_token
 from app.core.infrastructure.work import Released
-from app.modules.function.domain.errors import PodAtCapacity, SandboxNotReady
+from app.modules.function.application.dispatch_failures import (
+    PodAtCapacity,
+    SandboxNotReady,
+)
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
     FunctionSessionTokenCache,
@@ -86,6 +89,15 @@ START_DEADLINE_ERROR = (
     "safe to retry."
 )
 
+
+def _not_a_failure(exc: Exception, *, queued: bool, started: bool) -> bool:
+    """Signals for the caller, not outcomes of the run: a full pod, a sandbox
+    not up yet, or a queued run stopped before its start."""
+    if isinstance(exc, (PodAtCapacity, SandboxNotReady)):
+        return True
+    return queued and not started and isinstance(exc, Released)
+
+
 RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
 SafePoint = Callable[[], None]
 TokenMinter = Callable[..., Awaitable[FunctionSessionToken]]
@@ -141,11 +153,8 @@ class FunctionDispatcher:
         *,
         mode: FunctionDispatchMode,
     ) -> FunctionRunEntity:
-        """Run it now, for a caller holding a request open.
-
-        A full pod is waited out up to the run's start deadline: the run is
-        still PENDING, and its execution budget starts only when it does.
-        """
+        """Run it now, for a caller holding a request open. A full pod is waited
+        out up to the start deadline: the budget starts only when the run does."""
         # Spanned per phase because the gap between a run being created and
         # reaching RUNNING was measurable even warm and uncontended, but not
         # attributable: this path had no instrumentation at all, so the only
@@ -177,22 +186,15 @@ class FunctionDispatcher:
     async def run_queued(
         self, run_id: UUID, *, before_start: SafePoint | None = None
     ) -> FunctionRunEntity:
-        """Start and invoke a queued run, for the ``function.run`` work item.
-
-        Raises ``PodAtCapacity`` when the pod's gate is full and
-        ``SandboxNotReady`` when its sandbox cannot be reached yet -- both with
-        the run still PENDING, so the item can come back for it. A run that is
-        no longer PENDING is returned untouched: a start that already happened
-        is never repeated, whoever made it.
-        """
+        """Start and invoke a queued run (``function.run``). ``PodAtCapacity``
+        and ``SandboxNotReady`` leave it PENDING for the item to come back to;
+        a run already started is returned untouched, never started twice."""
         dispatch = await self._resolve_dispatch(
             run_id, mode=FunctionDispatchMode.ASYNCHRONOUS
         )
         if isinstance(dispatch, FunctionRunEntity):
             return dispatch
-        # Cheap and unlocked, so a pod at its cap costs a count rather than a
-        # sandbox lease and a token per turned-away run; the start re-checks
-        # under the pod's lock.
+        # Unlocked and cheap; the start re-checks under the pod's lock.
         if not await self._pod_has_room(dispatch.pod_id):
             raise PodAtCapacity(str(dispatch.pod_id))
         return await self._execute_dispatch(
@@ -266,10 +268,6 @@ class FunctionDispatcher:
                         await FunctionExecutionRepository(uow).cancel_dispatch(dispatch)
                     await self._best_effort_cancel(dispatch, endpoint=endpoint)
                 raise
-            if isinstance(exc, (PodAtCapacity, SandboxNotReady)) or (
-                queued and started is None and isinstance(exc, Released)
-            ):
-                raise
             # Interpreter teardown is not a dispatch failure. `CancelledError`
             # is handled above because it has a durable outcome to record --
             # the dispatch is cancelled and the run says so. `KeyboardInterrupt`
@@ -279,40 +277,13 @@ class FunctionDispatcher:
             # `agent_runner_service` re-raises at the same boundary and for the
             # same reason -- swallowing it there made every interrupted run look
             # like a success, and a deploy ended every conversation in flight.
-            if not isinstance(exc, Exception):
-                raise
-            if (
-                isinstance(exc, InvocationOutcomeUnconfirmed)
-                and dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS
-                and started is not None
+            if not isinstance(exc, Exception) or _not_a_failure(
+                exc, queued=queued, started=started is not None
             ):
-                # The runtime may still own the task. Its callback or the
-                # run's deadline item will durably settle this JOB run.
-                return await self._load_run(run_id)
-            if isinstance(exc, InvocationOutcomeUnconfirmed) and started is not None:
-                await self._best_effort_cancel(dispatch, endpoint=endpoint)
-            message = self._execution_error(exc)
-            # Every branch above turns a *recognised* failure into a specific
-            # message. Anything reaching the generic fallback is by definition
-            # unanticipated, so it is the one most worth recording: otherwise a
-            # run stores "Function execution failed" with no way to find out why.
-            logger.warning(
-                "function.function_dispatcher.execution_failed",
-                run_id=str(run_id),
-                error_type=type(exc).__name__,
-                # The type alone is not enough to act on: a bare `DBAPIError`
-                # names the wrapper, not the driver error inside it, and the
-                # message stored on the run is the generic one built above. A
-                # CI failure here was undiagnosable for exactly that reason.
-                error=str(exc),
-                exc_info=exc,
+                raise
+            return await self._after_failure(
+                run_id, dispatch, exc, started=started, endpoint=endpoint
             )
-            async with self._uow_factory() as uow:
-                failed = await FunctionExecutionRepository(uow).fail_dispatch(
-                    dispatch,
-                    error=message,
-                )
-            return failed or await self._load_run(run_id)
         finally:
             for task in (endpoint_task, token_task, organization_task):
                 if not task.done():
@@ -323,6 +294,45 @@ class FunctionDispatcher:
                 organization_task,
                 return_exceptions=True,
             )
+
+    async def _after_failure(
+        self,
+        run_id: UUID,
+        dispatch: FunctionExecutionDispatch,
+        exc: Exception,
+        *,
+        started: FunctionRunRuntimeContext | None,
+        endpoint: FunctionRuntimeEndpoint | None,
+    ) -> FunctionRunEntity:
+        """What a dispatch that raised leaves behind on its run."""
+        unconfirmed = isinstance(exc, InvocationOutcomeUnconfirmed)
+        if (
+            unconfirmed
+            and dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS
+            and started is not None
+        ):
+            # The runtime may still own the task. Its callback or the run's
+            # deadline item will durably settle this JOB run.
+            return await self._load_run(run_id)
+        if unconfirmed and started is not None:
+            await self._best_effort_cancel(dispatch, endpoint=endpoint)
+        message = self._execution_error(exc)
+        # An unrecognised failure stores only "Function execution failed", so the
+        # log is the one place that says why.
+        logger.warning(
+            "function.function_dispatcher.execution_failed",
+            run_id=str(run_id),
+            error_type=type(exc).__name__,
+            # A bare `DBAPIError` names the wrapper, not the driver error.
+            error=str(exc),
+            exc_info=exc,
+        )
+        async with self._uow_factory() as uow:
+            failed = await FunctionExecutionRepository(uow).fail_dispatch(
+                dispatch,
+                error=message,
+            )
+        return failed or await self._load_run(run_id)
 
     async def cancel(self, run_id: UUID) -> FunctionRunEntity:
         async with self._uow_factory() as uow:

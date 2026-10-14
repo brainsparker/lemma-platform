@@ -87,22 +87,6 @@ class FunctionRevisionPrunedError(FunctionDomainError):
         )
 
 
-class PodAtCapacity(Exception):
-    """The pod already runs as many functions as it may; this run has not started.
-
-    Not a domain error: nobody sees it. A queued run waits its turn and a
-    synchronous caller waits up to its start deadline. The slot is the RUNNING
-    row, counted at the start under the pod's lock, so it is held until the run
-    is terminal however that end arrives -- inline, by callback, or by the
-    deadline.
-    """
-
-
-class SandboxNotReady(Exception):
-    """The pod's sandbox could not be reached or is still starting, and the run
-    has not started. Nothing ran, so a queued run waits and tries again."""
-
-
 class FunctionConflictError(FunctionDomainError):
     def __init__(self, message: str):
         super().__init__(

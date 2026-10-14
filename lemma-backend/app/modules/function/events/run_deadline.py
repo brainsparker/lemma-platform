@@ -55,7 +55,7 @@ def deadline_dedup_key(run_id: UUID, due: datetime) -> str:
     return f"function-deadline:{run_id}:{due.astimezone(UTC).isoformat()}"
 
 
-async def enqueue_function_deadline(
+async def add_function_deadline(
     session: AsyncSession,
     *,
     pod_id: UUID,

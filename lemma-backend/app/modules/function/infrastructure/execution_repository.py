@@ -13,10 +13,10 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import facts
 from app.modules.function.config import execution_budget_seconds
 from app.modules.function.contracts.run_facts import FunctionRunFinished
-from app.modules.function.domain.errors import PodAtCapacity
+from app.modules.function.application.dispatch_failures import PodAtCapacity
 from app.modules.function.domain.run_deadline import expired_run_error
-from app.modules.function.events.run_deadline import enqueue_function_deadline
-from app.modules.function.events.run_work import enqueue_function_cancel
+from app.modules.function.events.run_deadline import add_function_deadline
+from app.modules.function.events.run_work import add_function_cancel
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenKey,
 )
@@ -124,7 +124,7 @@ class FunctionExecutionRepository:
         # function's to lose.
         run.deadline_at = timestamp + timedelta(seconds=dispatch.execution_seconds)
         await self.session.flush()
-        await enqueue_function_deadline(
+        await add_function_deadline(
             self.session,
             pod_id=function.pod_id,
             run_id=run.id,
@@ -364,7 +364,7 @@ class FunctionExecutionRepository:
         await self.session.flush()
         await self._announce_finished(run, pod_id=function.pod_id)
         if was_running:
-            await enqueue_function_cancel(
+            await add_function_cancel(
                 self.session, pod_id=function.pod_id, run_id=run.id
             )
         return True

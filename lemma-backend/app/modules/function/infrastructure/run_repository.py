@@ -23,8 +23,8 @@ from app.modules.function.domain.entities import (
 )
 from app.modules.function.domain.errors import FunctionRunNotFoundError
 from app.modules.function.domain.ports import FunctionRunRepositoryPort
-from app.modules.function.events.run_deadline import enqueue_function_deadline
-from app.modules.function.events.run_work import enqueue_function_run
+from app.modules.function.events.run_deadline import add_function_deadline
+from app.modules.function.events.run_work import add_function_run_work
 from app.modules.function.infrastructure.models import (
     FunctionModel,
     FunctionRunModel,
@@ -70,9 +70,9 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         if pod_id is None:
             return
         if run.job_id is not None:
-            await enqueue_function_run(self.session, pod_id=pod_id, run_id=run.id)
+            await add_function_run_work(self.session, pod_id=pod_id, run_id=run.id)
         elif run.deadline_at is not None:
-            await enqueue_function_deadline(
+            await add_function_deadline(
                 self.session, pod_id=pod_id, run_id=run.id, deadline_at=run.deadline_at
             )
 

@@ -37,6 +37,10 @@ WORKFLOW_RESUME = "workflow.resume"
 WORKFLOW_WAIT_EXPIRE = "workflow.wait_expire"
 WORKFLOW_DECIDE = "workflow.decide"
 WORKFLOW_NOTIFY_FORM = "workflow.notify_form"
+#: Admit a workflow's parked runs into whatever room it has. Admission normally
+#: happens in the transaction that frees the room; this is for room that
+#: appears any other way -- a raised limit, the cutover.
+WORKFLOW_ADMIT = "workflow.admit"
 
 
 class ResumeWork(BaseModel):
@@ -60,6 +64,10 @@ class WaitWork(BaseModel):
 
 class DecisionWork(BaseModel):
     external_ref: str
+
+
+class AdmitWork(BaseModel):
+    flow_id: UUID
 
 
 def _registered() -> None:
@@ -121,3 +129,13 @@ async def write_wait_items(
             WaitWork(wait_id=wait.id),
             dedup_key=f"workflow-notify:{wait.id}",
         )
+
+
+async def write_admission(work: WorkWriter, *, pod_id: UUID, flow_id: UUID) -> None:
+    _registered()
+    await work.add(
+        WORKFLOW_ADMIT,
+        pod_namespace(pod_id),
+        AdmitWork(flow_id=flow_id),
+        dedup_key=f"workflow-admit:{flow_id}",
+    )

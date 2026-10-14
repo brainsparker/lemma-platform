@@ -88,12 +88,12 @@ async def admit_queued_runs(engine: "WorkflowEngine", flow_id: UUID) -> int:
         oldest = await engine.wait_repo.oldest_queued(flow.id, limit=1)
         if not oldest:
             break
-        if await _admit(engine, flow, oldest[0]):
+        if await _admit_parked(engine, flow, oldest[0]):
             admitted += 1
     return admitted
 
 
-async def _admit(
+async def _admit_parked(
     engine: "WorkflowEngine", flow: WorkflowEntity, queued: WorkflowRunWaitEntity
 ) -> bool:
     """Advance one parked run from its entry node; whether it was admitted."""

@@ -48,6 +48,10 @@ from app.modules.agent.infrastructure.models import (
     MessageModel,
 )
 from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
+from app.modules.agent.domain.conversation_metadata import (
+    MANUAL_RETRY_SOURCE,
+    SOURCE_KEY,
+)
 from app.modules.agent.infrastructure.queued_message_queries import (
     in_order,
     stamp,
@@ -281,7 +285,7 @@ class ConversationRunQueriesMixin:
         return model.to_entity() if model else None
 
     async def run_is_replay_safe(self, agent_run_id: UUID) -> bool:
-        """Whether a run holds a user message and nothing a replay would repeat.
+        """Whether a run replays a user turn and holds nothing a replay would repeat.
 
         This is the message half of ``AgentRun.is_safely_retryable``, and the
         same rule (``replays_without_effect``): only the person's messages and
@@ -292,13 +296,23 @@ class ConversationRunQueriesMixin:
         of loading the run's messages. Callers should check the status half
         first: a run that did not fail is not retryable regardless, so the
         common path never reaches this query at all.
+
+        A run started by a retry owns no message -- the turn it replays stays
+        on the run it retried -- so it is asked for by its ``source`` instead.
+        Without that, a retry that failed too could never be retried again.
         """
+        is_retry = (
+            select(AgentRunModel.run_metadata[SOURCE_KEY].astext == MANUAL_RETRY_SOURCE)
+            .where(AgentRunModel.id == agent_run_id)
+            .scalar_subquery()
+        )
         row = (
             await self.session.execute(
                 select(
                     func.count()
                     .filter(MessageModel.role == MessageRole.USER.value)
                     .label("user"),
+                    func.coalesce(is_retry, False).label("is_retry"),
                     func.count()
                     .filter(
                         MessageModel.role != MessageRole.USER.value,
@@ -311,7 +325,7 @@ class ConversationRunQueriesMixin:
                 ).where(MessageModel.agent_run_id == agent_run_id)
             )
         ).one()
-        return bool(row.user) and not row.with_effect
+        return (bool(row.user) or bool(row.is_retry)) and not row.with_effect
 
     async def count_queued_user_messages(
         self,

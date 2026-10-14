@@ -152,6 +152,58 @@ async def test_retrying_twice_while_the_retry_runs_returns_the_same_run(
     assert len(await runs(seeded.conversation_id)) == 2
 
 
+async def test_a_retry_that_failed_too_can_be_retried_again(scenario) -> None:
+    """The retry owns no message -- the person's turn stays on the run it
+    retried -- so it must not read as "nothing to replay" once it fails.
+
+    The usual sequence: the runtime is broken, the person retries before fixing
+    it, the retry fails the same way, they fix it and retry again.
+    """
+    seeded = await seeded_conversation(scenario)
+    await _failed_after(seeded)
+    first = await _retry(scenario, seeded)
+    assert first.status_code == status.HTTP_200_OK, first.text
+    first_retry = UUID(first.json()["agent_run_id"])
+    await finish(first_retry, status=AgentRunStatus.FAILED)
+    assert await _retryable(scenario, seeded) is True
+
+    second = await _retry(scenario, seeded)
+    again = await _retry(scenario, seeded)
+
+    assert second.status_code == status.HTTP_200_OK, second.text
+    assert second.json()["started_new_run"] is True
+    second_retry = UUID(second.json()["agent_run_id"])
+    assert second_retry != first_retry
+    assert again.status_code == status.HTTP_200_OK, again.text
+    assert again.json()["agent_run_id"] == str(second_retry)
+    assert again.json()["started_new_run"] is False
+    (_, _, newest) = await runs(seeded.conversation_id)
+    assert newest.run_metadata["retried_agent_run_id"] == str(first_retry)
+    _, prompt = history_and_prompt(
+        await messages(seeded.conversation_id), current_run_id=second_retry
+    )
+    assert prompt is not None and prompt.endswith("Summarise it."), (
+        "the second retry replays the person's turn from the original run"
+    )
+
+
+async def test_a_retry_that_replied_before_failing_is_not_retried_again(
+    scenario,
+) -> None:
+    seeded = await seeded_conversation(scenario)
+    await _failed_after(seeded)
+    first = await _retry(scenario, seeded)
+    first_retry = UUID(first.json()["agent_run_id"])
+    await append(seeded, first_retry, MessageDraft.of_text("Here is half a summary"))
+    await finish(first_retry, status=AgentRunStatus.FAILED)
+    assert await _retryable(scenario, seeded) is False
+
+    response = await _retry(scenario, seeded)
+
+    assert response.status_code == status.HTTP_409_CONFLICT, response.text
+    assert len(await runs(seeded.conversation_id)) == 2
+
+
 @pytest.mark.parametrize(
     "work",
     [

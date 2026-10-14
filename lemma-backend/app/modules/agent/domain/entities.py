@@ -14,6 +14,10 @@ from app.core.authorization.context import ResourceType
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.domain.entity import CreatedEntity, Entity
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.conversation_metadata import (
+    MANUAL_RETRY_SOURCE,
+    source_of,
+)
 from app.modules.agent.domain.errors import AgentValidationError
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -265,10 +269,22 @@ class AgentRun(Entity):
         }
 
     @property
+    def replays_a_retried_turn(self) -> bool:
+        """Whether this run was started by a retry, and so replays a person's
+        turn that belongs to the run it retried rather than to itself."""
+        return source_of(self.metadata) == MANUAL_RETRY_SOURCE
+
+    @property
     def is_safely_retryable(self) -> bool:
+        # A retry owns no user message, so "it holds the person's turn" is
+        # answered by what started it. Its retry was only allowed because the
+        # run before it was replay-safe, so the same turn is still there.
         return (
             self.status == AgentRunStatus.FAILED
-            and any(message.role is MessageRole.USER for message in self.messages)
+            and (
+                self.replays_a_retried_turn
+                or any(message.role is MessageRole.USER for message in self.messages)
+            )
             and all(
                 replays_without_effect(message.role, message.kind)
                 for message in self.messages

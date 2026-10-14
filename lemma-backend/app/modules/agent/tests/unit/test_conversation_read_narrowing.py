@@ -144,6 +144,7 @@ async def test_retryability_is_one_aggregate_over_a_single_run() -> None:
 
     class _CountRow:
         user = 2
+        is_retry = False
         with_effect = 0
 
     uow = _Uow([_CountRow()])
@@ -163,6 +164,7 @@ async def test_retryability_is_one_aggregate_over_a_single_run() -> None:
 async def test_a_run_with_a_reply_is_not_replay_safe() -> None:
     class _CountRow:
         user = 2
+        is_retry = False
         with_effect = 1
 
     uow = _Uow([_CountRow()])
@@ -176,7 +178,35 @@ async def test_a_run_with_no_messages_is_not_replay_safe() -> None:
 
     class _CountRow:
         user = 0
+        is_retry = False
         with_effect = 0
+
+    uow = _Uow([_CountRow()])
+
+    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is False
+
+
+@pytest.mark.asyncio
+async def test_a_failed_retry_with_no_messages_of_its_own_is_replay_safe() -> None:
+    """The turn a retry replays stays on the run it retried, so a retry that
+    failed too owns nothing -- and is still the same turn, safe to run again."""
+
+    class _CountRow:
+        user = 0
+        is_retry = True
+        with_effect = 0
+
+    uow = _Uow([_CountRow()])
+
+    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is True
+
+
+@pytest.mark.asyncio
+async def test_a_retry_that_replied_is_not_replay_safe() -> None:
+    class _CountRow:
+        user = 0
+        is_retry = True
+        with_effect = 1
 
     uow = _Uow([_CountRow()])
 

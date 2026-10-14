@@ -279,3 +279,37 @@ async def test_a_retry_on_a_model_that_is_gone_is_refused_before_a_run_exists(
 
     repository.create_agent_run.assert_not_awaited()
     uow.commit.assert_not_awaited()
+
+
+def _bare_failed_run(metadata: dict[str, object] | None) -> AgentRun:
+    return AgentRun(
+        conversation_id=uuid4(),
+        status=AgentRunStatus.FAILED,
+        agent_runtime=_CURRENT_RUNTIME,
+        started_at=datetime.now(timezone.utc),
+        metadata=metadata,
+    )
+
+
+def test_a_failed_retry_owning_no_messages_is_safely_retryable() -> None:
+    """The turn a retry replays belongs to the run it retried."""
+    assert _bare_failed_run({"source": "manual_retry"}).is_safely_retryable
+
+
+def test_a_failed_run_with_no_turn_and_no_retry_behind_it_is_not() -> None:
+    assert not _bare_failed_run({"source": "user_message"}).is_safely_retryable
+    assert not _bare_failed_run(None).is_safely_retryable
+
+
+def test_a_failed_retry_that_replied_is_not_safely_retryable() -> None:
+    retry = _bare_failed_run({"source": "manual_retry"})
+    retry.messages = [
+        Message.create(
+            conversation_id=retry.conversation_id,
+            sequence=1,
+            agent_run_id=retry.id,
+            role=MessageRole.ASSISTANT,
+            text="Here is half",
+        )
+    ]
+    assert not retry.is_safely_retryable

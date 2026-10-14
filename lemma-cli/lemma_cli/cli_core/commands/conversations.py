@@ -53,6 +53,42 @@ def _emit_stream(state: CliState, response: Any) -> None:
     emit_stream_events(state, response)
 
 
+def _refuse_other_agents_conversation(
+    ctx: typer.Context, *, pod: str | None, agent: str, conversation: str
+) -> None:
+    """Fail when a named agent is asked to continue a conversation it does not own.
+
+    The server posts into the conversation whatever agent is named, so without
+    this `lemma chat builder --conversation <someone else's>` is answered by the
+    conversation's own agent while the caller believes the builder replied.
+    Only a definite mismatch refuses: a conversation with no recorded agent (the
+    pod assistant's) is left to the server.
+    """
+
+    def lookup(client, s):  # type: ignore[no-untyped-def]
+        pc = pod_client(client, s, pod)
+        return to_plain(pc.conversations.get(conversation)), to_plain(
+            pc.agents.get(agent)
+        )
+
+    found = run_with_client(ctx, lookup)
+    if not found:
+        return
+    conversation_payload, agent_payload = found
+    owner = (
+        conversation_payload.get("agent_id")
+        if isinstance(conversation_payload, dict)
+        else None
+    )
+    named = agent_payload.get("id") if isinstance(agent_payload, dict) else None
+    if owner and named and str(owner) != str(named):
+        fail(
+            f"Conversation {conversation} belongs to a different agent, not "
+            f"'{agent}'. Drop --conversation to start a new conversation with "
+            f"'{agent}', or omit the agent name to continue that conversation."
+        )
+
+
 def _ensure_conversation(
     ctx: typer.Context,
     *,
@@ -60,8 +96,13 @@ def _ensure_conversation(
     agent: str | None,
     conversation: str | None,
     title: str | None,
+    check_owner: bool = True,
 ) -> str | None:
     if conversation:
+        if agent and check_owner:
+            _refuse_other_agents_conversation(
+                ctx, pod=pod, agent=agent, conversation=conversation
+            )
         return conversation
 
     result = run_with_client(
@@ -87,6 +128,7 @@ def chat_once(
     show_header: bool = False,
     show_user_message: bool = False,
     verbose: bool = False,
+    check_owner: bool = True,
 ) -> None:
     state = state_from_ctx(ctx)
     pod_id = selected_pod(state, pod) or ""
@@ -96,6 +138,7 @@ def chat_once(
         agent=agent,
         conversation=conversation,
         title=title,
+        check_owner=check_owner,
     )
     if conversation_id is None:
         return
@@ -262,6 +305,8 @@ def interactive_chat(
             title=title,
             show_header=False,
             show_user_message=False,
+            # Checked (or created for this agent) when the session opened.
+            check_owner=False,
         )
 
 

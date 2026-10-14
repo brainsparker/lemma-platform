@@ -117,7 +117,7 @@ Environment variables continue to work for humans, scripts, and agents:
 - `LEMMA_TOKEN`: bearer token override.
 - `LEMMA_ORG_ID`: org override.
 - `LEMMA_POD_ID`: pod override.
-- `LEMMA_CONVERSATION_ID`: conversation override.
+- `LEMMA_CONVERSATION_ID`: default conversation for `lemma conversations get|messages|stream|stop|approvals` (an agent sandbox sets it to the running conversation). `lemma chat` ignores it: chatting starts a new conversation unless you pass `--conversation`.
 
 Command-line flags take precedence over environment variables.
 

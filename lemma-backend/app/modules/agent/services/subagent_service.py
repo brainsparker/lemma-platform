@@ -488,8 +488,9 @@ class SubAgentService:
                     "status": run.status.value,
                     "timed_out": True,
                     "hint": (
-                        "Still running; poll query_subagents (mode='messages') "
-                        "or interact_subagent (action='await') again."
+                        "Still running. Rather than awaiting again, call "
+                        "`wait_for` with `subagent_run_id` and end your turn; "
+                        "you wake with its result."
                     ),
                 }
             attempt += 1

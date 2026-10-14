@@ -181,6 +181,7 @@ async fn run_once(
         &request.run_spec,
         request.own_settings,
         request.lemma_cli_bin.as_deref(),
+        request.mcp_server.as_ref(),
     );
     let agent = build_agent(
         &request.adapter,
@@ -284,7 +285,12 @@ async fn run_once(
             )
             .await?;
             let steering_supported = steering_advertised(initialization.meta.as_ref());
-            let mcp_servers: Vec<McpServer> = mcp_server.into_iter().collect();
+            // Named once: an agent given the server in its environment would
+            // otherwise hold it twice, the second without its limits.
+            let mcp_servers: Vec<McpServer> = mcp_server
+                .filter(|_| !session_options.mcp_server_in_environment)
+                .into_iter()
+                .collect();
             let mut session = open_session(
                 &connection,
                 resume_session_id,

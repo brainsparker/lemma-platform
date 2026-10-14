@@ -25,6 +25,7 @@ from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent
+from app.modules.agent.infrastructure.mcp import resource_tool_name
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
@@ -280,7 +281,7 @@ class AgentCallableToolFactory:
     ) -> Tool:
         schema = inline_schema(normalize_json_schema(function.input_schema))
         description = self._build_function_description(function)
-        function_name = f"function_{function.name}"
+        function_name = resource_tool_name("function_", function.name)
         parent_agent_id = parent_agent.id
         parent_agent_name = parent_agent.name
 
@@ -351,7 +352,7 @@ class AgentCallableToolFactory:
             else _single_string_input_schema()
         )
         description = self._build_agent_description(agent)
-        agent_tool_name = f"agent_{agent.name}"
+        agent_tool_name = resource_tool_name("agent_", agent.name)
 
         # See _build_function_tool: model arguments arrive as flat kwargs, so
         # collect them via **request rather than a single `request` parameter.
@@ -392,9 +393,9 @@ class AgentCallableToolFactory:
                     "run_id": str(handle.run_id),
                     "status": result.get("status"),
                     "note": (
-                        "Sub-agent still running; poll query_subagents "
-                        "(mode='messages') or interact_subagent (action='await') "
-                        "to continue."
+                        "Sub-agent still running. Call `wait_for` with "
+                        "`subagent_run_id` set to this run_id and end your turn; "
+                        "you wake with its result."
                     ),
                 }
             output = result.get("output")

@@ -28,6 +28,34 @@ from lemma_cli.cli_core.commands import conversations as conversations_command
 POD_ID = str(uuid.uuid4())
 CONVERSATION_ID = str(uuid.uuid4())
 RUN_ID = str(uuid.uuid4())
+AGENT_ID = str(uuid.uuid4())
+_NOW = "2026-01-01T00:00:00Z"
+
+#: A chat that names an agent and passes --conversation first checks the
+#: conversation belongs to that agent, so the fake answers both lookups.
+_LOOKUPS = {
+    f"/conversations/{CONVERSATION_ID}": {
+        "id": CONVERSATION_ID,
+        "pod_id": POD_ID,
+        "user_id": str(uuid.uuid4()),
+        "agent_id": AGENT_ID,
+        "created_at": _NOW,
+        "updated_at": _NOW,
+        "last_activity_at": _NOW,
+        "pod_cwd": "/",
+        "workspace_cwd": "/",
+    },
+    "/agents/coder": {
+        "id": AGENT_ID,
+        "pod_id": POD_ID,
+        "user_id": str(uuid.uuid4()),
+        "name": "coder",
+        "instruction": "",
+        "permissions": {"agent_id": AGENT_ID, "agent_name": "coder"},
+        "created_at": _NOW,
+        "updated_at": _NOW,
+    },
+}
 
 #: Far past anything a passing run takes, and short enough that a regression
 #: fails the suite rather than hanging it.
@@ -114,6 +142,22 @@ class _FakeApi:
 
             def do_GET(self) -> None:  # noqa: N802
                 url = urlparse(self.path)
+                lookup = next(
+                    (
+                        body
+                        for tail, body in _LOOKUPS.items()
+                        if url.path.endswith(tail)
+                    ),
+                    None,
+                )
+                if lookup is not None:
+                    encoded = json.dumps(lookup).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(encoded)))
+                    self.end_headers()
+                    self.wfile.write(encoded)
+                    return
                 if not url.path.endswith(f"/conversations/{CONVERSATION_ID}/stream"):
                     self.send_error(404)
                     return

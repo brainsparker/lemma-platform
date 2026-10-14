@@ -323,3 +323,39 @@ async def test_a_schema_without_chunks_is_migrated_properly_on_its_first_write(
 
     assert await pod_schema_version(engine, schema) == POD_SCHEMA_LATEST
     assert await _exists(engine, f'"{schema}".reserved_changes')
+
+
+async def test_rerunning_the_change_log_step_takes_no_lock_a_writer_holds(
+    engine: AsyncEngine,
+) -> None:
+    """A writer holds the change log's tables the way a record write does; the
+    backfill re-running version 3 on that live schema must not wait on it.
+
+    It used to: ``CREATE INDEX IF NOT EXISTS`` and ``ADD COLUMN IF NOT EXISTS``
+    lock before they find nothing to do, and against a writer's lock order the
+    two deadlocked (seen in the agent e2e suite).
+    """
+    from uuid import uuid4 as new_id
+
+    from app.modules.datastore.changes.schema import (
+        changes_table,
+        create_change_log,
+        subscribers_table,
+    )
+
+    [schema] = await _create_schemas(engine, 1)
+    await ensure_change_log(engine, schema)
+    async with engine.connect() as writer:
+        await writer.begin()
+        await writer.execute(text(f"SELECT count(*) FROM {subscribers_table(schema)}"))
+        await writer.execute(
+            text(
+                f"INSERT INTO {changes_table(schema)} (table_id, op, record_id) "
+                "VALUES (CAST(:t AS uuid), 'I', 'r1')"
+            ),
+            {"t": str(new_id())},
+        )
+        async with engine.begin() as backfill:
+            await backfill.execute(text("SET LOCAL lock_timeout = '2s'"))
+            await create_change_log(backfill, schema)
+        await writer.rollback()

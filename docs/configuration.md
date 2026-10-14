@@ -387,7 +387,9 @@ FUNCTION_RUNTIME_GATEWAY_URL=http://backend:8000
 ```
 
 `WORKSPACE_PORT_ACCESS_URL` publishes a port a workspace opened, for previewing
-something running inside it.
+something running inside it. It is a base URL (default `API_URL`); the signed
+URL is `<base>/public/workspace-ports/<grant>/`, unauthenticated by design,
+since the grant in the path is the credential.
 
 ## Function execution
 
@@ -511,6 +513,34 @@ MCP_ACCESS_AUTHORIZE_REQUESTS_PER_MINUTE=60  # sign-in requests, per source IP
 MCP_ACCESS_REGISTRATIONS_PER_HOUR=300        # dynamic registrations, per source IP
 MCP_ACCESS_TOKEN_REQUESTS_PER_MINUTE=600     # token + revoke, per client per source IP
 MCP_ACCESS_TOKEN_REQUESTS_PER_ADDRESS_PER_MINUTE=6000  # token + revoke, per source IP, any client
+```
+
+## Web chat and forms for people outside a pod
+
+A pod's web widgets put its chat, and forms for tables it opens to visitors, on
+other people's sites, reached by a public key anybody can copy off the page.
+They are off until an operator turns them on; while off, every `/public/web`
+endpoint and hosted page answers 404 and no widget can be set to answer anybody.
+
+```dotenv
+PUBLIC_WEB_ENABLED=true
+# Optional: an origin of its own for Lemma's hosted chat and form pages, routed
+# to the API but sharing no cookies with it. Unset, they are served on API_URL.
+PUBLIC_PAGES_URL=https://pages.example.com
+```
+
+With `PUBLIC_PAGES_URL` set, hosted pages answer only on that host, and that
+origin -- not `API_URL`'s -- is the one every widget allows.
+
+Bot protection is on by default: a visitor's browser solves an Altcha
+proof-of-work before an anonymous chat starts and before an email code is sent.
+It needs nothing configured and is independent of sign-in's
+`AUTH_ALTCHA_ENABLED`; without `AUTH_ALTCHA_HMAC_KEY`, challenges are signed
+with a key derived from `SECRET_ENCRYPTION_KEY`. Turn it off only behind
+protection of your own:
+
+```dotenv
+PUBLIC_WEB_ALTCHA_ENABLED=false
 ```
 
 ## Authentication and email
@@ -698,6 +728,11 @@ LEMMA_OPENAI_DEFAULT_MODEL=
 # Comma-separated. The vision list marks which of them accept images.
 LEMMA_OPENAI_MODEL_NAMES=
 LEMMA_OPENAI_VISION_MODEL_NAMES=
+# Default reasoning effort for reasoning models: none | minimal | low | medium | high.
+# Empty keeps the provider's default. Sent only to the models in the reasoning
+# list -- every configured model when that list is empty and an effort is set.
+LEMMA_OPENAI_REASONING_EFFORT=
+LEMMA_OPENAI_REASONING_MODEL_NAMES=
 
 LEMMA_ANTHROPIC_API_KEY=
 LEMMA_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-5
@@ -713,6 +748,22 @@ BRAVE_SEARCH_API_KEY=
 SEARXNG_URL=
 ```
 
+### Generation settings
+
+Reasoning effort, output cap, temperature, `top_p` and an Anthropic thinking
+budget are set in four places, each overriding the one before: the model's
+catalog entry (`default_model_settings`; for the system profile, the reasoning
+variables above), the runtime profile's `model_settings`, the agent
+(`agent_runtime.settings`), and a workflow agent step (`generation`). A field a
+layer leaves unset is inherited. The output cap is still clamped to the room
+the context window leaves.
+
+Reasoning effort is sent to an OpenAI-compatible model, and a thinking budget to
+an Anthropic-compatible one, only when the model's catalog entry declares the
+`REASONING` capability -- `reasoning_model_names` when a provider is added in
+Settings -> Models. A model that does not reason rejects the field. Agent Host
+runs drive their own model loop and ignore these settings.
+
 ### Decisions
 
 `POST /pods/{pod_id}/decisions` answers closed questions -- a choice, several
@@ -727,7 +778,8 @@ DECISION_PROVIDER=model       # model | typesafe
 DECISION_MODEL=
 
 # Typesafe System One, a classifier built for this. Opt-in: nothing is sent to
-# it unless DECISION_PROVIDER=typesafe.
+# it unless DECISION_PROVIDER=typesafe. Chosen without its key, the `model`
+# provider answers instead (with a warning), so decisions keep working.
 TYPESAFE_API_KEY=
 TYPESAFE_MODEL=jev-latest
 # Set so its calls count toward the spend limits below.
@@ -735,11 +787,19 @@ TYPESAFE_PRICE_PER_MILLION_INPUT_TOKENS_USD=
 
 DECISION_INTERACTIVE_TIMEOUT_SECONDS=8
 DECISION_BACKGROUND_TIMEOUT_SECONDS=25
-DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization; 0 for none
+DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization and priority; 0 for none
 ```
 
 Choosing `typesafe` sends the evidence of every decision to Typesafe, so list it
 wherever your deployment names the processors its users' data reaches.
+
+Live voice calls route everything the caller says through this API, with
+`priority: interactive`: whether it is conversation, a question about work
+already running, or new work, and for which conversation. Someone is waiting
+on every one of those, so `typesafe` is the recommended provider for a
+deployment with calls: it answers in about a third of a second, a language
+model in several. With no provider able to answer, a call carries on with the
+voice alone and dispatches nothing.
 
 ## Spend limits
 
@@ -768,6 +828,16 @@ USAGE_ORG_LIMIT_OVERRIDES_JSON=
 An override entry looks like `{"slug": "acme", "monthly_limit_usd": 5.0}`, or
 `{"slug_prefix": "trial-", "monthly_limit_usd": 0}` to cap a family of
 organizations at once. Slugs are organization handles, not display names.
+
+Answering people outside an organization -- contacts, and strangers in groups --
+has a ceiling of its own, which an organization owner sets in Usage. Until one
+does, this default applies; an owner who removes the cap chose no limit, and
+the default does not apply to them.
+
+```dotenv
+# USD a month. Unset (empty) means no default ceiling.
+USAGE_CONTACTS_MONTHLY_DEFAULT_USD=50
+```
 
 ### When the cost of the work cannot be established
 
@@ -958,6 +1028,8 @@ TELEGRAM_WEBHOOK_SECRET=
 ENABLE_TELEGRAM_POLLING_MODE=false
 
 WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_REENGAGE_TEMPLATE=   # approved template sent once the 24h window closes
+WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE=en_US
 MICROSOFT_BOT_APP_ID=
 ```
 

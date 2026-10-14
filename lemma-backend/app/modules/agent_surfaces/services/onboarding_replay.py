@@ -1,6 +1,10 @@
 """Hand off the saved user request through the normal ingestion/run pipeline."""
 
 from __future__ import annotations
+
+from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_identity_repository import (
+    VerifiedSurfaceIdentityRepository,
+)
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.identity.contracts.onboarding import UserEntity
 from app.modules.agent_surfaces.domain.ingress_context import (
@@ -11,7 +15,6 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.jobs.streaq_job_queue import SharedStreaqJobQueue
@@ -25,7 +28,6 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
-    VerifiedSurfaceIdentity,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
@@ -71,20 +73,14 @@ async def replay_onboarding(
                 }
             )
             if state.installation_surface_id is not None:
-                route_id = await uow.session.scalar(
-                    select(VerifiedSurfaceIdentity.id).where(
-                        VerifiedSurfaceIdentity.binding_key == state.binding_key,
-                        # The whole of `is_routable`, as `verified_sender` asks
-                        # it. On the pod alone, a row whose installation was
-                        # cleared by SET NULL -- the company uninstalled the app
-                        # -- is selected here and then refused inside
-                        # `validate_personal_dm_route`, which turns a knowable
-                        # "no route" into a raise in the middle of a replay.
-                        VerifiedSurfaceIdentity.installation_surface_id.is_not(None),
-                        VerifiedSurfaceIdentity.revoked_at.is_(None),
-                        VerifiedSurfaceIdentity.pod_id.is_not(None),
-                    )
+                # The whole of `is_routable`, as `verified_sender` asks it:
+                # on the pod alone, a row whose installation was cleared would
+                # be refused inside `validate_personal_dm_route`, a raise in
+                # the middle of a replay.
+                route = await VerifiedSurfaceIdentityRepository(uow).personal_route(
+                    state.binding_key
                 )
+                route_id = route[0] if route is not None else None
                 if route_id is None:
                     raise ValueError("The personal DM route is missing")
                 context = await prepare_personal_dm_context(

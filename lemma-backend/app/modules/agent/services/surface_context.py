@@ -72,8 +72,14 @@ def surface_context_from_conversation(conversation: Conversation) -> SurfaceCont
         "external_user_id": _text(metadata.get("external_user_id")),
         "external_message_id": _text(metadata.get("external_message_id")),
         "agent_display_name": _text(metadata.get("agent_display_name")),
-        "surface_conversation_kind": _text(metadata.get("conversation_kind")),
+        "surface_conversation_kind": surface_conversation_kind(conversation),
     }
+
+
+def surface_conversation_kind(conversation: Conversation) -> str | None:
+    """``DM``, ``CHANNEL`` or ``EMAIL`` as routing recorded it, else None."""
+    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
+    return _text(metadata.get("conversation_kind"))
 
 
 def _text(value: object) -> str | None:

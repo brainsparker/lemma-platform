@@ -47,6 +47,12 @@ class DatastoreTable(UUIDAuditBase):
     config: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
     enable_rls: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
+    #: Rows the pod keeps about its contacts, each readable by its own contact.
+    contact_owned: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    #: What a contact may read of their own rows: a member's explicit choice.
+    contact_columns: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
         Index(
@@ -70,6 +76,8 @@ class DatastoreTable(UUIDAuditBase):
             config=self.config,
             enable_rls=self.enable_rls,
             visibility=self.visibility,
+            contact_owned=self.contact_owned,
+            contact_columns=list(self.contact_columns or []),
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -169,7 +177,7 @@ class DatastoreFile(UUIDAuditBase):
 
 
 class DatastoreSignedLink(UUIDAuditBase):
-    """A public short link (``/s/{code}``) to one datastore file.
+    """A public short link (``/public/s/{code}``) to one datastore file.
 
     The link record lives here rather than only in Redis because it is a
     capability grant, not a cache: it is the whole of what stands between a URL
@@ -190,6 +198,10 @@ class DatastoreSignedLink(UUIDAuditBase):
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    # `agent:<id>` or `function:<id>` when a workload minted the link for a
+    # person, `alone:agent:<id>` when it minted for nobody, so the live check at
+    # fetch time holds it to what it was held to then (`ACTING_ALONE`).
+    minted_by_workload: Mapped[str | None] = mapped_column(String(80), nullable=True)
     path: Mapped[str] = mapped_column(Text)
     object_key: Mapped[str] = mapped_column(Text)
     content_type: Mapped[str] = mapped_column(String(255))
@@ -224,6 +236,7 @@ class DatastoreSignedLink(UUIDAuditBase):
             code=self.code,
             pod_id=self.pod_id,
             created_by_user_id=self.created_by_user_id,
+            minted_by_workload=self.minted_by_workload,
             path=self.path,
             object_key=self.object_key,
             content_type=self.content_type,

@@ -109,35 +109,72 @@ async def process_function_run(
         await _fail_run_after_worker_error(worker_ctx, parsed_run_id, exc)
 
 
+#: Wall-clock share of the once-a-minute reconcile tick each sweep may use.
+#: Both page until drained: a single page per tick left a large burst of
+#: stuck runs -- and the workflows waiting on them -- minutes behind.
+RECONCILE_SWEEP_BUDGET_SECONDS = 20.0
+
+
 async def _reconcile_unqueued_function_runs(
     *,
     uow_factory: UnitOfWorkFactory,
     now: datetime,
     limit: int = 100,
+    budget_seconds: float = RECONCILE_SWEEP_BUDGET_SECONDS,
 ) -> int:
     """Republish committed asynchronous PENDING runs without holding a connection."""
 
-    async with uow_factory() as uow:
-        run_ids = await FunctionRunRepository(uow).list_pending_async_runs(
-            now=now,
-            min_age_seconds=FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS,
-            limit=limit,
-        )
-
     queue = StreaqFunctionRunQueue(get_streaq_job_queue())
+    started = time.monotonic()
     published = 0
-    for run_id in run_ids:
-        try:
-            await queue.enqueue(run_id)
-            published += 1
-        except FunctionRunQueueUnavailable as exc:
-            logger.warning(
-                "function.handlers.run_reconcile_enqueue_failed.degraded",
-                run_id=str(run_id),
-                error_type=type(exc).__name__,
+    after: UUID | None = None
+    while True:
+        async with uow_factory() as uow:
+            run_ids = await FunctionRunRepository(uow).list_pending_async_runs(
+                now=now,
+                min_age_seconds=FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS,
+                limit=limit,
+                after=after,
             )
-            continue
-    return published
+        for run_id in run_ids:
+            try:
+                await queue.enqueue(run_id)
+                published += 1
+            except FunctionRunQueueUnavailable as exc:
+                logger.warning(
+                    "function.handlers.run_reconcile_enqueue_failed.degraded",
+                    run_id=str(run_id),
+                    error_type=type(exc).__name__,
+                )
+        if len(run_ids) < limit or time.monotonic() - started >= budget_seconds:
+            return published
+        after = run_ids[-1]
+
+
+async def _fail_expired_function_runs(
+    *,
+    uow_factory: UnitOfWorkFactory,
+    now: datetime,
+    limit: int = 100,
+    budget_seconds: float = RECONCILE_SWEEP_BUDGET_SECONDS,
+) -> int:
+    """Fail every run past its window, a committed page at a time.
+
+    No cursor needed: a failed run leaves the predicate, so each page is the
+    next one.
+    """
+    started = time.monotonic()
+    failed = 0
+    while True:
+        async with uow_factory() as uow:
+            page = await FunctionRunRepository(uow).fail_expired(
+                now=now,
+                limit=limit,
+                job_callback_grace_seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
+            )
+        failed += page
+        if page < limit or time.monotonic() - started >= budget_seconds:
+            return failed
 
 
 async def _guard_cron(task_name: str, body: Coroutine[Any, Any, None]) -> None:
@@ -223,11 +260,7 @@ async def _reconcile_function_runs() -> None:
         uow_factory=uow_factory,
         now=now,
     )
-    async with uow_factory() as uow:
-        await FunctionRunRepository(uow).fail_expired(
-            now=now,
-            job_callback_grace_seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
-        )
+    await _fail_expired_function_runs(uow_factory=uow_factory, now=now)
 
 
 @streaq_cron(

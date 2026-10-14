@@ -7,6 +7,7 @@ see the exact same tools for a given (agent, conversation).
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import source_of
 from typing import Literal, cast
 
 from pydantic_ai.toolsets import AbstractToolset
@@ -14,7 +15,9 @@ from app.modules.agent.tools.context import ConversationContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.outsiders import Audience
+from app.modules.agent.tools.contact_tools import build_contact_toolset
+from app.modules.agent.tools.form_tools import build_form_toolset
 from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
@@ -144,7 +147,7 @@ class RunToolAssembler:
             if (
                 include_notification_tools
                 and conversation is not None
-                and not answers_outsiders(conversation)
+                and not Audience.of(conversation).answers_outsiders
             ):
                 toolsets = [*toolsets, notification_toolset()]
             span.set_attribute("lemma.toolsets", len(toolsets))
@@ -220,7 +223,8 @@ class RunToolAssembler:
         # functions and sub-agents nor its surface's platform tools: a function
         # tool runs on behalf of the conversation's user, who on such a run is
         # the member looking after it, not the stranger asking.
-        for_outsider = answers_outsiders(conversation)
+        audience = Audience.of(conversation)
+        for_outsider = audience.answers_outsiders
         if agent is not None and callable(self.uow_factory) and not for_outsider:
             toolsets.extend(
                 await AgentCallableToolFactory(self.uow_factory).build_toolsets(
@@ -231,6 +235,7 @@ class RunToolAssembler:
             )
         if not for_outsider:
             toolsets.extend(await self._surface_toolsets(conversation))
+        toolsets.extend(self._outside_toolsets(conversation, audience))
         toolsets.extend(
             self._final_answer_toolsets(
                 agent=agent,
@@ -242,6 +247,20 @@ class RunToolAssembler:
         # sandbox.
         if not for_outsider:
             _add_view_image(toolsets, vision_mode)
+        return toolsets
+
+    def _outside_toolsets(
+        self, conversation: Conversation | None, audience: Audience
+    ) -> list[AbstractToolset[ConversationContext]]:
+        """What a run answering somebody outside the pod adds: a contact's own
+        rows and functions, and filling the form on a web visitor's page."""
+        if not callable(self.uow_factory):
+            return []
+        toolsets: list[AbstractToolset[ConversationContext]] = []
+        if audience.is_contact:
+            toolsets.append(build_contact_toolset(uow_factory=self.uow_factory))
+        if audience.answers_outsiders and _on_a_web_page(conversation):
+            toolsets.append(build_form_toolset(uow_factory=self.uow_factory))
         return toolsets
 
     async def _surface_toolsets(
@@ -284,3 +303,10 @@ def _add_view_image(
 
     if view_image_toolset not in toolsets:
         toolsets.append(view_image_toolset)
+
+
+def _on_a_web_page(conversation: Conversation | None) -> bool:
+    """A visitor chatting on a web page, where a form may sit beside the chat."""
+    return bool(
+        conversation is not None and source_of(conversation.metadata) == "web_widget"
+    )

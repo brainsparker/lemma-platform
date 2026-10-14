@@ -14,13 +14,12 @@ export interface ProfileDraft {
     timezone: string;
     country: string;
     mobile_number: string;
-    telegram_username: string;
     date_of_birth: string;
 }
 
 export const PROFILE_FIELDS: (keyof ProfileDraft)[] = [
     "first_name", "last_name", "timezone", "country",
-    "mobile_number", "telegram_username", "date_of_birth",
+    "mobile_number", "date_of_birth",
 ];
 
 function text(value: string | null | undefined): string {
@@ -35,8 +34,6 @@ export function draftOf(user: UserResponse | null | undefined): ProfileDraft {
         timezone: text(user?.timezone),
         country: text(user?.country),
         mobile_number: text(user?.mobile_number),
-        /* Stored bare; the @ is how people write it and how it is shown. */
-        telegram_username: text(user?.telegram_username).replace(/^@+/, ""),
         date_of_birth: text(user?.date_of_birth).slice(0, 10),
     };
 }
@@ -53,7 +50,7 @@ export function changes(before: ProfileDraft, after: ProfileDraft): UserProfileR
     const patch: Record<string, string | null> = {};
     for (const field of PROFILE_FIELDS) {
         const was = before[field];
-        const now = field === "telegram_username" ? after[field].replace(/^@+/, "").trim() : after[field].trim();
+        const now = after[field].trim();
         if (was === now) continue;
         patch[field] = now === "" ? null : now;
     }

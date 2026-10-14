@@ -301,10 +301,14 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
+        "contacts",
     }
     # A new bot answers people outside the pod in its groups until switched off.
     assert config["groups"] == {"answers_outsiders": True}
+    # It answers nobody outside the pod privately until somebody says so.
+    assert config["contacts"] == {"answer": "off", "looked_after_by": None}
     # Identity values are normalized on write.
     assert config["identity"]["allowed_domains"] == ["lemma.test"]
     route = config["channels"][0]
@@ -337,6 +341,28 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     assert config["send_policy"]["allow_send"] is True
     assert config["channels"][0]["channel_id"] == "C-ROUTED"
 
+    # Turning contacts on makes whoever did it the one who looks after them.
+    opened = await authenticated_client.patch(
+        f"/pods/{pod_id}/surfaces/slack",
+        json={"config": {"contacts": {"answer": "anyone"}}},
+    )
+    assert opened.status_code == 200, opened.text
+    contacts = opened.json()["config"]["contacts"]
+    assert contacts["answer"] == "anyone"
+    assert contacts["looked_after_by"] is not None
+    assert opened.json()["config"]["groups"]["answers_outsiders"] is False
+
+    # Nobody outside the pod can be the one who looks after them.
+    stranger = await authenticated_client.patch(
+        f"/pods/{pod_id}/surfaces/slack",
+        json={
+            "config": {
+                "contacts": {"answer": "anyone", "looked_after_by": str(uuid4())}
+            }
+        },
+    )
+    assert stranger.status_code in (400, 422), stranger.text
+
     openapi = await authenticated_client.get("/openapi.json")
     schemas = openapi.json()["components"]["schemas"]
     assert set(schemas["SurfaceConfigResponse"]["properties"]) == {
@@ -345,7 +371,9 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
+        "contacts",
     }
     assert set(schemas["SurfaceBehaviorConfigInput"]["properties"]) == {
         "identity",
@@ -354,7 +382,9 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
+        "contacts",
     }
 
 
@@ -515,12 +545,30 @@ async def test_platform_webhook_verification_endpoints_and_signature_rejection(
     assert telegram.status_code == 200, telegram.text
     assert telegram.text == "ok"
 
+    from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+        build_slack_signature_headers,
+    )
+
+    handshake = json.dumps(
+        {"type": "url_verification", "challenge": "slack-challenge"}
+    ).encode()
     slack_verify = await authenticated_client.post(
+        "/surfaces/webhooks/slack",
+        content=handshake,
+        headers=build_slack_signature_headers(
+            raw_body=handshake, signing_secret="slack-secret"
+        ),
+    )
+    assert slack_verify.status_code == 200, slack_verify.text
+    assert slack_verify.json() == {"challenge": "slack-challenge"}
+
+    # Unsigned, it is not Slack's: the handshake is the one branch that answers
+    # before the signature check, and it no longer answers anybody.
+    unsigned_verify = await authenticated_client.post(
         "/surfaces/webhooks/slack",
         json={"type": "url_verification", "challenge": "slack-challenge"},
     )
-    assert slack_verify.status_code == 200, slack_verify.text
-    assert slack_verify.json()["challenge"] == "slack-challenge"
+    assert unsigned_verify.status_code == 401, unsigned_verify.text
 
     missing_signature = await authenticated_client.post(
         "/surfaces/webhooks/slack",

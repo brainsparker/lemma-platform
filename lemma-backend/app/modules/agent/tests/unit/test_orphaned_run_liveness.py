@@ -84,11 +84,6 @@ def _install_repository(monkeypatch: pytest.MonkeyPatch, *, undecided, finished)
         async def list_runs_stuck_stopping(self, *, cutoff_seconds, limit=200):
             return []
 
-        async def list_conversations_stranded_by_a_finished_run(
-            self, *, cutoff_seconds, limit=200
-        ):
-            return []
-
         async def finish_agent_run(self, *, agent_run_id, status, error=None):
             finished.append((agent_run_id, status))
             return SimpleNamespace(updated=True, status=status)

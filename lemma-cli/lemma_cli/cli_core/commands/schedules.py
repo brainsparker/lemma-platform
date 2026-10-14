@@ -7,6 +7,7 @@ import typer
 from lemma_sdk.openapi_client.models.create_schedule_request import (
     CreateScheduleRequest,
 )
+from lemma_sdk.openapi_client.models.schedule_run_status import ScheduleRunStatus
 from lemma_sdk.openapi_client.models.update_schedule_request import (
     UpdateScheduleRequest,
 )
@@ -19,6 +20,12 @@ from ..sdk import pod_client
 from ..state import fail, run_with_client, state_from_ctx
 
 app = typer.Typer(help="Schedule commands.")
+runs_app = typer.Typer(help="Schedule run commands: what each event or tick became.")
+app.add_typer(runs_app, name="runs")
+
+# From the SDK's generated enum, so a status the API adds is accepted here
+# without a second list to keep in step.
+_RUN_STATUSES = tuple(status.value for status in ScheduleRunStatus)
 
 
 @app.command("init")
@@ -131,6 +138,34 @@ def get_schedule(
         emit(state, result)
 
 
+def _text_field(payload: dict[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _create_target(
+    payload: dict[str, object],
+    *,
+    agent: str | None,
+    workflow: str | None,
+    account: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """``(agent, workflow, account)``, from the flags or else the payload.
+
+    A flag wins. Resolved before the check and before the request is built:
+    the flags used to be written over the payload unconditionally, so a target
+    named only in --data/--file was refused as missing or sent as null.
+    """
+    agent = agent or _text_field(payload, "agent_name")
+    workflow = workflow or _text_field(payload, "workflow_name")
+    if bool(agent) == bool(workflow):
+        fail(
+            "Provide exactly one of --agent or --workflow (or agent_name / "
+            "workflow_name in the payload)."
+        )
+    return agent, workflow, account or _text_field(payload, "account_id")
+
+
 @app.command("create")
 def create_schedule(
     ctx: typer.Context,
@@ -191,9 +226,10 @@ def create_schedule(
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """Create a schedule."""
-    if bool(agent) == bool(workflow):
-        fail("Provide exactly one of --agent or --workflow.")
     extra = read_json(json_payload, file, required=False)
+    agent, workflow, account = _create_target(
+        extra, agent=agent, workflow=workflow, account=account
+    )
     schedule_type = "TIME"
     config: dict[str, object] = {}
     if cron:
@@ -356,3 +392,57 @@ def delete_schedule(
     )
     if result is None:
         emit(state, {"ok": True})
+
+
+@runs_app.command("list")
+def list_schedule_runs(
+    ctx: typer.Context,
+    schedule: str = typer.Argument(..., help="Schedule name or id."),
+    pod: str | None = typer.Option(None, "--pod"),
+    limit: int = typer.Option(100, "--limit"),
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help="Only runs with this status, e.g. COMPLETED, FILTERED, DEAD_LETTERED.",
+    ),
+    skipped: bool | None = typer.Option(
+        None,
+        "--skipped/--no-skipped",
+        help=(
+            "--skipped: only events the schedule's filter skipped. "
+            "--no-skipped: leave them out. Default: both."
+        ),
+    ),
+) -> None:
+    """List a schedule's runs, newest first."""
+    wanted = status.upper() if status else None
+    if wanted is not None and wanted not in _RUN_STATUSES:
+        raise typer.BadParameter(
+            f"--status is one of {', '.join(_RUN_STATUSES)}.", param_hint="--status"
+        )
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).schedules.runs(
+            schedule, limit=limit, status=wanted, skipped=skipped
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@runs_app.command("retry")
+def retry_schedule_run(
+    ctx: typer.Context,
+    schedule: str = typer.Argument(..., help="Schedule name or id."),
+    run: str = typer.Argument(..., help="The run to retry."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Run a failed or dead-lettered run again with the same event."""
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).schedules.retry_run(schedule, run),
+    )
+    if result is not None:
+        emit(state, result)

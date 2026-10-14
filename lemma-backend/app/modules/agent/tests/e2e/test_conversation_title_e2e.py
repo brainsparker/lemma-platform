@@ -17,6 +17,12 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+from app.modules.agent.domain.runtime_profiles import (
+    RuntimeModelCapability,
+    RuntimeProfileProtocol,
+)
+
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
@@ -35,16 +41,20 @@ pytestmark = pytest.mark.e2e
 class _FakeResolved:
     credentials: dict[str, object] = {}
     model_name_for_harness = "deepseek-v4-flash"
+    # Read to decide whether the title may ask for no reasoning.
+    profile = SimpleNamespace(protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE)
+    capabilities = [RuntimeModelCapability.TEXT, RuntimeModelCapability.REASONING]
 
-    def public_snapshot(self) -> dict[str, object | None]:
-        return {
-            "profile_id": "system:lemma",
-            "scope": "SYSTEM",
-            "protocol": "OPENAI_COMPATIBLE",
-            "model_name": "deepseek-v4-flash",
-            "provider_model_name": "accounts/fireworks/models/deepseek-v4-flash",
-            "config": {"base_url": "http://fireworks.test/v1"},
-        }
+    def runtime_snapshot(self) -> RuntimeSnapshot:
+        return RuntimeSnapshot(
+            profile_id="system:lemma",
+            profile_name="Lemma",
+            scope="SYSTEM",
+            protocol="OPENAI_COMPATIBLE",
+            model_name="deepseek-v4-flash",
+            provider_model_name="accounts/fireworks/models/deepseek-v4-flash",
+            config={"base_url": "http://fireworks.test/v1"},
+        )
 
 
 class _FakeProfileService:

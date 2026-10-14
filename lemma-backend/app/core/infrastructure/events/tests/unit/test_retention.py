@@ -174,3 +174,24 @@ async def test_a_claim_nothing_ever_finished_is_still_swept() -> None:
     assert "last_received_at" in sql
     # Not swept on status alone: a claim made moments ago is in flight.
     assert "2026-06-26" in sql  # _NOW minus the 14-day abandoned window
+
+
+@pytest.mark.asyncio
+async def test_outbox_only_prunes_no_inbox_category() -> None:
+    """The datastore database has an outbox and no inbox.
+
+    Touching ``domain_event_inbox`` there would raise on a table that does not
+    exist, so an outbox-only sweep must issue exactly the two outbox deletes.
+    """
+    session_maker, sessions = _harness([0, 0])
+
+    deleted = await prune_event_delivery_records(
+        session_maker, now=_NOW, include_inbox=False
+    )
+
+    assert set(deleted) == {"outbox_published", "outbox_dead_letter"}
+    assert len(sessions) == 2
+    for session in sessions:
+        (statement,) = session.statements
+        assert "domain_event_outbox" in str(statement)
+        assert "domain_event_inbox" not in str(statement)

@@ -286,6 +286,7 @@ mod host_execution {
                 folders: directory.path().join("conversation-folders.json"),
                 roots: directory.path().join("conversation-roots.json"),
                 target: uuid::Uuid::from_u128(1),
+                bundled_cli: Vec::new(),
             },
         );
         relay.set_enabled(enabled);

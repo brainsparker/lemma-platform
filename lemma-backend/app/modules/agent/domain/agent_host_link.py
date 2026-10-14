@@ -23,7 +23,7 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.agent.domain.agent_host import (
     AGENT_HOST_PROTOCOL_VERSION,
@@ -300,6 +300,17 @@ class McpBody(BaseModel):
     #: retry of that call, on any link. With ``run_id`` it makes the call
     #: execute at most once (``agent_host_link_tool_calls``).
     request_id: str | None = Field(default=None, pattern=_REQUEST_ID_PATTERN)
+
+    @field_validator("params", mode="before")
+    @classmethod
+    def _null_params_are_empty(cls, value: object) -> object:
+        """Read ``"params": null`` as no params.
+
+        MCP lets a client leave ``params`` out of ``tools/list``, and a host
+        released before the bridge filled it in relays that as ``null``.
+        Refusing it cost the agent every Lemma tool for the whole run.
+        """
+        return {} if value is None else value
 
 
 class InteractionWaitBody(BaseModel):

@@ -13,6 +13,7 @@ from app.core.authorization.context import (
     ResourceVisibility,
     normalize_resource_visibility,
 )
+from app.modules.datastore.domain.column_description import column_name_problem
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreTableEntity,
@@ -25,10 +26,19 @@ from app.modules.datastore.domain.errors import (
     DatastoreDomainError,
     DatastoreInfrastructureError,
     DatastoreTableNotFoundError,
+    DatastoreValidationError,
 )
 from app.modules.datastore.domain.ports import (
     DatastoreSchemaPort,
     DatastoreTableRepositoryPort,
+)
+from app.modules.datastore.services.contact_owned_tables import (
+    CONTACT_OWNED_AND_RLS,
+    apply_contact_owned,
+    apply_row_policies,
+    refuse_conflicts,
+    resolve_contact_columns,
+    with_contact_column,
 )
 from app.modules.datastore.infrastructure.sql_identifiers import (
     ensure_identifier_fits,
@@ -90,14 +100,20 @@ class TableService:
         visibility: str | None = None,
         *,
         ctx: Context,
+        contact_owned: bool = False,
+        contact_columns: list[str] | None = None,
     ) -> DatastoreTableEntity:
         ensure_table_name_available(table_name)
+        if contact_owned and enable_rls:
+            raise DatastoreValidationError(CONTACT_OWNED_AND_RLS)
         # Before the metadata row, not after: the 409 the truncation produces
         # names a table the caller cannot find, and by then a row exists.
         ensure_identifier_fits(table_name, kind="Table name")
         ensure_identifier_fits(primary_key_column, kind="Column name")
+        _ensure_queryable_column_name(primary_key_column)
         for declared in columns:
             ensure_identifier_fits(declared.name, kind="Column name")
+            _ensure_queryable_column_name(declared.name)
         entity_data: dict = {
             "pod_id": pod_id,
             "table_name": table_name,
@@ -119,13 +135,27 @@ class TableService:
 
         entity.user_id = requester_user_id
         self._normalize_table_visibility(entity)
+        refuse_conflicts(
+            per_user=enable_rls,
+            contact_owned=contact_owned,
+            visibility=entity.visibility,
+        )
         entity.validate_structure()
         entity.columns = materialize_table_columns(
             entity.primary_key_column,
-            entity.columns,
+            with_contact_column(entity.columns) if contact_owned else entity.columns,
             enable_rls=entity.enable_rls,
         )
         entity.validate_structure()
+        # Recorded with the rest of the row, so the metadata over-reports if
+        # the policy below never lands -- never the other way round.
+        entity.contact_owned = contact_owned
+        entity.contact_columns = resolve_contact_columns(
+            entity.columns,
+            contact_owned=contact_owned,
+            chosen=contact_columns,
+            current=[],
+        )
 
         existing = await self.table_repository.get_by_datastore_and_name(
             entity.pod_id,
@@ -141,6 +171,7 @@ class TableService:
         # Metadata first — see the ordering rule on this class.
         await self.table_repository.commit()
 
+        physical = False
         try:
             await self.schema_manager.create_table(
                 entity.pod_id,
@@ -149,12 +180,11 @@ class TableService:
                 entity.columns,
                 entity.enable_rls,
             )
+            physical = True
+            if contact_owned:
+                await apply_contact_owned(self.schema_manager, table, enable=True)
         except Exception as exc:
-            await self._undo_metadata(
-                table,
-                lambda: self.table_repository.delete_entity(table),
-                change="create table",
-            )
+            await self._undo_create(table, physical=physical)
             if isinstance(exc, DatastoreDomainError):
                 raise
             raise DatastoreInfrastructureError(
@@ -178,6 +208,8 @@ class TableService:
         ctx: Context,
         visibility: str | None = None,
         enable_rls: bool | None = None,
+        contact_owned: bool | None = None,
+        contact_columns: list[str] | None = None,
     ) -> DatastoreTableEntity:
         requester_user_id = ctx.user_id
         table = await self.table_repository.get_by_datastore_and_name(
@@ -200,27 +232,13 @@ class TableService:
             table.update_config(config, actor_id=requester_user_id)
         if visibility is not None:
             table.visibility = self._normalize_visibility_value(visibility).value
-        if enable_rls is not None and enable_rls != table.enable_rls:
-            try:
-                await self.schema_manager.set_table_rls(
-                    pod_id,
-                    table.table_name,
-                    enable_rls,
-                )
-            except DatastoreDomainError:
-                raise
-            except Exception as exc:
-                raise DatastoreInfrastructureError(
-                    "Failed to toggle row-level security"
-                ) from exc
-            table.enable_rls = enable_rls
-            # Re-derive system columns so the stored schema matches the physical
-            # table (user_id appears only while RLS is on).
-            table.columns = materialize_table_columns(
-                table.primary_key_column,
-                [column for column in table.columns if not column.system],
-                enable_rls=enable_rls,
-            )
+        await apply_row_policies(
+            self.schema_manager,
+            table,
+            enable_rls=enable_rls,
+            contact_owned=contact_owned,
+            contact_columns=contact_columns,
+        )
         updated = await self.table_repository.update(table)
         if ctx is not None:
             refreshed = await self.table_repository.get_by_datastore_and_name(
@@ -230,6 +248,31 @@ class TableService:
             )
             return refreshed or updated
         return updated
+
+    async def _undo_create(
+        self, table: DatastoreTableEntity, *, physical: bool
+    ) -> None:
+        """Leave nothing of a table whose creation was refused part-way.
+
+        The physical table goes first, as on delete: if dropping it fails, the
+        metadata row stays so the caller can still see the table and delete it.
+        """
+        if physical:
+            try:
+                await self.schema_manager.drop_table(table.pod_id, table.table_name)
+            except SQLAlchemyError, DatastoreDomainError:
+                logger.warning(
+                    "datastore.table_service.table_undo_failed.degraded",
+                    pod_id=str(table.pod_id),
+                    table_name=table.table_name,
+                    exc_info=True,
+                )
+                return
+        await self._undo_metadata(
+            table,
+            lambda: self.table_repository.delete_entity(table),
+            change="create table",
+        )
 
     async def get_table(
         self,
@@ -397,6 +440,7 @@ class TableService:
         ctx: Context,
     ) -> DatastoreTableEntity:
         ensure_identifier_fits(column.name, kind="Column name")
+        _ensure_queryable_column_name(column.name)
         requester_user_id = ctx.user_id
         table = await self.table_repository.get_by_datastore_and_name(
             pod_id,
@@ -512,3 +556,17 @@ class TableService:
     @staticmethod
     def _normalize_visibility_value(value: str | None) -> ResourceVisibility:
         return normalize_resource_visibility(value) or ResourceVisibility.POD
+
+
+def _ensure_queryable_column_name(name: str) -> None:
+    """Refuse a new column name that hand-written SQL cannot use unquoted.
+
+    The platform's own SQL quotes every name, so `check` or `Order` work for
+    record writes -- and then break every query an agent or a person writes
+    without quotes, as a syntax error or a column that "does not exist". Only
+    at creation: an existing table keeps its names, and its describe marks the
+    ones that need quoting.
+    """
+    problem = column_name_problem(name)
+    if problem is not None:
+        raise DatastoreValidationError(f"Column name {problem}")

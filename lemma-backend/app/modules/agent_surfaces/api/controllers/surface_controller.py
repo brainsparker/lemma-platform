@@ -15,7 +15,6 @@ from app.core.api.pagination import parse_uuid_page_token
 from app.modules.connectors.contracts.surfaces import (
     account,
     require_account_owner,
-    surface_connector,
 )
 from app.modules.agent.contracts.agents import (
     agent_id_for_name,
@@ -29,35 +28,36 @@ from app.modules.agent_surfaces.api.dependencies import (
 )
 from app.modules.agent_surfaces.api.schemas import (
     AgentSurfaceListResponse,
-    AgentSurfaceResponse,
     AvailableSurfaceChannelResponse,
     AvailableSurfaceChannelsResponse,
-    AvailableSurfacesResponse,
-    SurfaceCreateRequest,
-    SurfaceReach,
     SurfaceSendRequest,
     SurfaceSendResponse,
     SurfaceSetupResponse,
     SurfaceUpdateRequest,
+)
+from app.modules.agent_surfaces.domain.surface_representation import (
+    AgentSurfaceResponse,
+    SurfaceCreateRequest,
+    SurfaceReach,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.contracts.provisioning import surface_response
-from app.modules.agent_surfaces.api.surface_config_resolver import (
+from app.modules.agent_surfaces.contracts.provisioning import warned_surface_response
+from app.modules.agent_surfaces.services.contact_keepers import contacts_warnings
+from app.modules.agent_surfaces.services.surface_config_input import (
     merge_surface_config,
+    resolve_surface_config,
+)
+from app.modules.agent_surfaces.api.surface_config_resolver import (
     require_own_account,
     require_surface_agent_action,
-    resolve_surface_config,
     surface_setup_for_reader,
 )
-from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
 from app.modules.agent_surfaces.services.surface_identity_claim import (
     create_surface_claiming_identity,
-)
-from app.modules.agent_surfaces.services.available_surfaces_builder import (
-    build_available_surfaces,
 )
 from app.modules.agent_surfaces.services.surface_reach_resolver import (
     SurfaceReachResolver,
@@ -67,19 +67,6 @@ from app.modules.agent_surfaces.services.surface_service import (
 )
 
 router = APIRouter(prefix="/pods/{pod_id}/surfaces", tags=["Agent Surfaces"])
-
-# A surface's platform-level setup checklist (env/OAuth prerequisites) needs no
-# surface to exist yet, so it lives outside the surface-resource router.
-setup_guide_router = APIRouter(
-    prefix="/pods/{pod_id}/surface-setup", tags=["Agent Surfaces"]
-)
-
-# The connectable-surface catalog (platform -> connector + supported credential
-# modes + connect schema) — also platform-level, needs no surface to exist. Kept
-# on its own path so it never collides with GET /surfaces/{surface_name}.
-available_surfaces_router = APIRouter(
-    prefix="/pods/{pod_id}/available-surfaces", tags=["Agent Surfaces"]
-)
 
 
 async def _resolve_surface_reaches(
@@ -93,7 +80,7 @@ async def _resolve_surface_reaches(
     and a session cannot serve two of those at once. See ``resolve_many``."""
     return await SurfaceReachResolver().resolve_many(
         surfaces,
-        credential_resolver=service._credential_resolver,
+        credential_resolver=service.credential_resolver,
         find_account=partial(account, uow),
         surface_repository=service.surface_repository,
     )
@@ -205,12 +192,14 @@ async def list_surfaces(
         pod_id=pod_id,
         viewer_user_id=user.id,
     )
+    warnings = await contacts_warnings(uow, pod_id, *(row[0] for row in visible))
     items = [
         surface_response(
             surface,
             agent_name=resolved_agent_name,
             reach=reach,
             connection=connections.get(surface.id),
+            contacts_warning=warnings.get(surface.id),
         )
         for surface, resolved_agent_name, reach in visible
     ]
@@ -329,8 +318,8 @@ async def get_surface(
     connection = await connection_resolver.for_surface(
         surface, pod_id=pod_id, viewer_user_id=user.id
     )
-    return surface_response(
-        surface, agent_name=agent_name, reach=reach, connection=connection
+    return await warned_surface_response(
+        uow, surface, agent_name=agent_name, reach=reach, connection=connection
     )
 
 
@@ -374,16 +363,18 @@ async def update_surface(
     # be created in -- it used to be, and that is what let one column mean both
     # "who answers here" and "whose bot is this".
     agent_id = agent_name_id or pod_id
-    await require_surface_agent_action(
-        ctx=ctx,
-        pod_id=pod_id,
-        agent_id=agent_id,
-        action=Permissions.AGENT_UPDATE,
-    )
-
     existing = await service.get_surface_by_name_in_pod(
         pod_id=pod_id, name=surface_name
     )
+    # The agent the surface answers as now, always: a patch that names no agent
+    # still disables or rebinds this one. And the agent it moves to, if any.
+    for checked_agent_id in {existing.agent_id, agent_id if update_agent_id else None}:
+        await require_surface_agent_action(
+            ctx=ctx,
+            pod_id=pod_id,
+            agent_id=checked_agent_id,
+            action=Permissions.AGENT_UPDATE,
+        )
     config = await merge_surface_config(
         uow=uow,
         existing=existing.config,
@@ -425,7 +416,8 @@ async def update_surface(
     connection = await connection_resolver.for_surface(
         updated, pod_id=pod_id, viewer_user_id=user.id
     )
-    return surface_response(
+    return await warned_surface_response(
+        uow,
         updated,
         agent_name=resolved_agent_name,
         reach=reach,
@@ -552,44 +544,4 @@ async def list_surface_channels(
             )
             for channel in channels
         ]
-    )
-
-
-@setup_guide_router.get(
-    "/{platform}",
-    operation_id="agent.surface.setup_guide",
-    dependencies=[require_action(Permissions.AGENT_READ)],
-)
-async def get_surface_setup_guide(
-    pod_id: UUID,
-    platform: str,
-    user: CurrentUser,
-    service: AgentSurfaceService = Depends(get_surface_service),
-) -> SurfacePlatformSetupGuide:
-    """The static pre-creation checklist for a platform (env/OAuth
-    prerequisites) — works before any surface of this platform exists."""
-    del user, pod_id
-    return service.get_platform_setup_guide(platform)
-
-
-@available_surfaces_router.get(
-    "",
-    operation_id="agent.surface.available",
-    dependencies=[require_action(Permissions.AGENT_READ)],
-)
-async def list_available_surfaces(
-    pod_id: UUID,
-    user: CurrentUser,
-    uow: UoWDep,
-    service: AgentSurfaceService = Depends(get_surface_service),
-) -> AvailableSurfacesResponse:
-    """The connectable-surface catalog: every surface platform with its connector,
-    supported credential modes, the schema to connect an account, and whether this
-    pod's org can still claim the platform's Lemma-managed bot/number. Otherwise
-    platform-level — no surface need exist."""
-    del user
-    return await build_available_surfaces(
-        read_connector=partial(surface_connector, uow),
-        pod_id=pod_id,
-        surface_repository=service.surface_repository,
     )

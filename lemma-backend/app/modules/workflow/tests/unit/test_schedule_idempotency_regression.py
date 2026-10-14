@@ -63,6 +63,7 @@ def _engine_with_mocks() -> WorkflowEngine:
         agent_adapter=Mock(),
         function_adapter=Mock(),
         schedule_adapter=Mock(),
+        decision_adapter=Mock(),
         notification_adapter=AsyncMock(),
     )
 
@@ -124,7 +125,9 @@ async def test_start_run_persists_row_before_advancing():
 
     flow_id, pod_id, user_id = uuid4(), uuid4(), uuid4()
     engine.flow_repo.get = AsyncMock(
-        return_value=SimpleNamespace(id=flow_id, pod_id=pod_id)
+        return_value=SimpleNamespace(
+            id=flow_id, pod_id=pod_id, max_concurrent_runs=None
+        )
     )
     engine._require_action = AsyncMock(return_value=None)
     engine._entry_node_id = Mock(return_value="entry")
@@ -156,7 +159,9 @@ async def test_start_run_emits_transactional_terminal_event():
     engine = _engine_with_mocks()
     flow_id, pod_id, user_id = uuid4(), uuid4(), uuid4()
     engine.flow_repo.get = AsyncMock(
-        return_value=SimpleNamespace(id=flow_id, pod_id=pod_id)
+        return_value=SimpleNamespace(
+            id=flow_id, pod_id=pod_id, max_concurrent_runs=None
+        )
     )
     engine._require_action = AsyncMock(return_value=None)
     engine._entry_node_id = Mock(return_value="entry")
@@ -190,7 +195,9 @@ async def test_reserved_workflow_run_id_is_idempotent():
         status="RUNNING",
     )
     engine.flow_repo.get = AsyncMock(
-        return_value=SimpleNamespace(id=flow_id, pod_id=pod_id)
+        return_value=SimpleNamespace(
+            id=flow_id, pod_id=pod_id, max_concurrent_runs=None
+        )
     )
     engine._require_action = AsyncMock(return_value=None)
     engine._entry_node_id = Mock(return_value="entry")

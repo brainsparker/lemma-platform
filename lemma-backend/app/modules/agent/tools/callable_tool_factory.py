@@ -120,6 +120,35 @@ def _schema_preview(schema: dict[str, Any] | None) -> str:
     )
 
 
+_STILL_RUNNING = frozenset({FunctionRunStatus.PENDING, FunctionRunStatus.RUNNING})
+
+
+def function_tool_result(function_name: str, run: FunctionRunEntity) -> dict[str, Any]:
+    """What a function tool call returns, given where its run got to.
+
+    A JOB run still going when the wait ran out is not a failure. It used to be
+    reported as "Function X failed", and the model's reasonable answer to a
+    failure is to run it again -- repeating whatever the function does, while
+    the first run carried on doing it.
+    """
+    if run.status in _STILL_RUNNING:
+        return {
+            "run_id": str(run.id),
+            "status": run.status.value,
+            "still_running": True,
+            "note": (
+                f"`{function_name}` is still running after "
+                f"{_SUBAGENT_TOOL_TIMEOUT_SECONDS // 60} minutes. It has not "
+                "failed -- do not run it again, which would repeat what it "
+                "does. Check its result later with `lemma functions runs get "
+                f"{function_name} {run.id}`, or tell the person it is running."
+            ),
+        }
+    if run.status != FunctionRunStatus.COMPLETED:
+        raise RuntimeError(run.error or f"Function {function_name} failed")
+    return bounded_tool_payload(run.output_data or {}, what="function output")
+
+
 class AgentCallableToolFactory:
     """Creates dynamic tools configured on an Agent."""
 
@@ -294,9 +323,7 @@ class AgentCallableToolFactory:
             ):
                 run = await self._await_function_run(run.id)
 
-            if run.status != FunctionRunStatus.COMPLETED:
-                raise RuntimeError(run.error or f"Function {function.name} failed")
-            return bounded_tool_payload(run.output_data or {}, what="function output")
+            return function_tool_result(function.name, run)
 
         return Tool(
             _run_function,

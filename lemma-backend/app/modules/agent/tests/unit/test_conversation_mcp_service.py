@@ -69,7 +69,7 @@ async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
 
     async def fake_load_agent_context(self, *, conversation_id, agent_run_id):
         del self, conversation_id, agent_run_id
-        return agent, conversation, ctx
+        return agent, conversation, ctx, None
 
     async def fake_build_toolsets(self, *, conversation):
         del self, conversation
@@ -147,7 +147,7 @@ async def test_conversation_mcp_exposes_todo_tools_when_agent_has_todo(monkeypat
 
     async def fake_load_agent_context(self, *, conversation_id, agent_run_id):
         del self, conversation_id, agent_run_id
-        return agent, conversation, ctx
+        return agent, conversation, ctx, None
 
     async def fake_callable_toolsets(self, *, agent, allow_subagents=True, grants=None):
         del self, agent, allow_subagents, grants
@@ -216,7 +216,7 @@ async def test_a_pausing_tool_reaches_a_person_over_mcp(monkeypatch):
 
     async def fake_load_agent_context(self, *, conversation_id, agent_run_id):
         del self, conversation_id, agent_run_id
-        return agent, conversation, ctx
+        return agent, conversation, ctx, None
 
     async def fake_record(uow_factory, **kwargs):
         del uow_factory
@@ -302,7 +302,7 @@ async def test_an_ordinary_tool_is_not_put_on_the_record_first(monkeypatch):
 
     async def fake_load_agent_context(self, *, conversation_id, agent_run_id):
         del self, conversation_id, agent_run_id
-        return agent, conversation, ctx
+        return agent, conversation, ctx, None
 
     async def fake_record(uow_factory, **kwargs):
         del uow_factory

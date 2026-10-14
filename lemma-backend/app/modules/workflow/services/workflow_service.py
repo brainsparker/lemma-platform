@@ -83,6 +83,7 @@ class WorkflowService:
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
         run_title: List[str] | None = None,
+        max_concurrent_runs: int | None = None,
     ) -> WorkflowEntity:
         await self._require_action(
             requester_user_id=requester_user_id,
@@ -109,6 +110,7 @@ class WorkflowService:
             nodes=nodes or [],
             edges=edges or [],
             run_title=validate_run_title(run_title),
+            max_concurrent_runs=max_concurrent_runs,
         )
         # Validation raises GraphValidationError (422) listing every issue and
         # stamps entry_node_id. Empty shells skip validation until a graph is
@@ -184,6 +186,8 @@ class WorkflowService:
             flow.visibility = self._normalize_workflow_visibility(
                 update_data.visibility
             )
+        if "max_concurrent_runs" in update_data.model_fields_set:
+            flow.max_concurrent_runs = update_data.max_concurrent_runs
 
         updated = await self.flow_repo.update(flow)
         if self.icon_service and old_icon_url != updated.icon_url:

@@ -113,10 +113,10 @@ Best today: `connectors` 8/16, `agent` 7/29 — ratchet
 expressed", and then through a step that says so. Otherwise a 500 satisfies a
 test written for a 403 — which is how an existence leak passes a permission test.
 
-*Check:* `journeys/test_harness_contract.py` rejects a bare `status_code >= 400`
-in a journey body
-*Today:* **9** loose comparisons in the backend, **2** in the scenario journeys —
-ratchet
+*Check:* `journeys/test_harness_contract.py::test_a_refusal_names_its_status_code`
+rejects a new `>= 400` in a journey body, and holds the journeys that still have
+one to a per-file table that may only fall
+*Today:* that table, `LOOSE_REFUSALS` — ratchet
 
 ### TST-07 — wait on a condition, never on the clock
 

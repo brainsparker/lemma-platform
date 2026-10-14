@@ -71,7 +71,7 @@ async def test_reconcile_does_not_hold_db_connection_during_queue_io(
         def __init__(self, uow):
             assert uow == "uow"
 
-        async def list_pending_async_runs(self, *, now, min_age_seconds, limit):
+        async def list_pending_async_runs(self, *, now, min_age_seconds, limit, after):
             assert state["open"] is True
             assert limit == 100
             # The sweep is recovery, not a second dispatcher: it must always

@@ -717,12 +717,20 @@ class FakeTeamsServer:
         """
         self._oauth_error_code = code
 
-    def issue_webhook_token(self, *, audience: str) -> str:
+    def issue_webhook_token(
+        self, *, audience: str, service_url: str | None = None
+    ) -> str:
+        """A Bot Framework token, bound like the real one to a ``serviceUrl``.
+
+        Defaults to this server's own service URL, which is what the payload
+        helpers put on the activity.
+        """
         now = int(time.time())
         return jwt.encode(
             {
                 "iss": "https://api.botframework.com",
                 "aud": audience,
+                "serviceurl": service_url or self.service_url,
                 "iat": now,
                 "nbf": now - 10,
                 "exp": now + 600,
@@ -1149,6 +1157,15 @@ class FakeTelegramServer:
         app.router.add_post("/bot{token}/sendMessage", self._send_message)
         app.router.add_post("/bot{token}/sendRichMessage", self._send_rich_message)
         app.router.add_post("/bot{token}/editMessageText", self._edit_message_text)
+        # What a tapped button is answered with. Unregistered, every
+        # acknowledgement 404'd into a debug log, and no test could see what a
+        # person was told after tapping.
+        app.router.add_post(
+            "/bot{token}/answerCallbackQuery", self._answer_callback_query
+        )
+        app.router.add_post(
+            "/bot{token}/editMessageReplyMarkup", self._edit_message_reply_markup
+        )
         app.router.add_post("/bot{token}/sendVoice", self._send_voice)
         app.router.add_post("/bot{token}/sendDocument", self._send_document)
         app.router.add_post("/bot{token}/sendChatAction", self._send_chat_action)
@@ -1335,6 +1352,18 @@ class FakeTelegramServer:
                 },
             }
         )
+
+    async def _answer_callback_query(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        self._store.add(
+            "TELEGRAM_CALLBACK_ANSWER", {**body, **_request_contract(request)}
+        )
+        return web.json_response({"ok": True, "result": True})
+
+    async def _edit_message_reply_markup(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        self._store.add("TELEGRAM_EDIT_MARKUP", {**body, **_request_contract(request)})
+        return web.json_response({"ok": True, "result": True})
 
     async def _send_voice(self, request: web.Request) -> web.Response:
         # sendVoice is a multipart upload (data fields + the OGG voice file part).

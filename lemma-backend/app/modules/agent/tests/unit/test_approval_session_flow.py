@@ -70,12 +70,13 @@ async def test_approve_for_session_records_each_permission(monkeypatch):
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    conversation = SimpleNamespace(id=uuid4(), agent_id=uuid4())
+    conversation = SimpleNamespace(id=uuid4(), agent_id=uuid4(), pod_id=uuid4())
     user_id = uuid4()
 
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=conversation.pod_id,
         tool_args={
             "tool_name": "pod_delete_table",
             "permission_ids": ["datastore.table.delete", "folder.delete", "", 7],
@@ -99,7 +100,10 @@ async def test_approve_for_session_records_each_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_approve_for_session_defaults_to_pod_default_agent(monkeypatch):
+async def test_approve_for_session_keys_the_pod_assistant_by_its_pod(monkeypatch):
+    """The pod's assistant has no agent on its conversation, and its runs carry
+    its own id -- which is its pod's. Recorded under ``DEFAULT_POD_AGENT_ID``,
+    which no run carries, an approval it was given was never found."""
     recorded: list[dict] = []
 
     async def fake_record(**kwargs):
@@ -109,16 +113,18 @@ async def test_approve_for_session_defaults_to_pod_default_agent(monkeypatch):
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    conversation = SimpleNamespace(id=uuid4(), agent_id=None)
+    conversation = SimpleNamespace(id=uuid4(), agent_id=None, pod_id=uuid4())
 
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=conversation.pod_id,
         tool_args={"permission_ids": ["datastore.table.delete"]},
         user_id=uuid4(),
     )
 
-    assert recorded[0]["workload_actor_id"] == f"agent:{DEFAULT_POD_AGENT_ID}"
+    assert recorded[0]["workload_actor_id"] == f"agent:{conversation.pod_id}"
+    assert recorded[0]["workload_actor_id"] != f"agent:{DEFAULT_POD_AGENT_ID}"
 
 
 @pytest.mark.asyncio
@@ -136,11 +142,12 @@ async def test_approve_for_session_without_permission_ids_records_only_exact_com
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    conversation = SimpleNamespace(id=uuid4(), agent_id=None)
+    conversation = SimpleNamespace(id=uuid4(), agent_id=None, pod_id=uuid4())
 
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=conversation.pod_id,
         tool_args={"tool_name": "exec_command", "args": {"cmd": "ls -la"}},
         user_id=uuid4(),
     )
@@ -160,11 +167,12 @@ async def test_approve_for_session_without_tool_name_records_nothing(monkeypatch
         "app.core.authorization.session_approvals.record_session_approval",
         fail_record,
     )
-    conversation = SimpleNamespace(id=uuid4(), agent_id=None)
+    conversation = SimpleNamespace(id=uuid4(), agent_id=None, pod_id=uuid4())
 
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=conversation.pod_id,
         tool_args={},
         user_id=uuid4(),
     )

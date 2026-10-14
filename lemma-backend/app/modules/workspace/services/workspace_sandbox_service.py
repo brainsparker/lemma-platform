@@ -326,12 +326,22 @@ class WorkspaceSandboxService(
             mint_delegated_token,
         )
 
+        # A person's "allow for this conversation" is recorded under the
+        # conversation, and the authorizer looks it up under the token's
+        # delegation session. So a token minted for a conversation carries the
+        # conversation, never the shell or the run: those made every approval
+        # unfindable, and an approved delete was refused again.
+        delegation_session_id = (
+            str(conversation_id)
+            if conversation_id is not None
+            else session_id or str(uuid4())
+        )
         token = await mint_delegated_token(
             user_id=user_id,
             workload_type=workload_type,
             workload_id=workload_id,
             pod_id=pod_id,
-            session_id=session_id or str(uuid4()),
+            session_id=delegation_session_id,
             workload_name=workload_name,
             scope=scope,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,

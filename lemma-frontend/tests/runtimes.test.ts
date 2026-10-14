@@ -310,13 +310,13 @@ test("an agent nobody taught this app is named by its computer, then its key", (
     assert.equal(readLocalAgent({ id: "h1", harness_key: "gemini-cli", display_name: "Gemini CLI" })?.name, "Gemini CLI");
     assert.equal(readLocalAgent({ id: "h1", harness_key: "gemini-cli" })?.name, "gemini-cli");
     // A profile with no name of its own: the catalogue, the harness, the key.
-    assert.equal(readRuntime({ id: "p1", kind: "HARNESS", metadata: { harness_key: "codex" } })?.name, "Codex");
+    assert.equal(readRuntime({ id: "p1", kind: "HARNESS", harness_key: "codex" })?.name, "Codex");
     assert.equal(
-        readRuntime({ id: "p1", kind: "HARNESS", metadata: { harness_key: "gemini-cli" }, harness: { display_name: "Gemini CLI" } })?.name,
+        readRuntime({ id: "p1", kind: "HARNESS", harness_key: "gemini-cli", harness: { display_name: "Gemini CLI" } })?.name,
         "Gemini CLI",
     );
-    assert.equal(readRuntime({ id: "p1", kind: "HARNESS", metadata: { harness_key: "gemini-cli" } })?.name, "gemini-cli");
-    assert.equal(readRuntime({ id: "p1", name: "My agent", kind: "HARNESS", metadata: { harness_key: "codex" } })?.name, "My agent");
+    assert.equal(readRuntime({ id: "p1", kind: "HARNESS", harness_key: "gemini-cli" })?.name, "gemini-cli");
+    assert.equal(readRuntime({ id: "p1", name: "My agent", kind: "HARNESS", harness_key: "codex" })?.name, "My agent");
 });
 
 test("a stored choice is profile_id and model_name", () => {

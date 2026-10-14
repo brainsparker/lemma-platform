@@ -391,7 +391,6 @@ export function readRuntime(raw: unknown): Runtime | null {
         name: asString(entry.name)
             || agentLabel(harness)
             || asString(detail?.display_name)
-            || asString(entry.metadata?.["display_name"])
             || harness
             || id,
         kind: entry.kind === "HARNESS" ? "agent" : "key",

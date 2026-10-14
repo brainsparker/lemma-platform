@@ -356,7 +356,7 @@ async fn a_forgotten_session_is_answered_and_reported_rather_than_silently_lost(
 /// and the value of each model on its published model option.
 async fn probe_per_model_options(directory: &TempDir) -> (Vec<JsonMap>, Vec<ConfigOption>) {
     let (adapter, _log) = fake_adapter_in_mode(directory, Some("per-model-options"));
-    let probe = AcpDriver
+    let probe = AcpDriver::default()
         .probe(adapter, directory.path().join("probe"))
         .await
         .expect("a model that cannot be read does not fail the probe");

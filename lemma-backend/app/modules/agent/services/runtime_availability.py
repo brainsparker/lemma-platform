@@ -162,13 +162,13 @@ async def check_runtime_for_pod(
         profiles=profiles,
         organization_id=organization_id,
         user_id=user_id,
+        saving_for=saving_for,
     )
     await check_runtime_config_selections(
         runtime,
         profiles=profiles,
         organization_id=organization_id,
         user_id=user_id,
-        saving_for=saving_for,
     )
 
 

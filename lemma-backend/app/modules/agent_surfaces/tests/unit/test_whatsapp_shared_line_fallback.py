@@ -9,11 +9,14 @@ exception on any deployment whose settings are merely incomplete.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
 import pytest
+import pytest_asyncio
 from pydantic import SecretStr
+
+from app.core.config import settings
+from app.core.infrastructure.db.session import close_engine
 
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.contracts import whatsapp
@@ -21,15 +24,22 @@ from app.modules.agent_surfaces.contracts import whatsapp
 pytestmark = pytest.mark.unit
 
 
-@asynccontextmanager
-async def _refused() -> AsyncIterator[None]:
-    raise ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 5432)")
-    yield
+@pytest_asyncio.fixture
+async def database_refuses(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]:
+    """The process's real engine, aimed at a port nothing listens on.
 
-
-@pytest.fixture
-def database_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(whatsapp, "async_session_maker", _refused)
+    A real refusal rather than a stand-in for the session maker, because what
+    is under test is which exception the driver lets out -- a double would
+    raise whatever the test chose.
+    """
+    await close_engine()
+    monkeypatch.setattr(
+        settings, "database_url", "postgresql+asyncpg://postgres:postgres@127.0.0.1:9/x"
+    )
+    try:
+        yield
+    finally:
+        await close_engine()
 
 
 async def test_an_unreachable_database_falls_back_to_settings(

@@ -53,6 +53,7 @@ from app.core.infrastructure.work import (
     WorkWriter,
     pod_namespace,
     registry as default_registry,
+    was_database_unavailable,
 )
 from app.core.log.log import get_logger
 from app.core.origin import Origin, OriginKind, current_origin, origin_scope
@@ -262,7 +263,12 @@ async def end_dead_job(ctx: DeadContext) -> None:
         for field in _JOB_ID_FIELDS
         if ctx.item.payload.get(field)
     )
-    state = await get_pod_bundle_state_store().terminalize_interrupted(ctx.uow, job_id)
+    state = await get_pod_bundle_state_store().terminalize_interrupted(
+        ctx.uow,
+        job_id,
+        database_unavailable=ctx.reason == "unavailable_exhausted"
+        and was_database_unavailable(ctx.last_error),
+    )
     logger.warning(
         "pod_bundle.job.dead",
         kind=ctx.item.kind,

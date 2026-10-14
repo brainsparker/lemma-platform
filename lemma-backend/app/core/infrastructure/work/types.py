@@ -130,6 +130,26 @@ class Unavailable(Exception):
         self.retry_after = retry_after
 
 
+#: How an ``Unavailable`` for Lemma's own database starts its detail, so a dead
+#: hook can tell "the database was down" from a dependency of the kind's own.
+DATABASE_UNAVAILABLE = "database unavailable"
+
+
+def database_down(exc: BaseException) -> Unavailable:
+    """The ``Unavailable`` a database connection failure is (see ``transient_errors``)."""
+    down = Unavailable(
+        f"{DATABASE_UNAVAILABLE}: {type(exc).__name__}",
+        evidence=UnavailableEvidence.CONNECTION_REFUSED,
+    )
+    down.__cause__ = exc
+    return down
+
+
+def was_database_unavailable(last_error: str | None) -> bool:
+    """Whether a dead item's last error was the database being unavailable."""
+    return DATABASE_UNAVAILABLE in (last_error or "")
+
+
 class ItemFailure(Exception):
     """This item failed; charge an attempt.
 

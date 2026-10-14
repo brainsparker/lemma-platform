@@ -487,7 +487,11 @@ class PodBundleStateStore:
         return recovered
 
     async def terminalize_interrupted(
-        self, uow: SqlAlchemyUnitOfWork, job_id: UUID
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        job_id: UUID,
+        *,
+        database_unavailable: bool = False,
     ) -> BundleState | None:
         """End a job whose work item went dead, on ``uow``'s transaction.
 
@@ -500,7 +504,9 @@ class PodBundleStateStore:
         )
         if row is None or row.status not in _ACTIVE_STATUSES:
             return None
-        state = await self._terminalize(uow.session, row)
+        state = await self._terminalize(
+            uow.session, row, database_unavailable=database_unavailable
+        )
         kind, _ = self._identity(state)
 
         async def mirror() -> None:
@@ -510,13 +516,24 @@ class PodBundleStateStore:
         return state
 
     async def _terminalize(
-        self, session: AsyncSession, row: PodBundleJob
+        self,
+        session: AsyncSession,
+        row: PodBundleJob,
+        *,
+        database_unavailable: bool = False,
     ) -> BundleState:
         kind = BundleJobKind(row.job_kind)
         state = self._parse_snapshot(kind, row.snapshot)
         state.version = row.version + 1
-        state.error = "Interrupted by a worker restart; retry this job."
-        state.error_type = "WorkerHeartbeatExpired"
+        if database_unavailable:
+            state.error = (
+                "Stopped because Lemma's database was unavailable for too long. "
+                "Nothing is wrong with the bundle; retry this job."
+            )
+            state.error_type = "DatabaseUnavailable"
+        else:
+            state.error = "Interrupted by a worker restart; retry this job."
+            state.error_type = "WorkerHeartbeatExpired"
         state.error_code = "POD_BUNDLE_WORKER_INTERRUPTED"
         state.completed_at = datetime.now(state.updated_at.tzinfo)
         if isinstance(state, ImportState) and (state.status is ImportStatus.CANCELLING):

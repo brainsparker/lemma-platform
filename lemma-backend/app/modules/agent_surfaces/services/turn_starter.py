@@ -20,6 +20,7 @@ is what those became once nothing needed them to be methods on a namespace.
 
 from __future__ import annotations
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 from collections.abc import Awaitable, Callable
@@ -430,6 +431,10 @@ class SurfaceTurnStarter:
                 credentials=credentials,
             )
         except Exception as exc:
+            if is_database_unavailable(exc):
+                # Lemma's own database, not this message's files: raised so the work item
+                # retries it (uncharged) instead of recording a failure for good.
+                raise
             # `ingest_attachments` reports a per-file failure itself, so
             # reaching here is the whole call coming apart. This was a
             # `suppress`, which left `ingest` empty -- indistinguishable

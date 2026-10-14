@@ -19,6 +19,7 @@ import tempfile
 from datetime import timedelta
 from uuid import UUID
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
@@ -290,7 +291,11 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
             "pod_bundle.handlers.pod_bundle_export_s_terminal.degraded",
             export_id=export_id,
         )
-    except Exception:
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            # Lemma's own database: retried by the work item, uncharged and
+            # for as long as the outage lasts, not failed after a few seconds.
+            raise
         # Infrastructure error (DB blip, object storage). Mark FAILED for the UI,
         # then re-raise so the work item retries with a fresh attempt.
         await _fail(store, state, "Export failed due to a transient error.")
@@ -349,7 +354,11 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
             "pod_bundle.handlers.pod_bundle_plan_s_terminal.degraded",
             import_id=import_id,
         )
-    except Exception:
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            # Lemma's own database: retried by the work item, uncharged and
+            # for as long as the outage lasts, not failed after a few seconds.
+            raise
         await _fail_import(store, state, "Planning failed due to a transient error.")
         logger.warning(
             "pod_bundle.handlers.pod_bundle_plan_transient.failed",
@@ -467,6 +476,10 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
             import_id=import_id,
         )
     except Exception as exc:
+        if is_database_unavailable(exc):
+            # Lemma's own database: retried by the work item, uncharged and
+            # for as long as the outage lasts, not failed after a few seconds.
+            raise
         if state.attempt < 3:
             await _record_import_retry(store, state, exc)
             raise Defer(timedelta(seconds=min(state.attempt**2, 9))) from exc
@@ -533,7 +546,11 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
         logger.warning(
             "pod_bundle.handlers.url_import_s_terminal_s.degraded", import_id=import_id
         )
-    except Exception:
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            # Lemma's own database: retried by the work item, uncharged and
+            # for as long as the outage lasts, not failed after a few seconds.
+            raise
         await _fail_import(store, state, "URL import failed due to a transient error.")
         logger.warning(
             "pod_bundle.handlers.url_import_transient.failed",
@@ -737,7 +754,11 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             "pod_bundle.handlers.pod_bundle_apply_s_terminal.degraded",
             import_id=import_id,
         )
-    except Exception:
+    except Exception as exc:
+        if is_database_unavailable(exc):
+            # Lemma's own database: retried by the work item, uncharged and
+            # for as long as the outage lasts, not failed after a few seconds.
+            raise
         await _fail_import(store, state, "Apply failed due to a transient error.")
         logger.warning(
             "pod_bundle.handlers.pod_bundle_apply_transient.failed",

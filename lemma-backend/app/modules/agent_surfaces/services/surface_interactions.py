@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.current import reset_current_context, set_current_context
@@ -200,7 +201,11 @@ class SurfaceInteractionMixin:
             await self._process_interaction(
                 parsed, attempt, authorized_surface_ids=authorized_surface_ids
             )
-        except Exception:
+        except Exception as exc:
+            if is_database_unavailable(exc):
+                # Lemma's own database, not this action: raised so the work item
+                # retries it (uncharged) instead of recording a failure for good.
+                raise
             # Said first, at a level `LOG_LEVEL=INFO` keeps. This handler used to
             # swallow the failure whole: the person got "I couldn't complete
             # that action" and nobody else got anything, so a button that broke

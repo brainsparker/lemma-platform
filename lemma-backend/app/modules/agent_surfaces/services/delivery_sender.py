@@ -20,6 +20,7 @@ from uuid import UUID
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.transaction_locks import connection_released
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -65,6 +66,17 @@ from app.modules.agent_surfaces.services.progress_events import failure_notice
 from app.modules.agent_surfaces.services.surface_deliveries import SendResult
 
 logger = get_logger(__name__)
+
+
+def _failed_send(exc: BaseException) -> SendResult:
+    """A send that raised. Lemma's own database being unreachable is not the
+    platform refusing the message: the row goes back to PENDING and is sent
+    again, instead of FAILED for good."""
+    return SendResult(
+        delivered=False,
+        transient=is_database_unavailable(exc),
+        error=f"{type(exc).__name__}: {exc}",
+    )
 
 
 def _send_errors() -> tuple[type[BaseException], ...]:
@@ -116,7 +128,7 @@ class PlatformDeliverySender:
                     context
                 )
         except _send_errors() as exc:
-            return SendResult(delivered=False, error=f"{type(exc).__name__}: {exc}")
+            return _failed_send(exc)
         return SendResult(
             delivered=True,
             transient=outcome.gave_up_transient,
@@ -168,6 +180,7 @@ class PlatformDeliverySender:
                     return SendResult(delivered=True)
                 await self._take_down(target.conversation_id, display)
                 await forget_live_display(row.agent_run_id)
+        database_down = False
         with track_sends() as outcome:
             try:
                 async with self.uow_factory() as uow:
@@ -193,13 +206,14 @@ class PlatformDeliverySender:
                 )
                 delivered = False
                 error = f"{type(exc).__name__}: {exc}"
+                database_down = is_database_unavailable(exc)
         if run is not None and delivered:
             # Released with the reply that carried them. A reply that did not
             # arrive keeps them for its retry, or until they expire.
             await discard_display_paths(target.conversation_id, run)
         return SendResult(
             delivered=delivered,
-            transient=outcome.gave_up_transient,
+            transient=outcome.gave_up_transient or database_down,
             partial=outcome.partial,
             retry_after=outcome.retry_after,
             error=error,
@@ -318,7 +332,7 @@ class PlatformDeliverySender:
                     )
                 )
         except _send_errors() as exc:
-            return SendResult(delivered=False, error=f"{type(exc).__name__}: {exc}")
+            return _failed_send(exc)
         return SendResult(
             delivered=True,
             transient=outcome.gave_up_transient,

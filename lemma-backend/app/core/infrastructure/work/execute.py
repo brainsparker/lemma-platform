@@ -44,7 +44,7 @@ from app.core.infrastructure.work.types import (
     MaxRuntimeExceeded,
     PermanentFailure,
     Unavailable,
-    UnavailableEvidence,
+    database_down,
 )
 from app.core.infrastructure.work.writer import LocalWake, WorkWriter
 from app.core.log.log import get_logger
@@ -105,7 +105,7 @@ def decide(
         # same evidence an adapter's ``Unavailable`` carries, so the same
         # uncharged retry, bounded by the kind's unavailable budget -- not an
         # attempt the item is blamed for.
-        return after_unavailable(policy, state, _database_down(exc), now=now)
+        return after_unavailable(policy, state, database_down(exc), now=now)
     if isinstance(exc, Defer):
         return after_defer(state, exc.delay, now=now)
     if isinstance(exc, MaxRuntimeExceeded):
@@ -120,15 +120,6 @@ def decide(
     return after_failure(
         policy, state, now=now, error=describe_error(exc), error_class=error_class
     )
-
-
-def _database_down(exc: Exception) -> Unavailable:
-    down = Unavailable(
-        f"database unavailable: {describe_error(exc)}",
-        evidence=UnavailableEvidence.CONNECTION_REFUSED,
-    )
-    down.__cause__ = exc
-    return down
 
 
 def validated_payload(spec: HandlerSpec, item: ClaimedItem) -> BaseModel:

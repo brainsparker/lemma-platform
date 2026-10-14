@@ -12,6 +12,7 @@ import httpx
 from opentelemetry import trace
 
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
@@ -94,6 +95,11 @@ def _not_a_failure(exc: Exception, *, queued: bool, started: bool) -> bool:
     """Signals for the caller, not outcomes of the run: a full pod, a sandbox
     not up yet, or a queued run stopped before its start."""
     if isinstance(exc, (PodAtCapacity, SandboxNotReady)):
+        return True
+    if not started and is_database_unavailable(exc):
+        # Lemma's database could not be reached before the function was sent
+        # anywhere: nothing ran, so the run is retried, not failed. Once it
+        # started, the result is the sandbox's and failing is what records it.
         return True
     return queued and not started and isinstance(exc, Released)
 

@@ -49,8 +49,10 @@ from app.core.infrastructure.work.types import (
     UnavailableEvidence,
     WorkClass,
     WorkMode,
+    database_down,
     org_namespace,
     pod_namespace,
+    was_database_unavailable,
 )
 from app.core.infrastructure.work.writer import (
     CancelOutcome,
@@ -84,6 +86,8 @@ __all__ = [
     "RetryPolicy",
     "Unavailable",
     "UnavailableEvidence",
+    "database_down",
+    "was_database_unavailable",
     "UnknownWorkKind",
     "WorkClass",
     "WorkLimitPort",

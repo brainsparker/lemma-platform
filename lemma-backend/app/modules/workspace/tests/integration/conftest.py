@@ -41,14 +41,14 @@ def isolated_database_url(server_url: str, worker: str, pid: int) -> str:
     runs (two worktrees against one local Postgres) apart.
     """
     name = f"{ISOLATED_DATABASE_PREFIX}{worker}_{pid}".lower()
-    return make_url(server_url).set(database=name).render_as_string(
-        hide_password=False
-    )
+    return make_url(server_url).set(database=name).render_as_string(hide_password=False)
 
 
 def _server_url() -> str:
-    return os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL") or (
-        _DEFAULT_SERVER_URL
+    return (
+        os.getenv("TEST_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+        or (_DEFAULT_SERVER_URL)
     )
 
 

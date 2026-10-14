@@ -140,7 +140,9 @@ async def finish_agent_run(
         )
 
 
-async def lock_conversation_row(session: AsyncSession, *, conversation_id: UUID) -> None:
+async def lock_conversation_row(
+    session: AsyncSession, *, conversation_id: UUID
+) -> None:
     """Take the conversation's row lock: the first lock of any turn transaction.
 
     See ``finish_agent_run`` for the order and the deadlock it prevents.

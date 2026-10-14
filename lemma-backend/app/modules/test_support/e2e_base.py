@@ -389,7 +389,10 @@ def supertokens_state_restored() -> Iterator[None]:
     back, because the SDK has no public "re-install this instance" call.
     """
     snapshot = [
-        (cls, {k: v for k, v in vars(cls).items() if k.startswith(f"_{cls.__name__}__")})
+        (
+            cls,
+            {k: v for k, v in vars(cls).items() if k.startswith(f"_{cls.__name__}__")},
+        )
         for cls in _supertokens_singleton_classes()
     ]
     _reset_supertokens_testing_state()

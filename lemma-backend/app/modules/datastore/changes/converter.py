@@ -33,7 +33,6 @@ from redis.exceptions import ResponseError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.redis.client import get_redis
@@ -214,7 +213,7 @@ async def append_events(
                 "at timestamptz) ORDER BY at "
                 "ON CONFLICT (event_id) WHERE event_id IS NOT NULL DO NOTHING"
             ),
-            {"records": await run_blocking(_encode_records, kept)},
+            {"records": _encode_records(kept)},
         )
         appended += int(result.rowcount or 0)
         await conn.execute(
@@ -227,6 +226,9 @@ async def append_events(
 
 
 def _encode_records(records: list[dict[str, object]]) -> str:
+    """On the loop, deliberately: at most ``BATCH`` events whose payloads the
+    outbox already truncated, encoded inside the transaction that holds their
+    rows locked -- offloading would hold that connection across a thread hop."""
     return json.dumps(records, default=str)
 
 

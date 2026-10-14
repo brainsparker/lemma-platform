@@ -411,6 +411,122 @@ class DatastoreFileChunkRepository:
                 )
             return self._rows(await session.execute(stmt, params))
 
+    def text_search_statement(
+        self,
+        query: str,
+        limit: int = 10,
+        scope_path: str | None = None,
+        include_descendants: bool = True,
+        *,
+        file_scope: SearchFileScope,
+        version: int = SEARCH_FILES_VERSION,
+    ):
+        """The text-search statement and its parameters, unexecuted.
+
+        Split from :meth:`text_search` so a plan test can ``EXPLAIN`` exactly
+        what a search runs.
+
+        Matching and ranking are on one vector per chunk: its file's path
+        (weight B) followed by its content (weight A). A query whose terms are
+        split between the two -- ``budget forecast`` for a chunk about the
+        forecast in ``/Q3 Budget/notes.pdf`` -- matches the pair and neither
+        half, and a negated term in the path excludes the chunk; testing the
+        halves separately gets both wrong. Version 1 computes that vector per
+        row from an expression; version 2 stores both halves and joins them at
+        query time, so its result is the same and only the plan differs.
+
+        No index can hold a vector spread over two tables, so version 2 finds
+        candidates through the two it has. ``querytree`` is the part of the
+        query an index can answer -- everything but negations -- and a chunk
+        can only match if its content or its path holds at least one of that
+        part's lexemes; the disjunction of them probes ``tsv`` and
+        ``path_tsv``, and the joined vector is then tested exactly. A query
+        with no such part (only negations: ``-draft``) has no probe and is
+        tested against every chunk in scope, as the version-1 index did too.
+        Each branch is gated by a one-time filter, so only one ever runs.
+        """
+        params: dict[str, Any] = {
+            "query": query,
+            "limit": limit,
+            **self._scope_params(scope_path, include_descendants),
+        }
+        file_filter = file_scope.sql_clause("rc.file_id", "readable_file_ids")
+        if file_scope.binds:
+            params["readable_file_ids"] = file_scope.parameter_value()
+        schema = self.schema_name
+        common = """rc.chunk_index, rc.file_id, rc.content, rc.chunk_metadata,
+                    (rc.chunk_metadata ->> 'page_number')::int AS page_number,
+                    (rc.chunk_metadata ->> 'page_end')::int AS page_end"""
+        if version >= SEARCH_FILES_VERSION:
+            parsed = "websearch_to_tsquery('english', CAST(:query AS TEXT))"
+            full = f"(SELECT {parsed})"
+            # Each lexeme of the indexable part, as tsquery text prints it
+            # (quoted, quotes doubled), OR-ed: NULL when there is none.
+            probe = (
+                "(SELECT string_agg(m[1], ' | ')::tsquery "
+                f"FROM regexp_matches(querytree({parsed})::text, "
+                "$re$('(?:[^']|'')*')$re$, 'g') AS m)"
+            )
+            joined = "(sf.path_tsv || rc.tsv)"
+            branch = f"""
+                    SELECT {common},
+                        ts_rank_cd({joined}, {full}) AS score
+                    FROM "{schema}".reserved_chunks AS rc
+                    JOIN "{schema}".search_files AS sf ON sf.file_id = rc.file_id
+                    WHERE {{gate}}
+                      AND {self._scope_clause(version)}
+                      {file_filter}
+                      {{candidates}}
+                      AND {joined} @@ {full}
+            """
+            probed = branch.format(
+                gate=f"{probe} IS NOT NULL",
+                candidates=f"""AND (
+                        rc.tsv @@ {probe}
+                        OR rc.file_id = ANY(ARRAY(
+                            SELECT pf.file_id FROM "{schema}".search_files AS pf
+                            WHERE pf.path_tsv @@ {probe}
+                        ))
+                      )""",
+            )
+            unprobed = branch.format(
+                gate=f"{probe} IS NULL AND numnode({full}) > 0",
+                candidates="",
+            )
+            ranked = f"""
+                SELECT * FROM ({probed} UNION ALL {unprobed}) AS hits
+                ORDER BY score DESC, chunk_index ASC
+                LIMIT :limit
+            """
+        else:
+            ranked = f"""
+                SELECT {common},
+                    ts_rank_cd(
+                        setweight(to_tsvector('english', COALESCE(rc.chunk_metadata ->> 'path', '')), 'B') ||
+                        setweight(to_tsvector('english', rc.content), 'A'),
+                        q.query
+                    ) AS score
+                FROM "{schema}".reserved_chunks AS rc
+                CROSS JOIN (SELECT websearch_to_tsquery('english', :query) AS query) AS q
+                WHERE {self._scope_clause(version)}
+                  {file_filter}
+                  AND (
+                    setweight(to_tsvector('english', COALESCE(rc.chunk_metadata ->> 'path', '')), 'B') ||
+                    setweight(to_tsvector('english', rc.content), 'A')
+                  ) @@ q.query
+                ORDER BY score DESC, rc.chunk_index ASC
+                LIMIT :limit
+            """
+        stmt = text(self._hits_select(version, ranked))
+        if file_scope.binds:
+            stmt = stmt.bindparams(
+                bindparam(
+                    "readable_file_ids",
+                    type_=ARRAY(PG_UUID(as_uuid=True)),
+                )
+            )
+        return stmt, params
+
     async def text_search(
         self,
         query: str,
@@ -422,77 +538,22 @@ class DatastoreFileChunkRepository:
         file_scope: SearchFileScope,
         version: int = SEARCH_FILES_VERSION,
     ) -> list[dict[str, Any]]:
-        """Full-text search over chunk content, ranked with the file's path.
-
-        At version 2 both vectors are stored: a chunk matches on its own
-        ``tsv``, or because its file's path matches, and ranks on the two
-        together -- path weighted below content, as before. Nothing is
-        computed per row at query time.
-        """
+        """Full-text search over chunk content and its file's path, ranked
+        with the path weighted below the content; see
+        :meth:`text_search_statement`."""
         del pod_id
         if file_scope.matches_nothing:
             return []
+        stmt, params = self.text_search_statement(
+            query,
+            limit,
+            scope_path,
+            include_descendants,
+            file_scope=file_scope,
+            version=version,
+        )
         async with self._session_factory() as session:
             await session.execute(
                 text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
-            params: dict[str, Any] = {
-                "query": query,
-                "limit": limit,
-                **self._scope_params(scope_path, include_descendants),
-            }
-            file_filter = file_scope.sql_clause("rc.file_id", "readable_file_ids")
-            if file_scope.binds:
-                params["readable_file_ids"] = file_scope.parameter_value()
-            schema = self.schema_name
-            if version >= SEARCH_FILES_VERSION:
-                ranked = f"""
-                    SELECT rc.chunk_index, rc.file_id, rc.content, rc.chunk_metadata,
-                        (rc.chunk_metadata ->> 'page_number')::int AS page_number,
-                        (rc.chunk_metadata ->> 'page_end')::int AS page_end,
-                        ts_rank_cd(path_hit.path_tsv || rc.tsv, q.query) AS score
-                    FROM "{schema}".reserved_chunks AS rc
-                    CROSS JOIN (SELECT websearch_to_tsquery('english', :query) AS query) AS q
-                    JOIN "{schema}".search_files AS path_hit ON path_hit.file_id = rc.file_id
-                    WHERE {self._scope_clause(version)}
-                      {file_filter}
-                      AND (
-                        rc.tsv @@ q.query
-                        OR rc.file_id = ANY(ARRAY(
-                            SELECT pf.file_id FROM "{schema}".search_files AS pf
-                            WHERE pf.path_tsv @@ websearch_to_tsquery('english', :query)
-                        ))
-                      )
-                    ORDER BY score DESC, rc.chunk_index ASC
-                    LIMIT :limit
-                """
-            else:
-                ranked = f"""
-                    SELECT rc.chunk_index, rc.file_id, rc.content, rc.chunk_metadata,
-                        (rc.chunk_metadata ->> 'page_number')::int AS page_number,
-                        (rc.chunk_metadata ->> 'page_end')::int AS page_end,
-                        ts_rank_cd(
-                            setweight(to_tsvector('english', COALESCE(rc.chunk_metadata ->> 'path', '')), 'B') ||
-                            setweight(to_tsvector('english', rc.content), 'A'),
-                            q.query
-                        ) AS score
-                    FROM "{schema}".reserved_chunks AS rc
-                    CROSS JOIN (SELECT websearch_to_tsquery('english', :query) AS query) AS q
-                    WHERE {self._scope_clause(version)}
-                      {file_filter}
-                      AND (
-                        setweight(to_tsvector('english', COALESCE(rc.chunk_metadata ->> 'path', '')), 'B') ||
-                        setweight(to_tsvector('english', rc.content), 'A')
-                      ) @@ q.query
-                    ORDER BY score DESC, rc.chunk_index ASC
-                    LIMIT :limit
-                """
-            stmt = text(self._hits_select(version, ranked))
-            if file_scope.binds:
-                stmt = stmt.bindparams(
-                    bindparam(
-                        "readable_file_ids",
-                        type_=ARRAY(PG_UUID(as_uuid=True)),
-                    )
-                )
             return self._rows(await session.execute(stmt, params))

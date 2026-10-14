@@ -112,7 +112,31 @@ def upgrade() -> None:
         )
 
 
+class ObjectLayoutRowsExist(RuntimeError):
+    """Raised by the downgrade while any file's bytes are keyed by its id."""
+
+
+def object_layout_guard() -> str:
+    """The count the downgrade refuses on -- importable so a test can run it."""
+    return "SELECT count(*) FROM datastore_files WHERE storage_layout = 'object'"
+
+
 def downgrade() -> None:
+    # Irreversible once a file is in the object layout: its bytes live under
+    # `pods/{pod}/objects/{id}/...` and only `storage_layout` says so. Dropping
+    # the column makes every such file read at its path key -- which the copy
+    # released, and which a file written with the switch on never had -- so
+    # the files would 404 with nothing left recording where their bytes are.
+    # Nothing copies bytes back; refuse rather than lose them.
+    moved = op.get_bind().scalar(sa.text(object_layout_guard()))
+    if moved:
+        raise ObjectLayoutRowsExist(
+            f"Refusing to downgrade 0054_file_work_items: {moved} datastore "
+            "file(s) are stored in the object layout (storage_layout = 'object'), "
+            "and dropping the column would leave their bytes unreachable. There "
+            "is no reverse copy; downgrading past this revision is only possible "
+            "before DATASTORE_OBJECT_STORAGE_LAYOUT has been switched on."
+        )
     with op.get_context().autocommit_block():
         for name in (
             "ix_datastore_file_path_layout",

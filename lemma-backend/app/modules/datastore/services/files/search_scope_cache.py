@@ -25,6 +25,7 @@ from redis.exceptions import RedisError
 from app.core.authorization.context import Context, PrincipalRef
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.search_scope import SearchablePartition
@@ -79,6 +80,24 @@ def _suffix(pod_id: UUID, epoch: str, key: str) -> str:
     return f"{pod_id}:{epoch}:{key}"
 
 
+def _decode(raw: str | bytes) -> SearchablePartition:
+    body = json.loads(raw)
+    return SearchablePartition(
+        readable=frozenset(UUID(item) for item in body["readable"]),
+        hidden=frozenset(UUID(item) for item in body["hidden"]),
+    )
+
+
+def _encode(partition: SearchablePartition) -> str:
+    return json.dumps(
+        {
+            "readable": sorted(str(item) for item in partition.readable),
+            "hidden": sorted(str(item) for item in partition.hidden),
+        },
+        separators=(",", ":"),
+    )
+
+
 async def cached_partition(
     pod_id: UUID, epoch: str, key: str
 ) -> SearchablePartition | None:
@@ -89,11 +108,8 @@ async def cached_partition(
         return None
     if raw is None:
         return None
-    body = json.loads(raw)
-    return SearchablePartition(
-        readable=frozenset(UUID(item) for item in body["readable"]),
-        hidden=frozenset(UUID(item) for item in body["hidden"]),
-    )
+    # Up to `datastore_search_scope_cache_max_ids` ids: off the loop.
+    return await run_blocking(_decode, raw)
 
 
 async def store_partition(
@@ -102,13 +118,7 @@ async def store_partition(
     size = len(partition.readable) + len(partition.hidden)
     if size > datastore_settings.datastore_search_scope_cache_max_ids:
         return
-    body = json.dumps(
-        {
-            "readable": sorted(str(item) for item in partition.readable),
-            "hidden": sorted(str(item) for item in partition.hidden),
-        },
-        separators=(",", ":"),
-    )
+    body = await run_blocking(_encode, partition)
     try:
         await _store().set_raw(
             _suffix(pod_id, epoch, key),

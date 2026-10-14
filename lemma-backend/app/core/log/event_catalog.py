@@ -776,7 +776,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.storage.deleting_datastore_prefix_s.propagated': EventSpec('debug', frozenset()),
     'datastore.storage_copy.abandoned_copy.diagnostic': EventSpec('debug', frozenset()),
     'datastore.storage_copy.derived_copy.degraded': EventSpec('warning', frozenset({'file_id'})),
-    'datastore.storage_copy.legacy_delete.diagnostic': EventSpec('debug', frozenset()),
     'datastore.storage_copy.page.observed': EventSpec('info', frozenset({'moved'})),
     'datastore.storage_phase.carrying_child_artifacts_s.diagnostic': EventSpec('debug', frozenset({'file_id'})),
     'datastore.storage_phase.deleted_file_search_purge.failed': EventSpec('error', frozenset({'file_count'})),

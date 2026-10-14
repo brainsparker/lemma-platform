@@ -936,10 +936,9 @@ async def test_wait_until_resumes_from_a_timer_that_carries_no_owner(
     This used to be about legacy APScheduler job rows: jobs written by an older
     build deserialized with kwargs carrying no ``user_id``, and the test proved
     those still woke their run. The job store is gone, and the case it guarded
-    is now the *only* case -- `claim_due_workflow_waits` builds its payload from
-    the wait row's typed columns (`run_id`, `external_ref`, `scheduled_at`) and
-    passes `user_id=None` for every timer it claims, because a timer is not a
-    thing a user is doing.
+    is now the *only* case -- the timer is a `workflow.resume` work item whose
+    payload is the wait's `wait_type` and `external_ref` and nothing about a
+    user, because a timer is not a thing a user is doing.
 
     So the ownership has to come from the run row on the resume path, for every
     workflow wait rather than for old ones. This drives it end to end through

@@ -1,9 +1,13 @@
-"""Deterministic match conditions for DATASTORE triggers.
+"""Deterministic ``when`` conditions on a record change.
+
+One filter language for everything that follows a pod's record changes: a
+DATASTORE trigger and a live socket subscription read the same grammar through
+this one evaluator, which is why it lives in core rather than in either module.
 
 A trigger that only matches on table and operation wakes for every write, and a
 schedule with an LLM filter then pays for a model call on each one. A match
 condition answers the cheap, decidable part of "should this fire" — is the
-status approved, did the owner change — before any of that, from the event
+status approved, did the owner change — before any of that, from the change
 alone and with no database read.
 
 The grammar is deliberately small. Every condition is a column name mapped to
@@ -15,11 +19,15 @@ asked for.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from app.modules.schedule.domain.value_objects import DatastoreOperation
+#: The operation a change records, upper-case. A ``str`` enum whose values are
+#: these compares equal to them, so a caller passes its own enum.
+INSERT = "INSERT"
+UPDATE = "UPDATE"
+DELETE = "DELETE"
 
 
 # Operators that ask what the row looks like now. They read the payload, which
@@ -38,18 +46,18 @@ class ColumnCondition(BaseModel):
     # fire on everything. Failing at save time is the whole point.
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    equals: Any = None
-    not_equals: Any = None
-    in_: list[Any] | None = Field(default=None, alias="in")
-    not_in: list[Any] | None = None
+    equals: JsonValue = None
+    not_equals: JsonValue = None
+    in_: list[JsonValue] | None = Field(default=None, alias="in")
+    not_in: list[JsonValue] | None = None
     # True when the column's value differs from what it was before this write.
     changed: bool | None = None
     # True when this write set the column at all, even to the value it already
     # held. `changed` asks whether the value moved; `written` asks whether
     # somebody touched it.
     written: bool | None = None
-    from_: Any = Field(default=None, alias="from")
-    to: Any = None
+    from_: JsonValue = Field(default=None, alias="from")
+    to: JsonValue = None
 
     @model_validator(mode="after")
     def _require_an_operator(self) -> "ColumnCondition":
@@ -71,6 +79,15 @@ class ColumnCondition(BaseModel):
         return any(self.supplied(name) for name in _UPDATE_ONLY_OPERATORS)
 
     @property
+    def asks_about_movement(self) -> bool:
+        """Whether this condition reads the prior image (or the written set).
+
+        A reader that sees only the current row -- a live subscription -- can
+        answer value operators and nothing else.
+        """
+        return self.needs_prior_image or self.supplied("to")
+
+    @property
     def needs_a_written_row(self) -> bool:
         """Whether this condition needs a row that an INSERT or UPDATE produced.
 
@@ -79,7 +96,7 @@ class ColumnCondition(BaseModel):
         return self.supplied("to")
 
 
-def parse_match_conditions(value: Any) -> dict[str, ColumnCondition]:
+def parse_match_conditions(value: object) -> dict[str, ColumnCondition]:
     """Parse the `when` block of a DATASTORE config into column conditions.
 
     A bare scalar is shorthand for equality, so the common case reads as
@@ -102,7 +119,7 @@ def parse_match_conditions(value: Any) -> dict[str, ColumnCondition]:
 
 
 def _match_value_operators(
-    condition: ColumnCondition, present: bool, actual: Any
+    condition: ColumnCondition, present: bool, actual: object
 ) -> bool:
     if condition.supplied("equals") and actual != condition.equals:
         return False
@@ -140,7 +157,7 @@ def _match_on_removed_row(condition: ColumnCondition) -> bool:
     return not (condition.supplied("from_") or condition.supplied("to"))
 
 
-def _match_on_new_row(condition: ColumnCondition, actual: Any) -> bool:
+def _match_on_new_row(condition: ColumnCondition, actual: object) -> bool:
     """An insert has nothing to have moved away from.
 
     `changed`, `written` and `from` are therefore all false. `to` is the
@@ -160,10 +177,10 @@ def _match_on_new_row(condition: ColumnCondition, actual: Any) -> bool:
 def _match_on_updated_row(
     condition: ColumnCondition,
     column: str,
-    actual: Any,
+    actual: object,
     *,
     changed: list[str],
-    previous: dict[str, Any] | None,
+    previous: Mapping[str, object] | None,
 ) -> bool:
     was_written = column in changed
     prior = (previous or {}).get(column)
@@ -188,15 +205,15 @@ def _match_on_updated_row(
 def _match_change_operators(
     condition: ColumnCondition,
     column: str,
-    actual: Any,
+    actual: object,
     *,
-    operation: DatastoreOperation,
+    operation: str,
     changed: list[str],
-    previous: dict[str, Any] | None,
+    previous: Mapping[str, object] | None,
 ) -> bool:
-    if operation is DatastoreOperation.DELETE:
+    if operation == DELETE:
         return _match_on_removed_row(condition)
-    if operation is DatastoreOperation.INSERT:
+    if operation == INSERT:
         return _match_on_new_row(condition, actual)
     return _match_on_updated_row(
         condition, column, actual, changed=changed, previous=previous
@@ -206,10 +223,10 @@ def _match_change_operators(
 def evaluate_match_conditions(
     conditions: dict[str, ColumnCondition] | None,
     *,
-    operation: DatastoreOperation,
-    payload: dict[str, Any] | None,
+    operation: str,
+    payload: Mapping[str, object] | None,
     changed: list[str] | None = None,
-    previous: dict[str, Any] | None = None,
+    previous: Mapping[str, object] | None = None,
 ) -> bool:
     """Decide whether an event satisfies every condition.
 

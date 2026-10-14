@@ -98,7 +98,10 @@ async def encode_batch(
             if key not in cache:
                 cache[key] = _encode_change(entry, names, rows)
             item = cache[key]
-            if item is not None:
+            if item is None:
+                continue
+            # After visibility (``wants`` in routing), on the row just fetched.
+            if subscription.when is None or subscription.when.admit(item.op, item.row):
                 encoded.append(item)
         if encoded:
             out[subscription] = encoded

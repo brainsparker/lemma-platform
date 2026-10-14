@@ -208,6 +208,7 @@ class PodHub:
                 ops=frozenset(request.ops) if request.ops else None,
                 position=self._position,
                 cursor=self._cursor,
+                when=request.conditions(),
             )
             connection.subscriptions[request.id] = subscription
             await self._join(subscription, request.since)

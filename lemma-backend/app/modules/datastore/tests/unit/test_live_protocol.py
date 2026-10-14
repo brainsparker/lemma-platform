@@ -49,7 +49,14 @@ def test_parses_the_three_client_frames() -> None:
         ('{"op":"subscribe"}', None),
         ('{"op":"subscribe","id":"s1","topic":"files"}', "s1"),
         ('{"op":"subscribe","id":"s1","ops":["upsert"]}', "s1"),
-        ('{"op":"subscribe","id":"s1","when":{"status":{"eq":"open"}}}', "s1"),
+        ('{"op":"subscribe","id":"s1","table":"t","when":{"s":{"eq":"open"}}}', "s1"),
+        ('{"op":"subscribe","id":"s1","when":{"status":"open"}}', "s1"),
+        (
+            '{"op":"subscribe","id":"s1","table":"t","when":{"s":{"changed":true}}}',
+            "s1",
+        ),
+        ('{"op":"subscribe","id":"s1","table":"t","when":{"s":{"to":"x"}}}', "s1"),
+        ('{"op":"subscribe","id":"s1","table":"t","when":{}}', "s1"),
         ('{"op":"dance"}', None),
     ],
 )
@@ -177,3 +184,19 @@ async def test_a_large_batch_is_split_and_only_its_last_frame_moves_the_cursor()
         len(sink.sent) - 1
     ) + ["after"]
     assert sum(len(frame["changes"]) for frame in sink.sent) == 100
+
+
+def test_when_admits_by_the_current_row_and_always_passes_a_delete() -> None:
+    request = parse_request(
+        '{"op":"subscribe","id":"s1","table":"tickets",'
+        '"when":{"status":{"in":["open","new"]},"owner":{"not_equals":null}}}'
+    )
+    assert isinstance(request, SubscribeRequest)
+    conditions = request.conditions()
+    assert conditions is not None
+    assert conditions.admit("insert", {"status": "open", "owner": "a"})
+    assert conditions.admit("update", {"status": "new", "owner": "b"})
+    assert not conditions.admit("update", {"status": "closed", "owner": "a"})
+    assert not conditions.admit("insert", {"status": "open", "owner": None})
+    assert not conditions.admit("insert", {"owner": "a"})
+    assert conditions.admit("delete", None)

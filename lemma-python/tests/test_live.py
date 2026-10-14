@@ -27,6 +27,20 @@ def test_live_url_follows_the_api_scheme() -> None:
     assert live_ws_url("api.x.test", "P") == "wss://api.x.test/pods/P/live"
 
 
+def test_session_sends_when_with_its_subscription() -> None:
+    session = LiveSession()
+    open_ = session.add(table="tickets", when={"status": {"in": ["open"]}})
+    assert [json.loads(f) for f in session.subscribe_frames()] == [
+        {
+            "op": "subscribe",
+            "id": open_,
+            "topic": "records",
+            "table": "tickets",
+            "when": {"status": {"in": ["open"]}},
+        }
+    ]
+
+
 def test_session_tracks_each_subscriptions_cursor_across_reconnects() -> None:
     session = LiveSession()
     tickets = session.add(table="tickets", since="c.0")

@@ -43,7 +43,7 @@ events of every MCP server the caller connected, each with the schedule type
 that serves it.
 
 A DATASTORE schedule can narrow what fires it with `when` conditions over the
-written row (`domain/match_conditions.py`: equals, not equals, in, not in,
+written row (`app/core/domain/record_conditions.py`, shared with live subscriptions: equals, not equals, in, not in,
 changed, written, from, to). They are checked before any LLM filter, so a row
 that fails them costs no model call.
 

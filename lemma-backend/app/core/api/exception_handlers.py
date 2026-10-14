@@ -32,6 +32,10 @@ from app.core.redaction import redact_text, redact_value
 #: which Starlette sends from its outermost layer. Without them the page that
 #: made the request cannot read the error at all.
 ERROR_CORS_HEADERS = "lemma_error_cors_headers"
+#: The request id the observer chose, for the same 500: it is built from the
+#: scope the server handed in, which never saw the header the observer adds.
+ERROR_REQUEST_ID = "lemma_error_request_id"
+REQUEST_ID_HEADER = "x-request-id"
 
 
 def _sanitize_validation_payload(value: object) -> object:
@@ -92,9 +96,17 @@ def _error_body(
     return {
         "message": redact_text(message),
         "code": code,
-        "request_id": request.headers.get("x-request-id"),
+        "request_id": _request_id(request),
         "details": redact_value(details),
     }
+
+
+def _request_id(request: Request) -> str | None:
+    state = request.scope.get("state")
+    chosen = state.get(ERROR_REQUEST_ID) if isinstance(state, Mapping) else None
+    return request.headers.get(REQUEST_ID_HEADER) or (
+        chosen if isinstance(chosen, str) else None
+    )
 
 
 def _http_exception_code_and_message(exc: HTTPException) -> tuple[str, str]:
@@ -158,9 +170,18 @@ def _record_request_failure(
         state["lemma_exception"] = exception
 
 
-def _error_cors_headers(request: Request) -> dict[str, str] | None:
-    headers = request.scope.get("state", {}).get(ERROR_CORS_HEADERS)
-    return dict(headers) if isinstance(headers, Mapping) else None
+def _unhandled_error_headers(request: Request) -> dict[str, str]:
+    """What the 500 carries that the layers it was built outside would add.
+
+    The CORS headers, and the request id: the observer stamps every response
+    that passes through it, and this one does not.
+    """
+    cors = request.scope.get("state", {}).get(ERROR_CORS_HEADERS)
+    headers = dict(cors) if isinstance(cors, Mapping) else {}
+    request_id = _request_id(request)
+    if request_id is not None:
+        headers[REQUEST_ID_HEADER] = request_id
+    return headers
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -254,5 +275,5 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=500,
             content=_error_body(request, "Internal server error", "INTERNAL_ERROR"),
-            headers=_error_cors_headers(request),
+            headers=_unhandled_error_headers(request),
         )

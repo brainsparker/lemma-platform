@@ -14,7 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import Response
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 from app.core.api.exception_handlers import register_exception_handlers
 
@@ -55,6 +55,19 @@ class _Token(BaseModel):
         return value
 
 
+class _Schedule(BaseModel):
+    """A whole-body rule that names the enum value the request chose."""
+
+    schedule_type: str
+    operations: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _datastore_needs_operations(self) -> "_Schedule":
+        if self.schedule_type == "DATASTORE" and not self.operations:
+            raise ValueError("DATASTORE schedules must declare operations explicitly")
+        return self
+
+
 @pytest.fixture
 def client() -> TestClient:
     app = FastAPI()
@@ -71,6 +84,10 @@ def client() -> TestClient:
     @app.post("/tokens")
     async def _store(body: _Token) -> dict[str, str]:
         return {"ok": body.label}
+
+    @app.post("/schedules")
+    async def _schedule(body: _Schedule) -> dict[str, str]:
+        return {"ok": body.schedule_type}
 
     return TestClient(app, raise_server_exceptions=False)
 
@@ -156,6 +173,15 @@ def test_a_validator_message_that_names_its_rule_is_kept(client: TestClient) -> 
     (error,) = _errors(response)
     assert error["type"] == "value_error"
     assert error["msg"] == "Value error, label must be at most 20 characters"
+
+
+def test_a_rule_that_names_the_enum_value_chosen_is_kept(client: TestClient) -> None:
+    """An enum constant is the schema's word, not the request's secret."""
+    response = client.post("/schedules", json={"schedule_type": "DATASTORE"})
+
+    (error,) = _errors(response)
+    assert error["type"] == "value_error"
+    assert "declare operations explicitly" in str(error["msg"])
 
 
 def test_only_the_rules_own_context_is_kept() -> None:

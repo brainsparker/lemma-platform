@@ -17,6 +17,8 @@ the status before the response body starts, or (b) a genuine status remap.
 
 from __future__ import annotations
 
+import re
+
 from collections.abc import Mapping, Sequence
 
 from fastapi import FastAPI, HTTPException, Request
@@ -110,12 +112,19 @@ _VALIDATOR_MESSAGE_FALLBACKS = {
 #: input would otherwise match, and blank, nearly every message.
 _MIN_QUOTED_LENGTH = 4
 
+#: An enum constant the request chose (``DATASTORE``, ``AGENT_HOST``) is the
+#: schema's own vocabulary, which rule messages name on purpose ("DATASTORE
+#: schedules must declare operations"); quoting it reveals nothing.
+_ENUM_CONSTANT = re.compile(r"[A-Z][A-Z0-9_]*")
+
 
 def _input_strings(value: object) -> list[str]:
     """Every string value in a refused input; a mapping's keys are field
     names, the schema's words rather than the request's."""
     if isinstance(value, str):
-        return [value] if len(value) >= _MIN_QUOTED_LENGTH else []
+        if len(value) < _MIN_QUOTED_LENGTH or _ENUM_CONSTANT.fullmatch(value):
+            return []
+        return [value]
     if isinstance(value, Mapping):
         return [text for item in value.values() for text in _input_strings(item)]
     if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):

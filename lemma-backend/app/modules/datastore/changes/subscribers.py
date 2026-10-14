@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.datastore.changes.cursor import ChangePosition
 from app.modules.datastore.changes.reader import Change, ChangeOp
-from app.modules.datastore.changes.schema import subscribers_table
+from app.modules.datastore.changes.schema import changes_table, subscribers_table
 from app.modules.datastore.infrastructure.pod_schema_migrations import (
     schema_name_for_pod,
 )
@@ -116,31 +116,43 @@ class SubscriberTable:
 
     def __init__(self, pod_id: UUID, *, engine: AsyncEngine | None = None) -> None:
         self._table = subscribers_table(schema_name_for_pod(pod_id))
+        self._changes = changes_table(schema_name_for_pod(pod_id))
         self._engine = engine or get_datastore_engine()
 
     async def upsert(
-        self, key: str, *, table_id: UUID, ops: frozenset[ChangeOp], delay: timedelta
+        self,
+        key: str,
+        *,
+        table_id: UUID,
+        ops: frozenset[ChangeOp],
+        delay: timedelta,
+        since: datetime | None = None,
     ) -> None:
-        """Create the row at the current horizon, or update what it watches.
+        """Create the row, or update what it watches.
 
-        A row that changes table starts again at the horizon: it is a new
-        subscription to a different stream of changes. One that only changes
-        operations keeps its cursor.
+        A new row starts at the first change to its table written at or after
+        ``since`` -- when the subscriber was asked for, in its module's
+        transaction -- or at the current horizon, whichever is earlier, so a
+        write that lands between a trigger being saved and this sync running
+        is not missed. A row that changes table starts again the same way: it
+        is a new subscription to a different stream of changes. One that only
+        changes operations keeps its cursor.
         """
         async with self._engine.begin() as conn:
+            start = await self._starting_position(conn, table_id, since)
             await conn.execute(
                 text(
                     f"INSERT INTO {self._table} AS s "
                     "(subscriber, table_id, ops, delay_ms, cursor_xid, cursor_seq) "
                     "VALUES (:key, CAST(:table_id AS uuid), CAST(:ops AS text[]), "
-                    ":delay_ms, pg_snapshot_xmin(pg_current_snapshot()), 0) "
+                    ":delay_ms, CAST(CAST(:xid AS text) AS xid8), :seq) "
                     "ON CONFLICT (subscriber) DO UPDATE SET "
                     "ops = EXCLUDED.ops, delay_ms = EXCLUDED.delay_ms, "
                     "updated_at = now(), "
                     "cursor_xid = CASE WHEN s.table_id = EXCLUDED.table_id "
                     "THEN s.cursor_xid ELSE EXCLUDED.cursor_xid END, "
                     "cursor_seq = CASE WHEN s.table_id = EXCLUDED.table_id "
-                    "THEN s.cursor_seq ELSE 0 END, "
+                    "THEN s.cursor_seq ELSE EXCLUDED.cursor_seq END, "
                     "table_id = EXCLUDED.table_id"
                 ),
                 {
@@ -148,8 +160,33 @@ class SubscriberTable:
                     "table_id": str(table_id),
                     "ops": sorted(op.value for op in ops),
                     "delay_ms": int(delay.total_seconds() * 1000),
+                    "xid": str(start.xid),
+                    "seq": start.seq,
                 },
             )
+
+    async def _starting_position(
+        self, conn: AsyncConnection, table_id: UUID, since: datetime | None
+    ) -> ChangePosition:
+        xmin = await conn.scalar(
+            text("SELECT pg_snapshot_xmin(pg_current_snapshot())::text")
+        )
+        horizon = ChangePosition(int(xmin or 0), 0)
+        if since is None:
+            return horizon
+        first = (
+            await conn.execute(
+                text(
+                    f"SELECT xid::text, seq FROM {self._changes} "
+                    "WHERE table_id = CAST(:table_id AS uuid) AND at >= :since "
+                    "ORDER BY xid, seq LIMIT 1"
+                ),
+                {"table_id": str(table_id), "since": since},
+            )
+        ).one_or_none()
+        if first is None:
+            return horizon
+        return min(horizon, ChangePosition(int(first[0]), int(first[1]) - 1))
 
     async def delete(self, key: str) -> None:
         """Drop the row; a schema without a change log has none to drop."""

@@ -45,6 +45,14 @@ from app.modules.schedule.work.kinds import SCHEDULE_START, StartTarget
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
+
+@pytest.fixture(autouse=True)
+def _drive_the_runtime_alone():
+    from app.modules.schedule.tests.e2e.trigger_work_support import worker_held
+
+    with worker_held():
+        yield
+
 PAGE = 500
 
 

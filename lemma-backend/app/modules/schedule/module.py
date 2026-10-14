@@ -82,8 +82,9 @@ def _register_streaq() -> None:
 async def _schedule_poller(context):
     """Fire due wait timers, for as long as the worker runs.
 
-    TIME schedules and workflow timers are work items now; this is left for
-    the agent wait timers that still live in their own table.
+    TIME schedules and workflow timers are work items now. This loop stays
+    only for agent ``wait_for`` TIME waits, which still live in their own table
+    -- until PR 3 moves agent waits to ``agent.wait.fire`` items and deletes it.
     Runs on every worker replica: the poll claims with `FOR UPDATE SKIP LOCKED`,
     so replicas share the work rather than duplicating it, and there is no
     leader to lose.

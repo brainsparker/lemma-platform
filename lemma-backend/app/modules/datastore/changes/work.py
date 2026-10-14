@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -76,6 +76,12 @@ class SubscriberRef(BaseModel):
     subscriber: str
 
 
+class SyncRequest(SubscriberRef):
+    #: When the subscriber's module asked: a new subscriber starts with the
+    #: first change written from then on, not from when the sync ran.
+    since: datetime | None = None
+
+
 def concurrency_key(pod_id: UUID, subscriber: str) -> str:
     return f"changes:{pod_id}:{subscriber}"
 
@@ -84,7 +90,9 @@ async def request_sync(work: WorkWriter, pod_id: UUID, subscriber: str) -> UUID 
     return await work.add(
         SYNC_SUBSCRIBERS,
         pod_namespace(pod_id),
-        SubscriberRef(pod_id=pod_id, subscriber=subscriber),
+        SyncRequest(
+            pod_id=pod_id, subscriber=subscriber, since=datetime.now(timezone.utc)
+        ),
         dedup_key=f"changes.sync:{pod_id}:{subscriber}",
         concurrency_key=concurrency_key(pod_id, subscriber),
     )
@@ -118,7 +126,7 @@ def _resolve(subscriber: str):
     return found
 
 
-async def run_sync(ctx: JobContext, payload: SubscriberRef) -> None:
+async def run_sync(ctx: JobContext, payload: SyncRequest) -> None:
     module, subscriber_id = _resolve(payload.subscriber)
     async with ctx.checkpoint() as uow:
         spec = await module.spec(uow, payload.pod_id, subscriber_id)
@@ -142,7 +150,11 @@ async def run_sync(ctx: JobContext, payload: SubscriberRef) -> None:
     if version < CHANGE_LOG_VERSION:
         return
     await rows.upsert(
-        payload.subscriber, table_id=table.id, ops=spec.ops, delay=spec.delay
+        payload.subscriber,
+        table_id=table.id,
+        ops=spec.ops,
+        delay=spec.delay,
+        since=payload.since,
     )
     async with ctx.complete_work() as uow:
         work = ctx.writer(uow)
@@ -215,7 +227,7 @@ def register_change_work(registry: WorkRegistry) -> None:
         kind=SYNC_SUBSCRIBERS,
         cls=WorkClass.EVENTS,
         mode=WorkMode.JOB,
-        payload=SubscriberRef,
+        payload=SyncRequest,
         concurrency=1,
     )(run_sync)
     registry.handler(

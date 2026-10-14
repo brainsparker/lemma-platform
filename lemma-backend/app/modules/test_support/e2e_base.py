@@ -779,6 +779,9 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     datastore_settings.datastore_database_url = (
         f"{base_url}/{_postgres_worker_datastore_db_name(worker_id)}"
     )
+    # Every schema a test makes is new, so record writes go to the change log
+    # from the first one, as they do once a deployment's backfill is done.
+    datastore_settings.datastore_change_log_mode = "on"
     settings.redis_url = test_redis_url
     settings.supertokens_core_url = get_supertokens_url(supertokens_container)
     settings.environment = "testing"

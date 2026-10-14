@@ -41,6 +41,7 @@ from app.modules.datastore.infrastructure.pod_schema_migrations import (
     CHANGE_LOG_VERSION,
     schema_name_for_pod,
 )
+from app.modules.datastore.infrastructure.record_bulk_sql import array_element_type
 from app.modules.datastore.infrastructure.session import get_datastore_engine
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.value_converter import ValueConverter
@@ -231,20 +232,35 @@ async def fetch_rows(
         return {}
     if table.pod_id != pod_id:
         raise ValueError("table belongs to another pod")
-    pk = table.primary_key_column
-    sql = (
-        f'SELECT * FROM "{table.schema_name}"."{table.table_name}" '
-        f'WHERE "{pk}"::text = ANY(CAST(:ids AS text[]))'
-    )
+    sql, params = fetch_rows_statement(table, record_ids)
     async with (engine or get_datastore_engine()).connect() as conn:
-        rows = (
-            (await conn.execute(text(sql), {"ids": list(record_ids)})).mappings().all()
-        )
+        rows = (await conn.execute(text(sql), params)).mappings().all()
+    pk = table.primary_key_column
     found: dict[str, JsonRow] = {}
     for row in rows:
         data = ValueConverter.deserialize_record(dict(row), table.columns)
         found[str(row[pk])] = to_jsonable_python(data)
     return found
+
+
+def fetch_rows_statement(
+    table: TableContext, record_ids: Sequence[str]
+) -> tuple[str, dict[str, object]]:
+    """The read :func:`fetch_rows` runs: by the typed primary key, so it is an
+    index lookup however large the table."""
+    pk = table.primary_key_column
+    source = f'SELECT * FROM "{table.schema_name}"."{table.table_name}"'
+    element = array_element_type(table, pk)
+    if element is None:
+        # A key type that cannot be named: compare as text, without the index.
+        return (
+            f'{source} WHERE "{pk}"::text = ANY(CAST(:ids AS text[]))',
+            {"ids": list(record_ids)},
+        )
+    return (
+        f'{source} WHERE "{pk}" = ANY(CAST(:ids AS {element}[]))',
+        {"ids": [table.parse_primary_key(record_id) for record_id in record_ids]},
+    )
 
 
 async def _horizon(conn: AsyncConnection) -> ChangePosition:
@@ -321,5 +337,6 @@ __all__ = [
     "Page",
     "current_horizon",
     "fetch_rows",
+    "fetch_rows_statement",
     "read_after",
 ]

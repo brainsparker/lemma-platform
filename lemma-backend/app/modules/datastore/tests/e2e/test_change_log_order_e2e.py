@@ -35,6 +35,7 @@ from app.modules.datastore.tests.e2e.change_log_support import (
     datastore_schedule,
     deliver_all,
     handoff,
+    log_final,
     orders_table,
     runs,
 )
@@ -95,6 +96,9 @@ async def test_concurrent_writers_are_each_read_once_in_order(
     seen: list[str] = []
     positions: list[tuple[int, int]] = []
     done = asyncio.Event()
+    # The reader reads again whenever a writer ends, so reads interleave with
+    # commits and aborts rather than following them.
+    progress = asyncio.Event()
 
     async def writer(index: int) -> None:
         record = f"w{index}-{uuid4().hex[:6]}"
@@ -110,6 +114,7 @@ async def test_concurrent_writers_are_each_read_once_in_order(
             else:
                 await txn.commit()
                 committed.add(record)
+        progress.set()
 
     async def reader() -> None:
         cursor: str | None = None
@@ -121,11 +126,15 @@ async def test_concurrent_writers_are_each_read_once_in_order(
             cursor = page.cursor
             if finished and not page.full:
                 return
-            await asyncio.sleep(0.005)
+            if not page.full:
+                await progress.wait()
+                progress.clear()
 
     reading = asyncio.create_task(reader())
     await asyncio.gather(*(writer(index) for index in range(40)))
+    await log_final()  # another session's open transaction must not end the read early
     done.set()
+    progress.set()
     await reading
 
     assert len(seen) == len(set(seen)), "no change is read twice"

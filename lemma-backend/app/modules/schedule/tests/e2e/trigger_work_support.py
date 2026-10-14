@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -168,3 +169,41 @@ class CountingFilter(ScheduleFilter):
             proceed=self.proceed,
             output={"should_proceed": self.proceed, "reason_code": "test"},
         )
+
+
+def _session_workers() -> list[int]:
+    """Worker subprocesses this pytest process started (the shared e2e worker)."""
+    import os
+    import subprocess
+
+    listing = subprocess.run(
+        ["ps", "-o", "pid=,ppid=,command="], capture_output=True, text=True, check=True
+    ).stdout
+    mine = str(os.getpid())
+    pids: list[int] = []
+    for line in listing.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[1] == mine and "-m app.worker" in parts[2]:
+            pids.append(int(parts[0]))
+    return pids
+
+
+@contextmanager
+def worker_held() -> Iterator[None]:
+    """Hold the session's shared worker still while a test drives the runtime itself.
+
+    These tests claim and run items step by step to observe each transition;
+    a live worker in the same database would race them for the same items.
+    Only a worker this process started is touched, and it always resumes.
+    """
+    import os
+    import signal
+
+    held = _session_workers()
+    for pid in held:
+        os.kill(pid, signal.SIGSTOP)
+    try:
+        yield
+    finally:
+        for pid in held:
+            os.kill(pid, signal.SIGCONT)

@@ -10,6 +10,7 @@ from uuid import UUID
 
 import pytest
 
+from app.modules.datastore.changes.cursor import decode_cursor
 from app.modules.datastore.changes.reader import ChangeOp, read_after
 from app.modules.datastore.changes.schema import PENDING_TABLE
 from app.modules.datastore.tests.e2e.change_log_support import (
@@ -24,6 +25,7 @@ from app.modules.datastore.tests.e2e.change_log_support import (
     scalar,
 )
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -148,3 +150,81 @@ async def test_bulk_writes_fire_nothing_by_default_and_are_recorded_as_skipped(
         )
         <= 3
     )
+
+
+async def test_current_rows_are_fetched_by_the_primary_key_index(pod_api: DatastoreApi):
+    """A live reader's per-batch row fetch is an index lookup, not a scan of
+    the table; comparing the key as text could only ever be the scan."""
+    import json
+
+    from sqlalchemy import text
+
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.datastore.changes.reader import fetch_rows, fetch_rows_statement
+    from app.modules.datastore.infrastructure.pod_schema_migrations import (
+        schema_name_for_pod,
+    )
+    from app.modules.datastore.infrastructure.repositories import (
+        DatastoreTableRepository,
+    )
+    from app.modules.datastore.infrastructure.session import get_datastore_engine
+    from app.modules.datastore.services.table_context import TableContext
+
+    pod_id = UUID(pod_api.pod_id)
+    table_id = await orders_table(pod_api)
+    await pod_api.bulk_create(
+        "orders", [{"status": "s", "total": n} for n in range(200)]
+    )
+    wanted = await pod_api.create_record("orders", {"status": "wanted", "total": 1})
+    async with async_session_maker() as session:
+        entity = await DatastoreTableRepository(SqlAlchemyUnitOfWork(session)).get(
+            table_id
+        )
+    assert entity is not None
+    ctx = TableContext.from_table_entity(entity, schema_name_for_pod(pod_id))
+
+    rows = await fetch_rows(
+        pod_id, ctx, [wanted["id"], "00000000-0000-0000-0000-000000000000"]
+    )
+    assert list(rows) == [wanted["id"]] and rows[wanted["id"]]["status"] == "wanted"
+
+    sql, params = fetch_rows_statement(ctx, [wanted["id"]])
+    async with get_datastore_engine().connect() as conn:
+        await conn.execute(text("SET LOCAL enable_seqscan = off"))
+        plan = (
+            await conn.execute(text(f"EXPLAIN (FORMAT JSON) {sql}"), params)
+        ).scalar_one()
+    assert "Index" in json.dumps(plan) and "Seq Scan" not in json.dumps(plan), plan
+
+
+async def test_the_live_wake_names_the_writing_transaction(pod_api: DatastoreApi):
+    """A hub told the writer's xid can wait for the horizon to pass it rather
+    than re-read an empty page while an older transaction is open."""
+    from app.core.config import settings
+    from app.core.infrastructure.redis.client import get_redis
+    from app.modules.datastore.changes.capture import live_channel, parse_wake
+
+    pod_id = UUID(pod_api.pod_id)
+    await orders_table(pod_api)
+    pubsub = get_redis(url=settings.redis_url).pubsub()
+    await pubsub.subscribe(live_channel(pod_id))
+    try:
+        await pod_api.create_record("orders", {"status": "new", "total": 1})
+        message = await eventually(
+            label="the live wake",
+            probe=lambda: pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=0.1
+            ),
+            done=lambda received: received is not None,
+            timeout_seconds=5,
+        )
+    finally:
+        await pubsub.unsubscribe()
+        await pubsub.aclose()
+    xid = parse_wake(message["data"])
+    [change] = await log(pod_id)
+    assert xid is not None and xid == change.position.xid
+    # Readable exactly when a read's horizon is past the named transaction.
+    page = await read_after(pod_id, None)
+    assert decode_cursor(page.horizon).xid > xid and page.changes == [change]

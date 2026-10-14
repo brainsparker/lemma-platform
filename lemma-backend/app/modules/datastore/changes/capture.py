@@ -24,6 +24,7 @@ latency, never a change, because the hub reads the log from its own cursor.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 from typing import Literal
 from uuid import UUID
@@ -69,6 +70,23 @@ def live_channel(pod_id: UUID) -> str:
     return LIVE_CHANNEL_FORMAT.format(pod_id=pod_id)
 
 
+def wake_payload(xid: str | None) -> str:
+    """``{"xid": "<xid8>"}``: the write's transaction. A change it wrote is
+    readable once a read's horizon is past it, so a hub can wait for that
+    instead of re-reading an empty page while an older transaction is open."""
+    return json.dumps({"xid": xid}) if xid is not None else ""
+
+
+def parse_wake(payload: str | bytes) -> int | None:
+    """The transaction id a wake names, or ``None`` (an older, empty wake)."""
+    try:
+        value = json.loads(payload or b"{}")
+    except ValueError:
+        return None
+    xid = value.get("xid") if isinstance(value, dict) else None
+    return int(xid) if isinstance(xid, str) and xid.isdigit() else None
+
+
 def _free_alias(taken: set[str], base: str) -> str:
     """An output column name no table column can shadow."""
     alias = base
@@ -87,6 +105,8 @@ class ChangeCapture:
     #: Operations a durable subscriber watches on this table, as of ``begin``.
     watched: frozenset[str] = field(default_factory=frozenset)
     _statements: int = 0
+    #: The writing transaction's id (xid8, as text), once ``wake_handoff`` ran.
+    xid: str | None = None
 
     async def prepare(self) -> None:
         """Make sure the pod schema has a change log; a memo hit after the first."""
@@ -186,11 +206,15 @@ class ChangeCapture:
         return statement, bound
 
     async def wake_handoff(self, session: AsyncSession) -> None:
-        """Before commit: wake the handoff if anything here was watched."""
-        if self.watched and self._statements:
-            await session.execute(
-                text("SELECT pg_notify(:channel, '')"), {"channel": PENDING_CHANNEL}
-            )
+        """Before commit: note this transaction's id, and wake the handoff if
+        anything here was watched -- one round trip either way."""
+        if not self._statements:
+            return
+        notify = "pg_notify(:channel, '')" if self.watched else "NULL"
+        self.xid = await session.scalar(
+            text(f"SELECT pg_current_xact_id()::text, {notify}"),
+            {"channel": PENDING_CHANNEL},
+        )
 
     async def publish_wake(self) -> None:
         """After commit: tell this pod's live hubs to read. Best effort."""
@@ -199,7 +223,7 @@ class ChangeCapture:
         try:
             client = get_redis(url=settings.redis_url)
             await asyncio.wait_for(
-                client.publish(live_channel(self.ctx.pod_id), ""),
+                client.publish(live_channel(self.ctx.pod_id), wake_payload(self.xid)),
                 timeout=_PUBLISH_TIMEOUT_SECONDS,
             )
         except (RedisError, OSError, TimeoutError) as exc:
@@ -210,4 +234,10 @@ class ChangeCapture:
             _publish_incident.record_success()
 
 
-__all__ = ["LIVE_CHANNEL_FORMAT", "ChangeCapture", "live_channel"]
+__all__ = [
+    "LIVE_CHANNEL_FORMAT",
+    "ChangeCapture",
+    "live_channel",
+    "parse_wake",
+    "wake_payload",
+]

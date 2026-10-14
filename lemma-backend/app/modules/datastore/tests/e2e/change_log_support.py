@@ -129,29 +129,25 @@ async def log_final(*, timeout_seconds: float = 60.0) -> None:
     The log is read below the oldest open transaction on the whole cluster,
     and another test session's transaction can hold that back for a moment.
     """
-    import asyncio
-    import time
+    from app.modules.test_support.e2e.waiters import eventually
 
     engine = get_datastore_engine()
-    async with engine.connect() as conn:
-        target = int(
-            await conn.scalar(
-                text("SELECT pg_snapshot_xmax(pg_current_snapshot())::text")
-            )
-        )
-    deadline = time.monotonic() + timeout_seconds
-    while True:
+
+    async def snapshot(edge: str) -> int:
         async with engine.connect() as conn:
-            xmin = int(
-                await conn.scalar(
-                    text("SELECT pg_snapshot_xmin(pg_current_snapshot())::text")
-                )
+            value = await conn.scalar(
+                text(f"SELECT pg_snapshot_{edge}(pg_current_snapshot())::text")
             )
-        if xmin >= target:
-            return
-        if time.monotonic() > deadline:
-            raise TimeoutError(f"a transaction older than {target} is still open")
-        await asyncio.sleep(0.05)
+        return int(value)
+
+    target = await snapshot("xmax")
+    await eventually(
+        label=f"every transaction before {target} ended",
+        probe=lambda: snapshot("xmin"),
+        done=lambda xmin: xmin >= target,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.05,
+    )
 
 
 async def deliver_all(*, max_rounds: int = 10_000) -> int:

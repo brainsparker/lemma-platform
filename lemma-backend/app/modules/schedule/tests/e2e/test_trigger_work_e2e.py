@@ -42,6 +42,14 @@ from app.modules.workflow.contracts.run_work import WorkflowRunFinished
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 
+@pytest.fixture(autouse=True)
+def _drive_the_runtime_alone():
+    from app.modules.schedule.tests.e2e.trigger_work_support import worker_held
+
+    with worker_held():
+        yield
+
+
 @pytest.fixture
 def counting_filter():
     judge = CountingFilter()

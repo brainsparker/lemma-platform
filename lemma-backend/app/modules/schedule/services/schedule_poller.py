@@ -1,9 +1,9 @@
 """The loop that fires due wait timers, on every replica.
 
-TIME schedules no longer pass through here: each one owns a ``schedule.fire``
-work item due at its cursor. What is left are the one-shot timers other
-modules still keep in their own tables -- workflow ``WAIT_UNTIL`` waits and
-agent waits -- until they move onto work items of their own. One transaction
+TIME schedules and workflow ``WAIT_UNTIL`` timers no longer pass through here:
+each is a work item due at its moment. What is left is agent ``wait_for`` TIME
+waits, kept in the agent module's own table -- until PR 3 moves them to
+``agent.wait.fire`` items and this loop is deleted. One transaction
 per tick claims them with ``FOR UPDATE SKIP LOCKED`` and stages each fire onto
 the same unit of work, so a claim and its fire commit together.
 

@@ -50,6 +50,7 @@ _WORK_METRICS = {
     "lemma.work.ready_oldest_age",
     "lemma.work.items",
     "lemma.work.namespaces",
+    "lemma.work.oldest_transaction_age",
     "lemma.work.claim_latency",
     "lemma.work.handler.duration",
     "lemma.work.dead",

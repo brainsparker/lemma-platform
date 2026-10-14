@@ -167,7 +167,7 @@ async fn run(key: &str, mac: &Machine, bin: Option<PathBuf>) -> (Value, Value, S
             "https://lemma.example".to_owned(),
         ),
     ]);
-    AcpDriver.run(request, Arc::new(Quiet)).await.unwrap();
+    AcpDriver::default().run(request, Arc::new(Quiet)).await.unwrap();
     let traffic: Vec<Value> = std::fs::read_to_string(&log)
         .unwrap()
         .lines()

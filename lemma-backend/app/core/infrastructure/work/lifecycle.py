@@ -39,6 +39,18 @@ _LOCK_OWNED = text(
        FOR UPDATE
     """
 )
+# The same lock, also setting the handler's statement timeout for the rest of
+# its transaction (``set_config(..., true)`` is ``SET LOCAL``): a fast handler
+# is a few statements, and this was one round trip of them on every item.
+_LOCK_OWNED_WITH_TIMEOUT = text(
+    """
+    SELECT attempts, lease_losses, first_unavailable_at,
+           set_config('statement_timeout', :timeout_ms, true) AS timeout
+      FROM work_items
+     WHERE id = :id AND lease_owner = :owner AND state = 'running'
+       FOR UPDATE
+    """
+)
 _DELETE = text("DELETE FROM work_items WHERE id = :id")
 _REQUEUE = text(
     """
@@ -103,7 +115,11 @@ _LOCK_EXPIRED = text(
 
 
 async def lock_owned(
-    session: AsyncSession, item_id: object, owner: str
+    session: AsyncSession,
+    item_id: object,
+    owner: str,
+    *,
+    statement_timeout_ms: int | None = None,
 ) -> AttemptState | None:
     """Lock the item if this owner still holds it; ``None`` means the lease is lost.
 
@@ -111,8 +127,20 @@ async def lock_owned(
     as holding one: a connection-release helper the handler reaches (an
     authorization check commits a read-only session to hand its connection
     back) must not commit the fenced transaction half way through.
+
+    ``statement_timeout_ms`` bounds every later statement of the transaction,
+    set in the same round trip; only when the lock is held.
     """
-    row = (await session.execute(_LOCK_OWNED, {"id": item_id, "owner": owner})).first()
+    if statement_timeout_ms is None:
+        statement, params = _LOCK_OWNED, {"id": item_id, "owner": owner}
+    else:
+        statement = _LOCK_OWNED_WITH_TIMEOUT
+        params = {
+            "id": item_id,
+            "owner": owner,
+            "timeout_ms": str(statement_timeout_ms),
+        }
+    row = (await session.execute(statement, params)).first()
     if row is None:
         return None
     mark_transaction_scoped_lock(session)

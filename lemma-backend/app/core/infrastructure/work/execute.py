@@ -14,9 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work.context import FastContext
@@ -181,14 +179,6 @@ async def release_item(env: ExecEnv, item: ClaimedItem) -> str:
     return "released" if released else "lease_lost"
 
 
-async def _set_statement_timeout(session: AsyncSession, ms: int) -> None:
-    # set_config(..., is_local => true) is SET LOCAL with a bound value; it
-    # ends with the transaction, so it never leaks into a pooled connection.
-    await session.execute(
-        text("SELECT set_config('statement_timeout', :ms, true)"), {"ms": str(ms)}
-    )
-
-
 async def _apply_and_finish(
     env: ExecEnv,
     spec: HandlerSpec,
@@ -213,8 +203,15 @@ async def run_fast(env: ExecEnv, spec: HandlerSpec, item: ClaimedItem) -> str:
     error: Exception | None
     async with env.db.handler(item.cls) as session:
         uow = SqlAlchemyUnitOfWork(session)
-        await _set_statement_timeout(session, env.statement_timeout_ms)
-        if await lock_owned(session, item.id, env.owner) is None:
+        if (
+            await lock_owned(
+                session,
+                item.id,
+                env.owner,
+                statement_timeout_ms=env.statement_timeout_ms,
+            )
+            is None
+        ):
             logger.warning(
                 "work.item.lease_lost", item_id=str(item.id), kind=item.kind, ns=item.ns
             )

@@ -124,6 +124,7 @@ async def _staged(platform: SurfacePlatform, platform_fake, **kwargs) -> Surface
     )
 
 
+@pytest.mark.drives_work
 @pytest.mark.parametrize("platform", CHAT_PLATFORMS, ids=lambda p: p.value)
 async def test_a_tapped_approve_runs_the_tool_and_resumes_the_run(
     platform: SurfacePlatform,

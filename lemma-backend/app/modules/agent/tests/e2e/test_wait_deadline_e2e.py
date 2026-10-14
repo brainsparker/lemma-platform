@@ -45,6 +45,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
 pytestmark = [pytest.mark.e2e]
 
 
+@pytest.mark.drives_work
 async def test_a_wait_past_its_deadline_resumes_saying_the_wait_expired(
     scenario,
 ) -> None:

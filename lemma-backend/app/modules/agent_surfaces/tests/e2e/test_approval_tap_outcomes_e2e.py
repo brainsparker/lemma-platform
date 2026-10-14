@@ -139,6 +139,7 @@ async def test_approve_after_moving_on_says_cancelled_and_runs_nothing(
     assert result["executed"] is False
 
 
+@pytest.mark.drives_work
 async def test_a_failed_job_after_running_it_now_is_reported_on_the_platform(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,

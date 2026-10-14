@@ -132,6 +132,7 @@ async def _stop(scenario: E2EScenario, seeded: Seeded):
 # -- PROCESS: the poll re-arms itself, and stops re-arming -----------------------
 
 
+@pytest.mark.drives_work
 async def test_a_process_poll_rearms_until_the_process_exits(
     scenario, monkeypatch
 ) -> None:
@@ -168,6 +169,7 @@ async def test_a_process_poll_rearms_until_the_process_exits(
     del paused
 
 
+@pytest.mark.drives_work
 async def test_a_stop_landing_while_the_poll_runs_is_not_rearmed(
     scenario, monkeypatch
 ) -> None:
@@ -204,6 +206,7 @@ async def test_a_stop_landing_while_the_poll_runs_is_not_rearmed(
 # -- TIME: a stop racing the fire ------------------------------------------------
 
 
+@pytest.mark.drives_work
 async def test_a_stop_racing_the_timer_ends_the_wait_exactly_one_way(scenario) -> None:
     """Twenty races of Stop against a due TIME fire: resumed xor cancelled."""
     outcomes: list[str] = []
@@ -262,6 +265,7 @@ async def _finished_child(scenario: E2EScenario, parent: Seeded) -> tuple[UUID, 
     return child.conversation_id, child_run
 
 
+@pytest.mark.drives_work
 async def test_a_child_finishing_at_the_deadline_resumes_the_parent_once(
     scenario,
 ) -> None:
@@ -302,6 +306,7 @@ async def test_a_child_finishing_at_the_deadline_resumes_the_parent_once(
         assert await _items(wait.id) == 0
 
 
+@pytest.mark.drives_work
 async def test_a_child_still_running_at_the_deadline_is_left_running(scenario) -> None:
     parent = await seeded_conversation(scenario)
     child = await seeded_conversation(scenario, parent_id=parent.conversation_id)
@@ -322,6 +327,7 @@ async def test_a_child_still_running_at_the_deadline_is_left_running(scenario) -
     assert child_status == AgentRunStatus.RUNNING.value
 
 
+@pytest.mark.drives_work
 async def test_a_deadline_item_fired_early_rearms_for_the_deadline(scenario) -> None:
     parent = await seeded_conversation(scenario)
     child = await seeded_conversation(scenario, parent_id=parent.conversation_id)

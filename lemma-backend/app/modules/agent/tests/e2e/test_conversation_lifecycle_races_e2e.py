@@ -107,6 +107,7 @@ def _returns_for(found, tool_call_id: str):
     ]
 
 
+@pytest.mark.drives_work
 async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
     scenario,
 ) -> None:
@@ -323,6 +324,7 @@ async def test_a_remote_harness_question_is_answered_inside_its_own_run(
     assert [run.id for run in await runs(seeded.conversation_id)] == [working]
 
 
+@pytest.mark.drives_work
 async def test_stop_keeps_an_already_approved_pause_from_waking_the_agent(
     scenario,
 ) -> None:

@@ -33,9 +33,11 @@ async def _blocked_behind_the_competitor() -> None:
     Matched on the wait rather than the statement text: a session's ``query``
     column can still show its previous statement while the next one waits.
     """
-    async with async_session_maker() as session:
 
-        async def waiting_on_a_transaction() -> int:
+    async def waiting_on_a_transaction() -> int:
+        # A session per probe: pg_stat_activity is a snapshot taken once per
+        # transaction, so a reused one keeps answering what the first poll saw.
+        async with async_session_maker() as session:
             return (
                 await session.scalar(
                     text(
@@ -49,13 +51,13 @@ async def _blocked_behind_the_competitor() -> None:
                 or 0
             )
 
-        await eventually(
-            label="the create waiting on the competing insert",
-            probe=waiting_on_a_transaction,
-            done=lambda waiting: waiting > 0,
-            timeout_seconds=10.0,
-            interval_seconds=0.05,
-        )
+    await eventually(
+        label="the create waiting on the competing insert",
+        probe=waiting_on_a_transaction,
+        done=lambda waiting: waiting > 0,
+        timeout_seconds=10.0,
+        interval_seconds=0.05,
+    )
 
 
 async def test_the_create_that_loses_the_race_gets_the_same_409(

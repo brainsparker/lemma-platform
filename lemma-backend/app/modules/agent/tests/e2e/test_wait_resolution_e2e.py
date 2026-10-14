@@ -133,6 +133,7 @@ async def _reload(wait_id: UUID) -> AgentConversationWaitEntity | None:
         return await AgentConversationWaitRepository(uow).get(wait_id)
 
 
+@pytest.mark.drives_work
 async def test_a_process_whose_sandbox_is_gone_wakes_rather_than_waiting_out_the_hour(
     waiting_conversation,
 ) -> None:
@@ -159,6 +160,7 @@ async def test_a_process_whose_sandbox_is_gone_wakes_rather_than_waiting_out_the
     assert resolved.spec["woke_because"] == AgentWaitWakeReason.TARGET_GONE.value
 
 
+@pytest.mark.drives_work
 async def test_a_subagent_run_that_no_longer_exists_wakes_as_gone(
     waiting_conversation,
 ) -> None:
@@ -200,6 +202,7 @@ async def test_a_second_resolution_does_not_start_a_second_run(
     assert (first, second) == (True, False)
 
 
+@pytest.mark.drives_work
 async def test_a_wait_fires_when_due_and_its_item_goes_with_it(
     waiting_conversation,
 ) -> None:
@@ -220,6 +223,7 @@ async def test_a_wait_fires_when_due_and_its_item_goes_with_it(
     assert resolved.spec["woke_because"] == AgentWaitWakeReason.TIMER.value
 
 
+@pytest.mark.drives_work
 async def test_a_healthy_future_wait_is_left_alone(
     waiting_conversation,
 ) -> None:

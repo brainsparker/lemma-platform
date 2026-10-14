@@ -435,7 +435,7 @@ async def test_work_a_handler_enqueues_wakes_its_own_process_not_the_database(
     """
     import asyncpg
 
-    from app.core.infrastructure.events.outbox_wake import asyncpg_connect_kwargs
+    from app.core.infrastructure.db.direct_connection import asyncpg_connect_kwargs
 
     _fast(registry)
 

@@ -132,6 +132,7 @@ async def _chores_left(scenario: E2EScenario) -> int:
     return len(listed.json()["items"])
 
 
+@pytest.mark.drives_work
 async def test_a_decision_commits_with_the_item_that_carries_it_out(scenario) -> None:
     """The old gap: decision committed, enqueue lost with the process.
 
@@ -162,6 +163,7 @@ async def test_a_decision_commits_with_the_item_that_carries_it_out(scenario) ->
     assert await _items(seeded, approval_id) == 0
 
 
+@pytest.mark.drives_work
 async def test_racing_approvals_write_one_item_and_run_the_tool_once(scenario) -> None:
     """Two Approve taps at once: one decision row, one queued item, one run."""
     seeded, _, approval_id = await _paused_on_a_delete(scenario)
@@ -312,6 +314,7 @@ def _read_until(stream, marker: str) -> str | None:
     return None
 
 
+@pytest.mark.drives_work
 async def test_a_resume_waits_for_every_pause_of_the_run(scenario) -> None:
     """An approval resumed while another pausing call is unanswered: no resume."""
     seeded, paused, approval_id = await _paused_on_a_delete(scenario)
@@ -329,6 +332,7 @@ async def test_a_resume_waits_for_every_pause_of_the_run(scenario) -> None:
     )
 
 
+@pytest.mark.drives_work
 async def test_the_item_written_while_one_runs_waits_for_it(scenario) -> None:
     """A second item for the same approval never runs beside the first.
 

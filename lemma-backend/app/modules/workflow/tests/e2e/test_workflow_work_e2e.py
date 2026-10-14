@@ -21,7 +21,7 @@ from app.core.infrastructure.work.testing import dispatcher_for, make_due
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.workflow.tests.e2e.workflow_work_support import FlowWork, flow_work
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 FORM_SCHEMA = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
 

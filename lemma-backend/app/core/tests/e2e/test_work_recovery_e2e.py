@@ -40,7 +40,7 @@ from app.core.tests.e2e.work_support import (
     write_effect,
 )
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 NO_WAIT = Exponential(base=timedelta(0), cap=timedelta(0), jitter=0)
 LATER = Exponential(base=timedelta(hours=1), jitter=0)

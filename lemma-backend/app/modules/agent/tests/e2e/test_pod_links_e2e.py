@@ -489,6 +489,7 @@ async def test_pods_in_different_organizations_cannot_be_connected(
     assert "same organization" in refused.text
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_a_deleted_pod_takes_its_links_with_it(
     authenticated_client, fixed_test_org

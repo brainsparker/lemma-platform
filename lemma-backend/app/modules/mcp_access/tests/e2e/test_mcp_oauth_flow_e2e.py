@@ -422,6 +422,7 @@ async def test_the_cancelled_token_still_ends_the_grant_after_the_winner_rotates
     assert after.status_code == 401
 
 
+@pytest.mark.drives_work
 async def test_a_deleted_pod_refuses_its_clients_and_ends_their_grants(
     mcp_client, authenticated_client, test_pod, db_manager
 ):

@@ -45,7 +45,7 @@ from app.modules.datastore.tests.e2e.change_log_support import (
 )
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
 
-pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
+pytestmark = [pytest.mark.e2e, pytest.mark.asyncio, pytest.mark.drives_work]
 
 
 @pytest.fixture(autouse=True)

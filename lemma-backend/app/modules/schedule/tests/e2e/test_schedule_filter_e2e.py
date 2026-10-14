@@ -40,7 +40,7 @@ from app.modules.schedule.tests.e2e.test_schedule_e2e import (
 from app.modules.test_support.e2e.function_helpers import seed_user
 from app.modules.usage.infrastructure.models import UsageRecord
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 EVENT = {"from": "billing@vendor.example.com", "subject": "Invoice 4411", "total": 1200}
 

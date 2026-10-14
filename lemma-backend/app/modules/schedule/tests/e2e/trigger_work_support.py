@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -169,91 +168,3 @@ class CountingFilter(ScheduleFilter):
             proceed=self.proceed,
             output={"should_proceed": self.proceed, "reason_code": "test"},
         )
-
-
-def _session_workers() -> list[int]:
-    """Worker subprocesses this pytest process started (the shared e2e worker)."""
-    import os
-    import subprocess
-
-    listing = subprocess.run(
-        ["ps", "-axo", "pid=,ppid=,command="],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    mine = str(os.getpid())
-    pids: list[int] = []
-    for line in listing.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) == 3 and parts[1] == mine and "-m app.worker" in parts[2]:
-            pids.append(int(parts[0]))
-    return pids
-
-
-def _client_ports(pid: int) -> list[int]:
-    import subprocess
-
-    listing = subprocess.run(
-        ["lsof", "-a", "-p", str(pid), "-i", "TCP", "-n", "-P", "-Fn"],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout
-    ports: list[int] = []
-    for line in listing.splitlines():
-        # ``n127.0.0.1:54012->127.0.0.1:33201``: the left side is ours.
-        if line.startswith("n") and "->" in line:
-            local = line[1:].split("->", 1)[0]
-            ports.append(int(local.rsplit(":", 1)[1]))
-    return ports
-
-
-async def _busy(ports: list[int]) -> bool:
-    """Whether any of these connections is inside a transaction right now."""
-    busy = await scalar(
-        "SELECT count(*) FROM pg_stat_activity WHERE client_port = ANY(:ports) "
-        "AND state <> 'idle'",
-        ports=ports,
-    )
-    return bool(busy)
-
-
-@asynccontextmanager
-async def worker_held() -> AsyncIterator[None]:
-    """Hold the session's shared worker still while a test drives the runtime itself.
-
-    These tests claim and run items step by step to observe each transition;
-    a live worker in the same database would race them for the same items.
-    Only a worker this process started is touched, it is stopped only between
-    transactions (a worker frozen inside a claim would hold queue rows locked),
-    and it always resumes.
-    """
-    import os
-    import signal
-
-    from app.modules.test_support.e2e.waiters import eventually
-
-    held = _session_workers()
-    for pid in held:
-        ports = _client_ports(pid)
-
-        async def stopped_between_transactions(pid: int = pid) -> bool:
-            os.kill(pid, signal.SIGSTOP)
-            if not ports or not await _busy(ports):
-                return True
-            os.kill(pid, signal.SIGCONT)
-            return False
-
-        await eventually(
-            label="shared worker idle between transactions",
-            probe=stopped_between_transactions,
-            done=bool,
-            timeout_seconds=30,
-            interval_seconds=0.02,
-        )
-    try:
-        yield
-    finally:
-        for pid in held:
-            os.kill(pid, signal.SIGCONT)

@@ -34,7 +34,7 @@ from app.core.tests.e2e.work_support import (
     write_effect,
 )
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 
 def _fast(registry: WorkRegistry, kind: str = "demo.fast", **options: object) -> None:

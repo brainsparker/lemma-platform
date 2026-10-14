@@ -210,6 +210,7 @@ async def _fired(schedule_id: UUID) -> list[dict]:
     return [dict(run["metadata"] or {}) for run in await runs(schedule_id)]
 
 
+@pytest.mark.drives_work
 async def test_an_outside_row_starts_only_a_schedule_that_asked_for_it(
     pod_api: DatastoreApi, db_session: AsyncSession
 ):

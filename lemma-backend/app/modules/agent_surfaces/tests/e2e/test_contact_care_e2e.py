@@ -806,6 +806,7 @@ async def test_stop_unsubscribes_the_address_it_came_from(
 # ------------------------------------------------------------ who looks after them
 
 
+@pytest.mark.drives_work
 async def test_a_contacts_history_moves_with_them_to_a_new_keeper(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,

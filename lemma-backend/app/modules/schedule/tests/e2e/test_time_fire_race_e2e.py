@@ -27,16 +27,7 @@ from app.modules.schedule.tests.e2e.trigger_work_support import (
     scalar,
 )
 
-pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
-
-
-@pytest.fixture(autouse=True)
-async def _drive_the_runtime_alone(db_manager):
-    del db_manager  # truncated before the worker is held, not while
-    from app.modules.schedule.tests.e2e.trigger_work_support import worker_held
-
-    async with worker_held():
-        yield
+pytestmark = [pytest.mark.e2e, pytest.mark.asyncio, pytest.mark.drives_work]
 
 
 ROUNDS = 40

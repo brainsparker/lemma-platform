@@ -24,7 +24,7 @@ from app.modules.test_support.query_counting import (
 )
 from app.modules.workflow.tests.e2e.workflow_work_support import FlowWork, flow_work
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 _TABLES = ("workflow_run_waits", "workflow_flow_runs", "workflow_flows")
 _SELECT_FROM = re.compile(r"^\s*SELECT\b.*?\bFROM (\w+)", re.DOTALL | re.IGNORECASE)

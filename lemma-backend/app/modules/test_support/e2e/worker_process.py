@@ -18,6 +18,10 @@ import redis.asyncio as redis
 from app.core.config import settings
 from app.modules.datastore.config import datastore_settings
 from app.modules.agent.tests.e2e.system_lemma_helpers import system_lemma_env_overlay
+from app.modules.test_support.e2e.worker_hold import (
+    register_session_worker,
+    unregister_session_worker,
+)
 
 _DEFAULT_READINESS_MARKERS = (
     '"logger": "app.core.infrastructure.jobs.streaq_runtime"',
@@ -145,9 +149,11 @@ async def production_worker_process(
                 f"Timed out waiting for {log_prefix} worker.\n{_read_log(log_path)}"
             )
 
+        register_session_worker(process.pid, e2e_settings.database_url)
         try:
             yield ProductionWorkerProcess(process=process, log_path=log_path)
         finally:
+            unregister_session_worker(process.pid)
             process.terminate()
             try:
                 # Comfortably longer than the 1s grace period set above. The

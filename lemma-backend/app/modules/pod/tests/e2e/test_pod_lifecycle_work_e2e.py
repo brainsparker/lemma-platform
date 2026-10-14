@@ -40,7 +40,7 @@ from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.test_support.e2e_authz import signup_user
 
-pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
+pytestmark = [pytest.mark.e2e, pytest.mark.asyncio, pytest.mark.drives_work]
 
 _CLEANUP_KINDS = {
     "schedule.pod_deleted",

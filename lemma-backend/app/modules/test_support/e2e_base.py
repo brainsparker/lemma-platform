@@ -1221,9 +1221,16 @@ async def worker(e2e_settings, sandbox_reachable_backend):
             logs = log_file.read()
             pytest.fail(f"Timed out waiting for streaq worker startup.\n{logs}")
 
+        from app.modules.test_support.e2e.worker_hold import (
+            register_session_worker,
+            unregister_session_worker,
+        )
+
+        register_session_worker(proc.pid, e2e_settings.database_url)
         try:
             yield proc
         finally:
+            unregister_session_worker(proc.pid)
             proc.terminate()
             try:
                 # Comfortably longer than the 1s grace period set at spawn, so

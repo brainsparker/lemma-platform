@@ -44,7 +44,7 @@ from app.modules.mcp_access.tests.e2e.test_mcp_oauth_flow_e2e import (
     _Client,
 )
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 SECRET = "whsec_" + base64.b64encode(os.urandom(32)).decode()
 PROTOCOL = "2026-07-28"

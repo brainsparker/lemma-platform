@@ -402,6 +402,7 @@ async def test_domain_without_explicit_mx_is_rejected_before_account_creation(
     assert local_user is None
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_emailpassword_verification_welcome_and_password_reset_filesystem_flow(
     async_client: AsyncClient,

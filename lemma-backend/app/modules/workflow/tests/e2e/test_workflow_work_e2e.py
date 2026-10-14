@@ -91,6 +91,19 @@ async def _items(flows: FlowWork, kind: str) -> int:
     )
 
 
+async def _expiries(flows: FlowWork, *, resolved: bool) -> int:
+    """Queued expiry items whose wait is (or is not) still active."""
+    return int(
+        await flows.scalar(  # type: ignore[arg-type]
+            "SELECT count(*) FROM work_items i JOIN workflow_run_waits w"
+            " ON w.id = CAST(i.payload->>'wait_id' AS uuid)"
+            " WHERE i.kind = 'workflow.wait_expire' AND i.state = 'queued'"
+            " AND (w.status <> 'ACTIVE') = :resolved",
+            resolved=resolved,
+        )
+    )
+
+
 async def test_a_function_time_decision_form_flow_runs_on_work_items(
     flows: FlowWork,
 ) -> None:
@@ -114,6 +127,8 @@ async def test_a_function_time_decision_form_flow_runs_on_work_items(
     )
     # TIME: one resume item, due at the wait's own time and not before.
     assert await _items(flows, "workflow.resume") == 1
+    # The FUNCTION wait resolved, so its expiry went with it.
+    assert await _expiries(flows, resolved=True) == 0
     await flows.drain()
     assert (await flows.run(run["id"]))["active_wait"]["wait_type"] == "TIME"
 
@@ -137,9 +152,14 @@ async def test_a_function_time_decision_form_flow_runs_on_work_items(
         == 1
     )
 
+    assert await _expiries(flows, resolved=False) == 1
+
     done = await flows.submit(run["id"], "approve", {"ok": True})
     assert done["status"] == "COMPLETED"
     assert flows.runtime.invocations.total() == 1
+    # No expiry is left queued for a wait that already resolved.
+    assert await _expiries(flows, resolved=True) == 0
+    assert await _items(flows, "workflow.wait_expire") == 0
 
 
 async def _drained_run(flows: FlowWork, run_id: str) -> dict:

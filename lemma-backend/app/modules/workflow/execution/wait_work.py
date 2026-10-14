@@ -30,7 +30,11 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from app.core.infrastructure.work import WorkWriter, pod_namespace
-from app.modules.workflow.domain.wait import WorkflowRunWaitEntity, WorkflowRunWaitType
+from app.modules.workflow.domain.wait import (
+    WorkflowRunWaitEntity,
+    WorkflowRunWaitType,
+    wait_expire_key,
+)
 from app.modules.workflow.execution.wait_ceiling import expires_at
 
 WORKFLOW_RESUME = "workflow.resume"
@@ -117,7 +121,7 @@ async def write_wait_items(
                 ns,
                 WaitWork(wait_id=wait.id),
                 run_at=deadline,
-                dedup_key=f"workflow-expire:{wait.id}",
+                dedup_key=wait_expire_key(wait.id),
             )
     if (
         wait.wait_type is WorkflowRunWaitType.HUMAN

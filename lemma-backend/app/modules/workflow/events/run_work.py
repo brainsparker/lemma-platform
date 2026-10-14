@@ -58,6 +58,7 @@ from app.modules.workflow.contracts.run_work import (
 from app.modules.workflow.domain.context import TriggerContext
 from app.modules.workflow.domain.run import WorkflowRunEntity
 from app.modules.workflow.domain.wait import (
+    wait_expire_key,
     WorkflowRunWaitEntity,
     WorkflowRunWaitStatus,
     WorkflowRunWaitType,
@@ -191,7 +192,7 @@ async def expire_wait(ctx: FastContext, payload: WaitWork) -> None:
             ctx.item.ns,
             payload,
             run_at=due,
-            dedup_key=f"workflow-expire:{wait.id}",
+            dedup_key=wait_expire_key(wait.id),
         )
         return
     logger.warning(

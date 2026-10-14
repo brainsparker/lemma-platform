@@ -14,7 +14,6 @@ number of database connections. Sized by ``WORKFLOW_LOAD_RUNS`` and
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import time
@@ -170,39 +169,37 @@ async def test_thousands_of_three_step_runs_across_pods(
             budget=budget,
         )
         peak_connections = 0
-        sampling = True
 
-        async def sample() -> None:
+        async def completed() -> int:
+            # Sampled on each probe: the peak is what the runtime's pool held
+            # while the burst ran, not a timing measurement.
             nonlocal peak_connections
-            while sampling:
-                count = await flows.scalar(
-                    "SELECT count(*) FROM pg_stat_activity "
-                    "WHERE datname = current_database()"
-                )
-                peak_connections = max(peak_connections, int(count))  # type: ignore[arg-type]
-                await asyncio.sleep(0.5)
+            count = await flows.scalar(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE datname = current_database()"
+            )
+            peak_connections = max(peak_connections, int(count))  # type: ignore[arg-type]
+            done = await flows.scalar(
+                "SELECT count(*) FROM workflow_flow_runs WHERE status = 'COMPLETED'"
+            )
+            return int(done)  # type: ignore[arg-type]
 
         await _enqueue_starts(flows, flows_by_pod)
         total = (RUNS // PODS) * PODS
-        sampler = asyncio.create_task(sample())
         began = time.monotonic()
         await runtime.start()
         try:
             await eventually(
                 label="every run completed",
-                probe=lambda: flows.scalar(
-                    "SELECT count(*) FROM workflow_flow_runs WHERE status = 'COMPLETED'"
-                ),
-                done=lambda n: int(n) >= total,  # type: ignore[call-overload]
+                probe=completed,
+                done=lambda n: n >= total,
                 timeout_seconds=max(600, total / 5),
-                interval_seconds=1.0,
+                interval_seconds=0.5,
                 fail_fast=lambda _: None,
             )
             elapsed = time.monotonic() - began
         finally:
-            sampling = False
             await runtime.stop()
-            await sampler
             await engine.dispose()
 
         steps = {

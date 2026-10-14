@@ -30,7 +30,6 @@ from app.modules.schedule.tests.e2e.trigger_work_support import (
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio, pytest.mark.drives_work]
 
 
-ROUNDS = 40
 SCHEDULES = 4
 DISPATCHERS = 3
 
@@ -56,8 +55,18 @@ async def _viable(pod_id) -> list[tuple[str, bool, int]]:
     return [(row.schedule_id, row.is_active, row.viable) for row in rows]
 
 
+@pytest.mark.parametrize(
+    "rounds",
+    [
+        # Enough rounds to exercise every edit against a fire on each PR; the
+        # long soak runs in the protected lane, where 40 rounds (~70s on CI)
+        # do not hold up a merge.
+        pytest.param(12, id="pr"),
+        pytest.param(40, id="soak", marks=pytest.mark.slow),
+    ],
+)
 async def test_edits_racing_fires_never_leave_two_fire_chains(
-    authenticated_client: AsyncClient, fixed_test_org
+    authenticated_client: AsyncClient, fixed_test_org, rounds: int
 ):
     seed = int(os.environ.get("SCHEDULE_RACE_SEED", random.randrange(1 << 30)))
     rng = random.Random(seed)
@@ -128,7 +137,7 @@ async def test_edits_racing_fires_never_leave_two_fire_chains(
         )
         assert response.status_code == 200, (seed, response.text)
 
-    for round_number in range(ROUNDS):
+    for round_number in range(rounds):
         results = await asyncio.gather(
             fire(),
             *(edit(sid) for sid in rng.sample(ids, rng.randint(1, SCHEDULES))),

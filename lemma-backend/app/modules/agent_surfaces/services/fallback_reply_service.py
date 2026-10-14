@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+from app.modules.agent_surfaces.platforms.credential_checks import can_deliver
+
 from typing import Any
 from uuid import UUID
 
-from app.core.config import reveal_secret
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
-from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -25,6 +26,7 @@ from app.modules.agent_surfaces.domain.adapter_port import (
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
 )
+from app.modules.agent_surfaces.domain.reply_targets import copied_on_reply
 from app.modules.agent_surfaces.services.plain_reply import reply_text
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     has_shared_system_bot,
@@ -352,28 +354,9 @@ def _unrouted_reply(
 
 def has_delivery_credentials(
     platform: SurfacePlatform,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
 ) -> bool:
-    normalized = str(platform).upper()
-    if normalized == SurfacePlatform.WHATSAPP:
-        return bool(credentials.get("access_token"))
-    if normalized == SurfacePlatform.TELEGRAM:
-        return bool(credentials.get("bot_token"))
-    if normalized == SurfacePlatform.SLACK:
-        raw_response = credentials.get("raw_response") or {}
-        return bool(
-            credentials.get("access_token")
-            or credentials.get("bot_token")
-            or raw_response.get("access_token")
-        )
-    if normalized == SurfacePlatform.TEAMS:
-        return bool(
-            surface_settings.microsoft_bot_app_id
-            and reveal_secret(surface_settings.microsoft_bot_app_password)
-        )
-    if normalized == SurfacePlatform.RESEND:
-        return bool(credentials.get("api_key"))
-    return any(value for value in credentials.values())
+    return can_deliver(platform, credentials)
 
 
 def to_sender_alone(event: ParsedInboundSurfaceEvent) -> ParsedInboundSurfaceEvent:
@@ -383,7 +366,7 @@ def to_sender_alone(event: ParsedInboundSurfaceEvent) -> ParsedInboundSurfaceEve
     wrote. On an email thread the reply would otherwise copy everybody else on
     it -- a client among them -- with "you don't have access to this pod".
     """
-    if not event.reply_target.get("cc"):
+    if not copied_on_reply(event):
         return event
     return event.model_copy(update={"reply_target": {**event.reply_target, "cc": []}})
 
@@ -392,7 +375,7 @@ async def deliver_fallback_reply(
     *,
     adapter: SurfacePlatformAdapterPort,
     context: SurfaceReplyContext,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
     event_dedup_store: SurfaceEventDedupStorePort,
 ) -> None:
     # Every fallback reply on every platform passes here, which makes it the one

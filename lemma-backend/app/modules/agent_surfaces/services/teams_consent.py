@@ -14,23 +14,16 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import TEAMS_CONSENT_NONCES, surface_caches
 from app.modules.agent_surfaces.config import surface_settings
 
 # Well past a real consent round-trip, short enough that an observed URL stops
 # being useful quickly.
-_TTL_SECONDS = 3600
-_cache: RedisJsonCache | None = None
+_TTL_SECONDS = TEAMS_CONSENT_NONCES.ttl_seconds
 
 
 def _get_cache() -> RedisJsonCache:
-    global _cache
-    if _cache is None or _cache._redis_url != settings.redis_url:
-        _cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:teams-consent-nonce",
-            ttl_seconds=_TTL_SECONDS,
-        )
-    return _cache
+    return surface_caches.get(TEAMS_CONSENT_NONCES)
 
 
 async def _live_nonce(surface_id: UUID) -> str:

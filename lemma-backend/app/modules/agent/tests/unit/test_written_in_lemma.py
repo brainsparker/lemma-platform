@@ -42,7 +42,7 @@ from app.modules.agent.domain.surface_prompts import (
     surface_platform_guidance,
 )
 from app.modules.agent.domain.value_objects import AgentRunStatus, AgentRuntimeConfig
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     user_prompt_text,
 )
 from app.modules.agent.services import conversation_turns as turns
@@ -131,7 +131,9 @@ def _coordinator(conversation: Conversation):
         pausing_calls_decided_awaiting_a_return=AsyncMock(return_value=[]),
     )
     agents = SimpleNamespace(
-        get=AsyncMock(return_value=SimpleNamespace(name="lem", kind=None))
+        get=AsyncMock(
+            return_value=SimpleNamespace(name="lem", kind=None, agent_runtime=None)
+        )
     )
     uow = SimpleNamespace(
         collect_events=MagicMock(), commit=AsyncMock(), after_commit=MagicMock()

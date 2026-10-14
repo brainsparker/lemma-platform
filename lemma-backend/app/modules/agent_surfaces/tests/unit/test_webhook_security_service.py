@@ -27,14 +27,22 @@ pytestmark = pytest.mark.asyncio
 async def test_verify_platform_request_skips_checks_when_security_disabled(
     monkeypatch,
 ):
-    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", False)
+    monkeypatch.setattr(core_settings, "environment", "local")
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     service = SurfaceWebhookSecurityService()
+    unsigned = {
+        "platform": "slack",
+        "headers": {},
+        "raw_body": b'{"type":"event_callback"}',
+    }
+    # The same unsigned request is refused while the checks are on, so the
+    # acceptance below is the flag's doing and not an empty header passing.
+    with pytest.raises(SurfaceWebhookAuthenticationError):
+        await service.verify_platform_request(**unsigned)
 
-    await service.verify_platform_request(
-        platform="slack",
-        headers={},
-        raw_body=b'{"type":"event_callback"}',
-    )
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", False)
+
+    assert await service.verify_platform_request(**unsigned) is None
 
 
 async def test_verify_surface_request_uses_surface_telegram_secret(monkeypatch):
@@ -50,11 +58,13 @@ async def test_verify_surface_request_uses_surface_telegram_secret(monkeypatch):
         webhook_secret="surface-secret",
     )
 
-    await service.verify_surface_request(
+    accepted = await service.verify_surface_request(
         surface=surface,
         headers={"x-telegram-bot-api-secret-token": "surface-secret"},
         raw_body=b"{}",
     )
+
+    assert accepted is None
 
 
 async def test_surface_webhook_auth_exclusion_matches_only_uuid_webhook_paths():
@@ -93,9 +103,11 @@ async def test_verify_resend_request_accepts_valid_svix_signature(monkeypatch):
     service = SurfaceWebhookSecurityService()
     body = b'{"type":"email.inbound","data":{}}'
 
-    await service.verify_resend_request(
+    accepted = await service.verify_resend_request(
         headers=_svix_headers(body, _RESEND_SECRET), raw_body=body
     )
+
+    assert accepted is None
 
 
 async def test_verify_resend_request_rejects_tampered_body(monkeypatch):
@@ -148,7 +160,7 @@ async def test_verify_resend_request_skips_when_security_disabled(monkeypatch):
     service = SurfaceWebhookSecurityService()
 
     # No signature headers at all, but disabled security short-circuits.
-    await service.verify_resend_request(headers={}, raw_body=b"{}")
+    assert await service.verify_resend_request(headers={}, raw_body=b"{}") is None
 
 
 # ------------------------------------------- which secret verifies inbound mail
@@ -235,8 +247,8 @@ def test_the_verifier_accepts_svix_s_own_published_vector(monkeypatch):
         lambda: float(timestamp),
     )
 
-    # No exception means verified.
-    asyncio.run(
+    # Returning rather than raising is what verified means.
+    verified = asyncio.run(
         SurfaceWebhookSecurityService().verify_resend_request(
             headers={
                 "svix-id": msg_id,
@@ -246,6 +258,8 @@ def test_the_verifier_accepts_svix_s_own_published_vector(monkeypatch):
             raw_body=body,
         )
     )
+
+    assert verified is None
 
 
 def test_the_verifier_rejects_that_vector_under_a_different_secret(monkeypatch):
@@ -465,3 +479,45 @@ async def test_a_matching_app_id_still_narrows_to_its_candidate(monkeypatch):
 
     assert verified.app_id == "A123"
     assert verified.receiver_surface_ids == (wanted,)
+
+
+async def test_an_org_whatsapp_account_that_cannot_be_read_is_a_warning(caplog):
+    """Refused as unverifiable either way; at debug, a broken connector account
+    read exactly like a setting nobody had configured."""
+    import logging
+
+    class _Uow:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class _BrokenResolver:
+        async def for_account(self, account_id, *, platform):
+            raise ConnectionError("vault unreachable")
+
+    service = SurfaceWebhookSecurityService(
+        uow_factory=_Uow, resolver_factory=lambda _uow: _BrokenResolver()
+    )
+    surface = AgentSurfaceEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        name="whatsapp",
+        surface_type=SurfacePlatform.WHATSAPP,
+        config=SurfaceConfig(type="WHATSAPP"),
+        account_id=uuid4(),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert await service.resolve_whatsapp_verify_token(surface) is None
+
+    record = next(
+        r
+        for r in caplog.records
+        if "whatsapp_credentials_unavailable" in r.getMessage()
+    )
+    assert record.levelno == logging.WARNING
+    assert "ConnectionError" in caplog.text
+    assert str(surface.account_id) in caplog.text

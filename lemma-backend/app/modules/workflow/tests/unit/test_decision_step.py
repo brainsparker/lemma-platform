@@ -438,8 +438,13 @@ class _Repo:
     async def get_for_update(self, run_id):
         return self._engine.run
 
-    async def list_active_older_than(self, *, wait_types, created_before, limit):
-        return [self._engine.wait] if self._engine.wait is not None else []
+    async def list_active_older_than(
+        self, *, wait_types, created_before, limit, after=None, **_filters
+    ):
+        # The sweep pages by keyset; one page holds every wait this fake has.
+        if after is not None or self._engine.wait is None:
+            return []
+        return [self._engine.wait]
 
 
 class _Uow:

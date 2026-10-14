@@ -389,6 +389,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PATCH | `/pods/{pod_id}/workflows/{workflow_name}` | `workflow.update` | Update Workflow Metadata |
 | POST | `/pods/{pod_id}/workflow-runs/{run_id}/cancel` | `workflow.run.cancel` | Cancel Workflow Run |
 | POST | `/pods/{pod_id}/workflow-runs/{run_id}/form` | `workflow.run.form.submit` | Submit Workflow Run Form |
+| POST | `/pods/{pod_id}/workflow-runs/{run_id}/retry` | `workflow.run.retry` | Retry Workflow Run |
 | POST | `/pods/{pod_id}/workflows` | `workflow.create` | Create Workflow |
 | POST | `/pods/{pod_id}/workflows/{workflow_name}/runs` | `workflow.run.create` | Create Workflow Run |
 | PUT | `/pods/{pod_id}/workflows/{workflow_name}/graph` | `workflow.graph.update` | Update Workflow Graph |

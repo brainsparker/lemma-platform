@@ -8,6 +8,10 @@ surface once it has.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+
+from app.modules.agent_surfaces.domain.credentials import WhatsAppCredentials
+
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -15,7 +19,6 @@ import httpx
 from redis.exceptions import RedisError
 
 from app.core.config import reveal_secret
-from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.domain.entities import (
@@ -35,6 +38,7 @@ from app.modules.agent_surfaces.domain.setup_guides import (
     build_surface_setup_guide,
 )
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import TEAMS_CONSENT_CHECKS, surface_caches
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -42,11 +46,6 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     pass
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
-
-# Shared Redis cache of Teams admin-consent probe results (per-entry TTL: 60 s
-# granted / 10 s denied), so the Graph probe is shared across replicas. Redis
-# unavailable -> re-probe (never fails).
-_consent_check_cache: RedisJsonCache | None = None
 
 
 def access_token_from(payload: object) -> str | None:
@@ -68,17 +67,9 @@ def access_token_from(payload: object) -> str | None:
 
 
 def _get_consent_cache() -> RedisJsonCache:
-    global _consent_check_cache
-    if (
-        _consent_check_cache is None
-        or _consent_check_cache._redis_url != settings.redis_url
-    ):
-        _consent_check_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:teams-consent",
-            ttl_seconds=60,
-        )
-    return _consent_check_cache
+    """Teams admin-consent probe results (60 s granted, 10 s denied), so the
+    Graph probe is shared across replicas. Redis down -> re-probe."""
+    return surface_caches.get(TEAMS_CONSENT_CHECKS)
 
 
 if TYPE_CHECKING:
@@ -169,17 +160,19 @@ class SurfaceConsentMixin:
             return reveal_secret(surface_settings.whatsapp_verify_token)
         if surface.account_id is not None and self._credential_resolver is not None:
             try:
-                credentials = await self._credential_resolver.for_account(
-                    surface.account_id
+                credentials = WhatsAppCredentials.of(
+                    await self._credential_resolver.for_account(
+                        surface.account_id, platform=SurfacePlatform.WHATSAPP
+                    )
                 )
             except Exception:
-                logger.debug(
-                    "agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic",
-                    account_id=surface.account_id,
+                logger.warning(
+                    "agent_surfaces.surface_service.whatsapp_verify_token_unavailable.degraded",
+                    account_id=str(surface.account_id),
                     exc_info=True,
                 )
                 return None
-            return credentials.get("verify_token")
+            return reveal_secret(credentials.verify_token)
         if surface.surface_identity_id:
             number = await WhatsAppNumberRepository(
                 self.surface_repository.uow
@@ -294,7 +287,7 @@ class SurfaceConsentMixin:
 
         token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with outbound_http(10) as client:
                 token_response = await client.post(
                     token_url,
                     data={
@@ -334,7 +327,7 @@ class SurfaceConsentMixin:
             return False
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with outbound_http(10) as client:
                 probe = await client.get(
                     "https://graph.microsoft.com/v1.0/users?$top=1&$select=id",
                     headers={"Authorization": f"Bearer {token}"},

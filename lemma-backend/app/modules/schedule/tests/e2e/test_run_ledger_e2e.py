@@ -501,7 +501,7 @@ async def test_recovery_redelivers_abandoned_runs_and_reconciles_lost_outcome(
                 schedule_event_id="lost-terminal-target",
                 start_payload={},
                 status="COMPLETED",
-                completed_at=stale.replace(tzinfo=None),
+                completed_at=stale,
                 created_at=stale,
                 updated_at=stale,
             )
@@ -668,7 +668,7 @@ async def test_recovery_advances_past_runs_whose_targets_are_still_alive(
                     schedule_event_id="finished-behind-the-wall",
                     start_payload={},
                     status="COMPLETED",
-                    completed_at=stale.replace(tzinfo=None),
+                    completed_at=stale,
                     created_at=stale,
                     updated_at=stale,
                 ),

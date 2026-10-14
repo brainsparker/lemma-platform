@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import (
+    TelegramCredentials,
+    as_secret,
+)
+
 import asyncio
 import re
 import secrets
@@ -77,10 +82,13 @@ class TelegramManagerService:
         )
         self._manager_username = str(raw_username or "").strip().lstrip("@")
         self._api_base_url = api_base_url
-        credentials: dict[str, Any] = {"bot_token": self._manager_token or ""}
-        if api_base_url:
-            credentials["api_base_url"] = api_base_url
-        self._client = TelegramClient.from_credentials(credentials, timeout=65)
+        self._client = TelegramClient.from_credentials(
+            TelegramCredentials(
+                bot_token=as_secret(self._manager_token),
+                api_base_url=api_base_url or None,
+            ),
+            timeout=65,
+        )
 
     @property
     def configured(self) -> bool:

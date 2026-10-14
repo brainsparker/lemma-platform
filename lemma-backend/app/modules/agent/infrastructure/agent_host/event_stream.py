@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from app.core.infrastructure.redis.client import get_redis
@@ -215,11 +216,19 @@ class StreamBatch(list[StreamedEvent]):
 class AgentHostEventStream:
     """Append and tail one run's events."""
 
-    def __init__(self, redis_url: str | None = None) -> None:
+    def __init__(
+        self, redis_url: str | None = None, *, client: Redis | None = None
+    ) -> None:
         self._redis_url = redis_url
+        # A client handed in is used as is: the unit tests give an in-process
+        # Redis rather than writing into whatever answers on the developer's
+        # default port.
+        self._given_client = client
 
-    def _client(self):
+    def _client(self) -> Redis:
         """The process-wide pooled client; disposal is the lifespan's job."""
+        if self._given_client is not None:
+            return self._given_client
         return get_redis(
             url=self._redis_url,
             socket_timeout=_SOCKET_TIMEOUT_SECONDS,

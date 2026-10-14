@@ -4,6 +4,7 @@ waits whose completion events were lost."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import time
 from uuid import UUID
 
 from app.core.config import settings
@@ -15,6 +16,7 @@ from app.modules.workflow.domain.wait import (
     WorkflowRunWaitType,
 )
 from app.modules.workflow.execution.engine import WorkflowEngine
+from app.modules.workflow.execution.executors.agent import WAIT_TIMEOUT_SECONDS_KEY
 from app.modules.workflow.services.decision_resume_service import (
     DecisionResumeService,
 )
@@ -26,6 +28,8 @@ logger = get_logger(__name__)
 # truth by the reconciliation sweep.
 RECONCILE_AFTER = timedelta(minutes=10)
 RECONCILE_BATCH = 100
+# Inside the sweep's five-minute interval, so ticks never overlap.
+RECONCILE_BUDGET_SECONDS = 120.0
 
 # Agent wait reasons that resolve themselves. A whitelist on purpose: a wait
 # reason added later is subject to the ceiling until someone decides otherwise,
@@ -40,6 +44,25 @@ SELF_RESOLVING_WAIT_REASONS = frozenset({"WAIT"})
 # that reads as still waiting. This bounds the truly abandoned without punishing
 # ordinary out-of-hours delay.
 HUMAN_WAIT_CEILING_MULTIPLIER = 12
+
+
+def _step_timeout_seconds(wait: WorkflowRunWaitEntity) -> float | None:
+    """The step's own timeout, when its author set one.
+
+    It replaces the deployment's machine ceiling for that step alone: an
+    author who knows the step runs for a day says so, and one who knows it
+    should take ten minutes gets it stopped sooner.
+    """
+    value = wait.payload.get(WAIT_TIMEOUT_SECONDS_KEY)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        return None
+    return float(value)
+
+
+def _duration_text(seconds: float) -> str:
+    if seconds < 3600:
+        return f"{round(seconds / 60):g} min"
+    return f"{seconds / 3600:g}h"
 
 
 class RunResumeService:
@@ -151,79 +174,114 @@ class RunResumeService:
         ceiling is deliberately far longer than the machine one; see
         `_expire_overdue_wait`.
 
+        Every stale wait is examined, a page at a time, within
+        RECONCILE_BUDGET_SECONDS; see `list_active_older_than` for why reading
+        only the oldest page starved the rest.
+
         Returns the number of waits acted on.
         """
         now = datetime.now(timezone.utc)
-        cutoff = now - RECONCILE_AFTER
         machine_cutoff = now - timedelta(seconds=settings.workflow_wait_max_age_seconds)
-        waits = await self._engine.wait_repo.list_active_older_than(
-            wait_types=[
-                WorkflowRunWaitType.AGENT,
-                WorkflowRunWaitType.FUNCTION,
-                WorkflowRunWaitType.TIME,
-                WorkflowRunWaitType.HUMAN,
-                WorkflowRunWaitType.DECISION,
-            ],
-            created_before=cutoff,
-            limit=RECONCILE_BATCH,
+        human_cutoff = now - timedelta(
+            seconds=settings.workflow_wait_max_age_seconds
+            * HUMAN_WAIT_CEILING_MULTIPLIER
         )
+        started = time.monotonic()
+        after: tuple[datetime, UUID] | None = None
         acted = 0
-        for wait in waits:
-            # A HUMAN wait is the one kind with no external ref: a form is
-            # answered through the wait row, not by an outside system.
-            if not wait.external_ref and wait.wait_type != WorkflowRunWaitType.HUMAN:
-                continue
-            try:
-                # Fetched once and reused: the expiry check needs it to tell a
-                # self-waking agent (healthy) from a hung one, and
-                # _apply_agent_status needs the same answer immediately after.
-                agent_status = (
-                    await self._engine.agent_adapter.get_conversation_status(
-                        UUID(wait.external_ref)
-                    )
-                    if wait.wait_type == WorkflowRunWaitType.AGENT
-                    else None
-                )
-                # A wait past the ceiling is over regardless of what the source
-                # of truth says. Without this an agent that hangs (rather than
-                # fails) keeps its run non-terminal forever, and the run reads
-                # as "still going" for the rest of time.
-                if await self._expire_overdue_wait(
-                    wait, machine_cutoff, now=now, agent_status=agent_status
-                ):
+        while True:
+            waits = await self._engine.wait_repo.list_active_older_than(
+                wait_types=[
+                    WorkflowRunWaitType.AGENT,
+                    WorkflowRunWaitType.FUNCTION,
+                    WorkflowRunWaitType.TIME,
+                    WorkflowRunWaitType.HUMAN,
+                    WorkflowRunWaitType.DECISION,
+                    WorkflowRunWaitType.QUEUED,
+                ],
+                created_before=now - RECONCILE_AFTER,
+                limit=RECONCILE_BATCH,
+                after=after,
+                human_created_before=human_cutoff,
+                timers_due_by=now,
+            )
+            for wait in waits:
+                if await self._reconcile_one(wait, machine_cutoff, now=now):
                     acted += 1
-                    continue
-                if wait.wait_type == WorkflowRunWaitType.HUMAN:
-                    # Past the ceiling it is already handled above; short of it
-                    # there is nothing to reconcile against, so leave it.
-                    continue
-                if wait.wait_type == WorkflowRunWaitType.AGENT:
-                    handled = await self._apply_agent_status(
-                        wait, wait.external_ref, agent_status or {}, reconciled=True
-                    )
-                elif wait.wait_type == WorkflowRunWaitType.TIME:
-                    handled = await self._fire_time_wait_if_due(wait)
-                elif wait.wait_type == WorkflowRunWaitType.DECISION:
-                    handled = await DecisionResumeService(self._engine).recover_lost(
-                        wait
-                    )
-                else:
-                    status = await self._engine.function_adapter.get_run_status(
-                        UUID(wait.external_ref)
-                    )
-                    handled = await self._apply_function_status(wait, status)
-                if handled:
-                    acted += 1
-            except Exception:
-                logger.error(
-                    "workflow.reconcile.failed",
-                    wait_id=str(wait.id),
-                    run_id=str(wait.run_id),
-                    exc_info=True,
-                )
+            if len(waits) < RECONCILE_BATCH:
+                break
+            if time.monotonic() - started >= RECONCILE_BUDGET_SECONDS:
+                logger.warning("workflow.reconcile.budget_exhausted", acted=acted)
+                break
+            last = waits[-1]
+            assert last.created_at is not None
+            after = (last.created_at, last.id)
         if acted:
             logger.debug("workflow.reconcile.recovered", count=acted)
         return acted
+
+    async def _reconcile_one(
+        self,
+        wait: WorkflowRunWaitEntity,
+        machine_cutoff: datetime,
+        *,
+        now: datetime,
+    ) -> bool:
+        """Act on one stale wait if its source of truth says to; say if it did."""
+        # A HUMAN wait is the one kind with no external ref: a form is
+        # answered through the wait row, not by an outside system.
+        if not wait.external_ref and wait.wait_type != WorkflowRunWaitType.HUMAN:
+            return False
+        try:
+            # Fetched once and reused: the expiry check needs it to tell a
+            # self-waking agent (healthy) from a hung one, and
+            # _apply_agent_status needs the same answer immediately after.
+            agent_status = (
+                await self._engine.agent_adapter.get_conversation_status(
+                    UUID(wait.external_ref)
+                )
+                if wait.wait_type == WorkflowRunWaitType.AGENT
+                else None
+            )
+            # A wait past the ceiling is over regardless of what the source
+            # of truth says. Without this an agent that hangs (rather than
+            # fails) keeps its run non-terminal forever, and the run reads
+            # as "still going" for the rest of time.
+            if await self._expire_overdue_wait(
+                wait, machine_cutoff, now=now, agent_status=agent_status
+            ):
+                return True
+            if wait.wait_type == WorkflowRunWaitType.HUMAN:
+                # Past the ceiling it is already handled above; short of it
+                # there is nothing to reconcile against, so leave it.
+                return False
+            if wait.wait_type == WorkflowRunWaitType.AGENT:
+                return await self._apply_agent_status(
+                    wait, wait.external_ref, agent_status or {}, reconciled=True
+                )
+            if wait.wait_type == WorkflowRunWaitType.TIME:
+                return await self._fire_time_wait_if_due(wait)
+            if wait.wait_type == WorkflowRunWaitType.DECISION:
+                return await DecisionResumeService(self._engine).recover_lost(wait)
+            if wait.wait_type == WorkflowRunWaitType.QUEUED:
+                # A finish whose admission was lost leaves a place unused.
+                return await self._engine.admit_queued_runs(wait.flow_id) > 0
+            status = await self._engine.function_adapter.get_run_status(
+                UUID(wait.external_ref)
+            )
+            return await self._apply_function_status(wait, status)
+        except Exception:
+            logger.error(
+                "workflow.reconcile.failed",
+                wait_id=str(wait.id),
+                run_id=str(wait.run_id),
+                exc_info=True,
+            )
+            # Nothing this wait did was committed. Without the rollback a
+            # database error leaves the shared session unusable, and every
+            # wait after it in the sweep fails the same way.
+            await self._uow.rollback()
+            return False
 
     # -- internals ---------------------------------------------------------------
 
@@ -239,7 +297,9 @@ class RunResumeService:
 
         TIME waits are exempt: a wait-until node is *supposed* to sit for as
         long as it was told to, and `_fire_time_wait_if_due` already handles a
-        lost timer.
+        lost timer. QUEUED waits are exempt too: a run waiting its turn under
+        max_concurrent_runs has not hung, and failing it would be exactly the
+        refusal the queue exists to avoid.
 
         An AGENT wait is exempt only for `wait_reason` values on
         `SELF_RESOLVING_WAIT_REASONS` — deliberately a whitelist, not "anything
@@ -252,7 +312,7 @@ class RunResumeService:
         error. A wait blocked on a *person* is not exempt at this ceiling, but it
         gets a much longer one.
         """
-        if wait.wait_type == WorkflowRunWaitType.TIME:
+        if wait.wait_type in (WorkflowRunWaitType.TIME, WorkflowRunWaitType.QUEUED):
             return False
         wait_reason = (agent_status or {}).get("wait_reason")
         if wait_reason in SELF_RESOLVING_WAIT_REASONS:
@@ -268,14 +328,23 @@ class RunResumeService:
         human_paced = (
             wait.wait_type == WorkflowRunWaitType.HUMAN or wait_reason == "HUMAN"
         )
-        seconds = settings.workflow_wait_max_age_seconds
+        step_seconds = _step_timeout_seconds(wait)
+        seconds = (
+            step_seconds
+            if step_seconds is not None
+            else settings.workflow_wait_max_age_seconds
+        )
         if human_paced:
             seconds *= HUMAN_WAIT_CEILING_MULTIPLIER
-        cutoff = now - timedelta(seconds=seconds) if human_paced else machine_cutoff
+        cutoff = (
+            now - timedelta(seconds=seconds)
+            if human_paced or step_seconds is not None
+            else machine_cutoff
+        )
         if created_at > cutoff:
             return False
 
-        hours = seconds / 3600
+        within = _duration_text(seconds)
         logger.warning(
             "workflow.reconcile.wait_expired",
             run_id=str(wait.run_id),
@@ -290,11 +359,11 @@ class RunResumeService:
         # answered. "Human step did not finish" reads as a system fault, and
         # this one is not.
         error = (
-            f"Nobody answered this form within {hours:g}h, so the run was stopped."
+            f"Nobody answered this form within {within}, so the run was stopped."
             if wait.wait_type == WorkflowRunWaitType.HUMAN
             else (
                 f"{wait.wait_type.value.title()} step did not finish within "
-                f"{hours:g}h and was stopped."
+                f"{within} and was stopped."
             )
         )
         await self._engine.fail_for_wait(wait, error=error)

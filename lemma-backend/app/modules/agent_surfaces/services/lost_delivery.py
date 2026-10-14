@@ -32,7 +32,7 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.turn_starter import (
     PROCESSING_FAILED_REPLY,
     SurfaceTurnStarter,
@@ -75,7 +75,7 @@ async def after_failed_delivery(
             await count_failure(received) >= CONSUMER_ATTEMPTS
         ):
             await tell_sender(received, uow_factory)
-    except (RedisError, OSError, SQLAlchemyError, *PLATFORM_TRANSPORT_ERRORS):
+    except (RedisError, OSError, SQLAlchemyError, *platform_transport_errors()):
         logger.warning(
             "agent_surfaces.lost_delivery.sender_not_told.degraded",
             source=received.source,

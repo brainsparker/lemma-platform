@@ -17,6 +17,8 @@ Nothing here reads an inbound event.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from datetime import timezone
 from typing import Any
 from uuid import UUID
@@ -101,7 +103,7 @@ class SurfaceDelivery:
         surface: AgentSurfaceEntity,
         *,
         event: ParsedInboundSurfaceEvent | None = None,
-    ) -> dict[str, Any]:
+    ) -> SurfaceCredentials:
         """What this surface answers with, for this particular reply.
 
         ``event`` is the inbound message being answered, and it is passed for

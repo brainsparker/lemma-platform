@@ -6,7 +6,10 @@ import pytest
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.modules.agent_surfaces.api.schemas import AgentSurfaceResponse, SurfaceReach
+from app.modules.agent_surfaces.domain.surface_representation import (
+    AgentSurfaceResponse,
+    SurfaceReach,
+)
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,

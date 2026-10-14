@@ -38,6 +38,9 @@ export {
     // An empty Files list's way in, and the help menu's three doors: the
     // tour, the documentation and what changed.
     UploadSimple as UploadIcon, Compass as TourIcon, BookOpenText as DocsIcon,
+    // The parts of a teammate's About page that had no mark of their own:
+    // channels, skills, other teammates, the default model, and MCP.
+    Broadcast as ReachIcon, GraduationCap as TaughtIcon, Handshake as AskIcon, Cpu as ModelIcon, Plug as PlugIcon,
 } from "@phosphor-icons/react";
 
 export function LemmaLogo({ compact = false }: { compact?: boolean }) {

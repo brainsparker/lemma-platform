@@ -84,12 +84,14 @@ async def _default_agent_brief(*, pod_id: str, user_id: str) -> str:
             "type": None,
         },
     )()
-    return await AgentContextBriefBuilder(uow_factory).build(
+    brief = await AgentContextBriefBuilder(uow_factory).build(
         agent=agent,
         conversation=conversation,
         user_id=UUID(user_id),
         pod_id=UUID(pod_id),
     )
+    # The half in the system prompt: who the agent is and what the pod holds.
+    return brief.stable
 
 
 @pytest.mark.asyncio

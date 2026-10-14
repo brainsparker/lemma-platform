@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
 import asyncio
 import time
 from collections.abc import Callable
@@ -21,11 +23,10 @@ from app.modules.agent.contracts import (
     AgentEventType,
 )
 from app.modules.agent.contracts import ConversationContext
-from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.rendering import (
     ThinkingStreamFilter,
 )
@@ -61,23 +62,18 @@ from app.modules.agent.contracts.run_failures import user_safe_failure_reason
 
 logger = get_logger(__name__)
 
+
 # What a platform call can raise that must not stop the answer being delivered
 # another way: the transport family, plus the database work around it.
-_DELIVERY_ERRORS: tuple[type[BaseException], ...] = (
-    SQLAlchemyError,
-    *PLATFORM_TRANSPORT_ERRORS,
-)
+def _delivery_errors() -> tuple[type[BaseException], ...]:
+    return (SQLAlchemyError, *platform_transport_errors())
 
+
+# Read from the capability registry once; a mapping so a test can shorten one.
 _TYPING_REFRESH_INTERVAL_SECONDS = {
-    SurfacePlatform.TELEGRAM.value: 4.0,
-    SurfacePlatform.TEAMS.value: 10.0,
-    # WhatsApp couples mark-as-read and the typing bubble into one call, which
-    # the ingress path already makes once when it picks the message up. The
-    # bubble expires after ~25s, so on anything longer than a quick answer it
-    # went dark and stayed dark — dead in exactly the runs where it was the only
-    # sign of life. Refreshed inside that window it costs no conversation
-    # message and no attention, unlike the posted updates that back it up.
-    SurfacePlatform.WHATSAPP.value: 20.0,
+    platform: capabilities.typing_refresh_seconds
+    for platform, capabilities in PLATFORM_CAPABILITIES.items()
+    if capabilities.typing_refresh_seconds is not None
 }
 _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
 
@@ -145,7 +141,7 @@ class SurfaceAgentRunProgressObserver(
         self._error_delivered = False
         # Opaque handle for the live progress message on streaming platforms
         # (Telegram/Teams), threaded across edits and cleared on finish.
-        self._progress_handle: dict[str, Any] | None = None
+        self._progress_handle: ProgressHandle | None = None
         # Live token streaming. ``_streamed_text`` is what the user has already
         # seen in the stream; ``_token_buffer`` is what has arrived but not yet
         # been flushed. Flushing every token would blow Slack's rate limit, so
@@ -312,7 +308,7 @@ class SurfaceAgentRunProgressObserver(
                     message=message,
                     already_streamed=bool(self._streamed_text),
                 )
-        except _DELIVERY_ERRORS:
+        except _delivery_errors():
             # Not debug: this is the step that turns a live stream into the
             # answer, and a timeout here used to escape `on_run_finished`
             # before `_deliver_final_answer` ran -- the stream was left open and
@@ -342,7 +338,7 @@ class SurfaceAgentRunProgressObserver(
                     conversation_id=conversation_id,
                     progress_handle=handle,
                 )
-        except _DELIVERY_ERRORS:
+        except _delivery_errors():
             # Clearing is cosmetic and the answer that follows it is not, so a
             # failure here must never be the reason the answer is not sent.
             logger.warning(
@@ -370,7 +366,7 @@ class SurfaceAgentRunProgressObserver(
                 pass
         try:
             finished = await self._finish_stream_with_answer(conversation)
-        except _DELIVERY_ERRORS:
+        except _delivery_errors():
             # The flush before the close is outside the guarded call above. Either
             # way the answer still has to go out, and that is the next line.
             logger.warning(

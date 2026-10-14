@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     user_prompt_text,
 )
 

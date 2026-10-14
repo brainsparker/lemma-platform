@@ -8,4 +8,5 @@ export enum WorkflowRunWaitType {
     FUNCTION = 'FUNCTION',
     TIME = 'TIME',
     DECISION = 'DECISION',
+    QUEUED = 'QUEUED',
 }

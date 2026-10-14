@@ -231,6 +231,7 @@ def _event_routers():
 
 def _register_streaq() -> None:
     import app.modules.datastore.events.orphan_schema_tasks  # noqa: F401
+    import app.modules.datastore.events.outbox_retention_tasks  # noqa: F401
 
 
 @asynccontextmanager

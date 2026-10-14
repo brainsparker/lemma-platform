@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_identity_repository import (
+    VerifiedSurfaceIdentityRepository,
+)
+
 from dataclasses import dataclass
 from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -10,7 +14,6 @@ from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from datetime import datetime, timezone
 
 from pydantic import JsonValue
-from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.domain.entities import (
@@ -210,10 +213,8 @@ async def _provision_and_bind(
         if transport.surface is not None:
             # The destination goes on the identity row, which by now exists:
             # one write, and nothing that can outlive a revocation.
-            identity = await uow.session.scalar(
-                select(VerifiedSurfaceIdentity).where(
-                    VerifiedSurfaceIdentity.binding_key == state.binding_key
-                )
+            identity = await VerifiedSurfaceIdentityRepository(uow).by_binding_key(
+                state.binding_key
             )
             assert identity is not None
             identity.installation_surface_id = transport.surface.id
@@ -271,10 +272,8 @@ async def record_verified_identity(
         user = await active_chat_user(uow, state.user_id)
         if user is None:
             raise ChallengeRejected("This account cannot chat")
-        identity = await uow.session.scalar(
-            select(VerifiedSurfaceIdentity).where(
-                VerifiedSurfaceIdentity.binding_key == state.binding_key
-            )
+        identity = await VerifiedSurfaceIdentityRepository(uow).by_binding_key(
+            state.binding_key
         )
         if identity is not None and identity.user_id != user.id:
             if identity.revoked_at is None:
@@ -459,11 +458,8 @@ async def attach_chosen_workspace(
             uow, pod_id=pod_id, user_id=user.id
         )
         if transport.surface is not None:
-            identity = await uow.session.scalar(
-                select(VerifiedSurfaceIdentity).where(
-                    VerifiedSurfaceIdentity.binding_key == state.binding_key,
-                    VerifiedSurfaceIdentity.revoked_at.is_(None),
-                )
+            identity = await VerifiedSurfaceIdentityRepository(uow).by_binding_key(
+                state.binding_key, include_revoked=False
             )
             if identity is None:
                 # Recorded above and not revoked since, so this is a race with a

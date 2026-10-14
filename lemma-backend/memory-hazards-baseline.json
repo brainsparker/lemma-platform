@@ -21,7 +21,6 @@
     "app/core/observability/telemetry.py::_setup_llm_tracing::MH006::BatchSpanProcessor": 1,
     "app/core/observability/telemetry.py::_setup_llm_tracing::MH006::TracerProvider": 1,
     "app/modules/agent/services/runtime_model_factory.py::<module>::MH003::_closing_clients": 1,
-    "app/modules/agent/services/runtime_model_factory.py::_build_provider_client::MH004::httpx.AsyncClient": 1,
     "app/modules/agent_surfaces/api/controllers/webhook_controller.py::handle_platform_webhook::MH005::request.body()": 1,
     "app/modules/agent_surfaces/api/controllers/webhook_controller.py::handle_surface_webhook::MH005::request.body()": 1,
     "app/modules/agent_surfaces/api/controllers/webhook_controller.py::handle_telegram_manager_webhook::MH005::request.body()": 1,

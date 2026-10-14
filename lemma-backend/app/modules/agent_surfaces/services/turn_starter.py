@@ -18,9 +18,10 @@ is what those became once nothing needed them to be methods on a namespace.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 import sys
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -49,7 +50,7 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.credential_resolver import (
     PooledNumberReader,
     SurfaceCredentialResolver,
@@ -74,6 +75,8 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     SurfaceFileIngestService,
     every_attachment_failed,
 )
+from app.modules.agent_surfaces.domain.decision_card import CardRetirement
+from app.modules.agent_surfaces.services.held_replies import deliver_held_replies
 from app.modules.agent_surfaces.services.card_retirement import (
     retire_superseded_cards,
 )
@@ -86,7 +89,7 @@ from app.modules.agent_surfaces.services.surface_inbound_message import (
     transcribe_voice_attachments,
     write_inbound_message,
 )
-from app.modules.agent_surfaces.services.surface_inbound import release_ingress_claim
+from app.modules.agent_surfaces.services.delivery_claims import release_ingress_claim
 from app.modules.agent_surfaces.services.telegram_command_service import (
     handle_telegram_command,
     handle_typed_retry,
@@ -185,7 +188,10 @@ class SurfaceTurnStarter:
         if await self._waits_for_a_person(context):
             await self._hand_to_a_person(context, adapter, credentials)
             return
-        with suppress(*PLATFORM_TRANSPORT_ERRORS):
+        # Matched after the raise rather than taken up front as `suppress` would:
+        # this call may be the one that first loads Slack's SDK, whose errors
+        # join the family only once it is loaded.
+        try:
             await adapter.add_processing_indicator(
                 credentials=credentials,
                 event=context.event,
@@ -193,7 +199,18 @@ class SurfaceTurnStarter:
                     "agent_display_name": context.agent_display_name,
                 },
             )
+        except platform_transport_errors():
+            pass
 
+        # Their message reopened a closed reply window: what waited for that
+        # goes first, so the answer to this message follows it.
+        await deliver_held_replies(
+            adapter=adapter,
+            credentials=credentials,
+            event=context.event,
+            conversation_id=context.conversation_id,
+            uow_factory=self.uow_factory,
+        )
         ingest = await self._ingest_files(context, credentials)
         ingested: list[IngestedAttachment] = ingest.saved
         metadata = _message_metadata(context, ingest)
@@ -237,15 +254,17 @@ class SurfaceTurnStarter:
         # it is no longer true: `PendingUserMessagesCapability` steers these
         # into the run already going, which answers all of them at once.
         async with self.uow_factory() as uow:
-            superseded = await write_inbound_message(
-                context, message_text, metadata, uow
-            )
-        if superseded:
+            finished = await write_inbound_message(context, message_text, metadata, uow)
+        for tool_call_ids, reason in (
+            (finished.superseded, CardRetirement.SUPERSEDED),
+            (finished.answered, CardRetirement.ANSWERED),
+        ):
             await retire_superseded_cards(
                 adapter=adapter,
                 credentials=credentials,
                 conversation_id=context.conversation_id,
-                tool_call_ids=superseded,
+                tool_call_ids=tool_call_ids,
+                reason=reason,
             )
         if not message_text.strip() and not context.event.metadata.get("attachments"):
             # Nothing a person sent is empty: a body we failed to fetch or
@@ -300,7 +319,7 @@ class SurfaceTurnStarter:
                 credentials=await self._credentials_for(reply),
                 event_dedup_store=self.event_dedup_store,
             )
-        except (SQLAlchemyError, *PLATFORM_TRANSPORT_ERRORS):
+        except (SQLAlchemyError, *platform_transport_errors()):
             logger.warning(
                 "agent_surfaces.turn_starter.failure_reply_not_sent.degraded",
                 platform=str(context.platform),
@@ -353,7 +372,7 @@ class SurfaceTurnStarter:
         self,
         context: SurfaceChatContext,
         adapter: SurfacePlatformAdapterPort,
-        credentials: dict[str, object],
+        credentials: SurfaceCredentials,
     ) -> None:
         """Keep the message for the member, and tell the person once a day."""
         if context.pod_id is None:
@@ -381,7 +400,7 @@ class SurfaceTurnStarter:
                 message=held.reply,
                 metadata={"agent_display_name": context.agent_display_name},
             )
-        except (AgentSurfaceError, *PLATFORM_TRANSPORT_ERRORS):
+        except (AgentSurfaceError, *platform_transport_errors()):
             # The message is kept and the member told; only the courtesy line
             # did not land, and the conversation already shows it.
             logger.warning(
@@ -391,7 +410,7 @@ class SurfaceTurnStarter:
             )
 
     async def _ingest_files(
-        self, context: SurfaceChatContext, credentials: dict[str, Any]
+        self, context: SurfaceChatContext, credentials: SurfaceCredentials
     ) -> AttachmentIngest:
         """Auto-ingest user-provided files into the pod datastore (/me/{platform}).
 
@@ -436,7 +455,7 @@ class SurfaceTurnStarter:
     async def _name_new_thread(
         self,
         adapter: SurfacePlatformAdapterPort,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         context: SurfaceChatContext,
     ) -> None:
         """Name the thread on the platform when this turn created the conversation.
@@ -454,7 +473,7 @@ class SurfaceTurnStarter:
                 event=context.event,
                 title=context.created_conversation_title,
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             # A platform call, so a platform failure. It caught
             # `SQLAlchemyError` -- the wrong family entirely, and nothing here
             # touches the database: Slack's implementation catches only
@@ -487,7 +506,9 @@ class SurfaceTurnStarter:
                         "The queued personal destination no longer matches"
                     )
 
-    async def _credentials_for(self, context: AgentSurfaceContext) -> dict[str, Any]:
+    async def _credentials_for(
+        self, context: AgentSurfaceContext
+    ) -> SurfaceCredentials:
         """Credentials for a reply that has only the run's context in hand.
 
         Read in a short scope of its own and returned as a plain dict, so no

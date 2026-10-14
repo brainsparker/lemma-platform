@@ -57,6 +57,7 @@ from app.modules.test_support.surface_routing_double import routing_surfaces_dou
 #: ones reach a database.
 _CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
 _AGENT_DIRECTORY = "app.modules.agent.contracts.agents"
+_METADATA_RECORDS = "app.modules.agent.contracts.conversation_metadata_records"
 
 
 async def _the_tap_stands(_uow, **kwargs) -> agent_conversations.ApprovalResolution:
@@ -95,6 +96,13 @@ def conversation_operations(monkeypatch):
     }
     for name, double in doubles.items():
         monkeypatch.setattr(f"{_CONVERSATIONS}.{name}", double)
+    records = {
+        "conversation_metadata_record": AsyncMock(return_value=None),
+        "forget_conversation_metadata_record": AsyncMock(),
+        "due_conversation_metadata_records": AsyncMock(return_value=[]),
+    }
+    for name, double in records.items():
+        monkeypatch.setattr(f"{_METADATA_RECORDS}.{name}", double)
     monkeypatch.setattr(
         f"{_AGENT_DIRECTORY}.agent_name_for_id", AsyncMock(return_value="Surface Agent")
     )
@@ -373,6 +381,8 @@ def build_doubles(
     adapter.enrich_inbound_event.side_effect = lambda *, credentials, event: event
     adapter.unresolved_sender_reply = Mock(return_value=None)
     adapter.linked_sender_confirmation = Mock(return_value=None)
+    # Synchronous on the port, so an AsyncMock's coroutine would read as True.
+    adapter.mention_is_provisional = Mock(return_value=False)
     return SurfaceDoubles(
         uow=uow,
         surface_repository=surface_repository,

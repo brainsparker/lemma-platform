@@ -59,7 +59,7 @@ def has_stopped(process) -> bool:
     `ProcessDescriptor.state` is typed `object`, and a provider reporting a
     state this module does not know would read as running forever.
     """
-    if process.exit_code is not None:
+    if process.exit_code is not None or getattr(process, "exited_unobserved", False):
         return True
     return process.state in TERMINAL_PROCESS_STATES or str(
         getattr(process.state, "value", process.state)

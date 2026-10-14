@@ -254,6 +254,7 @@ fn start_command(harness_id: Uuid, expires_at: chrono::DateTime<Utc>) -> Command
         mcp: serde_json::json!({}),
         run_deadline: Utc::now() + chrono::Duration::minutes(5),
         system_prompt_delivery: None,
+        pre_approvals: Vec::new(),
     };
     Command {
         command_id: Uuid::new_v4(),
@@ -317,4 +318,36 @@ async fn a_late_cancel_is_still_obeyed() {
         .unwrap()
         .unwrap();
     assert!(run.state.is_terminal(), "{:?}", run.state);
+}
+
+/// The driver gets what is left of the run when it starts, not what was left
+/// before the CLI was chosen; a run whose deadline went by meanwhile never
+/// starts its agent.
+#[test]
+fn a_run_gets_only_the_time_left_when_its_agent_starts() {
+    use crate::runtime::run::time_left;
+    let now = Utc::now();
+    assert_eq!(
+        time_left(now + chrono::Duration::seconds(30), now),
+        Some(Duration::from_secs(30))
+    );
+    assert_eq!(time_left(now, now), None);
+    assert_eq!(time_left(now - chrono::Duration::seconds(1), now), None);
+
+    // Asserted on the source, as the terminal-path test above is: reaching
+    // the order from a test needs a CLI download that outlives a deadline.
+    let source = include_str!("../../run.rs").replace("\r\n", "\n");
+    let chosen = source
+        .find("cli_bin_for_run(")
+        .expect("the run chooses its CLI");
+    let measured = source
+        .find("time_left(spec.run_deadline")
+        .expect("the run measures its time");
+    let started = source
+        .find("tokio::time::timeout(remaining")
+        .expect("the run starts its agent");
+    assert!(
+        chosen < measured && measured < started,
+        "the time left is measured after the CLI is chosen and before the agent starts"
+    );
 }

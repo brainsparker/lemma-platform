@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.adapter_port import in_chat_setup
 
-from typing import TYPE_CHECKING, Any
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
+
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 
@@ -96,6 +100,14 @@ class AgentSurfaceService(
         self._credential_resolver = credential_resolver
         self._adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
 
+    @property
+    def credential_resolver(self) -> "SurfaceCredentialResolver | None":
+        """The resolver this service was built with, for callers that read a
+        surface's reach or webhook credentials beside it. None where the
+        service was composed without one, which leaves nothing to verify or
+        reach with."""
+        return self._credential_resolver
+
     async def list_channels(
         self, *, surface: AgentSurfaceEntity
     ) -> list["SurfaceChannelInfo"]:
@@ -104,7 +116,7 @@ class AgentSurfaceService(
         Empty for platforms without enumerable channels, or when credentials
         cannot be resolved.
         """
-        adapter = self._adapter_registry.get(surface.surface_type)
+        adapter = in_chat_setup(self._adapter_registry.get(surface.surface_type))
         if adapter is None or self._credential_resolver is None:
             return []
         credentials = await self._credential_resolver.for_surface(surface)
@@ -197,7 +209,7 @@ class AgentSurfaceService(
             entity, surface_repository=self.surface_repository
         )
         await self._ensure_identity_is_claimable(entity)
-        telegram_credentials: dict[str, Any] | None = None
+        telegram_credentials: SurfaceCredentials | None = None
         if telegram_requires_webhook_setup(entity):
             await self._ensure_unique_telegram_account(entity)
             telegram_credentials = await self._prepare_telegram_webhook(entity)
@@ -262,6 +274,13 @@ class AgentSurfaceService(
         if surface is None:
             raise AgentSurfaceNotFoundError(name)
         return surface
+
+    async def surface_name_taken(self, *, pod_id: UUID, name: str) -> bool:
+        """Whether a surface of this name already exists in the pod."""
+        existing = await self.surface_repository.get_by_pod_and_name(
+            pod_id=pod_id, name=name
+        )
+        return existing is not None
 
     async def resend_surface_for_agent(
         self,
@@ -344,7 +363,7 @@ class AgentSurfaceService(
             surface.toggle_active(is_active)
 
         telegram = _telegram_transition(previous_surface, surface)
-        telegram_credentials: dict[str, Any] | None = None
+        telegram_credentials: SurfaceCredentials | None = None
         if telegram.register:
             await self._ensure_unique_telegram_account(surface)
             telegram_credentials = await self._prepare_telegram_webhook(surface)
@@ -412,6 +431,24 @@ class AgentSurfaceService(
             cursor=cursor,
             limit=limit,
         )
+
+    async def all_surfaces_in_pod(
+        self, pod_id: UUID, *, page_size: int = 100
+    ) -> list[AgentSurfaceEntity]:
+        """Every surface in the pod, however many pages that takes.
+
+        For callers that want the whole set -- a bundle export, a plan diff --
+        and would otherwise read one page and silently drop the rest.
+        """
+        surfaces: list[AgentSurfaceEntity] = []
+        cursor: UUID | None = None
+        while True:
+            page, cursor = await self.list_surfaces_by_pod(
+                pod_id, cursor=cursor, limit=page_size
+            )
+            surfaces.extend(page)
+            if cursor is None:
+                return surfaces
 
     async def delete_surface(self, surface_id: UUID) -> None:
         surface = await self.surface_repository.get(surface_id)

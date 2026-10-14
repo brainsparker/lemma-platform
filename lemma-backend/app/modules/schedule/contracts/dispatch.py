@@ -26,12 +26,35 @@ from app.modules.schedule.repositories.schedule_repository import ScheduleReposi
 from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
 )
+from app.modules.schedule.services.run_admission import admit_fire
 from app.modules.schedule.services.run_outcome_service import ScheduleRunOutcomeService
 
 
 async def get_schedule(uow, schedule_id: UUID) -> ScheduleEntity | None:
     """The schedule a fire names, or ``None`` if it has since been deleted."""
     return await ScheduleRepository(uow).get(schedule_id)
+
+
+async def admit_schedule_fire(
+    uow,
+    schedule: ScheduleEntity,
+    *,
+    source_event_id: str,
+    user_id: UUID,
+    metadata: dict[str, object] | None,
+) -> bool:
+    """Whether the schedule's ``max_concurrent_runs`` lets this fire claim a run.
+
+    Call it just before `claim_schedule_run`, in the same transaction. False
+    means the fire was recorded as skipped and must start nothing.
+    """
+    return await admit_fire(
+        uow,
+        schedule,
+        source_event_id=source_event_id,
+        user_id=user_id,
+        metadata=metadata,
+    )
 
 
 async def claim_schedule_run(
@@ -102,6 +125,7 @@ async def record_dispatch_dead_letter(uow, schedule: ScheduleEntity) -> None:
 
 
 __all__ = [
+    "admit_schedule_fire",
     "claim_schedule_run",
     "get_schedule",
     "mark_run_dispatched",

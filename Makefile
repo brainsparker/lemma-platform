@@ -1338,10 +1338,21 @@ desktop-dmg:
 	@# -- gets "Not authorised to send Apple events to Finder. (-1743)" and the
 	@# build fails after the .app is already built and signed. The documented
 	@# command has to work where it is documented to be run.
+	@# The `lemma` CLI the Agent Host lets a hosted workspace's runs use
+	@# without asking (desktop/agent-host/src/lemma_cli.rs). Signed here, before
+	@# the bundler signs the app around it, for the same reason as lemma-vz:
+	@# the app's signature refuses unsigned code nested inside it.
+	@echo "→ Staging the bundled lemma CLI…"
+	@rm -rf $(DESKTOP_DIR)/binaries/lemma-cli
+	@uv run --no-project python scripts/build_desktop_lemma_cli.py \
+		--output $(DESKTOP_DIR)/binaries/lemma-cli \
+		--sign "$${APPLE_SIGNING_IDENTITY:--}" \
+		$(if $(PYTHON_ROOT),--python-root $(PYTHON_ROOT),) >/dev/null
 	@echo "→ Bundling the self-contained DMG…"
 	@cd $(DESKTOP_DIR) && APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" \
 		LEMMA_DESKTOP_DATA_DIR_NAME="$(DESKTOP_DMG_DATA_DIR)" \
-		npx -y $(TAURI_CLI) build --ci --config $(DESKTOP_DMG_CONFIG)
+		npx -y $(TAURI_CLI) build --ci --config $(DESKTOP_DMG_CONFIG) \
+		--config tauri.lemma-cli.conf.json
 	@$(MAKE) --no-print-directory _desktop-verify-dist-app
 	@echo ""
 	@dmg=$$(ls $(DESKTOP_DIR)/target/release/bundle/dmg/*_*.dmg 2>/dev/null | head -1); \
@@ -1519,6 +1530,9 @@ _desktop-verify-dist-app:
 	test -f "$$app/Contents/Resources/lemma-local.json"; \
 	test -f "$$app/Contents/Resources/host-runtime.zip"; \
 	test -f "$$app/Contents/Resources/guest-runtime.zip"; \
+	test -x "$$app/Contents/Resources/lemma-cli/bin/lemma"; \
+	env -i PATH=/usr/bin:/bin "$$app/Contents/Resources/lemma-cli/bin/lemma" --version >/dev/null || ( \
+		echo "  ✗ the bundled lemma CLI does not start from inside the app"; exit 1); \
 	test ! -e "$$app/Contents/Resources/local-runtime"; \
 	test ! -e "$$app/Contents/Resources/managed-runtime"; \
 	app_bytes=$$(du -sk "$$app" | awk '{print $$1 * 1024}'); \

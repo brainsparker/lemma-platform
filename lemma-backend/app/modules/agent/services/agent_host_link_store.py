@@ -21,6 +21,7 @@ from uuid import UUID
 from sqlalchemy.exc import DBAPIError
 
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.transient_errors import is_deadlock
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -56,8 +57,10 @@ from app.modules.agent.services.agent_host_auth import (
 
 logger = get_logger(__name__)
 
-#: How many commands one read of the queue hands out, as the poll did.
-MAX_COMMANDS_PER_READ = 16
+#: How many commands one read of the queue hands out. Above a Desktop host's
+#: default run limit (20), so a burst of starts queued while the link was down
+#: goes out in one read rather than waiting for the next poke.
+MAX_COMMANDS_PER_READ = 32
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,16 +92,6 @@ def _stored_host_execution(
 ) -> dict[str, object]:
     """What the host row's ``capacity`` keeps under ``host_execution``."""
     return (host_execution or HostExecutionCapability()).model_dump(mode="json")
-
-
-def is_deadlock(exc: DBAPIError) -> bool:
-    """Whether Postgres aborted this transaction to break a deadlock (40P01).
-
-    Read off the driver error rather than the message: asyncpg surfaces the
-    SQLSTATE, and matching on text would break the moment a locale or a driver
-    changes.
-    """
-    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "40P01"
 
 
 class AgentHostLinkStore:
@@ -273,13 +266,21 @@ class AgentHostLinkStore:
     async def publish_harnesses(
         self, *, host_id: UUID, snapshots: list[AgentHostHarnessSnapshot]
     ) -> list[AgentHostHarnessRecord]:
-        """Replace this host's harness snapshots with the reported set."""
+        """Replace this host's harness snapshots with the reported set.
+
+        Rows are kept (runs and profiles point at them), so an agent the report
+        leaves out is marked DISABLED rather than deleted.
+        """
         async with self._uow_factory() as uow:
             repository = AgentHostRepository(uow)
             published = [
                 await repository.publish_harness(host_id=host_id, snapshot=snapshot)
                 for snapshot in snapshots
             ]
+            await repository.disable_unreported_harnesses(
+                host_id=host_id,
+                reported_keys={snapshot.harness_key for snapshot in snapshots},
+            )
             records = [
                 AgentHostHarnessRecord.model_validate(harness) for harness in published
             ]

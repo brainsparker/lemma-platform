@@ -237,6 +237,45 @@ pub struct RunSpec {
     /// run that never happens at all.
     #[serde(default)]
     pub system_prompt_delivery: Option<String>,
+    /// Permissions the person granted after the turn that asked had ended.
+    /// See [`PreApproval`]. Sent only to a harness that published
+    /// `pre_approval`.
+    #[serde(default)]
+    pub pre_approvals: Vec<PreApproval>,
+}
+
+/// A permission the person granted for a call an earlier turn never made.
+///
+/// A turn that waited past Lemma's parked window was ended, and the request it
+/// was holding open went with it. The person's later approval resumes the
+/// conversation with a new run, whose agent asks again for the same thing:
+/// this lets that one request through without asking the person a second time
+/// (`acp::pre_approval`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PreApproval {
+    /// The approval in Lemma that granted it, named in the transcript.
+    pub approval_id: String,
+    /// The canonical tool name the request was shown under.
+    pub tool_name: String,
+    /// The canonical input the request was shown with.
+    #[serde(default)]
+    pub input: Value,
+    /// `APPROVE_ONCE` or `APPROVE_FOR_SESSION`; either allows one call. A
+    /// string, so a decision this host does not know allows nothing rather
+    /// than failing the whole run spec.
+    pub decision: String,
+}
+
+impl PreApproval {
+    /// Whether this is an approval at all. Anything else -- a denial, a
+    /// spelling this host does not know -- allows nothing.
+    #[must_use]
+    pub fn approves(&self) -> bool {
+        matches!(
+            self.decision.as_str(),
+            "APPROVE_ONCE" | "APPROVE_FOR_SESSION"
+        )
+    }
 }
 
 /// The one value that lets a turn leave the instructions out.
@@ -509,6 +548,11 @@ pub struct HarnessCapabilities {
     /// one thing it was: a harness nobody asked to steer.
     #[serde(default)]
     pub steering: bool,
+    /// This host honours a run spec's `pre_approvals`. Not the adapter's: the
+    /// host answers the permission request itself, so every harness of this
+    /// host has it.
+    #[serde(default)]
+    pub pre_approval: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -25,6 +25,7 @@ pytestmark = pytest.mark.e2e
 BACKEND = Path(__file__).resolve().parents[5]
 BEFORE = "0050_pod_grantee_index"
 REVISION = "0051_agent_run_reliability"
+_RUN_CAP_CHECK = "ck_workflow_flows_max_concurrent_runs_positive"
 
 
 class _Ids:
@@ -202,6 +203,15 @@ def _index_exists(connection: psycopg.Connection, name: str) -> bool:
     )
 
 
+def _constraint_exists(connection: psycopg.Connection, name: str) -> bool:
+    return (
+        connection.execute(
+            "SELECT 1 FROM pg_constraint WHERE conname = %s", (name,)
+        ).fetchone()
+        is not None
+    )
+
+
 def _profile_user_fk_action(connection: psycopg.Connection) -> str:
     (action,) = connection.execute(
         "SELECT con.confdeltype FROM pg_constraint AS con "
@@ -275,8 +285,21 @@ def test_the_migration_repairs_its_data_and_rolls_back_its_schema() -> None:
             assert not _index_exists(q, "ix_users_telegram_username")
             # No index for client message ids: the conversation lock holds it.
             assert not _index_exists(q, "uq_agent_message_client_message_id")
-            # Workflow concurrency cap, and its check.
-            assert "max_concurrent_runs" in _columns(q, "workflow_flows")
+            # Workflow concurrency cap, and its check. Nullable with no default:
+            # every existing workflow stays unlimited.
+            assert q.execute(
+                "SELECT is_nullable, column_default FROM information_schema.columns "
+                "WHERE table_name = 'workflow_flows' "
+                "AND column_name = 'max_concurrent_runs'"
+            ).fetchone() == ("YES", None)
+            assert (
+                _scalar(
+                    q,
+                    "SELECT max_concurrent_runs FROM workflow_flows WHERE id = %s",
+                    ids.flow,
+                )
+                is None
+            )
             with pytest.raises(psycopg.errors.CheckViolation):
                 q.execute(
                     "UPDATE workflow_flows SET max_concurrent_runs = 0 WHERE id = %s",
@@ -361,6 +384,7 @@ def test_the_migration_repairs_its_data_and_rolls_back_its_schema() -> None:
                 connection, "agent_host_run_leases"
             )
             assert "max_concurrent_runs" not in _columns(connection, "workflow_flows")
+            assert not _constraint_exists(connection, _RUN_CAP_CHECK)
             assert "version" not in _columns(connection, "agent_runtime_profiles")
             assert not _index_exists(connection, "uq_agent_runtime_profile_org_default")
             assert _index_exists(connection, "ix_users_telegram_username")
@@ -370,3 +394,4 @@ def test_the_migration_repairs_its_data_and_rolls_back_its_schema() -> None:
         with psycopg.connect(sync_url) as connection:
             assert _index_exists(connection, "uq_agent_runtime_profile_org_default")
             assert _profile_user_fk_action(connection) == "c"
+            assert _constraint_exists(connection, _RUN_CAP_CHECK)

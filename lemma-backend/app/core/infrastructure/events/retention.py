@@ -46,6 +46,7 @@ async def prune_event_delivery_records(
     session_maker: Callable[[], AsyncSession],
     *,
     now: datetime | None = None,
+    include_inbox: bool = True,
 ) -> dict[str, int]:
     """Drain each retention category, bounded by a wall-clock budget.
 
@@ -62,6 +63,10 @@ async def prune_event_delivery_records(
     the next cron tick resumes where it left off. Nothing is lost by stopping
     early -- the cutoff is recomputed from ``now`` on the next run, and rows
     past it stay eligible.
+
+    ``include_inbox=False`` prunes the outbox alone, for a database that has
+    an outbox and no inbox: the datastore database, when pod schemas live in
+    one of their own (see ``datastore.events.outbox_retention_tasks``).
     """
     now = now or datetime.now(timezone.utc)
     completed_cutoff = now - timedelta(
@@ -128,6 +133,8 @@ async def prune_event_delivery_records(
             ),
         ),
     )
+    if not include_inbox:
+        categories = tuple(c for c in categories if c[1] is DomainEventOutbox)
     budget = event_transport_settings.event_retention_run_budget_seconds
     started = time.monotonic()
 

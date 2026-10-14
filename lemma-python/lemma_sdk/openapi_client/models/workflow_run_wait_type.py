@@ -6,6 +6,7 @@ class WorkflowRunWaitType(str, Enum):
     DECISION = "DECISION"
     FUNCTION = "FUNCTION"
     HUMAN = "HUMAN"
+    QUEUED = "QUEUED"
     TIME = "TIME"
 
     def __str__(self) -> str:

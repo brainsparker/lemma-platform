@@ -56,11 +56,9 @@ _NAME_TO_MODULE = {
     'AgentRuntimeConfig': 'agent_runtime_config',
     'AgentRuntimeProfileDetailResponse': 'agent_runtime_profile_detail_response',
     'AgentRuntimeProfileDetailResponseConfig': 'agent_runtime_profile_detail_response_config',
-    'AgentRuntimeProfileDetailResponseMetadata': 'agent_runtime_profile_detail_response_metadata',
     'AgentRuntimeProfileListResponse': 'agent_runtime_profile_list_response',
     'AgentRuntimeProfileResponse': 'agent_runtime_profile_response',
     'AgentRuntimeProfileResponseConfig': 'agent_runtime_profile_response_config',
-    'AgentRuntimeProfileResponseMetadata': 'agent_runtime_profile_response_metadata',
     'AgentRuntimeProfileTestResponse': 'agent_runtime_profile_test_response',
     'AgentSummaryResponse': 'agent_summary_response',
     'AgentSummaryResponseMetadataType0': 'agent_summary_response_metadata_type_0',
@@ -291,6 +289,7 @@ _NAME_TO_MODULE = {
     'FunctionStatus': 'function_status',
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
+    'GenerationSettings': 'generation_settings',
     'GroupDetailResponse': 'group_detail_response',
     'GroupLineResponse': 'group_line_response',
     'GroupLinkRequest': 'group_link_request',
@@ -439,6 +438,7 @@ _NAME_TO_MODULE = {
     'PublishStartRequest': 'publish_start_request',
     'PublishStatus': 'publish_status',
     'PublishStatusResponse': 'publish_status_response',
+    'ReasoningEffort': 'reasoning_effort',
     'RecordAccessMode': 'record_access_mode',
     'RecordCreateResponseRecordCreate': 'record_create_response_record_create',
     'RecordGetResponseRecordGet': 'record_get_response_record_get',
@@ -461,6 +461,7 @@ _NAME_TO_MODULE = {
     'RuntimeModelCatalogEntry': 'runtime_model_catalog_entry',
     'RuntimeModelCatalogEntryDefaultModelSettings': 'runtime_model_catalog_entry_default_model_settings',
     'RuntimeModelCatalogEntryMetadata': 'runtime_model_catalog_entry_metadata',
+    'RuntimeProfileAvailability': 'runtime_profile_availability',
     'RuntimeProfileKind': 'runtime_profile_kind',
     'RuntimeProfileProtocol': 'runtime_profile_protocol',
     'RuntimeProfileScope': 'runtime_profile_scope',
@@ -538,6 +539,7 @@ _NAME_TO_MODULE = {
     'SurfaceTelegramConfigInput': 'surface_telegram_config_input',
     'SurfaceUnavailableReason': 'surface_unavailable_reason',
     'SurfaceUpdateRequest': 'surface_update_request',
+    'SurfaceWhatsAppConfigInput': 'surface_whats_app_config_input',
     'TableColumn': 'table_column',
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
@@ -691,11 +693,9 @@ if TYPE_CHECKING:
     from .agent_runtime_config import AgentRuntimeConfig
     from .agent_runtime_profile_detail_response import AgentRuntimeProfileDetailResponse
     from .agent_runtime_profile_detail_response_config import AgentRuntimeProfileDetailResponseConfig
-    from .agent_runtime_profile_detail_response_metadata import AgentRuntimeProfileDetailResponseMetadata
     from .agent_runtime_profile_list_response import AgentRuntimeProfileListResponse
     from .agent_runtime_profile_response import AgentRuntimeProfileResponse
     from .agent_runtime_profile_response_config import AgentRuntimeProfileResponseConfig
-    from .agent_runtime_profile_response_metadata import AgentRuntimeProfileResponseMetadata
     from .agent_runtime_profile_test_response import AgentRuntimeProfileTestResponse
     from .agent_summary_response import AgentSummaryResponse
     from .agent_summary_response_metadata_type_0 import AgentSummaryResponseMetadataType0
@@ -926,6 +926,7 @@ if TYPE_CHECKING:
     from .function_status import FunctionStatus
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
+    from .generation_settings import GenerationSettings
     from .group_detail_response import GroupDetailResponse
     from .group_line_response import GroupLineResponse
     from .group_link_request import GroupLinkRequest
@@ -1074,6 +1075,7 @@ if TYPE_CHECKING:
     from .publish_start_request import PublishStartRequest
     from .publish_status import PublishStatus
     from .publish_status_response import PublishStatusResponse
+    from .reasoning_effort import ReasoningEffort
     from .record_access_mode import RecordAccessMode
     from .record_create_response_record_create import RecordCreateResponseRecordCreate
     from .record_get_response_record_get import RecordGetResponseRecordGet
@@ -1096,6 +1098,7 @@ if TYPE_CHECKING:
     from .runtime_model_catalog_entry import RuntimeModelCatalogEntry
     from .runtime_model_catalog_entry_default_model_settings import RuntimeModelCatalogEntryDefaultModelSettings
     from .runtime_model_catalog_entry_metadata import RuntimeModelCatalogEntryMetadata
+    from .runtime_profile_availability import RuntimeProfileAvailability
     from .runtime_profile_kind import RuntimeProfileKind
     from .runtime_profile_protocol import RuntimeProfileProtocol
     from .runtime_profile_scope import RuntimeProfileScope
@@ -1173,6 +1176,7 @@ if TYPE_CHECKING:
     from .surface_telegram_config_input import SurfaceTelegramConfigInput
     from .surface_unavailable_reason import SurfaceUnavailableReason
     from .surface_update_request import SurfaceUpdateRequest
+    from .surface_whats_app_config_input import SurfaceWhatsAppConfigInput
     from .table_column import TableColumn
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
@@ -1339,11 +1343,9 @@ __all__ = [
     'AgentRuntimeConfig',
     'AgentRuntimeProfileDetailResponse',
     'AgentRuntimeProfileDetailResponseConfig',
-    'AgentRuntimeProfileDetailResponseMetadata',
     'AgentRuntimeProfileListResponse',
     'AgentRuntimeProfileResponse',
     'AgentRuntimeProfileResponseConfig',
-    'AgentRuntimeProfileResponseMetadata',
     'AgentRuntimeProfileTestResponse',
     'AgentSummaryResponse',
     'AgentSummaryResponseMetadataType0',
@@ -1574,6 +1576,7 @@ __all__ = [
     'FunctionStatus',
     'FunctionSummaryResponse',
     'FunctionType',
+    'GenerationSettings',
     'GroupDetailResponse',
     'GroupLineResponse',
     'GroupLinkRequest',
@@ -1722,6 +1725,7 @@ __all__ = [
     'PublishStartRequest',
     'PublishStatus',
     'PublishStatusResponse',
+    'ReasoningEffort',
     'RecordAccessMode',
     'RecordCreateResponseRecordCreate',
     'RecordGetResponseRecordGet',
@@ -1744,6 +1748,7 @@ __all__ = [
     'RuntimeModelCatalogEntry',
     'RuntimeModelCatalogEntryDefaultModelSettings',
     'RuntimeModelCatalogEntryMetadata',
+    'RuntimeProfileAvailability',
     'RuntimeProfileKind',
     'RuntimeProfileProtocol',
     'RuntimeProfileScope',
@@ -1821,6 +1826,7 @@ __all__ = [
     'SurfaceTelegramConfigInput',
     'SurfaceUnavailableReason',
     'SurfaceUpdateRequest',
+    'SurfaceWhatsAppConfigInput',
     'TableColumn',
     'TableDetailResponse',
     'TableDetailResponseConfigType0',

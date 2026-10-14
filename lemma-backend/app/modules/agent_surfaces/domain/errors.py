@@ -116,6 +116,18 @@ class AgentSurfaceNotFoundError(AgentSurfaceError):
         )
 
 
+class AgentSurfacePodNotFoundError(AgentSurfaceError):
+    """The pod a surface request names has no row -- deleted mid-request, or
+    never there. A 404 like any other missing resource, not a server error."""
+
+    def __init__(self, pod_id: str):
+        super().__init__(
+            message=f"Pod '{pod_id}' not found",
+            code="AGENT_SURFACE_POD_NOT_FOUND",
+            status_code=404,
+        )
+
+
 class AgentSurfaceAlreadyExistsError(AgentSurfaceError):
     """A surface with the same stable name already exists in this pod."""
 

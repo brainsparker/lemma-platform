@@ -19,12 +19,38 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunState,
 )
 from app.modules.agent.domain.value_objects import AgentEvent
+from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 from app.modules.agent.infrastructure.harnesses.agent_host.events import (
     AgentHostEventNormalizer,
     error_event,
 )
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class RunLease:
+    """What the run window reads of a dispatch lease, read once and typed.
+
+    The window used to take the row as ``object`` and ``getattr`` its columns,
+    so a renamed column answered ``None`` -- "never accepted" -- instead of
+    failing anywhere.
+    """
+
+    state: AgentHostRunState
+    accepted_at: datetime | None
+    error_detail: str | None
+
+    @classmethod
+    def of(cls, row: AgentHostRunLeaseModel | None) -> RunLease | None:
+        if row is None:
+            return None
+        return cls(
+            state=AgentHostRunState(row.state),
+            accepted_at=row.accepted_at,
+            error_detail=row.error_detail,
+        )
+
 
 # The deadline we hand the host, and therefore the real lifetime of the run.
 #
@@ -209,7 +235,7 @@ def failure_events(
 
 def terminal_checkpoint_state(
     *,
-    lease: object | None,
+    lease: RunLease | None,
     seen_at: float | None,
     now: float,
     grace_seconds: float,
@@ -221,7 +247,7 @@ def terminal_checkpoint_state(
     """
     if lease is None:
         return None, None
-    state = AgentHostRunState(lease.state)
+    state = lease.state
     if state not in TERMINAL_AGENT_HOST_RUN_STATES:
         return None, None
     if seen_at is None:
@@ -231,7 +257,7 @@ def terminal_checkpoint_state(
     return seen_at, state
 
 
-def lease_terminal_detail(lease: object | None) -> str | None:
+def lease_terminal_detail(lease: RunLease | None) -> str | None:
     """Why this lease ended, in the words it recorded, or ``None``.
 
     Only ever a sentence written for a person: every writer of
@@ -240,11 +266,11 @@ def lease_terminal_detail(lease: object | None) -> str | None:
     text a run refused *before it started* ends on, and the alternative is
     ``finish_without_terminal``'s description of Lemma's own plumbing.
 
-    Reads the attribute rather than the model, like
+    Reads the lease through `RunLease`, like
     :func:`terminal_checkpoint_state` above it, so this module stays a pure
     helper over whatever the repository hands back.
     """
-    detail = getattr(lease, "error_detail", None)
+    detail = lease.error_detail if lease is not None else None
     if isinstance(detail, str) and detail.strip():
         return detail.strip()
     return None

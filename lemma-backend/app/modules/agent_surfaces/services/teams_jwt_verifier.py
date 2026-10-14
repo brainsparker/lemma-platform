@@ -17,16 +17,17 @@ endorsements; both are checked here.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+
 import json
 from dataclasses import dataclass
-import httpx
 import jwt
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from jwt.algorithms import RSAAlgorithm
 from redis.exceptions import RedisError
 
-from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import TEAMS_OIDC, surface_caches
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.errors import SurfaceWebhookAuthenticationError
@@ -45,7 +46,7 @@ _BOT_FRAMEWORK_ALLOWED_ISSUERS = frozenset(
         "https://api.botframework.com/",
     }
 )
-_OIDC_CACHE_TTL_SECONDS = 60 * 10
+_OIDC_CACHE_TTL_SECONDS = TEAMS_OIDC.ttl_seconds
 # Microsoft's guidance for Bot Framework token validation: clocks on either side
 # drift, and five minutes is the skew it tells bots to tolerate.
 _CLOCK_SKEW_LEEWAY_SECONDS = 300
@@ -54,10 +55,6 @@ _CLOCK_SKEW_LEEWAY_SECONDS = 300
 # but an unknown ``kid`` is also something anyone can send, so the refetch is
 # rate limited across replicas rather than done per request.
 _JWKS_REFETCH_COOLDOWN_SECONDS = 60
-
-# Shared Redis cache of OIDC/JWKS documents used to verify Teams webhook JWTs, so
-# the metadata is fetched once across replicas. Redis unavailable -> refetch.
-_oidc_cache: RedisJsonCache | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,14 +84,9 @@ class TeamsActivityBinding:
 
 
 def _get_oidc_cache() -> RedisJsonCache:
-    global _oidc_cache
-    if _oidc_cache is None or _oidc_cache._redis_url != settings.redis_url:
-        _oidc_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:oidc",
-            ttl_seconds=_OIDC_CACHE_TTL_SECONDS,
-        )
-    return _oidc_cache
+    """OIDC metadata and JWKS for Teams tokens, fetched once across replicas.
+    Redis down -> refetch."""
+    return surface_caches.get(TEAMS_OIDC)
 
 
 def _bearer_token(headers: dict[str, str]) -> str:
@@ -216,7 +208,7 @@ class TeamsJwtVerifier:
         if cached is not None:
             return cached
 
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with outbound_http(10) as client:
             response = await client.get(url)
             if response.status_code != 200:
                 raise SurfaceWebhookAuthenticationError(

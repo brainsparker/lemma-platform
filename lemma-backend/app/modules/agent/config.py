@@ -13,8 +13,9 @@ the test harness, not purely agent-internal.
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.core.domain.generation import ReasoningEffort
 from app.core.settings_env import dotenv_path
 
 
@@ -140,6 +141,14 @@ class AgentSettings(BaseSettings):
             "spent narrowest-scope-first."
         ),
     )
+    agent_memory_file_max_chars: int = Field(
+        default=8000,
+        description=(
+            "Size past which a write to a memory topic or journal file is "
+            "answered with a warning to condense it. Memory files are read back "
+            "into later runs, so their size is paid again every time."
+        ),
+    )
     agent_memory_brief_cache_ttl_seconds: int = Field(
         default=60,
         description=(
@@ -174,6 +183,17 @@ class AgentSettings(BaseSettings):
             "summary is the only memory the run has of its early work, a long "
             "run rewrites it repeatedly, and whatever a weaker model drops on "
             "one pass is gone from every pass after it."
+        ),
+    )
+    agent_history_compaction_timeout_seconds: float = Field(
+        default=120.0,
+        description=(
+            "How long one attempt at summarizing a run's history may take. The "
+            "summary is requested without streaming, so nothing else bounds the "
+            "wait for its answer but the per-chunk read timeout, and the run "
+            "waits on it. An attempt that times out is tried once more; if that "
+            "fails too, the history is left as it was while it still fits, and "
+            "replaced by a notice only past the hard ceiling. 0 disables it."
         ),
     )
     agent_model_context_windows: str = Field(
@@ -229,13 +249,16 @@ class AgentSettings(BaseSettings):
         ),
     )
     agent_model_stream_total_timeout_seconds: float = Field(
-        default=300.0,
+        default=900.0,
         description=(
-            "Ceiling on one whole model exchange, first byte to last. The only "
-            "bound that catches a provider trickling a token a second: the "
-            "per-chunk timeout never fires while chunks keep arriving. Generous "
-            "on purpose, because a long answer streaming steadily has to be "
-            "allowed to finish. 0 disables it."
+            "Runaway backstop on one whole model exchange, from the moment the "
+            "request is sent to its last byte. The only bound that catches a "
+            "provider trickling a token at a time: the per-chunk timeout never "
+            "fires while chunks keep arriving. Far out on purpose, because a "
+            "reasoning model thinking at length and then writing a long answer "
+            "is working, not stuck. An exchange that does run past it is "
+            "retried at most once, with a smaller answer budget, and the reader "
+            "is told the model took too long. 0 disables it."
         ),
     )
     agent_model_http_max_connections: int = Field(
@@ -337,12 +360,15 @@ class AgentSettings(BaseSettings):
         description="Server-provided Lemma system model profile provider type.",
     )
     lemma_llm_caching_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Enable LLM prompt caching. Activates PromptCachingCapability, which "
-            "applies conversation-id session affinity on OPENAI_COMPATIBLE profiles "
-            "(e.g. Fireworks via lemma-cloud) and an explicit instruction cache "
-            "breakpoint on ANTHROPIC_COMPATIBLE profiles."
+            "Ask providers to reuse the cached prompt prefix. On "
+            "OPENAI_COMPATIBLE profiles this sends the baseline `user` field, "
+            "keyed on the pod and agent so a provider can route requests that "
+            "share a prompt start together; on ANTHROPIC_COMPATIBLE profiles it "
+            "marks cache breakpoints after the tool definitions, the system "
+            "prompt and the message history. Both are part of each protocol's "
+            "standard request, so turning this off only gives up the reuse."
         ),
     )
     lemma_openai_default_model: str = Field(
@@ -375,6 +401,35 @@ class AgentSettings(BaseSettings):
             "when the provider advertises it.)"
         ),
     )
+
+    lemma_openai_reasoning_effort: ReasoningEffort | None = Field(
+        default=None,
+        description=(
+            "Default reasoning effort (none, minimal, low, medium, high) for the "
+            "reasoning models of the OpenAI-compatible system model profile. It "
+            "is the catalog default: a profile, agent or workflow step that sets "
+            "its own wins. Unset keeps the provider's default. Setting it "
+            "declares the profile's models reasoning models unless "
+            "LEMMA_OPENAI_REASONING_MODEL_NAMES narrows that."
+        ),
+    )
+    lemma_openai_reasoning_model_names: str = Field(
+        default="",
+        description=(
+            "Comma-separated subset of LEMMA_OPENAI_MODEL_NAMES that are reasoning "
+            "models. Only these are sent a reasoning effort: OpenAI-compatible "
+            "endpoints reject the field on a model that does not reason. Empty "
+            "with LEMMA_OPENAI_REASONING_EFFORT set means every configured model."
+        ),
+    )
+
+    @field_validator("lemma_openai_reasoning_effort", mode="before")
+    @classmethod
+    def _blank_effort_is_unset(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip().lower()
+            return value or None
+        return value
 
 
 agent_settings = AgentSettings()

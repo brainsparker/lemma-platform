@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from uuid import UUID
 
-from app.modules.agent.domain.ports import ConversationRepository
+from app.modules.agent.domain.conversation_ports import QueuedMessages
 
 #: On a follow-up run: the finished runs still holding messages of the kind it
 #: did not answer, for the follow-up after it to find.
@@ -32,7 +32,7 @@ def leftover_sources(run_metadata: Mapping[str, object] | None) -> list[UUID]:
 
 
 async def next_queue(
-    repository: ConversationRepository,
+    repository: QueuedMessages,
     sources: list[UUID],
     *,
     after_sequence: int | None = None,
@@ -51,7 +51,7 @@ async def next_queue(
 
 
 async def still_waiting(
-    repository: ConversationRepository,
+    repository: QueuedMessages,
     sources: list[UUID],
     *,
     answering: UUID,

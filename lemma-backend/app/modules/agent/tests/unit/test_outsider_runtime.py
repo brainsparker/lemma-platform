@@ -83,6 +83,33 @@ async def test_a_default_that_cannot_be_resolved_is_passed_over():
     assert chosen is IN_PROCESS
 
 
+async def test_each_fallback_that_cannot_be_resolved_says_why(caplog):
+    """A refusal tells the person only that there is no model; the reason each
+    candidate fell through has to be somewhere an operator can read it."""
+    with caplog.at_level("WARNING"), pytest.raises(OutsiderRunRefused):
+        await in_process_runtime(
+            AGENT_HOST,
+            fallbacks=[ORGANIZATION, SYSTEM],
+            resolve=_resolving(
+                {
+                    "organization-default": DomainError(
+                        "retired", code="MODEL_RETIRED"
+                    ),
+                    "system-default": RuntimeError("no key"),
+                }
+            ),
+        )
+
+    skipped = [
+        record.getMessage()
+        for record in caplog.records
+        if "agent.outsider_runtime.fallback_skipped.degraded" in record.getMessage()
+    ]
+    assert len(skipped) == 2
+    assert "MODEL_RETIRED" in skipped[0] and "organization-default" in skipped[0]
+    assert "RuntimeError" in skipped[1]
+
+
 async def test_with_nothing_that_runs_here_the_stranger_is_refused():
     with pytest.raises(OutsiderRunRefused):
         await in_process_runtime(

@@ -5,7 +5,7 @@
  *  profiles*: same list, same id, same shape, same slot in a conversation.
  *  There is no `HarnessKind` per coding tool — Codex, Claude Code, Cursor and
  *  OpenCode all arrive as `HARNESS`, and which one it is comes from
- *  `metadata.harness_key`. So the ledger is one list, and a computer is a
+ *  `harness_key`. So the ledger is one list, and a computer is a
  *  heading inside it rather than a second list beside it.
  *
  *  Pure, and tested, for the reason `accounts.ts` is: every field here is a
@@ -19,6 +19,9 @@ export interface RuntimeModel {
     /** The short, readable end of the name — `anthropic/models/sonnet` is
      *  `sonnet`. The full name is what gets sent; this is what gets read. */
     label: string;
+    /** Declares `REASONING`: takes a reasoning effort. Only then is one sent,
+     *  so only then is one worth offering. */
+    reasons?: boolean;
 }
 
 /** A row in the ledger: something a conversation can actually run on. */
@@ -141,7 +144,7 @@ const AGENTS: Record<string, { label: string; logo: string; signIn: string; upda
     "claude-code": {
         label: "Claude Code",
         logo: "/agent-logos/claudecode.png",
-        signIn: "claude login",
+        signIn: "claude auth login",
         update: "claude update",
     },
     codex: {
@@ -289,10 +292,11 @@ export function shortModel(name: string): string {
 }
 
 function readModel(raw: unknown): RuntimeModel | null {
-    const entry = (raw ?? {}) as { name?: string; display_name?: string | null };
+    const entry = (raw ?? {}) as { name?: string; display_name?: string | null; capabilities?: unknown };
     const name = asString(entry.name);
     if (!name) return null;
-    return { name, label: asString(entry.display_name) || shortModel(name) };
+    const reasons = Array.isArray(entry.capabilities) && entry.capabilities.includes("REASONING");
+    return { name, label: asString(entry.display_name) || shortModel(name), ...(reasons ? { reasons } : {}) };
 }
 
 const SCOPES: Record<string, Runtime["scope"]> = {
@@ -335,7 +339,7 @@ export function readRuntime(raw: unknown): Runtime | null {
         availability_status?: string | null;
         default_model_name?: string | null;
         model_catalog?: unknown[];
-        metadata?: Record<string, unknown> | null;
+        harness_key?: string | null;
         config?: Record<string, unknown> | null;
     };
     const id = asString(entry.id);
@@ -345,9 +349,9 @@ export function readRuntime(raw: unknown): Runtime | null {
     const models = (entry.model_catalog ?? []).map(readModel).filter((model): model is RuntimeModel => model !== null);
     const defaultModel = asString(entry.default_model_name);
 
-    /* A saved profile keeps the harness it was made from in its metadata, so
-       a row can wear the right logo without re-reading the computer. */
-    const harness = asString(entry.metadata?.["harness_key"]);
+    /* A saved profile keeps the harness it was made from, so a row can wear
+       the right logo without re-reading the computer. */
+    const harness = asString(entry.harness_key);
 
     return {
         id,

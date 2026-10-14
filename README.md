@@ -114,6 +114,10 @@ server.
 
 <a href="https://github.com/lemma-work/lemma-platform/releases/latest"><img src="https://img.shields.io/badge/Download_for_macOS-141414?style=for-the-badge&logo=apple&logoColor=white" alt="Download Lemma for macOS"></a>
 
+That link opens the version-tagged release: the build to install, and the one
+Desktop's updater follows. The `desktop-nightly-<sha>` entries above it on the
+Releases page are prereleases built from a branch to try an unreleased change.
+
 Run this after Desktop's local setup has finished once:
 
 ```bash

@@ -59,11 +59,13 @@ async def test_a_workspaces_own_slack_app_verifies_against_its_own_secret(monkey
     monkeypatch.setattr(surface_settings, "slack_signing_secret", DEPLOYMENT_SECRET)
     body = b'{"type":"event_callback"}'
 
-    await SurfaceWebhookSecurityService().verify_surface_request(
+    accepted = await SurfaceWebhookSecurityService().verify_surface_request(
         surface=_surface(webhook_secret=OWN_SECRET),
         headers=_signed(OWN_SECRET, body),
         raw_body=body,
     )
+
+    assert accepted is None
 
 
 async def test_the_deployments_secret_cannot_sign_for_a_custom_app(monkeypatch):
@@ -89,11 +91,13 @@ async def test_a_surface_without_its_own_secret_still_uses_the_deployments(monke
     monkeypatch.setattr(surface_settings, "slack_signing_secret", DEPLOYMENT_SECRET)
     body = b'{"type":"event_callback"}'
 
-    await SurfaceWebhookSecurityService().verify_surface_request(
+    accepted = await SurfaceWebhookSecurityService().verify_surface_request(
         surface=_surface(webhook_secret=None),
         headers=_signed(DEPLOYMENT_SECRET, body),
         raw_body=body,
     )
+
+    assert accepted is None
 
 
 async def test_a_custom_app_delivers_to_the_same_shared_endpoint(monkeypatch):

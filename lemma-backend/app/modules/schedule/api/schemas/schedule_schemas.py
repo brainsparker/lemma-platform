@@ -14,6 +14,15 @@ from app.modules.schedule.domain.schedule import (
     ScheduleFireStatus,
     ScheduleType,
     normalize_datastore_schedule_config,
+    schedule_run_cap,
+)
+
+_CONFIG = (
+    "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for "
+    "TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for "
+    "DATASTORE. Any type may set `max_concurrent_runs`: at most that many of "
+    "the schedule's runs in flight at once, from 1 to 1000; a fire that finds "
+    "it full is skipped and recorded as skipped, not queued."
 )
 
 _INCLUDE_OUTSIDE_ROWS = (
@@ -42,7 +51,7 @@ class CreateScheduleRequest(BaseModel):
         ),
     )
     workflow_name: str | None = None
-    config: dict = Field(default_factory=dict)
+    config: dict = Field(default_factory=dict, description=_CONFIG)
     instruction: str | None = Field(
         default=None,
         max_length=8000,
@@ -111,6 +120,7 @@ class CreateScheduleRequest(BaseModel):
                 "connector_trigger_id is only valid for agent webhook schedules; "
                 "workflow schedules derive it from the workflow start config"
             )
+        schedule_run_cap(self.config)
         if self.schedule_type == ScheduleType.DATASTORE:
             self.config = normalize_datastore_schedule_config(self.config)
         return self
@@ -120,7 +130,9 @@ class UpdateScheduleRequest(BaseModel):
     """Request to update a schedule."""
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    config: dict | None = None
+    config: dict | None = Field(
+        default=None, description=f"Replaces the whole config. {_CONFIG}"
+    )
     agent_name: str | None = None
     workflow_name: str | None = None
     instruction: str | None = Field(default=None, max_length=8000)
@@ -139,6 +151,8 @@ class UpdateScheduleRequest(BaseModel):
         # schedule_type is unknown here; the service enforces the DATASTORE
         # rules. Normalize eagerly when the config is recognizably datastore
         # so users get a field-scoped 422 instead of a service-level 400.
+        if self.config is not None:
+            schedule_run_cap(self.config)
         if self.config is not None and "operations" in self.config:
             self.config = normalize_datastore_schedule_config(self.config)
         return self

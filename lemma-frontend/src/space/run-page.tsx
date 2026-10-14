@@ -8,7 +8,7 @@ import { useMe } from "@/session/use-me";
 import { WaitForm } from "@/workflow/form";
 import { DataView } from "@/workflow/data-view";
 import {
-    readRun, runMillis, runTone, sayCancelRefusal, sayFor, sayStatus, sayWhen, stillGoing,
+    canRetryFrom, readRun, runMillis, runTone, sayCancelRefusal, sayFor, sayRetryRefusal, sayStatus, sayWhen, stillGoing,
     type RunDetail, type StepRow,
 } from "@/workflow/runs";
 import {
@@ -94,6 +94,14 @@ export function RunPage({ pod, runId, label, onBack, onOpenConversation, onOpenR
             setRefused(sayCancelRefusal(status, problem instanceof Error ? problem.message : "Couldn’t cancel this run."));
         },
     });
+    const retry = useMutation({
+        mutationFn: () => lemma(pod.id).workflows.runs.retry(runId, pod.id),
+        onSuccess: () => { setRefused(null); refresh(); },
+        onError: (problem) => {
+            const status = (problem as { statusCode?: number } | null)?.statusCode;
+            setRefused(sayRetryRefusal(status, problem instanceof Error ? problem.message : "Couldn’t retry this run."));
+        },
+    });
     const again = useMutation({
         mutationFn: async () => readRun(await lemma(pod.id).workflows.runs.create(name!)),
         onSuccess: (next) => { if (next) onOpenRun(next.id, name ?? label); },
@@ -109,6 +117,8 @@ export function RunPage({ pod, runId, label, onBack, onOpenConversation, onOpenR
         : null;
     const going = detail ? stillGoing(detail.status) : false;
     const nodeName = (id: string | null) => (id && graph?.nodes.get(id)?.label) || id || "a step";
+    const retryable = detail?.status === "FAILED" && !sample
+        && canRetryFrom(detail.failedNodeId ? graph?.nodes.get(detail.failedNodeId)?.kind : null);
 
     return (
         <div className="runpage">
@@ -176,6 +186,13 @@ export function RunPage({ pod, runId, label, onBack, onOpenConversation, onOpenR
                     <div>
                         <b>Failed at {nodeName(detail.failedNodeId)}</b>
                         <p>{detail.error || "It stopped without saying why."}</p>
+                        {retryable && (
+                            /* Every step before this one keeps its result, so
+                               an agent's answer is not paid for twice. */
+                            <button className="runpage__cancel" disabled={retry.isPending} onClick={() => retry.mutate()}>
+                                {retry.isPending ? "Retrying…" : "Retry from this step"}
+                            </button>
+                        )}
                     </div>
                 </div>
             )}

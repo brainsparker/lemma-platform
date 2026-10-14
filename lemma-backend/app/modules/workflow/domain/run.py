@@ -258,6 +258,23 @@ class WorkflowRunEntity(AggregateRoot):
         self.failed_node_id = failed_node
         self.completed_at = datetime.now(timezone.utc)
 
+    def reopen_at_failed_node(self) -> str:
+        """Back to RUNNING at the node that failed, keeping all that came before.
+
+        The execution context already holds every earlier node's output -- an
+        agent's answer among them -- so continuing from here redoes only the
+        failed step. Its failed step stays in the history; the retry is a new one.
+        """
+        if self.status != WorkflowRunStatus.FAILED or self.failed_node_id is None:
+            raise ValueError("Only a run that failed at a node can be retried")
+        node_id = self.failed_node_id
+        self.status = WorkflowRunStatus.RUNNING
+        self.current_node_id = node_id
+        self.error = None
+        self.failed_node_id = None
+        self.completed_at = None
+        return node_id
+
     def _last_suspended_step(self, node_id: str | None) -> StepRecord | None:
         for step in reversed(self.step_history):
             if step.status in (StepStatus.WAITING, StepStatus.RUNNING) and (

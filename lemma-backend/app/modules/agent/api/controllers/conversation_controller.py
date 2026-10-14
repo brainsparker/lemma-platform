@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -18,7 +19,9 @@ from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.server_metadata import client_metadata
-from app.modules.agent.services.runtime_availability import check_runtime_for_pod
+from app.modules.agent.services.runtime_availability import (
+    check_conversation_runtime_for_pod,
+)
 from app.modules.agent.api.controllers.conversation_streaming import (
     load_authorized_agent_run,
     start_and_stream_run,
@@ -26,7 +29,6 @@ from app.modules.agent.api.controllers.conversation_streaming import (
 )
 from app.modules.agent.api.controllers.shared import (
     ChannelServiceDep,
-    _build_conversation_retry_service,
     _build_conversation_service,
     _parse_message_page_token,
     _parse_metadata_filters,
@@ -59,11 +61,8 @@ from app.modules.agent.domain.errors import (
     AgentNotFoundError,
     ConversationNotFoundError,
 )
-from app.modules.agent.domain.value_objects import (
-    AgentRunStartResult,
-    ConversationStatus,
-    ConversationType,
-)
+from app.modules.agent.domain.value_objects import ConversationStatus, ConversationType
+from app.modules.agent.services.conversation_service import ConversationService
 
 logger = get_logger(__name__)
 
@@ -110,7 +109,7 @@ async def create_conversation(
     service: ConversationServiceDep,
 ) -> ConversationResponse:
     # Refused when saved, with the reason, rather than at the first turn.
-    await check_runtime_for_pod(
+    await check_conversation_runtime_for_pod(
         service.uow, data.agent_runtime, pod_id=pod_id, user_id=user.id
     )
     conversation = await service.create_conversation(
@@ -229,7 +228,7 @@ async def update_conversation(
     update_payload = data.model_dump(exclude_unset=True)
     if "agent_runtime" in update_payload:
         update_payload["agent_runtime"] = data.agent_runtime
-        await check_runtime_for_pod(
+        await check_conversation_runtime_for_pod(
             service.uow,
             data.agent_runtime,
             pod_id=pod_id,
@@ -386,25 +385,28 @@ async def send_message(
     # PodContextDep: a StreamingResponse keeps those (and their pooled
     # connection) alive for the whole SSE stream. Here the connection is
     # released the moment send_from_lemma commits, before streaming.
-    async def start_run() -> AgentRunStartResult:
+    @asynccontextmanager
+    async def conversations() -> AsyncIterator[ConversationService]:
         async with pod_context_scope(
             uow_factory, request=request, user_id=user.id, pod_id=pod_id
         ) as scope:
             assert_pod_membership(scope.ctx, "use conversations in this pod")
-            service = _build_conversation_service(scope.uow)
-            return await service.send_from_lemma(
-                conversation_id=conversation_id,
-                user_id=user.id,
-                content=data.content,
-                pod_id=pod_id,
-                message_metadata=data.metadata,
-                client_message_id=data.client_message_id,
-            )
+            yield _build_conversation_service(scope.uow)
 
     return await start_and_stream_run(
         channel_service=channel_service,
+        conversations=conversations,
         conversation_id=conversation_id,
-        start_run=start_run,
+        user_id=user.id,
+        pod_id=pod_id,
+        start_run=lambda service: service.send_from_lemma(
+            conversation_id=conversation_id,
+            user_id=user.id,
+            content=data.content,
+            pod_id=pod_id,
+            message_metadata=data.metadata,
+            client_message_id=data.client_message_id,
+        ),
     )
 
 
@@ -479,7 +481,7 @@ async def retry_failed_run(
         uow_factory, request=request, user_id=user.id, pod_id=pod_id
     ) as scope:
         assert_pod_membership(scope.ctx, "use conversations in this pod")
-        service = _build_conversation_retry_service(scope.uow)
+        service = _build_conversation_service(scope.uow)
         result = await service.retry_failed_run(
             conversation_id=conversation_id,
             user_id=user.id,

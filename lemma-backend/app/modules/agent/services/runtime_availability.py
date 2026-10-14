@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
-from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
@@ -30,17 +29,18 @@ from app.modules.agent.infrastructure.unavailable_models import (
     UnavailableModels,
     unavailable_models,
 )
-from app.modules.agent.infrastructure.repositories import (
-    AgentRuntimeProfileRepository,
-)
 from app.modules.agent.services.pod_runtime_defaults import (
     default_agent_runtime_for_pod,
 )
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
+    runtime_profile_service_for,
     runtime_profile_unavailable_error,
 )
-from app.modules.agent.services.runtime_resolution import selected_model
+from app.modules.agent.services.runtime_resolution import (
+    RuntimeHolder,
+    selected_model,
+)
 from app.modules.agent.services.runtime_system_profiles import (
     SYSTEM_LEMMA_PROFILE_ID,
     is_model_not_configured,
@@ -56,6 +56,7 @@ async def check_runtime_selection(
     profiles: AgentRuntimeProfileService,
     organization_id: UUID | None,
     user_id: UUID,
+    saving_for: RuntimeHolder | None = None,
 ) -> SelectedModel | None:
     """Refuse a runtime ``user_id`` cannot run, with a :class:`RuntimeUnavailableError`.
 
@@ -88,7 +89,7 @@ async def check_runtime_selection(
             runtime=runtime, organization_id=organization_id, user_id=user_id
         )
         raise runtime_profile_unavailable_error()
-    model = selected_model(profile, runtime.model_name)
+    model = selected_model(profile, runtime.model_name, saving_for=saving_for)
     if model is None:
         return None
     return SelectedModel(
@@ -119,9 +120,7 @@ async def refuse_a_model_the_provider_refused(
 
 
 def profile_service(uow: SqlAlchemyUnitOfWork) -> AgentRuntimeProfileService:
-    return AgentRuntimeProfileService(
-        AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
-    )
+    return runtime_profile_service_for(uow)
 
 
 class SaveRuntimeCheck(Protocol):
@@ -143,6 +142,7 @@ async def check_runtime_for_pod(
     *,
     pod_id: UUID,
     user_id: UUID,
+    saving_for: RuntimeHolder = RuntimeHolder.TEAMMATE,
 ) -> None:
     """The save-time check: the runtime an agent or conversation is given."""
     if runtime is None:
@@ -152,18 +152,42 @@ async def check_runtime_for_pod(
         profiles=profile_service(uow),
         organization_id=await pod_organization_id(uow, pod_id),
         user_id=user_id,
+        saving_for=saving_for,
+    )
+
+
+async def check_conversation_runtime_for_pod(
+    uow: SqlAlchemyUnitOfWork,
+    runtime: AgentRuntimeConfig | None,
+    *,
+    pod_id: UUID,
+    user_id: UUID,
+) -> None:
+    """The save-time check, for the runtime a conversation is given."""
+    await check_runtime_for_pod(
+        uow,
+        runtime,
+        pod_id=pod_id,
+        user_id=user_id,
+        saving_for=RuntimeHolder.CONVERSATION,
     )
 
 
 async def turn_runtime(
     uow: SqlAlchemyUnitOfWork, conversation: Conversation, agent: Agent
 ) -> AgentRuntimeConfig:
-    """The runtime a new turn on this conversation runs on, as it stands now."""
-    return (
+    """The runtime a new turn on this conversation runs on, as it stands now.
+
+    A conversation that picked its own model keeps the agent's generation
+    settings unless it chose its own: switching the model for one chat is not
+    a decision to forget how the agent was told to think.
+    """
+    selected = (
         conversation.agent_runtime
         or agent.agent_runtime
         or await default_agent_runtime_for_pod(uow, pod_id=conversation.pod_id)
     )
+    return selected.inheriting_settings_from(agent.agent_runtime)
 
 
 class TurnRuntimeCheck(Protocol):

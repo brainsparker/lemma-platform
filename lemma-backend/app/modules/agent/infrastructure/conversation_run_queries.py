@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.modules.agent.domain.entities import (
@@ -34,6 +34,10 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ACTIVE_AGENT_RUN_STATUSES,
     ConversationStatus,
+    MessageKind,
+)
+from app.modules.agent.infrastructure.repositories.conversation_run_lifecycle import (
+    lock_conversation_row,
 )
 from app.modules.agent.infrastructure.runtime_history_queries import (
     RuntimeHistoryQueries,
@@ -44,23 +48,18 @@ from app.modules.agent.infrastructure.models import (
     MessageModel,
 )
 from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
+from app.modules.agent.domain.conversation_metadata import (
+    MANUAL_RETRY_SOURCE,
+    SOURCE_KEY,
+)
 from app.modules.agent.infrastructure.queued_message_queries import (
     in_order,
     stamp,
     unclaimed_queued_messages,
 )
-from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
-    list_conversations_stranded_by_a_finished_run,
-)
-from app.modules.agent.infrastructure.repository_status import (
-    run_status_values_for_db as _run_status_values_for_db,
-)
-from app.modules.agent.domain.run_projections import (
-    StaleAgentRunRef,
-    StrandedConversationRef,
-)
+from app.modules.agent.domain.run_projections import StaleAgentRunRef
 
-_ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
+_ACTIVE_AGENT_RUN_STATUS_VALUES = [status.value for status in ACTIVE_AGENT_RUN_STATUSES]
 
 #: How far back to look for a transcript of the file `listen` was asked for.
 #: Bounded because a long-running chat holds thousands of messages and the
@@ -102,6 +101,14 @@ class ConversationRunQueriesMixin:
         self,
         conversation_id: UUID,
     ) -> AgentRunEntity | None:
+        """The conversation's active run, locked -- after the conversation itself.
+
+        The conversation first, because that is the order ``finish_agent_run``
+        and every turn transaction take the two in; a Stop that locked the run
+        and then finished it would take them the other way round. A caller
+        already holding the conversation re-takes a lock it has.
+        """
+        await lock_conversation_row(self.session, conversation_id=conversation_id)
         result = await self.session.execute(
             select(AgentRunModel)
             .where(
@@ -215,21 +222,6 @@ class ConversationRunQueriesMixin:
         )
         return [StaleAgentRunRef(*row) for row in result.all()]
 
-    async def list_conversations_stranded_by_a_finished_run(
-        self,
-        *,
-        cutoff_seconds: int,
-        limit: int = 200,
-    ) -> list[StrandedConversationRef]:
-        """Conversations still active whose most recent run already finished.
-
-        Implemented next to the write that settles them; see
-        `repositories.conversation_status_repair`.
-        """
-        return await list_conversations_stranded_by_a_finished_run(
-            self.session, cutoff_seconds=cutoff_seconds, limit=limit
-        )
-
     async def list_agent_runs_with_messages(
         self,
         conversation_id: UUID,
@@ -292,29 +284,48 @@ class ConversationRunQueriesMixin:
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
-    async def run_has_only_user_messages(self, agent_run_id: UUID) -> bool:
-        """Whether a run holds at least one message and none of them are replies.
+    async def run_is_replay_safe(self, agent_run_id: UUID) -> bool:
+        """Whether a run replays a user turn and holds nothing a replay would repeat.
 
-        This is the message half of ``AgentRun.is_safely_retryable`` — a run is
-        safe to retry only if the model never got far enough to say anything,
-        so replaying it cannot duplicate assistant output or tool effects.
+        This is the message half of ``AgentRun.is_safely_retryable``, and the
+        same rule (``replays_without_effect``): only the person's messages and
+        the model's reasoning, so replaying it cannot duplicate assistant
+        output or tool effects.
 
         Answered as one aggregate over ``ix_agent_message_run_sequence`` instead
         of loading the run's messages. Callers should check the status half
         first: a run that did not fail is not retryable regardless, so the
         common path never reaches this query at all.
+
+        A run started by a retry owns no message -- the turn it replays stays
+        on the run it retried -- so it is asked for by its ``source`` instead.
+        Without that, a retry that failed too could never be retried again.
         """
+        is_retry = (
+            select(AgentRunModel.run_metadata[SOURCE_KEY].astext == MANUAL_RETRY_SOURCE)
+            .where(AgentRunModel.id == agent_run_id)
+            .scalar_subquery()
+        )
         row = (
             await self.session.execute(
                 select(
-                    func.count().label("total"),
                     func.count()
-                    .filter(MessageModel.role != MessageRole.USER.value)
-                    .label("non_user"),
+                    .filter(MessageModel.role == MessageRole.USER.value)
+                    .label("user"),
+                    func.coalesce(is_retry, False).label("is_retry"),
+                    func.count()
+                    .filter(
+                        MessageModel.role != MessageRole.USER.value,
+                        or_(
+                            MessageModel.role != MessageRole.ASSISTANT.value,
+                            MessageModel.kind != MessageKind.THINKING.value,
+                        ),
+                    )
+                    .label("with_effect"),
                 ).where(MessageModel.agent_run_id == agent_run_id)
             )
         ).one()
-        return bool(row.total) and not row.non_user
+        return (bool(row.user) or bool(row.is_retry)) and not row.with_effect
 
     async def count_queued_user_messages(
         self,

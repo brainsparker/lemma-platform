@@ -150,10 +150,13 @@ async def is_whatsapp_verification_configured() -> bool:
     `False` for it would leave mobile verification switched off with working
     credentials sitting in a table.
     """
+    # The flag first: every reserved-looking WhatsApp message asks this, and
+    # with the feature off no row in the pool can change the answer.
+    if not identity_settings.auth_whatsapp_mobile_verification_enabled:
+        return False
     whatsapp = await global_whatsapp_configuration()
     return bool(
-        identity_settings.auth_whatsapp_mobile_verification_enabled
-        and whatsapp.access_token
+        whatsapp.access_token
         and whatsapp.phone_number_id
         and whatsapp.app_secret
         and whatsapp.verify_token

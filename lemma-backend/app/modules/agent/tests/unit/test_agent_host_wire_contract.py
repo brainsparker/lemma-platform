@@ -161,9 +161,14 @@ def test_the_tool_event_payloads_are_the_ones_this_side_models() -> None:
         AgentHostEventType.TOOL_CALL.value: AgentHostToolCallPayload,
         AgentHostEventType.TOOL_CALL_RESULT.value: AgentHostToolResultPayload,
     }
-    for case in CONTRACT["tool_events"]:
-        for raw in case["events"]:
-            models[raw["type"]].model_validate(raw["payload"])
+    validated = [
+        models[raw["type"]].model_validate(raw["payload"])
+        for case in CONTRACT["tool_events"]
+        for raw in case["events"]
+    ]
+
+    assert validated, "the contract carries no tool events to check"
+    assert {type(payload) for payload in validated} == set(models.values())
 
 
 def test_the_declared_limits_are_the_ones_this_side_enforces() -> None:

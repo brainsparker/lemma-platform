@@ -23,6 +23,7 @@ from app.modules.agent.domain.value_objects import (
     TERMINAL_AGENT_RUN_STATUSES,
     ConversationStatus,
 )
+from app.modules.agent.domain.subagent_results import COLLECTED_BY_WAIT
 from app.modules.agent.domain.wait import AgentWaitType, AgentWaitWakeReason
 from app.modules.agent.tools.waiting.models import wake_message
 
@@ -31,14 +32,20 @@ logger = get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class TargetOutcome:
-    """What the target is doing. ``reason is None`` means "still going"."""
+    """What the target is doing. ``reason is None`` means "still going".
+
+    ``unreadable`` qualifies "still going": nothing answered, so it is only not
+    known to have stopped. The resolver gives that a grace period, not forever.
+    """
 
     reason: AgentWaitWakeReason | None
     exit_code: int | None = None
     message: str = ""
+    unreadable: bool = False
 
 
 _STILL_GOING = TargetOutcome(reason=None)
+_UNREADABLE = TargetOutcome(reason=None, unreadable=True)
 
 
 async def read_target(
@@ -77,7 +84,7 @@ def _outcome(
     return TargetOutcome(
         reason=reason,
         exit_code=exit_code,
-        message=wake_message(wait_type, reason),
+        message=wake_message(wait_type, reason, exit_code=exit_code),
     )
 
 
@@ -96,10 +103,12 @@ async def _read_process(process_id: str, *, user_id: UUID) -> TargetOutcome:
         )
     if probe.status is ProcessProbeStatus.GONE:
         return _outcome(AgentWaitType.PROCESS, AgentWaitWakeReason.TARGET_GONE)
-    # RUNNING and UNREADABLE are both "ask again". An unreachable provider is
-    # not evidence that anything stopped -- the idle sweep learned that by
-    # releasing a sandbox mid-command -- and the wait's own deadline is what
-    # stops an unreadable target being waited on forever.
+    if probe.status is ProcessProbeStatus.UNREADABLE:
+        # "Ask again", not an ending. An unreachable provider is not evidence
+        # that anything stopped -- the idle sweep learned that by releasing a
+        # sandbox mid-command -- but it is not evidence of running either, and
+        # the resolver stops waiting blind after a grace period.
+        return _UNREADABLE
     return _STILL_GOING
 
 
@@ -114,6 +123,7 @@ async def _read_subagent_run(
     result that did not exist yet and the question was never answered.
     """
     from app.modules.agent.infrastructure.repositories import ConversationRepository
+    from app.modules.agent.services.subagent_result_delivery import mark_collected
 
     try:
         parsed = UUID(run_id)
@@ -140,4 +150,9 @@ async def _read_subagent_run(
         return _STILL_GOING
     if child.status == ConversationStatus.WAITING:
         return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_NEEDS_INPUT)
+    # Both callers hand "finished" to the parent that is waiting on exactly
+    # this run, so the parent has collected it and nothing delivers it again.
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        await mark_collected(uow, run.id, by=COLLECTED_BY_WAIT)
+        await uow.commit()
     return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_FINISHED)

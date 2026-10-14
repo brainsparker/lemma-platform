@@ -20,6 +20,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
+from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.services.conversation_access import (
     resolve_agent,
 )
@@ -45,9 +46,6 @@ from app.modules.agent.services.realtime import (
     error_payload,
     message_payload,
     publish_conversation_event,
-)
-from app.modules.agent.services.pod_runtime_defaults import (
-    default_agent_runtime_for_pod,
 )
 from app.modules.agent.services.serialization import message_to_payload
 from app.modules.agent.services.usage_preflight import assert_usage_preflight_allowed
@@ -305,11 +303,7 @@ class PauseResume:
             user_id=user_id,
             agent_repository=self.agent_repository,
         )
-        selected_agent_runtime = (
-            conversation.agent_runtime
-            or agent.agent_runtime
-            or await default_agent_runtime_for_pod(self.uow, pod_id=conversation.pod_id)
-        )
+        selected_agent_runtime = await turn_runtime(self.uow, conversation, agent)
         try:
             # Resuming is a run like any other: skipping this made answering a
             # question a way past an exhausted limit.

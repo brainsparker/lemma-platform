@@ -439,6 +439,9 @@ class BundleApplier:
             user_id=self._user_id,
             ctx=self._ctx,
             run_title=payload.get("run_title") or None,
+            # Exported since the field existed, and dropped here until now: an
+            # imported workflow ran unbounded however its source was capped.
+            max_concurrent_runs=payload.get("max_concurrent_runs"),
         )
 
 

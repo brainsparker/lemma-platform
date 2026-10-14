@@ -360,7 +360,7 @@ async def test_an_email_among_colleagues_has_no_audience():
 @pytest.mark.anyio
 async def test_a_private_notes_run_cannot_post_to_the_chat():
     """A note's answer stays in Lemma -- `surface_send_message` included."""
-    from app.modules.agent_surfaces.platforms import surface_send_tools
+    from app.modules.agent_surfaces.services import surface_send_tools
 
     sent: list[str] = []
 
@@ -400,7 +400,7 @@ async def test_a_group_send_that_reached_nobody_says_where_it_did_not_go():
     a bare failure the model retries or assumes it landed; said plainly it puts
     the message in its reply instead.
     """
-    from app.modules.agent_surfaces.platforms import surface_send_tools
+    from app.modules.agent_surfaces.services import surface_send_tools
 
     async def deliver(*, conversation_id, message):
         return PrivateSend.NO_PRIVATE_CHAT
@@ -433,7 +433,7 @@ async def test_a_group_send_that_failed_does_not_claim_there_is_no_private_chat(
     Reported as "they do not have one", a surface that was briefly down taught
     the run that a member it could reach was unreachable.
     """
-    from app.modules.agent_surfaces.platforms import surface_send_tools
+    from app.modules.agent_surfaces.services import surface_send_tools
 
     async def deliver(*, conversation_id, message):
         return PrivateSend.NOT_DELIVERED

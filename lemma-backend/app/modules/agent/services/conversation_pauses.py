@@ -12,8 +12,10 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.authorization.permissions import Permissions
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.pausing_tools import PausingKind, PendingPause
 from app.modules.agent.domain.ports import AgentRepository, ConversationRepository
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.services.conversation_access import authorized_conversation
@@ -21,9 +23,22 @@ from app.modules.agent.services.conversation_approvals import ApprovalCoordinato
 from app.modules.agent.services.pause_resume import PAUSING_TOOL_NAMES
 
 
+async def _retire_platform_cards(conversation_id: UUID, approval_id: str) -> None:
+    # Deferred like `agent_service`'s reach into the surfaces: the contract
+    # loads the platforms, and only a decision in the web app needs them.
+    from app.modules.agent_surfaces.contracts.egress import (
+        retire_cards_answered_in_lemma,
+    )
+
+    await retire_cards_answered_in_lemma(
+        conversation_id=conversation_id, tool_call_id=approval_id
+    )
+
+
 class ConversationPauses:
     """Reads and answers a conversation's pauses; mixed into ConversationService."""
 
+    uow: SqlAlchemyUnitOfWork
     conversation_repository: ConversationRepository
     agent_repository: AgentRepository
     approvals: ApprovalCoordinator
@@ -62,7 +77,7 @@ class ConversationPauses:
             agent_name=agent_name,
             action=Permissions.AGENT_EXECUTE,
         )
-        return await self.resolve_user_approval_internal(
+        resolution = await self.resolve_user_approval_internal(
             conversation=conversation,
             approval_id=approval_id,
             user_id=user_id,
@@ -72,6 +87,14 @@ class ConversationPauses:
             agent_name=agent_name,
             defer_reconciliation=defer_reconciliation,
         )
+        # Answered here, not on the platform: the cards posted there for this
+        # pause are retired once the decision has committed. A tap or a typed
+        # reply retires its own, which is why this is on the web entry point
+        # and not on the internal one they share.
+        self.uow.after_commit(
+            lambda: _retire_platform_cards(conversation.id, approval_id)
+        )
+        return resolution
 
     async def resolve_user_approval_internal(
         self,
@@ -106,23 +129,23 @@ class ConversationPauses:
         self,
         *,
         conversation_id: UUID,
-    ) -> dict[str, object] | None:
+    ) -> PendingPause | None:
         """Oldest unresolved ``ask_user`` pause for a conversation, or ``None``.
 
-        Returns ``{tool_call_id, kind, tool_args, agent_run_id}``. Used by surface
-        ingress to render the questions on the surface (from a WAITING event) and
-        to route a typed reply back into the run as the answer.
+        Used by surface ingress to render the questions on the surface (from a
+        WAITING event) and to route a typed reply back into the run as the
+        answer.
         """
         return await self.approvals.oldest_unresolved_pause(
             conversation_id=conversation_id,
-            tool_names=("ask_user",),
+            tool_names=(PausingKind.ASK_USER.value,),
         )
 
     async def get_pending_approval(
         self,
         *,
         conversation_id: UUID,
-    ) -> dict[str, object] | None:
+    ) -> PendingPause | None:
         """Oldest unresolved ``request_approval`` pause, or ``None``.
 
         The approval counterpart of :meth:`get_pending_ask_user`, and it has to
@@ -138,14 +161,14 @@ class ConversationPauses:
         """
         return await self.approvals.oldest_unresolved_pause(
             conversation_id=conversation_id,
-            tool_names=("request_approval",),
+            tool_names=(PausingKind.REQUEST_APPROVAL.value,),
         )
 
     async def get_pending_sign_in(
         self,
         *,
         conversation_id: UUID,
-    ) -> dict[str, object] | None:
+    ) -> PendingPause | None:
         """Oldest unresolved ``browser_sign_in`` pause, or ``None``.
 
         Its own lookup for the same reason :meth:`get_pending_approval` is: a
@@ -159,19 +182,18 @@ class ConversationPauses:
         """
         return await self.approvals.oldest_unresolved_pause(
             conversation_id=conversation_id,
-            tool_names=("browser_sign_in",),
+            tool_names=(PausingKind.BROWSER_SIGN_IN.value,),
         )
 
     async def get_pending_user_interaction(
         self,
         *,
         conversation_id: UUID,
-    ) -> dict[str, object] | None:
+    ) -> PendingPause | None:
         """Oldest unresolved pausing tool call (``ask_user`` or
         ``request_approval``) for a conversation, or ``None``.
 
-        Returns ``{tool_call_id, kind, tool_args, agent_run_id}``. Used by
-        surface ingress to route a typed reply back into the paused run.
+        Used by surface ingress to route a typed reply back into the paused run.
         """
         return await self.approvals.oldest_unresolved_pause(
             conversation_id=conversation_id,

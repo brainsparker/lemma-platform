@@ -13,6 +13,7 @@ from app.modules.agent.events.pod_ask_answers import deliver_pod_ask_answers
 from app.modules.agent.events.queued_followup import (
     start_followup_run_for_queued_messages,
 )
+from app.modules.agent.events.subagent_results import deliver_subagent_result
 from app.modules.agent.events.subagent_waits import (
     resolve_parent_wait_for_finished_child,
 )
@@ -27,5 +28,8 @@ async def settle_finished_run(
     # And a parent suspended on this child gets its turn back now, rather
     # than at the deadline its timer is holding as a backstop.
     await resolve_parent_wait_for_finished_child(event, uow_factory=uow_factory)
+    # A parent that did not wait gets the result as news -- after the wait
+    # above, which carries it itself for a parent that did.
+    await deliver_subagent_result(event, uow_factory=uow_factory)
     # An answer another pod asked for, or one this conversation is owed.
     await deliver_pod_ask_answers(event, uow_factory=uow_factory)

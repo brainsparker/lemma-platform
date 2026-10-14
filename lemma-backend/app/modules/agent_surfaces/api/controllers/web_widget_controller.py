@@ -30,19 +30,9 @@ from app.modules.agent.contracts.agents import agent_id_for_name
 from app.modules.agent_surfaces.domain.web_widgets import (
     WebWidget,
     WidgetAnswer,
-    mint_public_key,
-    mint_secret,
     parse_origin,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.web_widget_repository import (  # noqa: E501
-    WebWidgetRepository,
-)
-from app.modules.agent_surfaces.services.widget_directory import forget_widget
-from app.modules.contacts.contracts.visitor_sessions import (
-    VisitorStrength,
-    forget_session_liveness,
-    revoke_visitor_sessions,
-)
+from app.modules.agent_surfaces.services.web_widget_admin import WebWidgetAdmin
 from app.modules.pod.contracts.members import pod_member_id
 
 router = APIRouter(prefix="/pods/{pod_id}/web-widgets", tags=["Agent Surfaces"])
@@ -165,7 +155,7 @@ def _refuse_answering_while_off(answer: WidgetAnswer | None) -> None:
     dependencies=[require_action(Permissions.POD_READ)],
 )
 async def list_widgets(pod_id: UUID, uow: UoWDep) -> WebWidgetListResponse:
-    widgets = await WebWidgetRepository(uow.session).list(pod_id=pod_id)
+    widgets = await WebWidgetAdmin(uow).list(pod_id)
     return WebWidgetListResponse(items=[_response(widget) for widget in widgets])
 
 
@@ -187,20 +177,17 @@ async def create_widget(
         if request.agent_name and request.agent_name != _POD_ASSISTANT
         else pod_id
     )
-    secret = mint_secret()
-    widget = await WebWidgetRepository(uow.session).create(
+    created = await WebWidgetAdmin(uow).create(
         pod_id=pod_id,
         agent_id=agent_id,
         name=request.name.strip(),
-        public_key=mint_public_key(),
-        secret=secret,
         allowed_origins=_origins(request.allowed_origins),
         answer=request.answer,
         looked_after_by=looked_after_by,
     )
-    await uow.commit()
     return WebWidgetCreatedResponse(
-        **_response(widget).model_dump(), signing_secret=secret
+        **_response(created.widget).model_dump(),
+        signing_secret=created.signing_secret,
     )
 
 
@@ -223,13 +210,11 @@ async def update_widget(
     if "looked_after_by" in fields:
         await _require_member(uow, pod_id, request.looked_after_by)
         values["looked_after_by"] = request.looked_after_by
-    widget = await WebWidgetRepository(uow.session).update(
+    widget = await WebWidgetAdmin(uow).update(
         pod_id=pod_id, widget_id=widget_id, values=values
     )
     if widget is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Widget not found")
-    await uow.commit()
-    await forget_widget(widget.public_key)
     return _response(widget)
 
 
@@ -248,16 +233,11 @@ async def reissue_widget(
     for who somebody is, and a secret is reissued because that word is no
     longer trusted.
     """
-    repository = WebWidgetRepository(uow.session)
-    if await repository.get(pod_id=pod_id, widget_id=widget_id) is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Widget not found")
-    secret = mint_secret()
-    await repository.rotate_secret(widget_id=widget_id, secret=secret)
-    ended = await revoke_visitor_sessions(
-        uow, widget_id=widget_id, strength=VisitorStrength.HOST
+    secret = await WebWidgetAdmin(uow).reissue_secret(
+        pod_id=pod_id, widget_id=widget_id
     )
-    await uow.commit()
-    await forget_session_liveness(ended)
+    if secret is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Widget not found")
     return WebWidgetSecretResponse(signing_secret=secret)
 
 
@@ -268,11 +248,5 @@ async def reissue_widget(
     dependencies=[require_action(Permissions.POD_UPDATE)],
 )
 async def delete_widget(pod_id: UUID, widget_id: UUID, uow: UoWDep) -> None:
-    repository = WebWidgetRepository(uow.session)
-    widget = await repository.get(pod_id=pod_id, widget_id=widget_id)
-    if widget is None or not await repository.delete(
-        pod_id=pod_id, widget_id=widget_id
-    ):
+    if not await WebWidgetAdmin(uow).delete(pod_id=pod_id, widget_id=widget_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Widget not found")
-    await uow.commit()
-    await forget_widget(widget.public_key)

@@ -230,5 +230,5 @@ async def test_no_workspace_is_opened_for_a_strangers_run():
 
 
 def test_a_members_run_reaches_its_workspace_as_before():
-    refuse_owner_workspace(SimpleNamespace(audience=Audience.member()))
-    refuse_owner_workspace(SimpleNamespace())
+    assert refuse_owner_workspace(SimpleNamespace(audience=Audience.member())) is None
+    assert refuse_owner_workspace(SimpleNamespace()) is None

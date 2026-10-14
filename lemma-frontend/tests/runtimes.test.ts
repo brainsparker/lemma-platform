@@ -27,7 +27,7 @@ import {
  *  it. Getting one wrong produces a page that looks finished and says nothing
  *  true. */
 
-test("a coding agent is HARNESS; which one it is comes from metadata", () => {
+test("a coding agent is HARNESS; which one it is comes from harness_key", () => {
     /* There is no kind per tool. Reading `kind` for "is this Codex" would
        make Codex and Claude Code the same row. */
     const runtime = readRuntime({
@@ -36,7 +36,7 @@ test("a coding agent is HARNESS; which one it is comes from metadata", () => {
         kind: "HARNESS",
         scope: "PERSONAL",
         harness_id: "h1",
-        metadata: { harness_key: "claude-code" },
+        harness_key: "claude-code",
         availability_status: "READY",
     });
     assert.equal(runtime?.kind, "agent");
@@ -72,6 +72,23 @@ test("a runtime with no catalog still offers the model it names", () => {
         default_model_name: "claude-opus-5",
     });
     assert.deepEqual(runtime?.models, [{ name: "claude-opus-5", label: "claude-opus-5" }]);
+});
+
+test("a model that declares REASONING says so; one that does not, does not", () => {
+    // The agent editor offers a reasoning effort only for the first: the
+    // backend sends one to no other model.
+    const runtime = readRuntime({
+        id: "p4",
+        name: "Local",
+        kind: "MODEL_PROVIDER",
+        scope: "ORGANIZATION",
+        model_catalog: [
+            { name: "thinker", capabilities: ["TEXT", "REASONING"] },
+            { name: "talker", capabilities: ["TEXT"] },
+        ],
+    });
+    assert.equal(runtime?.models[0]?.reasons, true);
+    assert.equal(runtime?.models[1]?.reasons, undefined);
 });
 
 test("archived is DISABLED, not a missing row", () => {
@@ -112,7 +129,7 @@ test("on the computer you are at, a fix names the command and the button", () =>
     const agent = readLocalAgent({ id: "h1", harness_key: "claude-code", health: "AUTH_REQUIRED" });
     assert.ok(agent);
     assert.equal(agent.health, "AUTH_REQUIRED");
-    assert.equal(agentFix(agent, "this Mac"), "Run `claude login` in Terminal, then press Check again.");
+    assert.equal(agentFix(agent, "this Mac"), "Run `claude auth login` in Terminal, then press Check again.");
     /* Anywhere else the fix is still over there, and cannot be checked from here. */
     assert.equal(agentFix(agent, null), agent.fix);
     assert.doesNotMatch(agentFix(agent, null), /Check again/);

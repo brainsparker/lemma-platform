@@ -130,8 +130,8 @@ async def test_a_connector_failure_is_data_not_a_dead_run(monkeypatch):
         ),
     )
 
-    assert "error" in result
-    assert "reconnecting" in result["message"]
+    assert result["success"] is False
+    assert "reconnecting" in result["error"]
 
 
 async def test_bad_arguments_come_back_with_the_schema_attached(monkeypatch):
@@ -166,7 +166,7 @@ async def test_bad_arguments_come_back_with_the_schema_attached(monkeypatch):
         ),
     )
 
-    assert result["error"] == "invalid_arguments"
+    assert result["code"] == "invalid_arguments"
     assert result["input_schema"] == schema
     assert any("recipient_email" in v["message"] for v in result["violations"])
     execute.assert_not_awaited()
@@ -176,7 +176,39 @@ async def test_a_conversation_without_an_org_says_so_once(monkeypatch):
     """Connectors are org-scoped; an unbound conversation should get one clear
     answer rather than a connection attempt that fails obscurely."""
     result = await adapter.list_connectors(_run_ctx(org_id=None))
-    assert result["error"] == "no_organization"
+    assert result["code"] == "no_organization"
+    assert result["success"] is False
+
+
+def _install(name: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        connector_id="gmail",
+        kind=SimpleNamespace(value="OAUTH"),
+        status=SimpleNamespace(value="ACTIVE"),
+        is_default=False,
+    )
+
+
+@pytest.mark.parametrize(("more", "truncated"), [(True, True), (False, False)])
+async def test_a_list_that_stops_at_its_limit_says_so(monkeypatch, more, truncated):
+    """An org past the limit was shown a list that silently stopped, so an
+    agent concluded the install it wanted did not exist."""
+    _patch_services(
+        monkeypatch,
+        SimpleNamespace(
+            connector=SimpleNamespace(
+                list_auth_configs=AsyncMock(
+                    return_value=([_install("a")], uuid4() if more else None)
+                )
+            )
+        ),
+    )
+
+    result = await adapter.list_connectors(_run_ctx())
+
+    assert result.get("truncated", False) is truncated
+    assert result["count"] == 1
 
 
 @pytest.mark.parametrize("limit", [0, 101])

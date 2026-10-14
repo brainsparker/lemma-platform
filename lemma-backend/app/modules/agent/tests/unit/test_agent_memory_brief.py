@@ -105,6 +105,19 @@ async def test_scoped_folders_are_stated_before_anything_is_written(agents_md):
     assert "Pod (shared) —" not in section  # nothing written -> no content blocks
 
 
+async def test_which_index_holds_what_is_said_once(agents_md):
+    """The section is re-read on every model request of a run; the memory
+    contract is cached with the system prompt. Guidance said in both was paid
+    for twice, once of them on every step."""
+    from app.modules.agent.domain.prompts import load_memory_prompt
+
+    section = " ".join((await _build(_agent())).split())
+    contract = " ".join(load_memory_prompt().split())
+
+    assert "A fact about the pod itself" in contract
+    assert "A fact about the pod itself" not in section
+
+
 async def test_each_scope_is_rendered_under_its_own_label(agents_md):
     agents_md["/memory/AGENTS.md"] = "- pricing: see memory/pricing.md"
     agents_md["/me/AGENTS.md"] = "- prefers async updates over calls"

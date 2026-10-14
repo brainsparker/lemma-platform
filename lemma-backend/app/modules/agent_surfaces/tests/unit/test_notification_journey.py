@@ -30,6 +30,8 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse
 
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.entities import (
     AgentRun,
     Message,
@@ -141,7 +143,11 @@ class AgentSide:
 
     def start_run(self, conversation_id: UUID, text: str) -> AgentRun:
         """A person's message, and the run that answers it."""
-        run = AgentRun(conversation_id=conversation_id, started_at=_now())
+        run = AgentRun(
+            conversation_id=conversation_id,
+            started_at=_now(),
+            agent_runtime=AgentRuntimeConfig(profile_id=SYSTEM_LEMMA_PROFILE_ID),
+        )
         self.runs[conversation_id].append(run)
         self._append(
             conversation_id,
@@ -705,7 +711,8 @@ async def test_a_reply_after_a_quiet_day_reaches_the_notification_and_wakes_the_
     # (C) the agent handling the reply can see what was asked ...
     run = world.agent_side.start_run(delivered_into, "yes, the 14th works")
     history, prompt = await world.agent_side.history_for(run)
-    assert prompt == "yes, the 14th works"
+    # Their words, after the note of when they sent them.
+    assert prompt.endswith("</notes>\n\nyes, the 14th works")
     assert isinstance(history[-1], ModelResponse), "the question must precede the reply"
     assert "does the 14th work" in history[-1].parts[0].content
     assert not any(isinstance(message, ModelRequest) for message in history)
@@ -889,7 +896,7 @@ async def test_a_notification_older_than_the_carried_history_stays_out(world):
     history, prompt = await agent_side.history_for(current)
 
     text = " ".join(str(part.content) for message in history for part in message.parts)
-    assert prompt == "yes"
+    assert prompt.endswith("</notes>\n\nyes")
     assert "a recent reminder" in text
     assert "an ancient report" not in text
 

@@ -35,11 +35,11 @@ impl HostProcess {
         .unwrap();
         lemma_agent_host::config::HostConfig {
             legacy_host_execution: false,
+            max_runs_chosen: false,
             own_settings: std::collections::BTreeSet::default(),
             installation_id,
             targets: vec![target],
             max_runs: 1,
-            config_version: lemma_agent_host::config::CONFIG_VERSION,
         }
         .save(&paths)
         .unwrap();
@@ -142,11 +142,11 @@ impl InProcessHost {
         .unwrap();
         let config = lemma_agent_host::config::HostConfig {
             legacy_host_execution: false,
+            max_runs_chosen: false,
             own_settings: std::collections::BTreeSet::default(),
             installation_id,
             targets: vec![target],
             max_runs: 1,
-            config_version: lemma_agent_host::config::CONFIG_VERSION,
         };
         config.save(&paths).unwrap();
         let runtime = lemma_agent_host::runtime::HostRuntime::new(config, paths)

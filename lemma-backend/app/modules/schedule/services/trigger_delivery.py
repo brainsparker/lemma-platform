@@ -34,7 +34,7 @@ from pydantic import JsonValue
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkWriter
-from app.modules.schedule.domain.match_conditions import evaluate_match_conditions
+from app.core.domain.record_conditions import evaluate_match_conditions
 from app.modules.schedule.domain.schedule import (
     DatastoreScheduleConfig,
     ScheduleEntity,

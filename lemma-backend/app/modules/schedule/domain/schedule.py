@@ -13,7 +13,7 @@ from pydantic import (
 )
 from app.core.authorization.context import ResourceType
 from app.core.domain.entity import Entity
-from app.modules.schedule.domain.match_conditions import (
+from app.core.domain.record_conditions import (
     ColumnCondition,
     parse_match_conditions,
 )

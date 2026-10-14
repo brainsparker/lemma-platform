@@ -34,9 +34,6 @@ from app.modules.agent.infrastructure.harnesses.agent_host import (
     harness_events as harness_events_module,
 )
 from app.modules.agent.infrastructure.agent_host.recovery import BusyHost
-from app.modules.agent.infrastructure.harnesses.agent_host import (
-    slot_wait as slot_wait_module,
-)
 from app.modules.agent.infrastructure.harnesses.agent_host.harness import RemoteHarness
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
@@ -478,7 +475,6 @@ class TestARunQueuedBehindAFullComputer:
         _stub_dispatch(harness, monkeypatch)
         repository = self._queued_repository(busy=busy, expired=expired)
         monkeypatch.setattr(harness_module, "AgentHostDispatchRepository", repository)
-        monkeypatch.setattr(slot_wait_module, "AgentHostDispatchRepository", repository)
 
         async def _cancel(_run_id) -> None:
             return None

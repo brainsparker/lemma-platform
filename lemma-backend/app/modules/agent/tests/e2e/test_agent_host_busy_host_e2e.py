@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
@@ -135,6 +135,21 @@ async def _poll(machine: dict, *, free: int) -> list:
     return [c for c in commands if c.kind == AgentHostCommandKind.START_RUN]
 
 
+async def _start_runs(run_id: UUID) -> list[AgentHostCommandModel]:
+    async with async_session_maker() as session:
+        return list(
+            (
+                await session.execute(
+                    select(AgentHostCommandModel).where(
+                        AgentHostCommandModel.run_id == run_id,
+                        AgentHostCommandModel.kind
+                        == AgentHostCommandKind.START_RUN.value,
+                    )
+                )
+            ).scalars()
+        )
+
+
 async def _lease(run_id: UUID) -> AgentHostRunLeaseModel:
     async with async_session_maker() as session:
         lease = await session.get(AgentHostRunLeaseModel, run_id)
@@ -152,32 +167,53 @@ async def test_a_run_behind_a_full_host_waits_past_the_timeout_then_starts(
     # A full host is not handed the run.
     assert await _poll(machine, free=0) == []
 
-    # Checked as the harness checks it, until well past the host-wait timeout.
-    notices = []
-    for _ in range(3 * _WAIT_SECONDS):
-        held, notice = await slot_wait.check(uow_factory, agent_run_id=run_id)
-        assert held
-        if notice is not None:
-            notices.append(notice)
-        await asyncio.sleep(1)
-    assert [(n.type, n.data["detail"]) for n in notices] == [
-        (
-            AgentEventType.STATUS,
-            "Waiting for a free slot on Ada's MacBook: 20 runs already going",
-        )
-    ]
+    # The harness's first check finds the host full, and says so.
+    held, notice = await slot_wait.check(
+        uow_factory, AgentHostDispatchRepository, agent_run_id=run_id
+    )
+    assert held
+    assert notice is not None
+    assert (notice.type, notice.data["detail"]) == (
+        AgentEventType.STATUS,
+        "Waiting for a free slot on Ada's MacBook: 20 runs already going",
+    )
 
-    # Past the timeout, the sweep that fails abandoned leases leaves it be.
+    # Its later checks, every second on a clock run forward to well past the
+    # host-wait timeout, keep renewing the run's place.
+    start = datetime.now(timezone.utc)
+    later = [
+        start + timedelta(seconds=second) for second in range(1, 3 * _WAIT_SECONDS + 1)
+    ]
+    for now in later:
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            assert await recovery.hold_for_busy_host(
+                uow.session, run_id=run_id, wait_seconds=_WAIT_SECONDS, now=now
+            )
+            await uow.commit()
+    # Nothing new to say while nothing changed.
+    held, notice = await slot_wait.check(
+        uow_factory, AgentHostDispatchRepository, agent_run_id=run_id
+    )
+    assert held
+    assert notice is None
+
+    # Past the timeout, the sweep that fails lapsed leases leaves it be, and
+    # its START_RUN is still there to be handed out.
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await recovery.reconcile_expired_leases(uow.session)
+        await recovery.reconcile_expired_leases(uow.session, now=later[-1])
         await uow.commit()
     lease = await _lease(run_id)
     assert lease.state == AgentHostRunState.QUEUED_FOR_HOST.value
-    assert lease.lease_expires_at > datetime.now(timezone.utc)
+    assert lease.lease_expires_at > later[-1]
+    (start_run,) = await _start_runs(run_id)
+    assert start_run.state == AgentHostCommandState.QUEUED.value
+    assert start_run.expires_at > later[-1]
 
     # A slot frees: the next poll hands the run out.
     await _heartbeat(machine, active=_MAX_RUNS - 1)
-    held, _ = await slot_wait.check(uow_factory, agent_run_id=run_id)
+    held, _ = await slot_wait.check(
+        uow_factory, AgentHostDispatchRepository, agent_run_id=run_id
+    )
     assert not held
     started = await _poll(machine, free=1)
     assert [command.run_id for command in started] == [run_id]

@@ -129,6 +129,8 @@ async def hold_for_busy_host(
             AgentHostCommandModel.state == AgentHostCommandState.QUEUED.value,
             AgentHostCommandModel.expires_at < renew_by,
         )
+        # One START_RUN per lease epoch; admission creates exactly one.
+        .limit(1)
         .with_for_update(skip_locked=True)
     )
     for command in commands.scalars():

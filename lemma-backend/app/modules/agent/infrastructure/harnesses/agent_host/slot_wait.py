@@ -11,18 +11,23 @@ changes.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.value_objects import AgentEvent
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
-    AgentHostDispatchRepository,
-)
 from app.modules.agent.infrastructure.agent_host.recovery import BusyHost
 from app.modules.agent.infrastructure.harnesses.agent_host.event_text import (
     waiting_for_slot_event,
 )
+
+if TYPE_CHECKING:
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+        AgentHostDispatchRepository,
+    )
 
 
 @dataclass(slots=True)
@@ -34,11 +39,19 @@ class SlotWait:
     waiting_on: BusyHost | None = None
 
     async def check(
-        self, uow_factory: UnitOfWorkFactory, *, agent_run_id: UUID
+        self,
+        uow_factory: UnitOfWorkFactory,
+        repository: Callable[[SqlAlchemyUnitOfWork], AgentHostDispatchRepository],
+        *,
+        agent_run_id: UUID,
     ) -> tuple[bool, AgentEvent | None]:
-        """Whether the run was held, and the notice to show if there is news."""
+        """Whether the run was held, and the notice to show if there is news.
+
+        ``repository`` is the caller's, so the harness's lease check and this
+        read the dispatch tables through the one it was built with.
+        """
         async with uow_factory() as uow:
-            busy = await AgentHostDispatchRepository(uow).hold_for_busy_host(
+            busy = await repository(uow).hold_for_busy_host(
                 run_id=agent_run_id, wait_seconds=self.wait_seconds
             )
             await uow.commit()

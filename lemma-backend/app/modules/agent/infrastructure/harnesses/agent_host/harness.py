@@ -526,7 +526,9 @@ class RemoteHarness:
             and lease.state is AgentHostRunState.QUEUED_FOR_HOST
         ):
             held, notice = await state.slot_wait.check(
-                self.uow_factory, agent_run_id=agent_run_id
+                self.uow_factory,
+                AgentHostDispatchRepository,
+                agent_run_id=agent_run_id,
             )
             if held:
                 wait = state.slot_wait.wait_seconds

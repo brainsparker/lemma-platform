@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import httpx2
 import pytest
+from anthropic import AsyncAnthropic
 from pydantic_ai import Agent as PydanticAgent
 from pydantic_ai.messages import (
     ModelMessage,
@@ -34,6 +35,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.output import OutputSpec
 from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.profiles.anthropic import AnthropicModelProfile
+from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.settings import ModelSettings
 
 from app.modules.agent.domain.entities import Agent, Conversation
@@ -42,6 +44,7 @@ from app.modules.agent.infrastructure.harnesses import mock_model
 from app.modules.agent.services import runtime_model_factory as factory
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.anthropic_thinking import (
+    AdaptiveThinkingAnthropicModel,
     adaptive_in_place_of_budget,
     nearest_thinking_effort,
 )
@@ -81,38 +84,52 @@ class _Gateway:
 
 
 @pytest.fixture
-def gateway(monkeypatch: pytest.MonkeyPatch) -> _Gateway:
-    recorder = _Gateway()
-    monkeypatch.setattr(mock_model, "is_mock_llm_enabled", lambda: False)
-    monkeypatch.setattr(
-        factory,
-        "get_provider_http_client",
-        lambda **_: httpx2.AsyncClient(transport=httpx2.MockTransport(recorder.handle)),
+def gateway() -> _Gateway:
+    return _Gateway()
+
+
+def _model(model_name: str, gateway: _Gateway) -> AdaptiveThinkingAnthropicModel:
+    return AdaptiveThinkingAnthropicModel(
+        model_name,
+        provider=AnthropicProvider(
+            anthropic_client=AsyncAnthropic(
+                api_key="test-key",
+                max_retries=0,
+                http_client=httpx2.AsyncClient(
+                    transport=httpx2.MockTransport(gateway.handle)
+                ),
+            )
+        ),
     )
-    return recorder
 
 
-async def _send(model_name: str, settings: ModelSettings) -> None:
+async def _send(model_name: str, settings: ModelSettings, gateway: _Gateway) -> None:
+    await _model(model_name, gateway).request(
+        [ModelRequest.user_text_prompt("hi")], settings, ModelRequestParameters()
+    )
+
+
+def test_an_anthropic_compatible_profile_builds_the_translating_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mock_model.settings, "e2e_llm_mode", "real")
     model = factory.connection_check_model(
         runtime_profile={
             "protocol": "ANTHROPIC_COMPATIBLE",
-            "provider_model_name": model_name,
+            "provider_model_name": "claude-haiku-5-5",
             "profile_id": "p",
             "config": {"base_url": "https://gateway.example.test"},
         },
         runtime_credentials={"api_key": "test-key"},
     )
-    assert model is not None
-    await model.request(
-        [ModelRequest.user_text_prompt("hi")], settings, ModelRequestParameters()
-    )
+    assert isinstance(model, AdaptiveThinkingAnthropicModel)
 
 
 async def test_a_budget_reaches_a_model_that_refuses_one_as_adaptive_thinking(
     gateway: _Gateway,
 ) -> None:
     """It used to raise ``UserError`` here, before anything was sent."""
-    await _send("claude-haiku-5-5", _BUDGET)
+    await _send("claude-haiku-5-5", _BUDGET, gateway)
 
     (body,) = gateway.bodies
     assert body["thinking"]["type"] == "adaptive"
@@ -122,7 +139,7 @@ async def test_a_budget_reaches_a_model_that_refuses_one_as_adaptive_thinking(
 async def test_a_model_that_takes_budgets_still_gets_the_budget(
     gateway: _Gateway,
 ) -> None:
-    await _send("claude-sonnet-4-5", _BUDGET)
+    await _send("claude-sonnet-4-5", _BUDGET, gateway)
 
     (body,) = gateway.bodies
     assert body["thinking"] == {"type": "enabled", "budget_tokens": 2000}

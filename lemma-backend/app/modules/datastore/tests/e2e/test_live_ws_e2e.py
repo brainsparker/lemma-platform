@@ -396,9 +396,14 @@ async def test_slow_consumer_is_resynced_without_slowing_the_hub(
     # The fast client kept receiving every batch while the slow one stalled.
     assert len(written) == 12 * 400
     # Draining the slow client now: its queue was cut back to a resync.
+    # The narrow window did its job; widen it before reading. Client and server
+    # share this event loop, and on Linux a 4 KiB window moves about one
+    # window per loop turn: the megabytes the kernel buffered ahead of the
+    # resync took longer than any timeout here on a busy CI loop.
+    narrow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
     drained: list[dict] = []
     try:
-        async with asyncio.timeout(10):
+        async with asyncio.timeout(30):
             while True:
                 drained.append(json.loads(await slow.ws.recv()))
                 if drained[-1]["type"] == "resync":

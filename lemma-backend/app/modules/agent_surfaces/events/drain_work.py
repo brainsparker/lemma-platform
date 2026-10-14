@@ -22,22 +22,22 @@ Run once after the deploy that moves surfaces onto the work runtime (migration
 Progress per group is kept in ``surface_receiver_state`` (``drain:<group>``),
 so a crash resumes where it stopped. While anything is left it defers itself
 10 s and looks again; it completes when every group is caught up and the
-outbox holds none of these types. Never deletes a stream entry or a group:
-removing the transport is the next PR's.
+outbox holds none of these types, destroying the three groups so the cutover
+check (``app/cutover_check.py``) reads them as drained. Never deletes a stream
+entry: dropping what is left of the transport is migration 0063's.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from struct import unpack
 from typing import Any
 from uuid import UUID
 
 from redis.exceptions import RedisError
 from sqlalchemy import func, select
 
+from app.core.infrastructure.cutover.legacy_streams import decode_entry, destroy_group
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import (
@@ -108,9 +108,6 @@ _STARTED = "drain:started"
 #: new worker starts; exiting the moment the stream looked empty would strand
 #: whatever they published next.
 MIN_DRAIN = timedelta(minutes=30)
-#: FastStream's binary envelope (``BinaryMessageFormatV1``).
-_BINARY_MAGIC = b"\x89BIN\x0d\x0a\x1a\x0a"
-_DATA_KEYS = (b"__data__", "__data__")
 
 
 @dataclass
@@ -120,29 +117,6 @@ class DrainReport:
 
     def count(self, what: str, n: int = 1) -> None:
         self.converted[what] = self.converted.get(what, 0) + n
-
-
-def decode_entry(fields: dict[Any, Any]) -> dict[str, Any] | None:
-    """The event an entry carries, however FastStream wrapped it."""
-    blob = next((fields[key] for key in _DATA_KEYS if key in fields), None)
-    if blob is None:
-        return None
-    if isinstance(blob, str):
-        blob = blob.encode()
-    data: bytes = blob
-    if blob.startswith(_BINARY_MAGIC):
-        (data_start,) = unpack(">I", blob[14:18])
-        data = blob[data_start:]
-    try:
-        decoded = json.loads(data)
-    except ValueError:
-        return None
-    if isinstance(decoded, dict) and isinstance(decoded.get("data"), str):
-        try:
-            decoded = json.loads(decoded["data"])
-        except ValueError:
-            return None
-    return decoded if isinstance(decoded, dict) else None
 
 
 def _id_after(entry_id: str) -> str:
@@ -454,6 +428,10 @@ def make_drain(
         )
         if left or outbox or datetime.now(UTC) - started < min_drain:
             raise Defer(_POLL_AGAIN)
+        # Caught up for good: the groups are what the cutover check reads, so
+        # a drained one goes (its stream stays until the transport is removed).
+        for group in GROUPS:
+            await destroy_group(drainer._client(), STREAM, group)
         logger.info(
             "agent_surfaces.drain.finished.observed", converted=report.converted
         )

@@ -26,14 +26,17 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from faststream.redis.parser.binary import BinaryMessageFormatV1
 from pydantic import BaseModel
 from redis.asyncio import Redis
-from redis.exceptions import ResponseError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.config import settings
+from app.core.infrastructure.cutover.legacy_streams import (
+    decode_entry,
+    destroy_group,
+    read_group,
+)
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.redis.client import get_redis
 from app.core.infrastructure.work import (
@@ -157,7 +160,7 @@ async def convert_stream(uow: SqlAlchemyUnitOfWork, redis: Redis) -> int:
         events = [
             event
             for _, fields in entries
-            if (event := _stream_event(fields)) is not None
+            if (event := decode_entry(fields)) is not None
         ]
         async with get_datastore_engine().begin() as conn:
             await append_events(conn, uow, events)
@@ -258,50 +261,17 @@ def _as_event(value: object) -> Event | None:
     return value if isinstance(value, dict) else None
 
 
-def _stream_event(fields: Mapping[bytes, bytes]) -> Event | None:
-    data = fields.get(b"__data__")
-    if data is None:
-        return None
-    body, _headers = BinaryMessageFormatV1.parse(data)
-    try:
-        return _as_event(json.loads(body))
-    except ValueError:
-        logger.warning("datastore.changes.drain.undecodable_entry")
-        return None
-
-
 async def _read_group(
     redis: Redis, group: str
 ) -> list[tuple[bytes, Mapping[bytes, bytes]]]:
-    """This consumer's pending entries first (a crashed pass), then new ones,
-    then entries other (departed) consumers of the group left pending."""
-    try:
-        for start in ("0", ">"):
-            reply = await redis.xreadgroup(
-                group, CONSUMER, {DATASTORE_EVENTS_STREAM: start}, count=BATCH
-            )
-            entries = [entry for _, batch in reply or [] for entry in batch]
-            if entries:
-                return entries
-        claimed = await redis.xautoclaim(
-            DATASTORE_EVENTS_STREAM, group, CONSUMER, min_idle_time=0, count=BATCH
-        )
-    except ResponseError as exc:
-        if "NOGROUP" in str(exc):
-            return []
-        raise
-    return list(claimed[1]) if claimed else []
+    return await read_group(
+        redis, DATASTORE_EVENTS_STREAM, group, CONSUMER, count=BATCH
+    )
 
 
 async def _destroy_groups(redis: Redis) -> None:
     for group in LEGACY_GROUPS:
-        try:
-            await redis.xgroup_destroy(DATASTORE_EVENTS_STREAM, group)
-        except ResponseError as exc:
-            # No stream, or the group was already destroyed: nothing to do.
-            logger.info(
-                "datastore.changes.drain.group_absent", group=group, detail=str(exc)
-            )
+        await destroy_group(redis, DATASTORE_EVENTS_STREAM, group)
 
 
 async def _syncs_outstanding(uow: SqlAlchemyUnitOfWork) -> bool:

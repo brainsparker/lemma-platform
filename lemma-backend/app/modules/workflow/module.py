@@ -10,14 +10,6 @@ def _routers():
     return [workflow, workflow_run]
 
 
-def _event_routers():
-    # handlers.py also defines the module's remaining streaq tasks and crons,
-    # which register on import.
-    from app.modules.workflow.events.handlers import router
-
-    return [router]
-
-
 def _register_work() -> None:
     # Resume, expire and start (FAST), decide and notify (JOB), and the
     # `FunctionRunFinished` subscription. Every process: the API advances runs
@@ -32,6 +24,10 @@ def _register_work() -> None:
 
 def _register_periodic_work() -> None:
     import app.modules.workflow.events.periodic_work  # noqa: F401
+
+    # Worker only: the cutover converter for schedule fires the old transport
+    # still held (seeded by migration 0062; finishes on its own).
+    import app.modules.workflow.events.schedule_fire_drain  # noqa: F401
 
 
 def _resource_names():
@@ -59,8 +55,6 @@ module = LemmaModule(
     name="workflow",
     resource_names=_resource_names,
     routers=_routers,
-    event_routers=_event_routers,
     register_work=_register_work,
     register_periodic_work=_register_periodic_work,
-    stream_groups=(("schedule_events", "workflow-schedule-events"),),
 )

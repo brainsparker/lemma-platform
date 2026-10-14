@@ -492,68 +492,50 @@ async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
 
 
 @pytest.mark.anyio
-async def test_unparseable_schedule_fire_is_dropped_by_the_inbox() -> None:
-    """Parsing must happen inside the inbox so poison events terminate.
+async def test_the_cutover_skips_an_entry_that_is_not_a_schedule_fire(
+    monkeypatch,
+) -> None:
+    """A leftover entry with no schedule (or another type) is acknowledged, not started."""
+    from app.modules.workflow.events import schedule_fire_drain
 
-    A ``schedule.fired`` staged by an older deployment can lack the now-required
-    ``source_event_id``. Validating before ``inbox.process`` would nack it out
-    to the subscriber, and the 60s reclaim loop has no attempt cap — the same
-    message would redeliver forever. Inside the inbox it is marked TERMINAL and
-    acked once.
-    """
-    from app.modules.test_support.fakes import ValidationTerminalEventInbox
-    from app.modules.workflow.events.handlers import handle_schedule_events
+    started = AsyncMock()
+    monkeypatch.setattr(schedule_fire_drain, "start_legacy_job", started)
 
-    inbox = ValidationTerminalEventInbox()
-    job_queue = Mock(enqueue=AsyncMock())
-
-    await handle_schedule_events(
-        {
-            "event_type": "schedule.fired",
-            "schedule_id": str(uuid4()),
-            "user_id": str(uuid4()),
-            "schedule_type": "TIME",
-            "payload": {},
-        },
-        Mock(),
-        job_queue=job_queue,
-        inbox=inbox,
+    assert not await schedule_fire_drain.start_fire(
+        {"event_type": "schedule.fired", "payload": {}}
     )
-
-    assert inbox.terminal == ["workflow.schedule-start:ValidationError"]
-    job_queue.enqueue.assert_not_awaited()
+    assert not await schedule_fire_drain.start_fire(
+        {"event_type": "schedule.paused", "schedule_id": str(uuid4())}
+    )
+    started.assert_not_awaited()
 
 
 @pytest.mark.anyio
-async def test_owner_survives_the_queue_boundary_as_none_not_the_string_none() -> None:
-    """An owner-less fire must reach the worker as None, not ``"None"``.
+async def test_the_cutover_keeps_an_owner_less_fire_owner_less(monkeypatch) -> None:
+    """An owner-less fire reaches the start as None, never the string ``"None"``.
 
-    The enqueue boundary stringifies its kwargs. ``str(None)`` produces the
-    literal ``"None"``, which is truthy, so the legacy-timer branch would try
-    ``UUID("None")`` and the run would never wake — the exact failure this
-    ownership work is meant to remove.
+    ``str(None)`` is truthy, so the legacy-timer branch would try
+    ``UUID("None")`` and the run would never wake.
     """
-    from app.modules.schedule.domain.events.schedule import ScheduleFired
-    from app.modules.schedule.domain.schedule import ScheduleType
-    from app.modules.workflow.events.handlers import on_schedule_fired
+    from app.modules.workflow.events import schedule_fire_drain
 
-    job_queue = Mock(enqueue=AsyncMock())
+    started = AsyncMock()
+    monkeypatch.setattr(schedule_fire_drain, "start_legacy_job", started)
     owner = uuid4()
-
-    for user_id, expected in ((None, None), (owner, str(owner))):
-        job_queue.enqueue.reset_mock()
-        await on_schedule_fired(
-            ScheduleFired(
-                schedule_id=uuid4(),
-                user_id=user_id,
-                schedule_type=ScheduleType.TIME,
-                payload={"workflow_run_id": str(uuid4()), "wait_ref": str(uuid4())},
-                source_event_id="timer:boundary-1",
-            ),
-            Mock(),
-            job_queue,
+    for user_id, expected in ((None, None), (str(owner), str(owner))):
+        started.reset_mock()
+        assert await schedule_fire_drain.start_fire(
+            {
+                "event_type": "schedule.fired",
+                "schedule_id": str(uuid4()),
+                "user_id": user_id,
+                "payload": {"workflow_run_id": str(uuid4())},
+                "source_event_id": "timer:boundary-1",
+                "scheduled_at": "2026-10-14T10:00:00Z",
+            }
         )
-        assert job_queue.enqueue.await_args.kwargs["user_id"] == expected
+        assert started.await_args.kwargs["user_id"] == expected
+        assert started.await_args.kwargs["schedule_event_id"] == "timer:boundary-1"
 
 
 @pytest.mark.anyio

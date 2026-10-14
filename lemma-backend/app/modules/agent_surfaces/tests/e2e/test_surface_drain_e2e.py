@@ -19,7 +19,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from faststream.redis.parser.binary import BinaryMessageFormatV1
 from sqlalchemy import text
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -35,6 +34,7 @@ from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.contracts import conversations_for_surfaces
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.work_payloads import NoPayload
+from app.core.infrastructure.cutover.legacy_streams import encode_binary_entry
 from app.modules.agent_surfaces.events.drain_work import (
     STREAM,
     register_drain_work,
@@ -79,9 +79,7 @@ def _webhook(surface_id: str, update: dict) -> dict:
 async def _xadd(redis, event: dict, *, binary: bool) -> str:
     data = json.dumps(event).encode()
     if binary:
-        data = await BinaryMessageFormatV1.encode(
-            message=data, reply_to=None, headers={}, correlation_id="drain-e2e"
-        )
+        data = encode_binary_entry(data, {"correlation_id": "drain-e2e"})
     entry = await redis.xadd(STREAM, {"__data__": data})
     return entry.decode() if isinstance(entry, bytes) else entry
 

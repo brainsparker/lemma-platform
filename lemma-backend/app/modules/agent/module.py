@@ -119,10 +119,11 @@ def _routers():
     ]
 
 
-def _event_routers():
-    from app.modules.agent.events.handlers import router
-
-    return [router]
+def _register_analytics() -> None:
+    # Every process: a memory file written anywhere -- including the shell's
+    # `lemma files write`, which commits in the API -- drops the cached brief
+    # section that quotes it, after the write commits.
+    import app.modules.agent.events.memory_brief_invalidation  # noqa: F401
 
 
 def _register_work() -> None:
@@ -167,20 +168,11 @@ module = LemmaModule(
     name="agent",
     resource_names=_resource_names,
     routers=_routers,
-    event_routers=_event_routers,
+    register_analytics=_register_analytics,
     register_work=_register_work,
     register_periodic_work=_register_periodic_work,
     api_lifespans=(_report_system_model_pricing, _drain_agent_host_links),
     # The worker is where agent runs actually dispatch, so a deployment
     # whose models cannot back its spend limit has to hear it there too.
     worker_lifespans=(_report_system_model_pricing,),
-    stream_groups=(
-        # A group on the datastore's stream, so a memory file written
-        # anywhere -- including the shell's `lemma files write`, which never
-        # reaches this process -- drops the cached brief section that quotes it.
-        # Declared here because publishers create declared groups before XADD;
-        # an undeclared group silently misses everything published before its
-        # first read.
-        ("datastore.events", "agent-memory-brief-invalidation"),
-    ),
 )

@@ -12,6 +12,11 @@ from __future__ import annotations
 from typing import Any
 
 
+class _NoRow:
+    def scalar_one_or_none(self) -> None:
+        return None
+
+
 class RecordingWorkSession:
     def __init__(self, *, title: str | None = "A title") -> None:
         self.items: list[dict[str, Any]] = []
@@ -29,8 +34,11 @@ class RecordingWorkSession:
             return self.title
         return None
 
-    async def execute(self, statement: object, params: Any = None) -> None:
+    async def execute(self, statement: object, params: Any = None) -> _NoRow:
+        # Any read made through ``execute`` -- the pod's own default runtime,
+        # say -- finds nothing, the ordinary case.
         del statement, params
+        return _NoRow()
 
     def kinds(self) -> list[str]:
         return [item["kind"] for item in self.items]

@@ -141,6 +141,7 @@ def _coordinator(conversation: Conversation):
         collect_events=MagicMock(),
         commit=AsyncMock(),
         after_commit=MagicMock(),
+        # The pod names no default runtime of its own.
         session=RecordingWorkSession(),
     )
     coordinator = turns.TurnCoordinator(

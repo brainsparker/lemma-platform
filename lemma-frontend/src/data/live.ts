@@ -838,6 +838,10 @@ export const liveSource: PodSource = {
             .filter((entry): entry is Runtime => entry !== null);
     },
 
+    async getRuntime(orgId: string, runtimeId: string): Promise<Runtime | null> {
+        return readRuntime(await lemma().agentRuntime.getProfile(orgId, runtimeId));
+    },
+
     async defaultRuntime(orgId: string): Promise<Choice | null> {
         const listed = await lemma().agentRuntime.listRuntimes(orgId);
         return readChoice(listed.default_runtime);
@@ -960,11 +964,21 @@ export const liveSource: PodSource = {
            resolving through it (`resolved_default_runtime` falls back to the
            mirror). "Inherit again" would have saved cleanly and changed
            nothing. */
+        /* Selections go up only when there are some. `default_runtime` is
+           replaced whole by the merge, so leaving the key out is how a pick
+           with none clears the ones a previous pick carried. */
+        const selections = choice?.selections && Object.keys(choice.selections).length ? choice.selections : null;
         await lemma(podId).pods.update(podId, {
             config: choice
-                ? { default_runtime: { profile_id: choice.runtimeId, model_name: choice.model || null } }
+                ? {
+                    default_runtime: {
+                        profile_id: choice.runtimeId,
+                        model_name: choice.model || null,
+                        ...(selections ? { config_selections: selections } : {}),
+                    },
+                }
                 : { default_runtime: null, default_profile_id: null },
-        });
+        } as Parameters<ReturnType<typeof lemma>["pods"]["update"]>[1]);
         forgetPod(podId);
     },
 

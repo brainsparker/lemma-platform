@@ -87,7 +87,10 @@ def _service(
         conversations_with_pending_interaction=AsyncMock(return_value=set()),
     )
     uow = SimpleNamespace(
-        collect_events=MagicMock(), commit=AsyncMock(), session=RecordingWorkSession()
+        collect_events=MagicMock(),
+        commit=AsyncMock(),
+        # The pod names no default runtime of its own.
+        session=RecordingWorkSession(),
     )
     service = ConversationService(
         uow=uow,

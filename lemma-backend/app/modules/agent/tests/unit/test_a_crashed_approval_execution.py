@@ -39,6 +39,7 @@ from app.modules.agent.services.conversation_resume_return import (
 )
 from app.modules.agent.services.pause_resume import PauseResume
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
+from app.modules.test_support.fakes import EmptyResultSession
 
 pytestmark = pytest.mark.unit
 
@@ -47,6 +48,9 @@ _POD_ID = uuid7()
 
 
 class _Uow:
+    # The pod names no default runtime of its own.
+    session = EmptyResultSession()
+
     def collect_events(self, _events) -> None:
         return None
 

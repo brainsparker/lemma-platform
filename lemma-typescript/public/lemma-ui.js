@@ -217,10 +217,12 @@ var LemmaUI = (() => {
   }
   function extractNotice(payload) {
     if (!isRecord2(payload)) return void 0;
-    const detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
+    const nested = isRecord2(payload.detail) ? payload.detail : void 0;
+    const sentence = nested ? nested.detail : payload.detail;
+    const detail = typeof sentence === "string" ? sentence.trim() : "";
     if (!detail) return void 0;
-    const kind = typeof payload.status === "string" ? payload.status.trim().toLowerCase() : void 0;
-    return kind ? { notice: detail, noticeKind: kind } : { notice: detail };
+    const kind = [payload.notice, nested == null ? void 0 : nested.status, payload.status].find((value) => typeof value === "string" && value.trim().length > 0);
+    return kind ? { notice: detail, noticeKind: kind.trim().toLowerCase() } : { notice: detail };
   }
   function extractTitle(payload) {
     const title = typeof payload === "string" ? payload : isRecord2(payload) && typeof payload.title === "string" ? payload.title : void 0;

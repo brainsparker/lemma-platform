@@ -707,6 +707,10 @@ export interface PodSource {
      *  Archived ones come too — the ledger hides them behind a toggle rather
      *  than pretending they were deleted. */
     listRuntimes(orgId: string): Promise<Runtime[]>;
+    /** One runtime with what the list leaves out: for a coding agent, the
+     *  options its computer publishes now, per model. `null` when it is gone
+     *  or not this person's to read. */
+    getRuntime(orgId: string, runtimeId: string): Promise<Runtime | null>;
     /** What this organization would run on if nobody chose — the catalog's
      *  own default, so "inherit" can say what it inherits. */
     defaultRuntime(orgId: string): Promise<Choice | null>;

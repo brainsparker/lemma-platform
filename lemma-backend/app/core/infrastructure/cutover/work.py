@@ -117,7 +117,7 @@ class LegacyOutbox:
     like: str
 
 
-_other_outboxes: dict[str, LegacyOutbox] = {}
+_other_outboxes: dict[str, LegacyOutbox] = {}  # memory: bounded one per database
 
 
 def register_legacy_outbox(outbox: LegacyOutbox) -> None:

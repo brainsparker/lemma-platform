@@ -197,7 +197,7 @@ type LegacyPayload = dict[str, JsonValue]
 #: is owed to.
 type Converter = Callable[["JobContext", LegacyPayload, str], Awaitable[None]]
 
-_converters: dict[str, Converter] = {}
+_converters: dict[str, Converter] = {}  # memory: bounded one per route
 
 
 def legacy_converter(*names: str) -> Callable[[Converter], Converter]:

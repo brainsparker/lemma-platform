@@ -167,9 +167,7 @@ async def test_a_run_with_a_reply_is_not_replay_safe() -> None:
 
     uow = _Uow([_CountRow()])
 
-    assert (
-        await ConversationRepository(uow).run_is_replay_safe(uuid4()) is False
-    )
+    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is False
 
 
 @pytest.mark.asyncio
@@ -182,9 +180,7 @@ async def test_a_run_with_no_messages_is_not_replay_safe() -> None:
 
     uow = _Uow([_CountRow()])
 
-    assert (
-        await ConversationRepository(uow).run_is_replay_safe(uuid4()) is False
-    )
+    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is False
 
 
 @pytest.mark.asyncio

@@ -132,9 +132,7 @@ async def test_a_failed_run_that_only_thought_is_run_again_from_the_users_turn(
     )
     assert prompt is not None and prompt.endswith("Summarise it.")
     assert not any(
-        isinstance(part, ThinkingPart)
-        for message in history
-        for part in message.parts
+        isinstance(part, ThinkingPart) for message in history for part in message.parts
     )
 
 

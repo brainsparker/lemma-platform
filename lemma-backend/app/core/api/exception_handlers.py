@@ -63,9 +63,7 @@ def _without_echoed_input(errors: object) -> object:
     """
     if not isinstance(errors, list):
         return errors
-    return [
-        _described(error) if isinstance(error, dict) else error for error in errors
-    ]
+    return [_described(error) if isinstance(error, dict) else error for error in errors]
 
 
 def _described(error: dict[str, object]) -> dict[str, object]:

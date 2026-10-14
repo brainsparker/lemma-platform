@@ -203,7 +203,7 @@ async def channel_member_ids(
     try:
         client = await build_slack_client(credentials)
         response = await client.conversations_members(channel=channel, limit=limit)
-    except SlackApiError as exc:
+    except slack_api_error() as exc:
         logger.info("agent_surfaces.slack_manager.members_refused", error=_error(exc))
         return None
     data = response.data if isinstance(response.data, dict) else {}
@@ -230,7 +230,7 @@ async def user_profiles(
         async with gate:
             try:
                 response = await client.users_info(user=user_id)
-            except SlackApiError:
+            except slack_api_error():
                 return user_id, {}
         data = response.data if isinstance(response.data, dict) else {}
         user = data.get("user")

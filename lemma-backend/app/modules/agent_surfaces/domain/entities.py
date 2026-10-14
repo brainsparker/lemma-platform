@@ -455,14 +455,6 @@ class AgentSurfaceEntity(AggregateRoot):
         expected = tenant_key(self)
         return bool(expected) and bool(tenant_id) and expected == tenant_id
 
-    def should_ignore_sender(self, sender_external_user_id: str | None) -> bool:
-        if self.surface_type is SurfacePlatform.SLACK:
-            return bool(
-                sender_external_user_id
-                and self.surface_identity_id == sender_external_user_id
-            )
-        return False
-
     def matches_channel(self, channel_id: str | None) -> bool:
         if not channel_id:
             return False

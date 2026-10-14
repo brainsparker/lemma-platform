@@ -21,11 +21,38 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.agent_surfaces.platforms.common import platform_transport_errors
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    echoes_own_messages,
+)
 from app.modules.agent_surfaces.services.identity_resolution_service import (
     SurfaceIdentityResolutionService,
 )
 
 logger = get_logger(__name__)
+
+
+def is_self_addressed(
+    *, surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent
+) -> bool:
+    """Is this event the surface hearing its own message come back?
+
+    Two shapes of the same echo: email, where the surface's own address is the
+    sender, and a platform that delivers the bot's posts back keyed on the
+    bot's user id (``echoes_own_messages``). Answering either would answer the
+    agent's own reply, forever.
+    """
+    if surface.surface_type.is_email:
+        surface_email = str(surface.surface_identity_email or "").strip().lower()
+        sender_email = (
+            str(parsed.sender_email or parsed.sender_external_user_id or "")
+            .strip()
+            .lower()
+        )
+        return bool(surface_email and sender_email and surface_email == sender_email)
+    if not echoes_own_messages(surface.surface_type):
+        return False
+    sender_id = parsed.sender_external_user_id
+    return bool(sender_id and surface.surface_identity_id == sender_id)
 
 
 class SenderResolver:
@@ -109,12 +136,4 @@ class SenderResolver:
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
     ) -> bool:
-        if not surface.surface_type.is_email:
-            return False
-        surface_email = str(surface.surface_identity_email or "").strip().lower()
-        sender_email = (
-            str(parsed.sender_email or parsed.sender_external_user_id or "")
-            .strip()
-            .lower()
-        )
-        return bool(surface_email and sender_email and surface_email == sender_email)
+        return is_self_addressed(surface=surface, parsed=parsed)

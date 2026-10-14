@@ -21,6 +21,7 @@ this is the test that should stop them.
 from __future__ import annotations
 
 import asyncio
+import uuid
 
 import asyncpg
 import pytest
@@ -29,8 +30,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.domain.events import DomainEvent
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.events.models import DomainEventOutbox
+from app.core.infrastructure.events import outbox_wake
 from app.core.infrastructure.events.outbox_wake import (
-    OUTBOX_WAKE_CHANNEL,
     OutboxWakeListener,
     asyncpg_connect_kwargs,
 )
@@ -51,6 +52,19 @@ class _WakeEvent(DomainEvent):
         return "wake_e2e_events"
 
 
+@pytest.fixture(autouse=True)
+def wake_channel(monkeypatch: pytest.MonkeyPatch) -> str:
+    """A channel only this test notifies.
+
+    The shard's database is shared: anything else committing events there
+    notifies the real channel, and these tests count notifications. What they
+    pin is PostgreSQL's behaviour, which is the same on any channel.
+    """
+    channel = f"lemma_outbox_wake_e2e_{uuid.uuid4().hex}"
+    monkeypatch.setattr(outbox_wake, "OUTBOX_WAKE_CHANNEL", channel)
+    return channel
+
+
 @pytest.fixture
 async def outbox_engine(test_database_url: str):
     engine = create_async_engine(test_database_url)
@@ -61,9 +75,9 @@ async def outbox_engine(test_database_url: str):
 
 
 @pytest.fixture
-async def listener(test_database_url: str):
+async def listener(test_database_url: str, wake_channel: str):
     """A live listener on its own connection, as the dispatcher runs it."""
-    instance = OutboxWakeListener(test_database_url, label="e2e")
+    instance = OutboxWakeListener(test_database_url, label="e2e", channel=wake_channel)
     task = asyncio.create_task(instance.run())
     # run() sets the wake once on connect; consume that so tests observe only
     # what their own transaction produced.
@@ -120,7 +134,7 @@ async def test_the_row_is_visible_when_the_wake_arrives(
 
 
 async def test_a_notification_issued_with_no_listener_is_lost(
-    test_database_url: str,
+    test_database_url: str, wake_channel: str
 ) -> None:
     """The reason the fallback poll exists. Do not delete the poll.
 
@@ -131,13 +145,11 @@ async def test_a_notification_issued_with_no_listener_is_lost(
         **asyncpg_connect_kwargs(test_database_url, application_name="lemma-e2e-probe")
     )
     try:
-        await connection.execute(
-            f"NOTIFY {OUTBOX_WAKE_CHANNEL}, 'while_nobody_listens'"
-        )
+        await connection.execute(f"NOTIFY {wake_channel}, 'while_nobody_listens'")
     finally:
         await connection.close()
 
-    late = OutboxWakeListener(test_database_url, label="e2e-late")
+    late = OutboxWakeListener(test_database_url, label="e2e-late", channel=wake_channel)
     task = asyncio.create_task(late.run())
     try:
         # The connect-time wake is the listener's own doing, so it does not

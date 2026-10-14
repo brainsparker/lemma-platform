@@ -313,3 +313,33 @@ async def test_the_group_page_says_who_in_the_channel_is_whose(
         "Guest": "outside",
         "Partner": "outside",
     }
+
+
+async def test_a_big_channel_says_how_many_more_it_did_not_look_at(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    message_store,
+):
+    surface = await _managed_teammate(
+        authenticated_client, db_session, fixed_test_user, fake_slack, test_pod["id"]
+    )
+    await _invite_and_pick(fake_slack, message_store, surface, "C-PUBLIC")
+    fake_slack.channel_members["C-PUBLIC"] = [TEAMMATE_BOT] + [
+        f"U-{n:03d}" for n in range(57)
+    ]
+    groups = await authenticated_client.get(f"/pods/{test_pod['id']}/groups")
+    group = next(
+        g for g in groups.json()["items"] if g["external_channel_id"] == "C-PUBLIC"
+    )
+
+    response = await authenticated_client.get(
+        f"/pods/{test_pod['id']}/groups/{group['id']}/slack-people"
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body["items"]) == 50
+    assert body["more"] == 7

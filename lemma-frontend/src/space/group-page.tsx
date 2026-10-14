@@ -337,7 +337,11 @@ function People({ pod, group, onInvite }: { pod: Pod; group: GroupDetail; onInvi
         <section className="gside">
             <h2 className="gside__head">People in this group</h2>
             {group.platform === "SLACK" ? (
-                <SlackPeople pod={pod} group={group} onInvite={onInvite} />
+                /* Who is in a channel -- guests and other companies' people
+                   included -- is for whoever runs the group. */
+                group.canManage
+                    ? <SlackPeople pod={pod} group={group} onInvite={onInvite} />
+                    : <p className="gside__text">Slack keeps who is in the channel.</p>
             ) : people.length === 0 ? (
                 <p className="gside__text">Nobody has spoken here yet.</p>
             ) : (

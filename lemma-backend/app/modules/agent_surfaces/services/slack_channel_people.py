@@ -14,12 +14,14 @@ from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import select
 
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
-from app.modules.agent_surfaces.infrastructure.models import AgentSurfaceExternalUser
+from app.modules.agent_surfaces.domain.errors import AgentSurfacePlatformError
+from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
+    ExternalSurfaceUserRepository,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (
     SlackManagerRepository,
 )
@@ -27,7 +29,7 @@ from app.modules.agent_surfaces.platforms.slack import workspace_calls as slack
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
-from app.modules.pod.contracts.members import pod_member_id
+from app.modules.pod.contracts.members import pod_members_among
 
 #: A channel's first people, read from Slack each time the page asks. Past this
 #: the page says how many more there are rather than asking Slack about each.
@@ -55,34 +57,41 @@ class ChannelPeople:
     more: int = 0
 
 
+#: Slack's own ceiling for one page of ``conversations.members``: enough to
+#: count a channel's people honestly, of whom the first few are looked at.
+MEMBER_PAGE = 1000
+
+
 async def channel_people(
     uow: SqlAlchemyUnitOfWork, *, surface: AgentSurfaceEntity, channel_id: str
 ) -> ChannelPeople:
     credentials = await SurfaceCredentialResolver(uow=uow).for_surface(surface)
     async with connection_released(uow.session):
-        ids = await slack.channel_member_ids(
-            credentials, channel_id, limit=MAX_CHANNEL_PEOPLE + 1
-        )
-        looked_at = ids[:MAX_CHANNEL_PEOPLE]
-        profiles = {
-            user: await slack.user_profile(credentials, user) for user in looked_at
-        }
+        ids = await slack.channel_member_ids(credentials, channel_id, limit=MEMBER_PAGE)
+        if ids is None:
+            raise AgentSurfacePlatformError(
+                "SLACK", "Slack didn't say who is in the channel"
+            )
+        others = [user for user in ids if user != surface.surface_identity_id]
+        looked_at = others[:MAX_CHANNEL_PEOPLE]
+        profiles = await slack.user_profiles(credentials, looked_at)
     known = await _known_users(uow, surface.external_workspace_id, looked_at)
+    in_pod = await pod_members_among(uow, surface.pod_id, list(set(known.values())))
     people = []
     for user in looked_at:
-        profile = profiles.get(user) or {}
-        if profile.get("is_bot") or user == surface.surface_identity_id:
+        profile = profiles.get(user)
+        if profile is not None and profile.get("is_bot"):
             continue
         user_id = known.get(user)
-        in_pod = bool(user_id and await pod_member_id(uow, surface.pod_id, user_id))
+        member = user_id is not None and user_id in in_pod
         people.append(
             ChannelPerson(
                 slack_user_id=user,
-                name=_name(profile, user),
+                name=_name(profile or {}, user),
                 standing=_standing(
-                    profile, surface.external_workspace_id, in_pod=in_pod
+                    profile, surface.external_workspace_id, in_pod=member
                 ),
-                user_id=user_id if in_pod else None,
+                user_id=user_id if member else None,
             )
         )
     order = {
@@ -91,34 +100,21 @@ async def channel_people(
         ChannelStanding.OUTSIDE: 2,
     }
     people.sort(key=lambda person: (order[person.standing], person.name.lower()))
-    return ChannelPeople(people=people, more=max(len(ids) - MAX_CHANNEL_PEOPLE, 0))
+    return ChannelPeople(people=people, more=max(len(others) - MAX_CHANNEL_PEOPLE, 0))
 
 
 async def _known_users(
     uow: SqlAlchemyUnitOfWork, team_id: str | None, slack_user_ids: list[str]
 ) -> dict[str, UUID]:
-    """The Lemma person each Slack user is known to be: proof first, then routing's."""
+    """The Lemma person each Slack user is known to be: routing's, then proof over it."""
     if not team_id or not slack_user_ids:
         return {}
-    known: dict[str, UUID] = {}
-    rows = await uow.session.execute(
-        select(
-            AgentSurfaceExternalUser.external_user_id,
-            AgentSurfaceExternalUser.resolved_user_id,
-        ).where(
-            AgentSurfaceExternalUser.platform == "SLACK",
-            AgentSurfaceExternalUser.tenant_id == team_id,
-            AgentSurfaceExternalUser.external_user_id.in_(slack_user_ids),
-            AgentSurfaceExternalUser.resolved_user_id.is_not(None),
-        )
+    known = await ExternalSurfaceUserRepository(uow).resolved_users_by_external_ids(
+        platform="SLACK", tenant_id=team_id, external_user_ids=slack_user_ids
     )
-    for external_user_id, resolved_user_id in rows.all():
-        known[str(external_user_id)] = resolved_user_id
-    managers = SlackManagerRepository(uow.session)
-    for user in slack_user_ids:
-        proven = await managers.person(team_id, user)
-        if proven is not None:
-            known[user] = proven
+    known.update(
+        await SlackManagerRepository(uow.session).people(team_id, slack_user_ids)
+    )
     return known
 
 
@@ -136,10 +132,13 @@ def _name(profile: dict[str, object], fallback: str) -> str:
 
 
 def _standing(
-    profile: dict[str, object], team_id: str | None, *, in_pod: bool
+    profile: dict[str, object] | None, team_id: str | None, *, in_pod: bool
 ) -> ChannelStanding:
     if in_pod:
         return ChannelStanding.IN_POD
+    # Slack would not describe them: not somebody to call a colleague.
+    if not profile:
+        return ChannelStanding.OUTSIDE
     theirs = str(profile.get("team_id") or "")
     if profile.get("is_restricted") or profile.get("is_ultra_restricted"):
         return ChannelStanding.OUTSIDE

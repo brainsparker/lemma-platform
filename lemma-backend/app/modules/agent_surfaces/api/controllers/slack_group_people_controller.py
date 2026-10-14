@@ -18,6 +18,7 @@ from app.modules.agent_surfaces.api.controllers.space_group_controller import (
     _readable_group,
     _surface,
 )
+from app.modules.agent_surfaces.api.group_access import GroupAccess
 from app.modules.agent_surfaces.services.slack_channel_people import channel_people
 
 router = APIRouter(prefix="/pods/{pod_id}/groups", tags=["Agent Surfaces"])
@@ -53,6 +54,15 @@ async def slack_group_people(
     group = detail.group
     if group.platform != "SLACK" or not group.external_channel_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not a Slack channel")
+    # Who is in a channel -- guests and other companies' people included -- is
+    # for whoever runs the group, not for anyone who may read it.
+    if not await GroupAccess(
+        ctx=ctx, uow=uow, pod_id=pod_id, viewer_id=user.id
+    ).manages(detail):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Only whoever runs this group sees its people",
+        )
     surface = await _surface(uow, group.surface_id)
     read = await channel_people(
         uow, surface=surface, channel_id=group.external_channel_id

@@ -13,15 +13,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from slack_sdk.errors import SlackApiError
-from slack_sdk.web.async_client import AsyncWebClient
+from typing import TYPE_CHECKING
 
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfacePlatformError,
     AgentSurfaceValidationError,
 )
 
+if TYPE_CHECKING:
+    from slack_sdk.errors import SlackApiError
+    from slack_sdk.web.async_client import AsyncWebClient
+
 _PLATFORM = "SLACK"
+
+
+def _client(token: str | None = None) -> "AsyncWebClient":
+    """Slack's client, imported here: serving a request must not load the SDK."""
+    from slack_sdk.web.async_client import AsyncWebClient
+
+    return AsyncWebClient(token=token)
 
 
 @dataclass(frozen=True)
@@ -41,7 +52,7 @@ class CreatedSlackApp:
     signing_secret: str
 
 
-def _slack_error(exc: SlackApiError) -> str:
+def _slack_error(exc: "SlackApiError") -> str:
     response = getattr(exc, "response", None)
     data = getattr(response, "data", None)
     if isinstance(data, dict):
@@ -56,10 +67,10 @@ async def rotate_configuration_token(refresh_token: str) -> RotatedConfiguration
     token, or one from a deleted app), so it is a validation error, not ours.
     """
     try:
-        response = await AsyncWebClient().tooling_tokens_rotate(
+        response = await _client().tooling_tokens_rotate(
             refresh_token=refresh_token.strip()
         )
-    except SlackApiError as exc:
+    except slack_api_error() as exc:
         raise AgentSurfaceValidationError(
             "Slack did not accept that refresh token "
             f"({_slack_error(exc)}). Generate a new configuration token on "
@@ -85,8 +96,8 @@ async def rotate_configuration_token(refresh_token: str) -> RotatedConfiguration
 async def workspace_name(access_token: str) -> str | None:
     """The workspace's name, for showing which one a token is for. Best effort."""
     try:
-        response = await AsyncWebClient(token=access_token).auth_test()
-    except SlackApiError:
+        response = await _client(access_token).auth_test()
+    except slack_api_error():
         return None
     data = response.data if isinstance(response.data, dict) else {}
     return str(data.get("team") or "") or None
@@ -97,10 +108,10 @@ async def create_app(access_token: str, manifest: dict[str, object]) -> CreatedS
     try:
         # A dict, not a JSON string: the SDK serialises it, and a manifest is
         # small enough that doing it here would only move the same work.
-        response = await AsyncWebClient(token=access_token).apps_manifest_create(
+        response = await _client(access_token).apps_manifest_create(
             manifest=dict(manifest)
         )
-    except SlackApiError as exc:
+    except slack_api_error() as exc:
         raise AgentSurfacePlatformError(
             _PLATFORM, f"Slack would not create the app ({_slack_error(exc)})"
         ) from exc
@@ -130,7 +141,7 @@ async def create_app(access_token: str, manifest: dict[str, object]) -> CreatedS
 async def delete_app(access_token: str, app_id: str) -> bool:
     """Undo `create_app` when Lemma could not keep what it made. Best effort."""
     try:
-        await AsyncWebClient(token=access_token).apps_manifest_delete(app_id=app_id)
-    except SlackApiError:
+        await _client(access_token).apps_manifest_delete(app_id=app_id)
+    except slack_api_error():
         return False
     return True

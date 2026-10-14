@@ -167,8 +167,13 @@ async def test_every_owed_delivery_takes_effect_once(
 
     projected: Counter[str] = Counter()
 
+    #: The owed events' ids: the in-process sink also projects whatever this
+    #: session's other tests committed, which is not the cutover's doing.
+    owed_ids: set[str] = set()
+
     async def capture(payload: dict[str, Any]) -> None:
-        projected[str(payload["event_type"])] += 1
+        if str(payload.get("event_id")) in owed_ids:
+            projected[str(payload["event_type"])] += 1
 
     monkeypatch.setattr(
         domain_events,
@@ -340,6 +345,7 @@ async def test_every_owed_delivery_takes_effect_once(
     }
     for event_type, fields in _ANALYTICS.items():
         owed[event_type] = event(event_type, pod_id=pod_id, **fields)
+    owed_ids.update(str(payload["event_id"]) for payload in owed.values())
 
     engine = get_engine()
     async with engine.begin() as conn:

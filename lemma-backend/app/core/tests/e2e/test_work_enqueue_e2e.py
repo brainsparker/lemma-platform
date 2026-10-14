@@ -162,7 +162,16 @@ async def test_periodic_arming_is_idempotent_and_each_run_rearms_the_next(
             await arm_periodics(session, registry, classes)
             await session.commit()
     assert await work_db.count("dedup_key = 'periodic:tick'") == 1
+    # The first run waits out the name's phase, so periodics armed by one boot
+    # do not all fall due together.
+    first_run = await work_db.scalar(
+        "SELECT run_at - now() FROM work_items WHERE dedup_key = 'periodic:tick'"
+    )
+    phase = registry.periodics()[0].phase
+    assert isinstance(first_run, timedelta)
+    assert phase - timedelta(seconds=5) < first_run <= phase
 
+    await make_due(work_db.sessions)
     assert await run_until_idle(work_db.sessions, registry=registry) == 1
     next_run = await work_db.scalar(
         "SELECT run_at - now() FROM work_items WHERE dedup_key = 'periodic:tick' "

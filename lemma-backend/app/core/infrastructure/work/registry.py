@@ -9,6 +9,7 @@ so an old worker in a rolling deploy never claims a kind it cannot run.
 
 from __future__ import annotations
 
+import zlib
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -75,6 +76,20 @@ class PeriodicSpec:
     @property
     def dedup_key(self) -> str:
         return f"{PERIODIC_PREFIX}{self.name}"
+
+    @property
+    def phase(self) -> timedelta:
+        """How long after arming the first run is due: stable per name.
+
+        Every periodic is armed at the same worker boot and re-arms itself
+        ``every`` after each run, so without an offset all the hourly sweeps
+        would fire together forever -- the convoy that showed up as event-loop
+        stalls on the round minute when they were crons. A hash of the name
+        spreads them across their interval (capped at an hour, so a daily
+        sweep still runs soon after a fresh deploy).
+        """
+        window = int(min(self.every, timedelta(hours=1)).total_seconds())
+        return timedelta(seconds=zlib.crc32(self.name.encode()) % max(window, 1))
 
 
 class WorkRegistry:

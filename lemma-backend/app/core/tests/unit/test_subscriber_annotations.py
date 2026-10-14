@@ -48,7 +48,9 @@ def _subscriber_handlers() -> Iterator[tuple[str, Any]]:
 def test_the_registry_wires_subscribers_at_all() -> None:
     # Guards the guard: if the walk above stops finding handlers, the test below
     # passes over an empty set and proves nothing.
-    assert sum(1 for _ in _subscriber_handlers()) > 20
+    # The remaining FastStream subscribers, until the transport goes (PR 3b):
+    # analytics left for the after-commit sink and most others for work items.
+    assert sum(1 for _ in _subscriber_handlers()) >= 8
 
 
 def test_every_subscriber_annotation_resolves_at_runtime() -> None:

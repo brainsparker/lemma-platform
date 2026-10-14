@@ -128,7 +128,11 @@ async def arm_periodics(
         if await session.scalar(_DEAD_PERIODIC, params):
             logger.warning("work.periodic.recreated", name=spec.name, kind=spec.kind)
         await writer.add(
-            spec.kind, SYSTEM_NAMESPACE, spec.payload, dedup_key=spec.dedup_key
+            spec.kind,
+            SYSTEM_NAMESPACE,
+            spec.payload,
+            dedup_key=spec.dedup_key,
+            delay=spec.phase,
         )
         armed += 1
     return armed

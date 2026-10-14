@@ -376,6 +376,12 @@ def _reset_supertokens_testing_state() -> None:
             recipe.reset()
 
 
+#: Class state the SDK keeps under plain names: ``Querier.init`` installs a
+#: ``network_interceptor``, and the first request caches the core's
+#: ``api_version``. A test that initialises with its own leaves both behind.
+_SUPERTOKENS_PUBLIC_CLASS_STATE = frozenset({"network_interceptor", "api_version"})
+
+
 @contextmanager
 def supertokens_state_restored() -> Iterator[None]:
     """Reset SuperTokens for the body, then put back what was there before.
@@ -391,7 +397,12 @@ def supertokens_state_restored() -> Iterator[None]:
     snapshot = [
         (
             cls,
-            {k: v for k, v in vars(cls).items() if k.startswith(f"_{cls.__name__}__")},
+            {
+                k: v
+                for k, v in vars(cls).items()
+                if k.startswith(f"_{cls.__name__}__")
+                or k in _SUPERTOKENS_PUBLIC_CLASS_STATE
+            },
         )
         for cls in _supertokens_singleton_classes()
     ]

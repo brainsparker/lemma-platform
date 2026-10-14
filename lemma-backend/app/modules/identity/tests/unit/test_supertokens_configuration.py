@@ -115,6 +115,27 @@ def test_reset_inside_a_test_leaves_the_process_initialised_as_it_found_it(
     assert Supertokens.get_instance() is before
 
 
+def test_the_querier_configuration_a_test_installs_is_taken_back(monkeypatch):
+    """``network_interceptor`` and ``api_version`` are plain class attributes,
+    not name-mangled ones, so a snapshot of only the mangled state left a
+    test's interceptor installed for every later request in the worker."""
+    from supertokens_python.querier import Querier
+
+    monkeypatch.setenv("SUPERTOKENS_ENV", "testing")
+    interceptor_before = Querier.network_interceptor
+    version_before = Querier.api_version
+
+    def interceptor(*args: object) -> tuple[object, ...]:
+        return args
+
+    with supertokens_state_restored():
+        Querier.network_interceptor = interceptor
+        Querier.api_version = "0.0-test"
+
+    assert Querier.network_interceptor is interceptor_before
+    assert Querier.api_version == version_before
+
+
 def test_build_supertokens_app_info_uses_origin_when_gateway_contains_api_prefix():
     original_api_url = settings.api_url
     original_gateway_path = identity_settings.supertokens_api_gateway_path

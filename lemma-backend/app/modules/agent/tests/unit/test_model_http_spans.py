@@ -12,9 +12,12 @@ and never the request's headers, where the provider credential travels.
 from __future__ import annotations
 
 import asyncio
+import tomllib
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 from opentelemetry.instrumentation.httpx import HTTPX2ClientInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -106,6 +109,28 @@ async def test_a_model_request_gets_a_client_span(
     assert _SECRET not in recorded
     assert "not recorded" not in recorded
     assert not any(key.startswith("http.request.header") for key in attributes)
+
+
+def test_the_declared_floor_has_the_httpx2_instrumentor() -> None:
+    """Start-up calls ``HTTPX2ClientInstrumentor``, which arrived in 0.65b0.
+
+    A floor below it lets a resolver install a version without the class, and
+    start-up then fails on an ``AttributeError``. The OTel instrumentation
+    packages release together, so they share the floor.
+    """
+    pyproject = Path(__file__).resolve().parents[5] / "pyproject.toml"
+    with pyproject.open("rb") as handle:
+        declared = tomllib.load(handle)["project"]["dependencies"]
+    floors = {
+        requirement.name: requirement.specifier
+        for requirement in map(Requirement, declared)
+        if requirement.name.startswith("opentelemetry-instrumentation-")
+    }
+
+    assert "opentelemetry-instrumentation-httpx" in floors
+    for name, specifier in floors.items():
+        assert not specifier.contains("0.64b0", prereleases=True), name
+        assert specifier.contains("0.65b0", prereleases=True), name
 
 
 def test_nothing_is_instrumented_with_observability_off(

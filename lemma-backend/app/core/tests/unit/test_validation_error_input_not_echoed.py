@@ -14,7 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import Response
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from app.core.api.exception_handlers import register_exception_handlers
 
@@ -33,6 +33,28 @@ class _Profile(BaseModel):
     headers: dict[str, str]
 
 
+class _Token(BaseModel):
+    """Validators worded both ways: one quoting its input, one naming its rule."""
+
+    token: str
+    label: str = "default"
+
+    @field_validator("token")
+    @classmethod
+    def _quotes_its_input(cls, value: str) -> str:
+        if not value.startswith("tok_"):
+            raise ValueError(f"Invalid value: {value}")
+        return value
+
+    @field_validator("label")
+    @classmethod
+    def _names_its_rule(cls, value: str) -> str:
+        assert value.strip(), f"label must not be blank, got {value!r}"
+        if len(value) > 20:
+            raise ValueError("label must be at most 20 characters")
+        return value
+
+
 @pytest.fixture
 def client() -> TestClient:
     app = FastAPI()
@@ -45,6 +67,10 @@ def client() -> TestClient:
     @app.post("/profiles")
     async def _create(body: _Profile) -> dict[str, str]:
         return {"ok": str(body.base_url)}
+
+    @app.post("/tokens")
+    async def _store(body: _Token) -> dict[str, str]:
+        return {"ok": body.label}
 
     return TestClient(app, raise_server_exceptions=False)
 
@@ -98,3 +124,56 @@ def test_the_rule_is_kept_and_the_value_is_not(client: TestClient) -> None:
     assert error["ctx"] == {"max_length": 100}
     assert "input" not in error
     assert "xxxx" not in response.text
+
+
+def test_a_validator_message_that_quotes_the_input_is_replaced(
+    client: TestClient,
+) -> None:
+    response = client.post("/tokens", json={"token": _SECRET})
+
+    (error,) = _errors(response)
+    assert error["loc"] == ["body", "token"]
+    assert error["type"] == "value_error"
+    assert error["msg"] == "Value error, the value is not valid"
+    assert "ctx" not in error
+    assert _SECRET not in response.text
+
+
+def test_an_assertion_that_quotes_the_input_is_replaced(client: TestClient) -> None:
+    blank = " " * 8
+
+    response = client.post("/tokens", json={"token": "tok_1", "label": blank})
+
+    (error,) = _errors(response)
+    assert error["type"] == "assertion_error"
+    assert error["msg"] == "Assertion failed, the value is not valid"
+    assert blank not in response.text
+
+
+def test_a_validator_message_that_names_its_rule_is_kept(client: TestClient) -> None:
+    response = client.post("/tokens", json={"token": "tok_1", "label": "z" * 30})
+
+    (error,) = _errors(response)
+    assert error["type"] == "value_error"
+    assert error["msg"] == "Value error, label must be at most 20 characters"
+
+
+def test_only_the_rules_own_context_is_kept() -> None:
+    from app.core.api.exception_handlers import _described
+
+    described = _described(
+        {
+            "type": "union_tag_invalid",
+            "loc": ("body", "kind"),
+            "msg": "Input tag 'x' found using 'kind' does not match any of the expected tags",
+            "input": {"kind": "x"},
+            "ctx": {
+                "discriminator": "'kind'",
+                "tag": f"{_SECRET}-part",
+                "expected_tags": "'a', 'b'",
+                "error": f"near {_SECRET}",
+            },
+        }
+    )
+
+    assert described["ctx"] == {"discriminator": "'kind'", "expected_tags": "'a', 'b'"}

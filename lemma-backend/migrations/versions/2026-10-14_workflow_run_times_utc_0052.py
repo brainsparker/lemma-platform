@@ -24,9 +24,24 @@ rebuild either. Both columns change in one ALTER, so the lock is taken once.
 The lock still has to queue behind any open transaction that has touched the
 table, which is why the lock wait is bounded: a busy table fails the migration
 quickly rather than stalling every run write behind it.
+
+Rolling deploy: the ``SET LOCAL`` protects the conversion, not the writes
+after it. A worker still on the previous release binds a naive UTC time with
+an explicit ``::timestamp without time zone`` cast (SQLAlchemy's asyncpg
+dialect renders one), and Postgres assigns that to the new column in the
+*session's* zone -- the database or role default, since that release sets
+none. Where the default is UTC -- the official Postgres image's default and
+the usual managed services' -- nothing shifts. Where it is not, a run an old
+worker writes between this migration and its own replacement is stored that
+zone's offset away from its instant; so the upgrade warns, and such a
+deployment drains the old release's workers before upgrading. The new release pins every
+connection to UTC (``SESSION_ZONE`` in ``app.core.infrastructure.db.session``)
+and binds aware times, so it is unaffected either way.
 """
 
 from __future__ import annotations
+
+import logging
 
 from alembic import op
 
@@ -55,7 +70,30 @@ def _retype(target: str) -> None:
     op.execute("SET LOCAL lock_timeout TO DEFAULT")
 
 
+#: The names Postgres accepts for UTC itself, rather than for a zone that is
+#: at offset zero for only part of the year.
+_UTC_NAMES = frozenset(
+    name.casefold()
+    for base in ("UTC", "UCT", "GMT", "GMT0", "Universal", "Zulu", "Greenwich")
+    for name in (base, f"Etc/{base}")
+)
+
+
+def _warn_unless_sessions_default_to_utc() -> None:
+    zone = op.get_bind().exec_driver_sql("SHOW TimeZone").scalar()
+    if str(zone).casefold() in _UTC_NAMES:
+        return
+    logging.getLogger("alembic.runtime.migration").warning(
+        "0052: this database's sessions default to TimeZone %r, not UTC. "
+        "A worker still on the previous release writes workflow run times "
+        "that are read in that zone once this migration lands; drain those "
+        "workers before upgrading.",
+        zone,
+    )
+
+
 def upgrade() -> None:
+    _warn_unless_sessions_default_to_utc()
     _retype("timestamp with time zone")
 
 

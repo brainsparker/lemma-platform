@@ -63,22 +63,97 @@ def _without_echoed_input(errors: object) -> object:
     payload. A client fixing a request already has what it sent; what it
     needs back is where and why. ``ctx`` is kept only for values that are the
     rule's (a length limit, the expected values), never the input itself or
-    an exception, whose text can quote it.
+    an exception, whose text can quote it. A validator's ``msg`` is kept only
+    when it quotes nothing the request sent.
     """
     if not isinstance(errors, list):
         return errors
     return [_described(error) if isinstance(error, dict) else error for error in errors]
 
 
+#: The ``ctx`` parameters that are the rule's, never the input's: limits,
+#: patterns and the values a field accepts. Anything else -- a validator's
+#: ``error``, a union's ``tag`` (the discriminator the request sent) -- is
+#: dropped, because its text can quote what was refused.
+_RULE_CONTEXT_KEYS = frozenset(
+    {
+        "max_length",
+        "min_length",
+        "actual_length",
+        "ge",
+        "le",
+        "gt",
+        "lt",
+        "multiple_of",
+        "max_digits",
+        "decimal_places",
+        "whole_digits",
+        "pattern",
+        "expected",
+        "expected_tags",
+        "discriminator",
+        "field_type",
+        "class_name",
+        "allowed_schemes",
+    }
+)
+
+#: Error types whose ``msg`` is a validator's own text, which may be built from
+#: the value it refused (``ValueError(f"Invalid value: {value}")``). The
+#: built-in types' messages are pydantic's templates over ``ctx``.
+_VALIDATOR_MESSAGE_FALLBACKS = {
+    "value_error": "Value error, the value is not valid",
+    "assertion_error": "Assertion failed, the value is not valid",
+}
+
+#: Shorter strings are kept: they quote nothing worth hiding, and a one-letter
+#: input would otherwise match, and blank, nearly every message.
+_MIN_QUOTED_LENGTH = 4
+
+
+def _input_strings(value: object) -> list[str]:
+    """Every string value in a refused input; a mapping's keys are field
+    names, the schema's words rather than the request's."""
+    if isinstance(value, str):
+        return [value] if len(value) >= _MIN_QUOTED_LENGTH else []
+    if isinstance(value, Mapping):
+        return [text for item in value.values() for text in _input_strings(item)]
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return [text for item in value for text in _input_strings(item)]
+    return []
+
+
+def _safe_message(error: dict[str, object]) -> object:
+    """The error's ``msg``, unless it is a validator's and quotes the input.
+
+    The platform's own validators name the rule ("table_name cannot be
+    empty"), and those words are what a client needs, so they are kept. A
+    message that contains any string the request sent -- or whose input was
+    not supplied to check against -- is replaced by its type's fixed wording.
+    """
+    message = error.get("msg")
+    fallback = _VALIDATOR_MESSAGE_FALLBACKS.get(str(error.get("type")))
+    if fallback is None or not isinstance(message, str):
+        return message
+    if "input" not in error:
+        return fallback
+    if any(text in message for text in _input_strings(error["input"])):
+        return fallback
+    return message
+
+
 def _described(error: dict[str, object]) -> dict[str, object]:
     kept = {key: error[key] for key in _VALIDATION_ERROR_KEYS if key in error}
+    if "msg" in kept:
+        kept["msg"] = _safe_message(error)
     context = error.get("ctx")
     if isinstance(context, Mapping):
         refused = error.get("input")
         rule = {
             str(key): value
             for key, value in context.items()
-            if isinstance(value, (int, float, str, bool))
+            if str(key) in _RULE_CONTEXT_KEYS
+            and isinstance(value, (int, float, str, bool))
             and not (isinstance(value, str) and value == refused)
         }
         if rule:

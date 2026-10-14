@@ -368,8 +368,9 @@ async def test_whatsapp_send_display_resource_uses_cta_url_payload():
     assert posted.headers["Authorization"] == "Bearer wa-token"
     assert body["type"] == "interactive"
     assert body["interactive"]["type"] == "cta_url"
-    assert body["interactive"]["action"]["parameters"]["url"].startswith(
-        "https://app.example.test"
+    assert (
+        body["interactive"]["action"]["parameters"]["url"]
+        == "https://app.example.test/pod/p/files?file=/me/report.pdf"
     )
 
 
@@ -595,8 +596,9 @@ async def test_telegram_send_display_resource_uses_inline_keyboard():
     body = http.json_of(posted)
     assert str(posted.url).endswith("/sendMessage")
     assert body["parse_mode"] == "HTML"
-    assert body["reply_markup"]["inline_keyboard"][0][0]["url"].startswith(
-        "https://app.example.test"
+    assert (
+        body["reply_markup"]["inline_keyboard"][0][0]["url"]
+        == "https://app.example.test/pod/p/data?tab=deals"
     )
 
 

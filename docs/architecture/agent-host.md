@@ -555,6 +555,60 @@ tells the agent to use Lemma's:
 delivering each of these, against a scripted agent that records what it is
 sent and the environment it starts in.
 
+## Resilience to agent updates
+
+The coding agents the host drives, and their ACP adapters, release on their
+own schedule -- some weekly. The rule that keeps an agent update from breaking
+Lemma:
+
+**Strict on our protocol, tolerant on agent-originated content.** The
+host↔backend envelope -- frame types, event types, run states, harness
+health, auth, lease epochs, the run spec -- is ours and is held exactly; an
+unknown value there is a bug on one side of the wire, and refusing it keeps
+the two in step. What an *agent* writes -- `session/update` kinds, tool-call
+kinds and statuses, content blocks, plan entries, permission option kinds,
+configuration options and their types, stop reasons, usage counts, `_meta`,
+version strings -- may grow at any time. Something new there is skipped,
+passed through or noted, and never the reason the parts Lemma knows stop
+working.
+
+In practice:
+
+- **The host settles agent output before typing it.**
+  `desktop/agent-host/src/acp/tolerance.rs` is the first handler on every
+  agent connection. An unknown update kind or content block is skipped; an
+  unknown tool status or tool content entry is removed; an unknown plan
+  priority or status is read as the plainest one; `session/prompt` is read
+  field by field, so a new stop reason ends the turn by name. Each unknown is
+  logged once per kind, by its name, never with the content around it.
+- **An unknown permission option is never consent.** It is removed from the
+  request, not mapped to a known kind, so it is neither shown nor selected; a
+  request offering nothing else is answered `cancelled`. An unknown tool kind
+  on a permission request is removed too, rather than read as ACP's `other`,
+  which the scoped-tool check trusts. The backend likewise never selects a
+  kind it does not know (`agent_host_permissions.option_for`).
+- **One option does not cost the harness.** An option of a type Lemma cannot
+  offer (only `select` and `boolean` are), or one it cannot read, is dropped
+  from the snapshot (`AgentHostHarnessSnapshot`) and logged by type; the rest
+  publish. A selection for an option that has disappeared is dropped when the
+  run is dispatched (`carry_agent_host_selections`).
+- **Display text is cut, not refused.** A version banner or label longer than
+  its column is shortened; identifiers a selection names (`id`, `category`)
+  are not, since shortening one names a different option.
+- **A floor, not a pin.** `minimum_upstream_version` refuses an agent older
+  than the one Lemma was certified against; a newer one runs. The adapter
+  itself stays pinned by version and integrity in
+  `agent-adapters.lock.json`, and the security checks -- credentials, the
+  seatbelt policy, the policy-bearing option filter -- do not loosen.
+
+`desktop/agent-host/tests/future_agent.rs` replays every recorded transcript
+with unknown fields injected at every level, unknown update kinds, tool
+content, content blocks, permission option kinds, configuration option types
+and `_meta`, and holds the known parts to the same reviewed events;
+`app/modules/agent/tests/unit/test_agent_host_agent_updates.py` does the same
+for the backend. A change that makes either stricter about agent content has to
+say why here.
+
 ## The link
 
 The host talks to Lemma over **one WebSocket per paired workspace**, opened by

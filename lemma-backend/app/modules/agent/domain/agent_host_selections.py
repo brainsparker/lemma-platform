@@ -9,6 +9,7 @@ with different values.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.agent_host_options import agent_host_option_is_selectable
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.value_objects import JsonObject
 
@@ -166,6 +167,10 @@ def _option_accepts(option: dict[str, object], value: object) -> bool:
     scalar, of the same type as the value the harness reports it holds when it
     reports one.
     """
+    # A type Lemma cannot offer takes nothing: the host does not publish one,
+    # and a stored option from before that check is not a choice either.
+    if not agent_host_option_is_selectable(option):
+        return False
     allowed_values = _agent_host_option_values(option.get("options"))
     if allowed_values:
         return value in allowed_values
@@ -184,6 +189,12 @@ def _option_accepts(option: dict[str, object], value: object) -> bool:
 
 
 def _agent_host_option_values(raw_options: object) -> list[object]:
+    """Every value an option offers, its groups' choices included.
+
+    ACP lets an agent group a select's choices (``{group, name, options}``).
+    Read as a choice, a group has no value -- so an option offering only
+    groups read as offering nothing, and "nothing" means any scalar is taken.
+    """
     if not isinstance(raw_options, list):
         return []
     values: list[object] = []
@@ -195,4 +206,6 @@ def _agent_host_option_values(raw_options: object) -> list[object]:
             values.append(item["value"])
         elif "id" in item:
             values.append(item["id"])
+        elif isinstance(item.get("options"), list):
+            values.extend(_agent_host_option_values(item["options"]))
     return values

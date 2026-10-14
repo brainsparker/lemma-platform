@@ -19,6 +19,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.agent_host_legacy.pairing_refused': EventSpec('info', frozenset()),
     'agent.agent_host_legacy.upgrade_required': EventSpec('info', frozenset({'host_id'})),
     'agent.agent_host_link.announce_skipped.degraded': EventSpec('warning', frozenset({'host_id'})),
+    'agent.agent_host_link.config_options_skipped': EventSpec('info', frozenset({'harness_key', 'host_id', 'skipped'})),
     'agent.agent_host_link.connected': EventSpec('info', frozenset({'connection_id', 'host_id', 'host_release'})),
     'agent.agent_host_link.control_deadlock_retried.degraded': EventSpec('warning', frozenset({'host_id'})),
     'agent.agent_host_link.disconnected': EventSpec('info', frozenset({'close_code', 'close_reason', 'connection_id', 'host_id', 'peer_closed'})),

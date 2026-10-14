@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
 import pytest
@@ -30,8 +31,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.domain.events import DomainEvent
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.events.models import DomainEventOutbox
-from app.core.infrastructure.events import outbox_wake
 from app.core.infrastructure.events.outbox_wake import (
+    OUTBOX_WAKE_CHANNEL,
     OutboxWakeListener,
     asyncpg_connect_kwargs,
 )
@@ -52,22 +53,37 @@ class _WakeEvent(DomainEvent):
         return "wake_e2e_events"
 
 
-@pytest.fixture(autouse=True)
-def wake_channel(monkeypatch: pytest.MonkeyPatch) -> str:
-    """A channel only this test notifies.
+@pytest.fixture
+async def wake_database_url(test_database_url: str):
+    """A database of this test's own, on the shard's server.
 
-    The shard's database is shared: anything else committing events there
-    notifies the real channel, and these tests count notifications. What they
-    pin is PostgreSQL's behaviour, which is the same on any channel.
+    These tests count notifications, and PostgreSQL delivers one only within
+    the database it was issued in. The shard's database is shared: anything
+    else committing events there notifies the same channel, which is how the
+    no-listener test once counted two wakes it never sent.
     """
-    channel = f"lemma_outbox_wake_e2e_{uuid.uuid4().hex}"
-    monkeypatch.setattr(outbox_wake, "OUTBOX_WAKE_CHANNEL", channel)
-    return channel
+    name = f"lemma_e2e_wake_{uuid.uuid4().hex[:12]}"
+    parts = urlsplit(test_database_url)
+    admin = await asyncpg.connect(
+        **asyncpg_connect_kwargs(test_database_url, application_name="lemma-e2e-admin")
+    )
+    try:
+        await admin.execute(f'CREATE DATABASE "{name}"')
+    finally:
+        await admin.close()
+    yield urlunsplit(parts._replace(path=f"/{name}"))
+    admin = await asyncpg.connect(
+        **asyncpg_connect_kwargs(test_database_url, application_name="lemma-e2e-admin")
+    )
+    try:
+        await admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+    finally:
+        await admin.close()
 
 
 @pytest.fixture
-async def outbox_engine(test_database_url: str):
-    engine = create_async_engine(test_database_url)
+async def outbox_engine(wake_database_url: str):
+    engine = create_async_engine(wake_database_url)
     async with engine.begin() as connection:
         await connection.run_sync(DomainEventOutbox.__table__.create, checkfirst=True)
     yield engine
@@ -75,9 +91,9 @@ async def outbox_engine(test_database_url: str):
 
 
 @pytest.fixture
-async def listener(test_database_url: str, wake_channel: str):
+async def listener(wake_database_url: str):
     """A live listener on its own connection, as the dispatcher runs it."""
-    instance = OutboxWakeListener(test_database_url, label="e2e", channel=wake_channel)
+    instance = OutboxWakeListener(wake_database_url, label="e2e")
     task = asyncio.create_task(instance.run())
     # run() sets the wake once on connect; consume that so tests observe only
     # what their own transaction produced.
@@ -120,7 +136,7 @@ async def test_rollback_wakes_nobody(outbox_engine, listener) -> None:
 
 
 async def test_the_row_is_visible_when_the_wake_arrives(
-    outbox_engine, listener, test_database_url: str
+    outbox_engine, listener
 ) -> None:
     """No wake-before-write race: the claim query cannot come up empty."""
     await _stage(outbox_engine, commit=True)
@@ -134,7 +150,7 @@ async def test_the_row_is_visible_when_the_wake_arrives(
 
 
 async def test_a_notification_issued_with_no_listener_is_lost(
-    test_database_url: str, wake_channel: str
+    wake_database_url: str,
 ) -> None:
     """The reason the fallback poll exists. Do not delete the poll.
 
@@ -142,14 +158,16 @@ async def test_a_notification_issued_with_no_listener_is_lost(
     window when nothing is listening at all.
     """
     connection = await asyncpg.connect(
-        **asyncpg_connect_kwargs(test_database_url, application_name="lemma-e2e-probe")
+        **asyncpg_connect_kwargs(wake_database_url, application_name="lemma-e2e-probe")
     )
     try:
-        await connection.execute(f"NOTIFY {wake_channel}, 'while_nobody_listens'")
+        await connection.execute(
+            f"NOTIFY {OUTBOX_WAKE_CHANNEL}, 'while_nobody_listens'"
+        )
     finally:
         await connection.close()
 
-    late = OutboxWakeListener(test_database_url, label="e2e-late", channel=wake_channel)
+    late = OutboxWakeListener(wake_database_url, label="e2e-late")
     task = asyncio.create_task(late.run())
     try:
         # The connect-time wake is the listener's own doing, so it does not

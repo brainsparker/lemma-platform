@@ -117,8 +117,9 @@ the architecture baseline in `lemma-backend/architecture-baseline.json`, which
   object-storage, streaming, or retry I/O.
 - Background side effects must be idempotent: a work item whose lease expires
   mid-run runs again. Database effects written in a fast handler's
-  transaction, or in a job's `complete_work`, are exactly once; anything
-  outside the database needs its own key.
+  transaction, in a job's `complete_work`, or in a transaction fenced with
+  `JobContext.hold_lease`, are exactly once; anything outside the database
+  needs its own key.
 - API errors use the shared `{message, code, details}` envelope.
 - Secrets should be encrypted at rest and must never be logged or returned in
   diagnostic details.

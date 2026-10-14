@@ -95,6 +95,12 @@ transaction id is below the oldest transaction still open
 of that rule is that delivery and the live socket wait for the **oldest open
 transaction on the datastore database's cluster**, whatever it is doing.
 
+A record write never migrates its pod schema. It checks the change log is
+there (`ensure_change_log`): a per-process memo, or one unlocked read. A schema
+the `pod_schema.backfill` periodic (armed at the first worker boot of a release
+that adds a pod-schema version) has not reached yet gets only the change log's
+own two tables, never the search-chunk rewrite of version 2.
+
 **Cutover.** Record writes used to stage events in the datastore database's
 `domain_event_outbox`, which a dispatcher published to `datastore.events` for
 the `schedule-datastore-events` and `mcp-access-event-deliveries` consumer

@@ -13,6 +13,19 @@ under leases that expire, and another process reclaims them. A poison item
 stops at `dead` with its domain state written terminal, and stays for
 inspection.
 
+Every claim bumps the item's `lease_epoch`, and every fenced write (a
+completion, a failure, a release, an agent turn's step) matches the owner and
+that epoch under the item's row lock. A process whose lease lapsed while it was
+still running the item -- its heartbeat could not reach the database -- writes
+nothing after another claim, even one by the same process.
+
+The database being unavailable (a refused connection, a full server, an empty
+pool, a connection cut mid-statement) is not an item failing. The runtime
+retries it without charging an attempt, for as long as the kind's unavailable
+budget, and handlers that record failures re-raise it rather than record it
+(`raise_if_database_unavailable`). An item that outlasts the budget dies as
+`unavailable_exhausted`, and its domain state says the database was down.
+
 Work runs in classes (`interactive`, `automation`, `delivery`, `ingestion`,
 `admin`, `receivers`, `events`), each with its own slots, per-pod cap, lease
 and shutdown grace. Recurring maintenance is periodic work: one item per sweep,

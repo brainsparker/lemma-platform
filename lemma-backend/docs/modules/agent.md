@@ -21,7 +21,11 @@ sandbox lifecycle belongs to [workspace](workspace.md).
 
 Everything that must follow a run's end is a work item or a fact written in the
 transaction that ends it, so a crash between the end and its follow-ups cannot
-lose one. Transient token/status frames use the core realtime-channel port with
+lose one. Each step of a turn (a tool call, its return, the answer) commits
+fenced by the turn's claim, so a worker that lost the turn's lease cannot add a
+second answer, and a resumed turn whose answer had committed ends on it without
+asking the model again. Lemma's database being unreachable mid-turn interrupts
+the turn, which resumes; it is never recorded as the model failing. Transient token/status frames use the core realtime-channel port with
 a Redis Pub/Sub adapter; each SSE connection leases one subscription connection
 and releases it on completion, failure, or cancellation.
 

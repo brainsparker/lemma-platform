@@ -1028,6 +1028,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'work.periodic.recreated': EventSpec('warning', frozenset({'kind', 'name'})),
     'work.queues.refresh_failed': EventSpec('warning', frozenset({'work_class'})),
     'work.retention.pruned': EventSpec('info', frozenset({'dead_items', 'full_buckets', 'idle_queues'})),
+    'work.runtime.boot_waiting_for_database.degraded': EventSpec('warning', frozenset({'error_type', 'retry_in_seconds'})),
     'work.runtime.started': EventSpec('info', frozenset({'classes', 'db_connections', 'periodics_armed'})),
     'work.runtime.stopped': EventSpec('info', frozenset({'released'})),
     'work.runtime.stopping': EventSpec('info', frozenset({'grace_seconds'})),

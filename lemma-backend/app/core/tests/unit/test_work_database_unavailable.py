@@ -135,3 +135,44 @@ def test_anything_else_is_the_item_failing(exc: Exception) -> None:
     decision = decide(_spec(), FRESH, exc, NOW)
 
     assert isinstance(decision, Dead) and decision.reason == "attempts_exhausted"
+
+
+class _Session:
+    async def __aenter__(self) -> "_Session":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def commit(self) -> None:
+        return None
+
+
+async def test_a_booting_worker_waits_for_a_full_database(monkeypatch) -> None:
+    """Too many clients at boot is waited out, not an exit and a crash loop."""
+    from app.core.infrastructure.work import maintenance, runtime
+
+    calls = {"n": 0}
+
+    async def arm(session, registry, classes) -> int:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _db("53300")
+        return 4
+
+    async def no_wait(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(maintenance, "arm_periodics", arm)
+    monkeypatch.setattr(runtime.asyncio, "sleep", no_wait)
+    work = runtime.WorkRuntime(_Session, classes=[WorkClass.EVENTS])
+
+    assert await work._arm_periodics() == 4  # noqa: SLF001
+    assert calls["n"] == 3
+
+    async def broken(session, registry, classes) -> int:
+        raise _db("42P01")
+
+    monkeypatch.setattr(maintenance, "arm_periodics", broken)
+    with pytest.raises(OperationalError):
+        await work._arm_periodics()  # noqa: SLF001

@@ -19,6 +19,7 @@ from uuid import uuid4
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.core.infrastructure.work import maintenance
 from app.core.infrastructure.work.config import (
     class_shutdown_grace,
@@ -46,6 +47,9 @@ from app.core.log.log import get_logger
 from app.core.request_context import create_background_task
 
 logger = get_logger(__name__)
+
+#: How long a booting worker waits for a database that refuses connections.
+_BOOT_DB_WAIT_SECONDS = 60.0
 
 
 def process_owner() -> str:
@@ -113,14 +117,39 @@ class WorkRuntime:
     def classes(self) -> list[WorkClass]:
         return list(self.dispatchers)
 
+    async def _arm_periodics(self) -> int:
+        """Arm the periodics, waiting out a database that cannot take a connection.
+
+        A worker that joins a rolling deploy while the database is full would
+        otherwise exit at boot and crash-loop until a slot frees. Bounded: past
+        ``_BOOT_DB_WAIT_SECONDS`` the error is raised as before.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _BOOT_DB_WAIT_SECONDS
+        delay = 0.5
+        while True:
+            try:
+                async with self.db.control() as session:
+                    armed = await maintenance.arm_periodics(
+                        session, self._registry, self.classes
+                    )
+                    await session.commit()
+                return armed
+            except (SQLAlchemyError, OSError) as exc:
+                if not is_database_unavailable(exc) or loop.time() > deadline:
+                    raise
+                logger.warning(
+                    "work.runtime.boot_waiting_for_database.degraded",
+                    error_type=type(exc).__name__,
+                    retry_in_seconds=delay,
+                )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 5.0)
+
     async def start(self) -> None:
         if not self.dispatchers:
             return
-        async with self.db.control() as session:
-            armed = await maintenance.arm_periodics(
-                session, self._registry, self.classes
-            )
-            await session.commit()
+        armed = await self._arm_periodics()
         for cls, dispatcher in self.dispatchers.items():
             self._tasks.append(
                 create_background_task(

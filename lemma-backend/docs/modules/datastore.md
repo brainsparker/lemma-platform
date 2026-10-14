@@ -87,7 +87,9 @@ A lost wake costs latency only: the hub also reads on an idle poll.
 Every record write appends one slim row per record to its pod schema's
 `reserved_changes`, in the writing statement; row snapshots are kept only for a
 `(table, op)` a durable subscriber (a DATASTORE trigger, an MCP event
-subscription) watches. Readers (`changes/reader.py`) only see rows whose
+subscription) watches, and only for a write intent (`normal`, `bulk`,
+`import`) one of them wants rows for -- a bulk import every watching trigger
+skips writes slim rows, from which the skips are still recorded. Readers (`changes/reader.py`) only see rows whose
 transaction id is below the oldest transaction still open
 (`pg_snapshot_xmin`), which is what makes a read final and gap-free. The cost
 of that rule is that delivery and the live socket wait for the **oldest open

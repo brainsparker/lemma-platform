@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import sys
 from collections.abc import Awaitable, Callable
 
 
@@ -28,9 +30,15 @@ from app.core.infrastructure.jobs.streaq_runtime import (
 )
 from app.modules.agent_surfaces.composition import (
     build_app_event_handler,
+    build_surface_egress,
     build_surface_ingress,
     build_surface_service,
     build_surface_turn_starter,
+)
+from app.modules.agent_surfaces.services.owed_reply import (
+    DELIVER_OWED_REPLY_JOB,
+    OwedReply,
+    deliver_owed_reply,
 )
 from app.modules.agent_surfaces.domain.events import (
     SurfaceWebhookReceivedEvent,
@@ -60,18 +68,36 @@ from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store 
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.modules.agent_surfaces.services.contact_keepers import (
+    tell_admins_a_keeper_left,
+)
 from app.modules.agent_surfaces.services.group_updates import apply_group_updates
+from app.modules.agent_surfaces.services.whatsapp_delivery_status import (
+    apply_delivery_statuses,
+)
 from app.modules.agent_surfaces.services.telegram_group_join import (
     claim_telegram_group_join,
 )
-from app.modules.agent_surfaces.services.surface_inbound import (
+from app.modules.agent_surfaces.services.delivery_claims import (
     release_ingress_claim,
 )
-from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
-from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
+from app.modules.pod.domain.events import (
+    PodDeletedEvent,
+    PodEvents,
+    PodMemberRemovedEvent,
+)
+from app.modules.identity.domain.events import (
+    IdentityEvents,
+    UserMobileChangedEvent,
+)
 from app.core.log.log import get_logger
+from app.core.request_context import current_observability_context
+from app.modules.agent_surfaces.services.lost_delivery import after_failed_delivery
 
-from app.modules.agent_surfaces.domain.delivery_limits import CONSUMER_ATTEMPTS
+from app.modules.agent_surfaces.domain.delivery_limits import (
+    CONSUMER_ATTEMPTS,
+    OWED_REPLY_JOB_TRIES,
+)
 
 logger = get_logger(__name__)
 
@@ -160,13 +186,20 @@ async def handle_surface_webhook(
     received = SurfaceWebhookReceivedEvent.model_validate(event)
 
     async def process() -> None:
-        await _process_surface_webhook(
-            received,
-            fs_logger,
-            uow_factory=uow_factory,
-            job_queue=job_queue,
-            onboarding_handler=onboarding_handler,
-        )
+        finished = False
+        try:
+            await _process_surface_webhook(
+                received,
+                fs_logger,
+                uow_factory=uow_factory,
+                job_queue=job_queue,
+                onboarding_handler=onboarding_handler,
+            )
+            finished = True
+        finally:
+            failure = sys.exception()
+            if not finished and isinstance(failure, Exception):
+                await after_failed_delivery(received, failure, uow_factory=uow_factory)
 
     await inbox.process(
         "agent-surfaces.webhook", received, process, max_attempts=CONSUMER_ATTEMPTS
@@ -295,6 +328,8 @@ async def _process_surface_webhook(
         # A group the bot asked WhatsApp to create, confirmed or refused. Never
         # instead of the message paths: such a body carries no message.
         await apply_group_updates(uow, ingress_request, adapters=adapters)
+        # And a WhatsApp send Meta now says never arrived.
+        await apply_delivery_statuses(uow, ingress_request)
 
         from app.modules.agent_surfaces.services.onboarding_inputs import (
             is_onboarding_input,
@@ -396,7 +431,14 @@ async def on_pod_deleted(
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ) -> None:
-    """Remove all surfaces for a deleted pod so its accounts become free."""
+    """Remove all surfaces for a deleted pod so its accounts become free.
+
+    Also where a member leaving the pod is heard: one consumer group for the
+    stream, as it already had, rather than a second one to keep alive.
+    """
+    if event.get("event_type") == PodMemberRemovedEvent.get_event_type():
+        await _on_member_removed(event, uow_factory=uow_factory, inbox=inbox)
+        return
     if event.get("event_type") != PodDeletedEvent.get_event_type():
         return
 
@@ -407,6 +449,26 @@ async def on_pod_deleted(
 
     await inbox.process(
         "agent-surfaces.pod-deletion",
+        event,
+        process,
+        max_attempts=CONSUMER_ATTEMPTS,
+    )
+
+
+async def _on_member_removed(
+    event: dict[str, object], *, uow_factory: UnitOfWorkFactory, inbox: EventInboxPort
+) -> None:
+    """Tell the pod's administrators if the member looked after any contacts."""
+
+    async def process() -> None:
+        parsed = PodMemberRemovedEvent.model_validate(event)
+        async with uow_factory() as uow:
+            await tell_admins_a_keeper_left(
+                uow, pod_id=parsed.pod_id, user_id=parsed.user_id
+            )
+
+    await inbox.process(
+        "agent-surfaces.pod-member-removed",
         event,
         process,
         max_attempts=CONSUMER_ATTEMPTS,
@@ -456,4 +518,20 @@ async def process_surface_message(
     # calls, file ingestion, and voice transcription — so no pooled DB
     # connection is held during that I/O.
     starter = build_surface_turn_starter(worker_ctx.uow_factory)
-    await starter.execute_chat(task_payload.context)
+    attempt = current_observability_context().job_attempt
+    await starter.execute_queued_chat(
+        task_payload.context,
+        last_try=attempt is not None and attempt >= CONSUMER_ATTEMPTS,
+    )
+
+
+# One try: the job reschedules itself with the wait the platform asked for, and
+# a streaq retry would send again on its own clock instead.
+@streaq_task(name=DELIVER_OWED_REPLY_JOB, max_tries=OWED_REPLY_JOB_TRIES)
+async def deliver_owed_reply_task(payload: dict[str, object]) -> None:
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    await deliver_owed_reply(
+        OwedReply.model_validate(payload),
+        uow_factory=worker_ctx.uow_factory,
+        egress_factory=build_surface_egress,
+    )

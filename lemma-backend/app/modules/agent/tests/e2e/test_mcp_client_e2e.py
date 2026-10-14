@@ -459,9 +459,17 @@ async def test_conversation_mcp_refuses_a_member_removed_from_the_pod(
         async_client, pod_id, agent["name"], headers=auth_headers(member)
     )
 
-    async with _conversation_tools(
-        async_client, conversation_id, member["token"]
-    ) as client:
+    # The member's own machine: a run token is honoured only on a link paired
+    # to the person it belongs to.
+    as_member = httpx.AsyncClient(
+        transport=async_client._transport,
+        base_url=async_client.base_url,
+        headers=auth_headers(member),
+    )
+    async with (
+        as_member,
+        _conversation_tools(as_member, conversation_id, member["token"]) as client,
+    ):
         assert (await client.list_tools()).tools
 
         removed = await authenticated_client.delete(

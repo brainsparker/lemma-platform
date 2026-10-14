@@ -140,7 +140,7 @@ class StreamingParts:
         is therefore left unmarked and ``RunMessageWriter`` defaults it to
         ``is_final_answer``, which is right for the last part of a run and wrong
         for every preamble before a tool call. Deciding it needs the whole
-        response, the way the agent-host harness's ``_flush_messages`` does.
+        response, the way the agent-host harness's ``flush_messages`` does.
         """
         if isinstance(part, TextPart) or part_kind == "text":
             text = part_content if part_content is not None else part.content

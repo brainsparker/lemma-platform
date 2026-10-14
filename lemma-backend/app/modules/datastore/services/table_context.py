@@ -50,6 +50,12 @@ class TableContext:
     primary_key_column: str
     enable_rls: bool
     events_enabled: bool = False
+    contact_owned: bool = False
+    #: Who outside the pod is writing, when somebody is -- ``visitor:{session}``
+    #: or ``contact:{id}``. The write still runs as the member who opened the
+    #: table, or as the function a contact called; this is what its events say
+    #: instead of naming either.
+    outside_actor: str | None = None
     _column_map: Dict[str, ColumnSchema] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
@@ -61,6 +67,7 @@ class TableContext:
         table: DatastoreTableEntity,
         schema_name: str,
         events_enabled: bool = False,
+        outside_actor: str | None = None,
     ) -> "TableContext":
         return cls(
             pod_id=table.pod_id,
@@ -71,6 +78,8 @@ class TableContext:
             primary_key_column=table.primary_key_column,
             enable_rls=table.enable_rls,
             events_enabled=events_enabled,
+            contact_owned=table.contact_owned,
+            outside_actor=outside_actor,
         )
 
     def get_column(self, name: str) -> Optional[ColumnSchema]:

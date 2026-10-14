@@ -34,6 +34,7 @@ def routing_surfaces_double(surfaces: Sequence):
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
         surface_identity_id: str | None = None,
+        limit: int | None = None,
     ) -> list:
         chosen = list(surfaces)
         if surface_ids is not None:
@@ -67,6 +68,6 @@ def routing_surfaces_double(surfaces: Sequence):
                 for surface in chosen
                 if surface.surface_identity_id in (surface_identity_id, None)
             ]
-        return chosen
+        return chosen if limit is None else chosen[:limit]
 
     return _list_active_for_routing

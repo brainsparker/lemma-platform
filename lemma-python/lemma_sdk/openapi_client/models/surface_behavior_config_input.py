@@ -9,11 +9,13 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.surface_channel_route_input import SurfaceChannelRouteInput
+    from ..models.surface_contacts_config import SurfaceContactsConfig
     from ..models.surface_groups_config import SurfaceGroupsConfig
     from ..models.surface_identity_config_input import SurfaceIdentityConfigInput
     from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
     from ..models.surface_slack_config_input import SurfaceSlackConfigInput
     from ..models.surface_telegram_config_input import SurfaceTelegramConfigInput
+    from ..models.surface_whats_app_config_input import SurfaceWhatsAppConfigInput
 
 
 T = TypeVar("T", bound="SurfaceBehaviorConfigInput")
@@ -24,6 +26,8 @@ class SurfaceBehaviorConfigInput:
     """
     Attributes:
         channels (list[SurfaceChannelRouteInput] | Unset):
+        contacts (SurfaceContactsConfig | Unset): Whom the bot answers in private chats beyond the pod's members.
+            Mirrored.
         dm_conversation_reset_after_hours (int | None | Unset): Ignored. The DM reset window is a deployment-wide
             setting (SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS). Still accepted so existing pod bundles and clients keep
             working.
@@ -32,15 +36,18 @@ class SurfaceBehaviorConfigInput:
         send_policy (SurfaceSendPolicyConfig | Unset): Proactive-send controls. Mirrored across request and response.
         slack (SurfaceSlackConfigInput | Unset): The Slack settings a caller owns.
         telegram (SurfaceTelegramConfigInput | Unset): Selects the pod app exposed as this bot's Telegram Mini App.
+        whatsapp (SurfaceWhatsAppConfigInput | Unset): WhatsApp settings. Mirrored across request and response.
     """
 
     channels: list[SurfaceChannelRouteInput] | Unset = UNSET
+    contacts: SurfaceContactsConfig | Unset = UNSET
     dm_conversation_reset_after_hours: int | None | Unset = UNSET
     groups: SurfaceGroupsConfig | Unset = UNSET
     identity: SurfaceIdentityConfigInput | Unset = UNSET
     send_policy: SurfaceSendPolicyConfig | Unset = UNSET
     slack: SurfaceSlackConfigInput | Unset = UNSET
     telegram: SurfaceTelegramConfigInput | Unset = UNSET
+    whatsapp: SurfaceWhatsAppConfigInput | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
         channels: list[dict[str, Any]] | Unset = UNSET
@@ -49,6 +56,10 @@ class SurfaceBehaviorConfigInput:
             for channels_item_data in self.channels:
                 channels_item = channels_item_data.to_dict()
                 channels.append(channels_item)
+
+        contacts: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.contacts, Unset):
+            contacts = self.contacts.to_dict()
 
         dm_conversation_reset_after_hours: int | None | Unset
         if isinstance(self.dm_conversation_reset_after_hours, Unset):
@@ -76,11 +87,17 @@ class SurfaceBehaviorConfigInput:
         if not isinstance(self.telegram, Unset):
             telegram = self.telegram.to_dict()
 
+        whatsapp: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.whatsapp, Unset):
+            whatsapp = self.whatsapp.to_dict()
+
         field_dict: dict[str, Any] = {}
 
         field_dict.update({})
         if channels is not UNSET:
             field_dict["channels"] = channels
+        if contacts is not UNSET:
+            field_dict["contacts"] = contacts
         if dm_conversation_reset_after_hours is not UNSET:
             field_dict["dm_conversation_reset_after_hours"] = (
                 dm_conversation_reset_after_hours
@@ -95,17 +112,21 @@ class SurfaceBehaviorConfigInput:
             field_dict["slack"] = slack
         if telegram is not UNSET:
             field_dict["telegram"] = telegram
+        if whatsapp is not UNSET:
+            field_dict["whatsapp"] = whatsapp
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.surface_channel_route_input import SurfaceChannelRouteInput
+        from ..models.surface_contacts_config import SurfaceContactsConfig
         from ..models.surface_groups_config import SurfaceGroupsConfig
         from ..models.surface_identity_config_input import SurfaceIdentityConfigInput
         from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
         from ..models.surface_slack_config_input import SurfaceSlackConfigInput
         from ..models.surface_telegram_config_input import SurfaceTelegramConfigInput
+        from ..models.surface_whats_app_config_input import SurfaceWhatsAppConfigInput
 
         d = dict(src_dict)
         _channels = d.pop("channels", UNSET)
@@ -116,6 +137,13 @@ class SurfaceBehaviorConfigInput:
                 channels_item = SurfaceChannelRouteInput.from_dict(channels_item_data)
 
                 channels.append(channels_item)
+
+        _contacts = d.pop("contacts", UNSET)
+        contacts: SurfaceContactsConfig | Unset
+        if isinstance(_contacts, Unset):
+            contacts = UNSET
+        else:
+            contacts = SurfaceContactsConfig.from_dict(_contacts)
 
         def _parse_dm_conversation_reset_after_hours(
             data: object,
@@ -165,14 +193,23 @@ class SurfaceBehaviorConfigInput:
         else:
             telegram = SurfaceTelegramConfigInput.from_dict(_telegram)
 
+        _whatsapp = d.pop("whatsapp", UNSET)
+        whatsapp: SurfaceWhatsAppConfigInput | Unset
+        if isinstance(_whatsapp, Unset):
+            whatsapp = UNSET
+        else:
+            whatsapp = SurfaceWhatsAppConfigInput.from_dict(_whatsapp)
+
         surface_behavior_config_input = cls(
             channels=channels,
+            contacts=contacts,
             dm_conversation_reset_after_hours=dm_conversation_reset_after_hours,
             groups=groups,
             identity=identity,
             send_policy=send_policy,
             slack=slack,
             telegram=telegram,
+            whatsapp=whatsapp,
         )
 
         return surface_behavior_config_input

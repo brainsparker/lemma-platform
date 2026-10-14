@@ -253,6 +253,13 @@ async def _create_enum_table(
                     "required": True,
                     "options": ["pass", "fail", "friction"],
                 },
+                {
+                    "name": "summary",
+                    "type": "TEXT",
+                    "max_length": 500,
+                    "default": "pending",
+                    "unique": True,
+                },
             ],
         },
     )
@@ -319,6 +326,12 @@ async def test_pod_tables_describe_surfaces_enum_options(
     assert columns["result"]["options"] == ["pass", "fail", "friction"]
     # A non-enum column carries no options key.
     assert "options" not in columns["title"]
+    # What the database will refuse, said up front: VARCHAR(500) was described
+    # as TEXT, so a longer value was only learned from the failed write.
+    assert columns["summary"]["sql_type"] == "VARCHAR(500)"
+    assert columns["summary"]["max_length"] == 500
+    assert columns["summary"]["default"] == "pending"
+    assert columns["summary"]["unique"] is True
 
 
 @pytest.mark.asyncio

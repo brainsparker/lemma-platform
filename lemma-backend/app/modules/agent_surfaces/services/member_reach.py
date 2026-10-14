@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
@@ -37,9 +38,19 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
     SurfaceConversationLinkRepository,
 )
+from app.modules.agent_surfaces.domain.adapter_port import reply_window_reopener
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
+from app.modules.agent_surfaces.services.held_replies import (
+    hold_reply,
+    needs_asking,
+)
+from app.modules.agent_surfaces.services.reengage_template import (
+    reengage_template_for,
+)
 from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
+    reply_window_open,
 )
 
 logger = get_logger(__name__)
@@ -101,6 +112,13 @@ class MemberReach:
                 surface_id=surface.id, external_user_id=ext.external_user_id
             )
             if link is not None:
+                if not reply_window_open(
+                    platform=surface.surface_type,
+                    last_inbound_at=link.last_inbound_at,
+                ):
+                    return await self._reach_after_window(
+                        surface, link.conversation_id, message
+                    )
                 sent = await self.egress.send_agent_message_for_conversation(
                     conversation_id=link.conversation_id, message=message
                 )
@@ -112,3 +130,43 @@ class MemberReach:
         if wrong_tenant:
             return UndeliverableReason.wrong_tenant_on(channel)
         return UndeliverableReason.never_interacted_on(channel)
+
+    async def _reach_after_window(
+        self, surface: AgentSurfaceEntity, conversation_id: UUID, message: str
+    ) -> str | None:
+        """A member whose reply window has closed: ask them to write, and hold
+        the message for when they do.
+
+        Without a template there is no asking. Meta accepts a free-form send
+        then with a 200 and drops it later, so the honest answer is a refusal
+        now.
+        """
+        template = reengage_template_for(surface)
+        if template is None:
+            return UndeliverableReason.REPLY_WINDOW_CLOSED
+        target = await self.egress.delivery.resolve_egress_target(conversation_id)
+        reopener = reply_window_reopener(target.adapter) if target else None
+        if target is None or reopener is None:
+            return UndeliverableReason.REPLY_WINDOW_CLOSED
+        uow = self.egress.uow
+        asking = await needs_asking(uow, conversation_id)
+        if asking:
+            try:
+                async with connection_released(uow.session):
+                    await reopener.reopen_reply_window(
+                        credentials=target.credentials,
+                        event=target.event,
+                        template=template,
+                    )
+            except platform_transport_errors():
+                logger.warning(
+                    "agent_surfaces.member_reach.reengage_not_sent.degraded",
+                    surface_id=str(surface.id),
+                    conversation_id=str(conversation_id),
+                    exc_info=True,
+                )
+                # Nothing is held: a message behind an ask that never went
+                # would wait for a reply that is not coming.
+                return UndeliverableReason.SEND_FAILED
+        await hold_reply(uow, conversation_id, message, asked=asking)
+        return None

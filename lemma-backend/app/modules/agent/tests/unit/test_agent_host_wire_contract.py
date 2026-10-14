@@ -54,6 +54,7 @@ from app.modules.agent.domain.agent_host_link import (
     HostExecutionCapability,
     HostFrameType,
     LinkErrorCode,
+    McpBody,
     OpMethod,
     ServerFrameType,
 )
@@ -160,9 +161,14 @@ def test_the_tool_event_payloads_are_the_ones_this_side_models() -> None:
         AgentHostEventType.TOOL_CALL.value: AgentHostToolCallPayload,
         AgentHostEventType.TOOL_CALL_RESULT.value: AgentHostToolResultPayload,
     }
-    for case in CONTRACT["tool_events"]:
-        for raw in case["events"]:
-            models[raw["type"]].model_validate(raw["payload"])
+    validated = [
+        models[raw["type"]].model_validate(raw["payload"])
+        for case in CONTRACT["tool_events"]
+        for raw in case["events"]
+    ]
+
+    assert validated, "the contract carries no tool events to check"
+    assert {type(payload) for payload in validated} == set(models.values())
 
 
 def test_the_declared_limits_are_the_ones_this_side_enforces() -> None:
@@ -274,6 +280,21 @@ def test_the_link_error_codes_are_the_ones_the_host_acts_on() -> None:
     assert {member.value for member in LinkErrorCode} == set(
         CONTRACT["link"]["error_codes"]
     )
+
+
+def test_an_mcp_listing_relayed_with_null_params_is_answered() -> None:
+    """MCP lets ``tools/list`` omit ``params``; a host released before its
+    bridge filled them in sends ``null``. Refused, the agent ran every turn
+    without any of Lemma's tools, approvals and questions included."""
+    body = McpBody.model_validate(
+        {
+            "conversation_id": str(uuid7()),
+            "token": "run-token",
+            "method": "tools/list",
+            "params": None,
+        }
+    )
+    assert body.params == {}
 
 
 def test_the_link_path_and_heartbeat_are_shared() -> None:

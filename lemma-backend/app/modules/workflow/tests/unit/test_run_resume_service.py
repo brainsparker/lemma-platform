@@ -351,6 +351,40 @@ async def test_wait_within_the_ceiling_is_left_alone():
     assert engine.failures == []
 
 
+async def test_an_agent_step_with_its_own_timeout_is_stopped_at_it():
+    """The step's timeout replaces the deployment ceiling in both directions:
+    a step the author bounded at twenty minutes does not run for six hours."""
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+    now = datetime.now(timezone.utc)
+    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-bounded")
+    wait.payload = {"agent_name": "triage", "timeout_seconds": 1200}
+    wait.created_at = now - timedelta(minutes=30)
+
+    handled = await service._expire_overdue_wait(
+        wait, now - timedelta(hours=6), now=now
+    )
+
+    assert handled is True
+    assert "did not finish within 20 min" in engine.failures[0]["error"]
+
+
+async def test_an_agent_step_given_longer_than_the_ceiling_keeps_running():
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+    now = datetime.now(timezone.utc)
+    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-long")
+    wait.payload = {"agent_name": "triage", "timeout_seconds": 24 * 3600}
+    wait.created_at = now - timedelta(hours=10)
+
+    handled = await service._expire_overdue_wait(
+        wait, now - timedelta(hours=6), now=now
+    )
+
+    assert handled is False
+    assert engine.failures == []
+
+
 async def test_time_waits_are_exempt_from_the_ceiling():
     """A wait-until node is supposed to sit for as long as it was told to."""
     engine = FakeEngine()
@@ -427,7 +461,9 @@ async def test_the_sweep_asks_for_human_waits_and_polls_nothing_for_them():
     requested: list[list] = []
 
     class _WaitRepo:
-        async def list_active_older_than(self, *, wait_types, created_before, limit):
+        async def list_active_older_than(
+            self, *, wait_types, created_before, limit, after, **_filters
+        ):
             requested.append(list(wait_types))
             wait = _wait(WorkflowRunWaitType.HUMAN, None)
             wait.created_at = datetime.now(timezone.utc) - timedelta(hours=1)

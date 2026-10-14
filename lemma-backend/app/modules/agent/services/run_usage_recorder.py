@@ -6,11 +6,21 @@ one implementation instead of duplicating reserve/record/release plumbing.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.usage.contracts import AgentRunUsage, UsageReservation
+from app.modules.agent.domain.runtime_profiles import (
+    MODEL_PROVIDER_PROTOCOLS,
+    RuntimeProfileProtocol,
+)
+from app.modules.agent.domain.outsiders import Audience
+from app.modules.usage.contracts import (
+    AgentRunUsage,
+    UsageReservation,
+    outside_audience_source,
+)
 from app.modules.usage.contracts.execution import (
     UsageExecutionContext,
     UsageService,
@@ -18,6 +28,33 @@ from app.modules.usage.contracts.execution import (
 )
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.usage.contracts.metering import check_run_budget, finalize_metered_run
+
+
+def outside_source_for(audience: Audience) -> str | None:
+    """The usage source of work done for a run answering somebody outside the
+    pod, or ``None`` when ``audience`` is a member's."""
+    return outside_audience_source(
+        answers_outsider=audience.answers_outsiders,
+        answers_contact=audience.is_contact,
+    )
+
+
+def usage_source_for(audience: Audience) -> str:
+    """What a run answering ``audience`` records its usage under."""
+    return outside_source_for(audience) or "agent_run"
+
+
+def metered_per_request(runtime_profile: Mapping[str, object | None] | None) -> bool:
+    """Whether this run's model is called from here and metered as it streams.
+
+    A model-provider run is; an Agent Host run reports its usage at the end.
+    Compared as the protocol enum, not as the strings it is spelled with.
+    """
+    protocol = (runtime_profile or {}).get("protocol")
+    try:
+        return RuntimeProfileProtocol(str(protocol)) in MODEL_PROVIDER_PROTOCOLS
+    except ValueError:
+        return False
 
 
 class RunUsageRecorder:
@@ -35,16 +72,15 @@ class RunUsageRecorder:
         organization_id: UUID | None,
         user_id: UUID,
         runtime_profile: dict[str, object | None],
+        outside_audience: bool = False,
     ) -> UsageReservation | None:
-        if runtime_profile.get("protocol") in {
-            "OPENAI_COMPATIBLE",
-            "ANTHROPIC_COMPATIBLE",
-        }:
+        if metered_per_request(runtime_profile):
             await check_run_budget(
                 factory=self.uow_factory,
                 organization_id=organization_id,
                 user_id=user_id,
                 profile_scope=str(runtime_profile.get("scope") or "ORGANIZATION"),
+                outside_audience=outside_audience,
             )
             return None
         profile_id = runtime_profile.get("profile_id")
@@ -56,11 +92,19 @@ class RunUsageRecorder:
             model_name = str(runtime_profile.get("provider_model_name") or "default")
         with run_phase("usage_reserve"):
             async with self.uow_factory() as uow:
+                # The same rule as the metered path above: a run answering
+                # somebody outside the pod is never held to, or reserved
+                # against, the allowance of the member who looks after it.
+                # Past this check no limit applies to it, so there is nothing
+                # of the organization's to reserve either.
                 await self._service(uow).require_remote_budget_support(
                     organization_id=organization_id,
                     user_id=user_id,
                     profile_scope=profile_scope,
+                    outside_audience=outside_audience,
                 )
+                if outside_audience:
+                    return None
                 reservation = await self._service(uow).reserve_for_profile(
                     organization_id=organization_id,
                     user_id=user_id,
@@ -78,10 +122,7 @@ class RunUsageRecorder:
         runtime_profile: dict[str, object | None] | None,
         status: str,
     ) -> None:
-        if runtime_profile and runtime_profile.get("protocol") in {
-            "OPENAI_COMPATIBLE",
-            "ANTHROPIC_COMPATIBLE",
-        }:
+        if metered_per_request(runtime_profile):
             await finalize_metered_run(agent_run_id, status, factory=self.uow_factory)
 
     async def release(self, reservation: UsageReservation | None) -> None:
@@ -100,10 +141,7 @@ class RunUsageRecorder:
         status: str,
         reservation: UsageReservation | None,
     ) -> None:
-        if runtime_profile and runtime_profile.get("protocol") in {
-            "OPENAI_COMPATIBLE",
-            "ANTHROPIC_COMPATIBLE",
-        }:
+        if metered_per_request(runtime_profile):
             return
         async with self.uow_factory() as uow:
             await self._service(uow).record_agent_run_usage(

@@ -164,6 +164,17 @@ test("a coding agent's request expires with its window or its run", () => {
     assert.equal(hostPermissionExpired(details, { askedAtMs: asked, nowMs: asked + 60_000, runEnded: false }), false);
     assert.equal(hostPermissionExpired(details, { askedAtMs: asked, nowMs: asked + HOST_PERMISSION_WINDOW_MS, runEnded: false }), true);
     assert.equal(hostPermissionExpired(details, { askedAtMs: asked, nowMs: asked, runEnded: true }), true);
+    /* A turn Lemma ended for its parked window leaves the conversation waiting
+       on the request, and the decision resumes a new run: it does not lapse. */
+    assert.equal(
+        hostPermissionExpired(details, {
+            askedAtMs: asked,
+            nowMs: asked + 2 * HOST_PERMISSION_WINDOW_MS,
+            runEnded: true,
+            resumesOnAnswer: true,
+        }),
+        false,
+    );
     /* An ordinary approval ends its run on purpose, and waits for as long as it takes. */
     const lemma = approvalDetails({ tool_name: "files_delete", args: {} });
     assert.equal(hostPermissionExpired(lemma, { askedAtMs: asked, nowMs: asked + 10 * HOST_PERMISSION_WINDOW_MS, runEnded: true }), false);

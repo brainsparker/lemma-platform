@@ -11,6 +11,13 @@ from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
 
 
+# Platforms that redeliver long after the short default claim has expired.
+# Meta retries a WhatsApp webhook for up to seven days and Bot Framework retries
+# Teams activities too; past the claim, a retry is answered a second time. The
+# key is a few bytes, so holding it for a day costs nothing.
+_MIN_CLAIM_TTL_SECONDS = {"whatsapp": 24 * 3600, "teams": 24 * 3600}
+
+
 class RedisSurfaceEventDedupStore:
     """Redis-backed short-lived dedupe for external platform message delivery."""
 
@@ -78,7 +85,7 @@ class RedisSurfaceEventDedupStore:
                 external_message_id=external_message_id,
             ),
             "1",
-            ex=self._ttl_seconds,
+            ex=max(self._ttl_seconds, _MIN_CLAIM_TTL_SECONDS.get(platform.lower(), 0)),
             nx=True,
         )
         return bool(claimed)

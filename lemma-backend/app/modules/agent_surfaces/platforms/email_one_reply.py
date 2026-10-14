@@ -14,6 +14,8 @@ threads.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 
 from app.core.log.log import get_logger
@@ -23,7 +25,7 @@ from app.modules.agent_surfaces.domain.envelope import (
     PartDelivery,
     SurfaceEnvelope,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 
 logger = get_logger(__name__)
 
@@ -66,7 +68,7 @@ class EmailOneReplyMixin:
     async def _render_one(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None,
@@ -104,7 +106,7 @@ class EmailOneReplyMixin:
                 message=body or " ",
                 metadata=send_metadata,
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.delivery.one_reply_reached_nobody.degraded",
                 platform=self.platform,

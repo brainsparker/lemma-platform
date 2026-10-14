@@ -40,7 +40,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.group_repository imp
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
@@ -158,7 +158,7 @@ class GroupUpdates:
         try:
             async with connection_released(self.uow.session):
                 link = await client.get_invite_link(group.external_channel_id)
-        except (WhatsAppApiError, *PLATFORM_TRANSPORT_ERRORS):
+        except (WhatsAppApiError, *platform_transport_errors()):
             logger.info(
                 "agent_surfaces.group_updates.invite_link_lookup.observed",
                 exc_info=True,

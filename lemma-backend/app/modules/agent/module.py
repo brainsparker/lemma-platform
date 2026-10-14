@@ -84,6 +84,15 @@ def _routers():
     from app.modules.agent.api.controllers.conversation_queue_controller import (
         router as conversation_queue,
     )
+    from app.modules.agent.api.controllers.conversation_pending_controller import (
+        router as conversation_pending,
+    )
+    from app.modules.agent.api.controllers.askable_pods_controller import (
+        router as askable_pods,
+    )
+    from app.modules.agent.api.controllers.pod_links_controller import (
+        router as pod_links,
+    )
 
     # serve_router is included before the main widget router (more specific path).
     from app.modules.agent.api.controllers.widget_controller import (
@@ -99,8 +108,12 @@ def _routers():
         runtime_config,
         runtime_default,
         tool,
+        # Ahead of `conversation`, whose `/{conversation_id}` would claim it.
+        conversation_pending,
         conversation,
         conversation_queue,
+        askable_pods,
+        pod_links,
         widget_serve,
         widget,
     ]
@@ -111,8 +124,11 @@ def _event_routers():
     from app.modules.agent.events.notification_settled import (
         router as notification_settled_router,
     )
+    from app.modules.agent.events.pod_links_lifecycle import (
+        router as pod_links_router,
+    )
 
-    return [router, notification_settled_router]
+    return [router, notification_settled_router, pod_links_router]
 
 
 def _resource_names():

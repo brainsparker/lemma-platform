@@ -29,6 +29,9 @@ import { openedTranscripts } from "./opened-transcripts";
 import { keepUnchanged } from "./turn-identity";
 import { useStableCallback } from "./stable-callback";
 import { conversationRefOf } from "@/data/live";
+import { draftKeyFor } from "./drafts";
+import { useAsksFollowWaiting } from "./use-conversation-asks";
+import { CONVERSATION_ASKS } from "./waiting-on-you";
 
 /** The conversation, on the SDK's own session.
  *
@@ -56,6 +59,7 @@ export function LiveConversation({
     callError,
     callRefresh,
     createWith,
+    draftScope,
     emptyHint,
     placeholder,
     autoSend,
@@ -68,15 +72,21 @@ export function LiveConversation({
      *  resource metadata it is found by, and it still only comes into being
      *  when somebody says something. */
     createWith?: Record<string, unknown>;
+    /** What this pane is about, when it has no conversation yet — the draft a
+     *  not-yet-sent message is kept under, so two panes beside two docs do not
+     *  share one. Absent in the main pane, which keeps the one "new" draft. */
+    draftScope?: string | null;
     /** What an empty conversation says, when the place it is shown in knows
      *  better than the generic "what should it work on". */
     emptyHint?: { title: string; body: string };
     /** What the box says before anything is typed. Defaults to the space's bot. */
     placeholder?: string;
     /** A message handed over from somewhere else — Home, a bot's page — to
-     *  send as soon as this pane is up. Sent here rather than there, so the
-     *  pane that shows the conversation is the one holding its stream. */
-    autoSend?: { text: string; id: number } | null;
+     *  send as soon as this pane is up, with any files that came with it.
+     *  Sent here rather than there, so the pane that shows the conversation is
+     *  the one holding its stream — and the one that reads the `pod_cwd` the
+     *  files are uploaded into, which does not exist until it does. */
+    autoSend?: { text: string; id: number; files?: File[] } | null;
     onAutoSent?: () => void;
     /** Text a framed widget or app asked the app to put in the composer.
      *  Arrives as a prop rather than through a ref because opening a new
@@ -400,6 +410,9 @@ export function LiveConversation({
        host permission wait never leaves RUNNING. The card is in the messages
        the moment the call arrives. */
     const waitingOn = useMemo(() => openInteraction(turns), [turns]);
+    /* The rail and Home learn of a new ask, or of one answered anywhere, when
+       this conversation does rather than at the next minute's poll. */
+    useAsksFollowWaiting(waitingOn?.id ?? null);
     const signingIn = useMemo(() => openSignIn(turns), [turns]);
     /* Filled by the docked question while it is open: what is typed answers
        it (see `Questions`). */
@@ -704,6 +717,22 @@ export function LiveConversation({
         if (failed) setRefill({ text: failed.text, id: Date.now() });
     });
 
+    /* Files that came with a handed-over message, into the same state a drop
+       fills — so they are uploaded by the one path that knows to wait for the
+       conversation, rather than by a second one here. Declared before the send
+       below, which reads them from the ref in the same commit. */
+    const seededId = useRef<number | null>(null);
+    useEffect(() => {
+        const handed = autoSend?.files;
+        if (!handed?.length || seededId.current === autoSend?.id) return;
+        seededId.current = autoSend?.id ?? null;
+        const incoming = toAttachments(handed);
+        setAttachments(was => [...was, ...incoming]);
+        /* The ref, not just the state: the send below runs before the render
+           that would sync it, and it is the ref `putFiles` reads. */
+        attachmentsRef.current = [...attachmentsRef.current, ...incoming];
+    }, [autoSend]);
+
     /* A handed-over message goes once, the first time this pane sees it. The
        hand-over is cleared first, so a remount cannot send it twice. */
     const autoSentId = useRef<number | null>(null);
@@ -739,7 +768,7 @@ export function LiveConversation({
             const queued = resolution?.status === "queued";
             /* Answered, so no longer owed: the rail and Home drop it now
                rather than at the next minute's refetch. */
-            void queryClient.invalidateQueries({ queryKey: ["conversation-asks"] });
+            void queryClient.invalidateQueries({ queryKey: [CONVERSATION_ASKS] });
             if (!queued) {
                 void loadMessages({ conversationId: conversation, limit: 100 }).catch(() => undefined);
             }
@@ -833,13 +862,11 @@ export function LiveConversation({
         });
     }, [pod.id, session.conversationId, session.conversation, session.status, session.messages, olderToken, historyLoading, loadError]);
 
-    /* Unsent words, kept per conversation. A new conversation keeps one only
-       in the main pane: the panes beside a doc or a table each start one of
-       their own, and one shared "new" draft would follow somebody between
-       them. */
-    const draftKey = session.conversationId
-        ? pod.id + ":" + session.conversationId
-        : createWith ? null : pod.id + ":new";
+    /* Unsent words, kept per conversation — and, before there is one to keep
+       them against, per pane: the chat beside a doc names its draft after what
+       it is about (`draftScope`), so the box keeps the words without carrying
+       them to the next doc. */
+    const draftKey = draftKeyFor(pod.id, session.conversationId, draftScope);
 
     return (
         <>
@@ -887,6 +914,7 @@ export function LiveConversation({
                 /* Not while the status is still unknown, which reads as idle
                    for a moment after load and would flash "Expired". */
                 runEnded={session.status !== undefined && state !== "running"}
+                resumesOnAnswer={state === "waiting"}
                 signIn={signingIn}
                 conversationId={session.conversationId}
                 crowded={crowded}
@@ -938,7 +966,9 @@ export function LiveConversation({
                 queuedNote={
                     queued.length === 0
                         ? undefined
-                        : teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " as soon as the work in progress allows"
+                        : queued.some(one => one.waitingOnAnswer)
+                          ? "Waiting on your answer: " + teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " once you reply to its question"
+                          : teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " as soon as the work in progress allows"
                 }
                 onWithdraw={withdrawStable}
                 fill={refill ?? fill}

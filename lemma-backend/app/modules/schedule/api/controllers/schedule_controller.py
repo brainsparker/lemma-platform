@@ -1,9 +1,10 @@
 """Schedule API controller."""
 
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.core.api.dependencies import UoWDep
 from app.core.api.pagination import parse_uuid_page_token
@@ -17,6 +18,7 @@ from app.modules.schedule.api.dependencies import (
 from app.modules.schedule.api.schemas.schedule_schemas import (
     CreateScheduleRequest,
     ScheduleDetailResponse,
+    ListeningResponse,
     ScheduleListResponse,
     UpdateScheduleRequest,
     ScheduleResponse,
@@ -24,7 +26,9 @@ from app.modules.schedule.api.schemas.schedule_schemas import (
     ScheduleRunResponse,
 )
 from app.modules.schedule.domain.schedule import (
+    MCP_EVENT_SOURCE,
     ScheduleCreateEntity,
+    ScheduleRunStatus,
     ScheduleType,
     ScheduleUpdateEntity,
 )
@@ -33,10 +37,64 @@ router = APIRouter(prefix="/pods/{pod_id}/schedules", tags=["Schedules"])
 
 
 async def _schedule_detail_response(schedule) -> ScheduleDetailResponse:
-    return ScheduleDetailResponse(
-        **ScheduleResponse.model_validate(schedule).model_dump(),
-        allowed_actions=schedule.allowed_actions,
+    [response] = await _with_listening(
+        [
+            ScheduleDetailResponse(
+                **ScheduleResponse.model_validate(schedule).model_dump(),
+                allowed_actions=schedule.allowed_actions,
+            )
+        ]
     )
+    return response
+
+
+async def _with_listening(
+    responses: list[ScheduleDetailResponse],
+) -> list[ScheduleDetailResponse]:
+    """Say, for each schedule on an MCP server's event, whether it is still
+    hearing from the server. Without it a schedule whose subscription lapsed
+    reads exactly like one that is working and has had no events."""
+    from app.modules.connectors.contracts.mcp_events import mcp_listening_states
+
+    wanted = {
+        response.id: str(response.config.get("provider_trigger_id"))
+        for response in responses
+        if response.config.get("source") == MCP_EVENT_SOURCE
+        and response.config.get("provider_trigger_id")
+    }
+    if not wanted:
+        return responses
+    states = await mcp_listening_states(
+        list(wanted.values()), now=datetime.now(timezone.utc)
+    )
+    shown: list[ScheduleDetailResponse] = []
+    for response in responses:
+        state = states.get(wanted.get(response.id, ""))
+        if state is None:
+            shown.append(response)
+            continue
+        shown.append(
+            response.model_copy(
+                update={
+                    "listening": ListeningResponse(
+                        state=(
+                            "pending"
+                            if not state.granted
+                            else "lapsed"
+                            if state.lapsed
+                            else "retrying"
+                            if state.renew_failures
+                            else "listening"
+                        ),
+                        last_error=state.last_error,
+                        last_event_at=state.last_event_at,
+                        refresh_before=state.refresh_before,
+                        server=state.server,
+                    )
+                }
+            )
+        )
+    return shown
 
 
 @router.post(
@@ -67,6 +125,7 @@ async def create_schedule(
         "connector_trigger_id": request.connector_trigger_id,
         "filter_instruction": request.filter_instruction,
         "filter_output_schema": request.filter_output_schema,
+        "include_outside_rows": request.include_outside_rows,
     }
     if request.visibility is not None:
         schedule_create_data["visibility"] = request.visibility
@@ -119,7 +178,9 @@ async def list_schedules(
     # fixes for the context-building step that runs before this handler.
     await uow.commit()
     return ScheduleListResponse(
-        items=[ScheduleDetailResponse.model_validate(t) for t in schedules],
+        items=await _with_listening(
+            [ScheduleDetailResponse.model_validate(t) for t in schedules]
+        ),
         limit=limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )
@@ -136,12 +197,30 @@ async def list_schedule_runs(
     service: ScheduleServiceDep,
     ctx: PodContextDep,
     limit: int = 100,
+    status: Optional[ScheduleRunStatus] = Query(
+        None,
+        description=(
+            "Only runs that report this status -- the target's outcome once "
+            "there is one."
+        ),
+    ),
+    skipped: Optional[bool] = Query(
+        None,
+        description=(
+            "true: only events the schedule's filter skipped. false: leave them "
+            "out, which is what a busy webhook schedule's history usually needs. "
+            "Omitted: both."
+        ),
+    ),
 ) -> ScheduleRunListResponse:
-    runs = await service.list_schedule_runs(
+    # Straight to the run service: the schedule service only passed it along.
+    runs = await service.run_service.list_schedule_runs(
         pod_id=pod_id,
         schedule_id=schedule_id,
         ctx=ctx,
         limit=max(1, min(limit, 1000)),
+        status=status,
+        skipped=skipped,
     )
     return ScheduleRunListResponse(
         items=[ScheduleRunResponse.model_validate(item) for item in runs],
@@ -225,6 +304,7 @@ async def update_schedule(
         instruction=request.instruction,
         filter_instruction=request.filter_instruction,
         filter_output_schema=request.filter_output_schema,
+        include_outside_rows=request.include_outside_rows,
         is_active=request.is_active,
         visibility=request.visibility,
     )

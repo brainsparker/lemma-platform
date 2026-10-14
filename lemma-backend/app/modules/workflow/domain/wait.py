@@ -15,6 +15,9 @@ class WorkflowRunWaitType(str, Enum):
     AGENT = "AGENT"
     FUNCTION = "FUNCTION"
     TIME = "TIME"
+    DECISION = "DECISION"
+    # Waiting for the workflow's max_concurrent_runs to allow another run in.
+    QUEUED = "QUEUED"
 
 
 class WorkflowRunWaitStatus(str, Enum):
@@ -27,8 +30,9 @@ class WorkflowRunWaitStatus(str, Enum):
 class WaitRequest(BaseModel):
     """Explicit wait description returned by a suspending executor.
 
-    External refs (agent conversation id, function run id, timer id) live
-    here and on the wait row — never in the run context.
+    External refs (agent conversation id, function run id, timer id, the id a
+    pending decision is asked under) live here and on the wait row — never in
+    the run context.
     """
 
     wait_type: WorkflowRunWaitType

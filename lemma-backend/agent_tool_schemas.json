@@ -1,5 +1,158 @@
 [
   {
+    "tool_name": "ask_teammate",
+    "toolset": "MESSAGING",
+    "description": "Ask another pod to find something out or look something up.\n\nIt works on it in its own conversation -- with the person's access there\nwhen they are in both pods, or with what that pod shared over a link -- and\nits final message is the answer. A quick answer comes back in this call;\notherwise end your turn: the answer arrives here as a new message, and you\ncontinue from there. Don't wait or poll for it.",
+    "input_schema": {
+      "properties": {
+        "teammate": {
+          "description": "The pod's exact name, or its `teammate` id from list_teammates.",
+          "type": "string"
+        },
+        "request": {
+          "description": "Everything the other pod needs, in one self-contained message. It sees nothing of this conversation: name the record, the date, the customer, and say what answer you want back.",
+          "maxLength": 8000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "wait_seconds": {
+          "default": 20.0,
+          "description": "How long to wait here for a quick answer. If it takes longer, end your turn: the answer arrives in this conversation by itself.",
+          "maximum": 45.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "teammate",
+        "request"
+      ],
+      "title": "AskTeammateRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "teammate": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "teammate_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "asked_as": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "AS_PERSON: it worked with the person's own access there. LINK: with what that pod shared with this one."
+        },
+        "conversation_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The other pod's conversation for this request."
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ANSWERED (read `answer`) / WORKING (end your turn; the answer comes here) / WAITING (it needs someone there first) / UNFINISHED / DISCONNECTED (the connection was removed)."
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "needs_approval": {
+          "default": false,
+          "type": "boolean"
+        },
+        "approval": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "AskTeammateResponse",
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "ask_user",
     "toolset": "USER_INTERACTION",
     "description": "Ask the user one or more multiple-choice questions and wait for their answers.\n\nUse it for a decision you genuinely cannot infer. Each question carries 2-4\nconcrete options; mark the one you recommend. The run pauses, and answers come\nback in `answers` keyed by each question's `header`.\n\nPrefer this over a prose question whenever the answer is a choice among known\noptions. For free-form input, ask in prose and end your turn. Only ask when it\nchanges what you do next \u2014 otherwise take the obvious default and proceed.",
@@ -546,6 +699,20 @@
           "maxItems": 4,
           "type": "array"
         },
+        "fallback": {
+          "anyOf": [
+            {
+              "maxLength": 600,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What this shows, as plain text, for chat apps that cannot draw it (Slack, WhatsApp, Teams, email): one or two lines carrying the names and numbers that matter. Write one for every WIDGET."
+        },
         "filters": {
           "anyOf": [
             {
@@ -722,12 +889,12 @@
             }
           ],
           "default": null,
-          "description": "Milliseconds to wait for output before returning."
+          "description": "Return after this many milliseconds even if the command is still running (you get its `process_id`). Defaults to 30000; when you set `timeout_seconds` instead, the call waits that long."
         },
         "timeout_seconds": {
           "anyOf": [
             {
-              "maximum": 300,
+              "maximum": 600,
               "minimum": 10,
               "type": "integer"
             },
@@ -736,7 +903,7 @@
             }
           ],
           "default": null,
-          "description": "How long to wait for the command before returning, instead of the default 30s. This is THIS CALL'S patience, not a limit on the command: if the command is still running when the wait is up you get `completed: false` and a `process_id`, and the command keeps running in the background. Hand that id to `wait_for` rather than raising this \u2014 waiting there costs nothing and costs no model calls. Never re-run the command."
+          "description": "How long to wait for the command before returning, up to 600s, instead of the default 60s. This is THIS CALL'S patience, not a limit on the command: if the command is still running when the wait is up you get `completed: false` and a `process_id`, and the command keeps running in the background. Hand that id to `wait_for` rather than raising this \u2014 waiting there costs nothing and costs no model calls. Never re-run the command."
         }
       },
       "required": [
@@ -1255,6 +1422,95 @@
         }
       },
       "title": "SkillListResult",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "list_teammates",
+    "toolset": "MESSAGING",
+    "description": "List the other pods this one can ask: ones the person is also in, and\nones connected to this pod.\n\nEach is a teammate with its own job, tools and data; `ask_teammate` asks one.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "output_schema": {
+      "$defs": {
+        "TeammateSummary": {
+          "properties": {
+            "teammate": {
+              "description": "Pass this verbatim as ask_teammate's `teammate`.",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "job": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "What this pod is for."
+            },
+            "reach": {
+              "description": "'through the person': asked as them, with their access there. 'connected': asked as this pod, over a link that pod's people made -- also when nobody is here.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "teammate",
+            "name"
+          ],
+          "title": "TeammateSummary",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "teammates": {
+          "items": {
+            "$ref": "#/$defs/TeammateSummary"
+          },
+          "type": "array"
+        }
+      },
+      "title": "ListTeammatesResponse",
       "type": "object"
     }
   },
@@ -2170,7 +2426,7 @@
   {
     "tool_name": "pod_query",
     "toolset": "POD",
-    "description": "Run a read-only SQL query against the pod.\n\nReads across tables (joins, aggregates, subqueries) including RLS-enabled\ntables; rows of an RLS table are always scoped to the agent's user (the same\nper-user view its other record reads get). Only a single read-only SELECT is\nallowed.",
+    "description": "Run a read-only SQL query against the pod.\n\nReads across tables (joins, aggregates, subqueries) including RLS-enabled\ntables; rows of an RLS table are always scoped to the agent's user (the same\nper-user view its other record reads get). Only a single read-only SELECT is\nallowed. A column shown in double quotes, or with `quote_required`, must be\nwritten in double quotes here too: `SELECT \"check\" FROM audits`.",
     "input_schema": {
       "properties": {
         "sql": {
@@ -2227,7 +2483,7 @@
         },
         "max_chars": {
           "default": 50000,
-          "maximum": 400000,
+          "maximum": 50000,
           "minimum": 1,
           "type": "integer"
         }
@@ -2753,8 +3009,43 @@
           "type": "object"
         },
         "ToolReturnContent": {
-          "oneOf": [
-            {},
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "discriminator": {
+                "mapping": {
+                  "audio-url": "#/$defs/AudioUrl",
+                  "binary": "#/$defs/BinaryContent",
+                  "document-url": "#/$defs/DocumentUrl",
+                  "image-url": "#/$defs/ImageUrl",
+                  "uploaded-file": "#/$defs/UploadedFile",
+                  "video-url": "#/$defs/VideoUrl"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ImageUrl"
+                },
+                {
+                  "$ref": "#/$defs/AudioUrl"
+                },
+                {
+                  "$ref": "#/$defs/DocumentUrl"
+                },
+                {
+                  "$ref": "#/$defs/VideoUrl"
+                },
+                {
+                  "$ref": "#/$defs/BinaryContent"
+                },
+                {
+                  "$ref": "#/$defs/UploadedFile"
+                }
+              ]
+            },
             {
               "additionalProperties": {
                 "$ref": "#/$defs/ToolReturnContent"
@@ -2766,7 +3057,8 @@
                 "$ref": "#/$defs/ToolReturnContent"
               },
               "type": "array"
-            }
+            },
+            {}
           ]
         },
         "UploadedFile": {
@@ -3517,7 +3809,7 @@
   {
     "tool_name": "spawn_subagent",
     "toolset": "SUBAGENTS",
-    "description": "Start a pod agent as a linked child conversation; returns a handle.\n\nOmit agent_name to spawn another instance of yourself for a targeted subtask.\nNon-blocking: returns {conversation_id, run_id, status}. Use interact_subagent\n(action='await') to wait, or query_subagents (mode='messages') to poll.",
+    "description": "Start a pod agent as a linked child conversation; returns a handle.\n\nOmit agent_name to spawn another instance of yourself for a targeted subtask.\nNon-blocking: returns {conversation_id, run_id, status}. Use interact_subagent\n(action='await') to wait, or query_subagents (mode='messages') to poll. If\nyou end your turn without collecting it, its result arrives later as a new\nmessage.",
     "input_schema": {
       "properties": {
         "agent_name": {
@@ -3717,7 +4009,7 @@
             }
           ],
           "default": null,
-          "description": "Give up waiting after this long and wake anyway, for `process_id` / `subagent_run_id`. Defaults to 60 minutes."
+          "description": "Give up waiting after this long and wake anyway, for `process_id` / `subagent_run_id`. Defaults to 15 minutes; at least 30s, at most 24h. Set it longer for a build or test suite you expect to run past the default."
         },
         "note_to_self": {
           "anyOf": [
@@ -3779,7 +4071,9 @@
                 "TARGET_GONE",
                 "DEADLINE",
                 "ANSWERED",
-                "CANCELLED"
+                "CANCELLED",
+                "TARGET_NEEDS_INPUT",
+                "TARGET_UNREADABLE"
               ],
               "type": "string"
             },
@@ -3834,7 +4128,7 @@
   {
     "tool_name": "web_fetch",
     "toolset": "WEB_SEARCH",
-    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them, and\n`view_image` for a screenshot. Both take the workspace path you were given.\n`pod_view_document_pages` takes a path *in the pod*, so it only works on a\ncaptured PDF after you have uploaded it. This is the right way to read\nanything longer than a search snippet.",
+    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them, and\n`view_image` for a screenshot. Both take the workspace path you were given.\n`pod_view_document_pages` takes a path *in the pod*, so it only works on a\ncaptured PDF after you have uploaded it. If you have no `exec_command`,\neach page's text comes back in its `content` instead, clipped to a budget.\nJSON and plain-text URLs are saved as they came. This is the right way to\nread anything longer than a search snippet.",
     "input_schema": {
       "properties": {
         "urls": {
@@ -3927,6 +4221,18 @@
               ],
               "default": null,
               "description": "First few hundred characters of the extracted text \u2014 enough to tell whether the page is worth reading in full."
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The page's text itself, clipped to a budget. Only for an agent with no tool that can read a saved file; otherwise read the file."
             },
             "characters": {
               "anyOf": [
@@ -4111,6 +4417,8 @@
         "max_results": {
           "default": 10,
           "description": "Maximum number of search results to return",
+          "maximum": 20,
+          "minimum": 1,
           "type": "integer"
         },
         "vertical": {
@@ -4295,7 +4603,7 @@
             }
           ],
           "default": null,
-          "description": "Set when the search could not be run exactly as asked \u2014 for example a vertical this provider does not serve."
+          "description": "Set when the search could not be run exactly as asked \u2014 for example a vertical this provider does not serve \u2014 or when it found nothing, which is not always the same as nothing existing."
         },
         "error": {
           "anyOf": [

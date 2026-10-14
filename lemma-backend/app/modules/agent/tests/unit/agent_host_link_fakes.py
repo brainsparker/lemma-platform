@@ -46,6 +46,7 @@ from app.modules.agent.services.agent_host_link_registry import (
 )
 from app.modules.agent.services.agent_host_link_session import AgentHostLinkSession
 from app.modules.agent.services.agent_host_link_tool_calls import ToolCallLedger
+from app.modules.agent.services.conversation_mcp_authorization import RelayingHost
 from app.modules.agent.services.agent_host_link_store import (
     ControlUpdates,
     LinkedHost,
@@ -322,10 +323,20 @@ class FakeConversationMcp:
         self.ended_runs: set[UUID] = set()
         #: Raised by the next ``call_tool`` after it is counted, once.
         self.call_error: BaseException | None = None
+        self.authorized_hosts: list[RelayingHost | None] = []
 
     async def authorize(
-        self, *, conversation_id: UUID, token: str, agent_run_id: UUID | None = None
+        self,
+        *,
+        conversation_id: UUID,
+        token: str,
+        agent_run_id: UUID | None = None,
+        host: RelayingHost | None = None,
+        allow_ended_run: bool = False,
     ) -> bool:
+        # What the link said about where the call came from, for a test to
+        # read back; the rules themselves are `conversation_mcp_authorization`'s.
+        self.authorized_hosts.append(host)
         if agent_run_id is not None and agent_run_id in self.foreign_runs:
             return False
         return conversation_id == self.conversation_id and token == TOKEN

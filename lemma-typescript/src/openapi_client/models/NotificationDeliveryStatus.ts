@@ -14,6 +14,7 @@
  */
 export enum NotificationDeliveryStatus {
     PENDING = 'PENDING',
+    SENDING = 'SENDING',
     DELIVERED = 'DELIVERED',
     UNDELIVERABLE = 'UNDELIVERABLE',
     FAILED = 'FAILED',

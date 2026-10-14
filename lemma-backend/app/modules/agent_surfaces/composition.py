@@ -28,6 +28,10 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
+from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.infrastructure.adapters.account_adapter import (
     SqlAlchemySurfaceAccountAdapter,
     SqlAlchemySurfaceAuthConfigAdapter,
@@ -238,7 +242,14 @@ def build_surface_turn_starter(uow_factory: UnitOfWorkFactory) -> SurfaceTurnSta
     connection. This used to be the same class as `build_surface_ingress`,
     handed a factory instead of a session, with seven collaborators left `None`.
     """
-    return SurfaceTurnStarter(uow_factory=uow_factory)
+
+    async def reprepare(
+        request: SurfacePlatformWebhookIngress,
+    ) -> AgentSurfaceContext | None:
+        async with uow_factory() as uow:
+            return await build_surface_ingress(uow).prepare_ingress(request)
+
+    return SurfaceTurnStarter(uow_factory=uow_factory, reprepare=reprepare)
 
 
 def build_notification_service(uow: SqlAlchemyUnitOfWork) -> NotificationService:

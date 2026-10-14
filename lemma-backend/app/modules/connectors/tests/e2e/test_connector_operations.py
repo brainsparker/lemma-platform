@@ -663,7 +663,10 @@ async def test_connector_operation_returns_upstream_execution_error_details(
     # the caller's own session ending, and resends or signs them out.
     assert response.status_code == 424, response.text
     payload = response.json()
-    assert payload["message"] == "Connector account authorization failed."
+    assert payload["message"] == (
+        "Connector account authorization failed. "
+        "The provider said: send_message failed: not_authed."
+    )
     assert payload["code"] == "OPERATION_EXECUTION_UNAUTHORIZED"
     assert payload["request_id"]
     assert payload["details"] == {

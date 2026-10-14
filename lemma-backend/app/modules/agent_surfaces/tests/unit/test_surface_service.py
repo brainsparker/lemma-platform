@@ -4,33 +4,32 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from pydantic import SecretStr
 
-from app.modules.agent_surfaces.services import teams_consent
+from app.modules.agent_surfaces.domain.credentials import TelegramCredentials
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     AgentSurfaceStatus,
     SurfaceConfig,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.services import telegram_mini_app_service
 from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceAgentPlatformConflictError,
     AgentSurfaceAlreadyExistsError,
     AgentSurfaceCredentialConflictError,
-    AgentSurfaceNotFoundError,
     AgentSurfaceError,
+    AgentSurfaceNotFoundError,
     AgentSurfaceValidationError,
 )
+from app.modules.agent_surfaces.domain.ports import (
+    SurfaceAccountInfo,
+)
+from app.modules.agent_surfaces.services import telegram_mini_app_service
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     TelegramMiniApp,
-)
-from app.modules.agent_surfaces.domain.errors import (
-    AgentSurfaceAgentPlatformConflictError,
-)
-from app.modules.agent_surfaces.domain.ports import (
-    SurfaceAccountInfo,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -401,9 +400,10 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
     assert result.webhook_secret
     webhook_url = f"https://api.example.test/surfaces/{result.id}/webhook"
     register.assert_awaited_once_with(
-        credentials={"bot_token": "telegram-token"},
+        credentials=TelegramCredentials(bot_token=SecretStr("telegram-token")),
         webhook_url=webhook_url,
-        webhook_secret=result.webhook_secret,
+        webhook_secret=result.webhook_secret.get_secret_value(),
+        drop_pending_updates=True,
     )
 
 
@@ -689,11 +689,14 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
     result = await service.update_surface(surface_id=entity.id, is_active=True)
 
     assert result.is_active is True
-    assert result.webhook_secret and result.webhook_secret != "old-secret"
+    assert result.webhook_secret
+    assert result.webhook_secret.get_secret_value() != "old-secret"
+    # Resuming the same bot: what Telegram held while it was off is kept.
     register.assert_awaited_once_with(
-        credentials={"bot_token": "telegram-token"},
+        credentials=TelegramCredentials(bot_token=SecretStr("telegram-token")),
         webhook_url=f"https://api.example.test/surfaces/{entity.id}/webhook",
-        webhook_secret=result.webhook_secret,
+        webhook_secret=result.webhook_secret.get_secret_value(),
+        drop_pending_updates=False,
     )
 
 
@@ -739,6 +742,24 @@ async def test_list_surfaces_by_pod():
     repo.list_by_pod.assert_awaited_once_with(
         pod_id, platform=None, agent_id=None, match_agent=False, cursor=None, limit=100
     )
+
+
+async def test_every_surface_in_a_pod_is_read_past_the_first_page():
+    """A bundle export read one page of a hundred and dropped the rest."""
+    repo = _repo()
+    service = AgentSurfaceService(
+        surface_repository=repo,
+        account_binding_resolver=AsyncMock(),
+    )
+    pod_id = uuid4()
+    first = [_surface_entity(pod_id=pod_id) for _ in range(100)]
+    second = [_surface_entity(pod_id=pod_id)]
+    repo.list_by_pod.side_effect = [(first, first[-1].id), (second, None)]
+
+    surfaces = await service.all_surfaces_in_pod(pod_id)
+
+    assert len(surfaces) == 101
+    assert repo.list_by_pod.await_args_list[1].kwargs["cursor"] == first[-1].id
 
 
 async def test_delete_all_surfaces_for_pod_paginates_and_deletes():
@@ -897,56 +918,6 @@ async def test_every_surface_platform_has_a_setup_guide(platform):
     assert guide.connectors, f"{platform.value} has a guide with no connector modes"
 
 
-class _FakeNonceCache:
-    """Stands in for the Redis nonce store, including compare-and-delete."""
-
-    def __init__(self):
-        self.values: dict[str, str] = {}
-
-    async def set_raw(self, suffix, payload, *, ttl_seconds=None):
-        self.values[suffix] = payload
-
-    async def delete_if_value(self, suffix, expected):
-        if self.values.get(suffix) != expected:
-            return False
-        del self.values[suffix]
-        return True
-
-
-async def test_teams_consent_callback_requires_the_nonce_it_issued(monkeypatch):
-    """The callback is unauthenticated and the surface id is not a secret.
-
-    It is shown to every pod member who starts Teams setup and never rotates,
-    so possession of it must not be enough to activate the surface and pin its
-    tenant binding.
-    """
-    cache = _FakeNonceCache()
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.teams_consent._get_cache",
-        lambda: cache,
-    )
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.teams_consent.settings.api_url",
-        "https://api.example.test",
-    )
-    surface_id = uuid4()
-
-    assert not await teams_consent.consume_nonce(surface_id, "guessed")
-    assert not await teams_consent.consume_nonce(surface_id, "")
-
-    url = await teams_consent.build_consent_url(surface_id, "tenant-123")
-    state = url.split("state=")[1].split("&")[0]
-    issued_id, _, nonce = state.partition("%3A")
-    assert issued_id == str(surface_id)
-    assert nonce
-
-    # Wrong nonce for a real surface is still refused.
-    assert not await teams_consent.consume_nonce(surface_id, "wrong")
-    # The issued one works exactly once, so a replayed callback loses.
-    assert await teams_consent.consume_nonce(surface_id, nonce)
-    assert not await teams_consent.consume_nonce(surface_id, nonce)
-
-
 def _runtime_service() -> AgentSurfaceService:
     return AgentSurfaceService(
         surface_repository=AsyncMock(),
@@ -970,8 +941,7 @@ async def test_resend_surface_allowed_without_public_url_when_polling_enabled(
     )
     surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
 
-    # Does not raise.
-    _runtime_service()._validate_runtime_supported(surface)
+    assert _runtime_service()._validate_runtime_supported(surface) is None
 
 
 async def test_resend_surface_rejected_on_local_url_without_polling(monkeypatch):

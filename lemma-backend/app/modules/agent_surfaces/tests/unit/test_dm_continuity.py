@@ -186,7 +186,7 @@ async def test_a_number_reassignment_keeps_the_conversation():
     agent_conversations.open_surface_conversation.assert_not_awaited()
     links.create.assert_not_awaited()
     links.rebind_thread_address.assert_awaited_once_with(
-        link_id=earlier.id,
+        link=earlier,
         surface_id=surface.id,
         external_channel_id="pn-new",
         external_thread_id=f"{WA_ID}@pn-new",
@@ -383,3 +383,54 @@ async def test_a_first_ever_message_opens_a_conversation():
 
     assert created_title is not None
     links.rebind_thread_address.assert_not_awaited()
+
+
+async def test_each_top_level_slack_dm_is_its_own_thread():
+    """Slack names a DM thread by its first message's `ts`, so a new one is new.
+
+    Adoption was written for WhatsApp's moving number and fired for Slack too:
+    every new top-level DM missed the exact key, adopted the person's latest
+    DM link and rebound it, so all their DM threads collapsed into one and a
+    reply could be posted into whichever thread they wrote in last.
+    """
+    from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+        _slack_event,
+        _slack_surface,
+    )
+
+    surface = _slack_surface()
+    user_id = uuid4()
+    earlier = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=uuid4(),
+        platform="SLACK",
+        external_channel_id="D123",
+        external_thread_id="1700000000.000100",
+        external_user_id="U123",
+        routed_agent_id=surface.agent_id,
+        conversation_kind="DM",
+        route_key="dm",
+        last_event={},
+        last_inbound_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    agent_conversations.open_surface_conversation.return_value = _conversation(
+        surface, user_id
+    )
+    binder, links = _binder(surface, earlier=earlier)
+    second_top_level = _slack_event().model_copy(
+        update={"external_thread_id": "1700000900.000200"}
+    )
+
+    _, created_title = await binder.bind_conversation(
+        surface=surface,
+        parsed=second_top_level,
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=user_id, external_user_id="U123"
+        ),
+        route=_route(surface),
+    )
+
+    assert created_title is not None
+    links.find_latest_dm_link_for_person.assert_not_awaited()
+    links.rebind_thread_address.assert_not_awaited()
+    links.create.assert_awaited_once()

@@ -283,10 +283,30 @@ export class HttpClient {
     options: RequestOptions = {},
   ): Promise<T> {
     const url = this.buildUrl(path, options.params);
-    const init = this.buildRequestInit(method, options);
+    await this.auth.ready();
+    let init = this.buildRequestInit(method, options);
+    let renewed = false;
 
     for (let attempt = 0; ; attempt++) {
       const response = await this.fetchWithTimeout(url, init, options.signal);
+
+      // A framed app holds a short-lived token from the view around it; when
+      // the session is refused, ask that view once for another before giving
+      // up on it. A connector's rejected key is not the session (see
+      // `isSessionRejection`), so it is thrown as it came.
+      if (response.status === 401) {
+        const error = await this.parseError(response);
+        const sessionGone = isSessionRejection(error.statusCode, error.code);
+        if (sessionGone && !renewed && (await this.auth.renewEmbeddedToken())) {
+          renewed = true;
+          init = this.buildRequestInit(method, options);
+          continue;
+        }
+        if (sessionGone) {
+          this.auth.markUnauthenticated();
+        }
+        throw error;
+      }
 
       const retryDelay = retryDelayForStatus(
         response.status,
@@ -339,6 +359,7 @@ export class HttpClient {
     path: string,
     options: Omit<RequestOptions, "isFormData"> & { method?: "GET" | "POST" | "PATCH" } = {},
   ): Promise<Response> {
+    await this.auth.ready();
     // Streams are deliberately timeout-exempt (they're long-lived), but we still
     // normalize transport failures into NetworkError so the typed-error contract
     // holds on the SSE path too.
@@ -399,6 +420,7 @@ export class HttpClient {
     options: { headers?: Record<string, string> } = {},
   ): Promise<{ blob: Blob; status: number; contentRange: string | null }> {
     const url = `${this.apiUrl}${path}`;
+    await this.auth.ready();
     const init = this.auth.getRequestInit({ method });
     if (options.headers) {
       init.headers = { ...(init.headers as Record<string, string>), ...options.headers };

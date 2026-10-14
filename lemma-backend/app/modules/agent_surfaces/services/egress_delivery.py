@@ -17,6 +17,8 @@ Nothing here reads an inbound event.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from datetime import timezone
 from typing import Any
 from uuid import UUID
@@ -35,8 +37,12 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
 )
-from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
+from app.modules.agent_surfaces.domain.envelope import (
+    DeliveryReceipt,
+    SurfaceEnvelope,
+)
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
+from app.modules.agent_surfaces.domain.groups import OUTSIDERS_LINK_USER
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
 )
@@ -61,6 +67,12 @@ from app.modules.agent_surfaces.services.group_log import (
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 
 logger = get_logger(__name__)
+
+
+#: How many of a person's private chats on one surface are looked through for
+#: the one in a given pod. One per pod they reach through this installation is
+#: the ordinary count, and it is rarely more than two.
+_PRIVATE_THREADS_CHECKED = 5
 
 
 class SurfaceDelivery:
@@ -91,7 +103,7 @@ class SurfaceDelivery:
         surface: AgentSurfaceEntity,
         *,
         event: ParsedInboundSurfaceEvent | None = None,
-    ) -> dict[str, Any]:
+    ) -> SurfaceCredentials:
         """What this surface answers with, for this particular reply.
 
         ``event`` is the inbound message being answered, and it is passed for
@@ -138,6 +150,20 @@ class SurfaceDelivery:
             # waiting for an answer that is now not coming. Those are
             # `warning`, because the failure is invisible from both ends --
             # the run completes normally and the person just never hears back.
+            #
+            # Except a conversation that *was* opened from a platform and has
+            # since lost its link -- the thread was repointed at a newer one.
+            # Then somebody is waiting there too, and the answer goes nowhere.
+            surface_id = await agent_conversations.conversation_metadata_value(
+                self.uow, conversation_id, "surface_id"
+            )
+            if surface_id is not None:
+                logger.warning(
+                    "agent_surfaces.egress.surface_conversation_lost_its_thread.degraded",
+                    conversation_id=str(conversation_id),
+                    surface_id=surface_id,
+                )
+                return None
             logger.debug(
                 "agent_surfaces.egress.skipped_no_conversation.diagnostic",
                 conversation_id=conversation_id,
@@ -222,6 +248,41 @@ class SurfaceDelivery:
             conversation_user_id=conversation.user_id,
         )
 
+    async def private_thread_for(
+        self, target: SurfaceEgressTarget
+    ) -> AgentSurfaceConversationLink | None:
+        """This person's own chat with the bot on this surface, if they have one.
+
+        A group thread is where they last spoke, not somewhere private to reach
+        them, and ``find_latest_dm_link_for_person`` answers with a private
+        thread or with nothing -- so somebody whose only thread is a group is
+        unreachable this way rather than reachable in front of everybody.
+
+        The conversation's pod is checked as well as its surface's: a personal
+        DM arrives through a company's installation and is answered in the
+        person's own pod, and a word meant for one pod's member must not land in
+        another pod's conversation. So it is the latest private chat *in this
+        pod*, not the latest one checked afterwards -- a newer chat in their own
+        pod would otherwise hide this pod's. The shared outsiders' key is not a
+        platform identity at all, so there is nothing to look up for it.
+        """
+        external_user_id = target.link.external_user_id
+        if not external_user_id or external_user_id == OUTSIDERS_LINK_USER:
+            return None
+        candidates = await self.conversation_link_repository.latest_dm_links_for_person(
+            platform=target.surface.surface_type.value,
+            external_user_id=external_user_id,
+            surface_ids=[target.surface.id],
+            limit=_PRIVATE_THREADS_CHECKED,
+        )
+        for private in candidates:
+            conversation = await agent_conversations.surface_conversation(
+                self.uow, private.conversation_id
+            )
+            if conversation is not None and conversation.pod_id == target.pod_id:
+                return private
+        return None
+
     async def _answers_lemma_message(self, link: AgentSurfaceConversationLink) -> bool:
         """Whether what goes out now answers a message typed in Lemma.
 
@@ -282,16 +343,35 @@ class SurfaceDelivery:
         target: SurfaceEgressTarget,
         *,
         envelope: SurfaceEnvelope,
-        metadata: dict[str, Any],
+        metadata: dict[str, object],
         conversation_id: UUID,
     ) -> bool:
-        """Hand one envelope to the platform and say whether it arrived.
+        """Hand one envelope to the platform and say whether it arrived."""
+        receipt = await self.deliver_envelope_receipt(
+            target,
+            envelope=envelope,
+            metadata=metadata,
+            conversation_id=conversation_id,
+        )
+        return receipt is not None
+
+    async def deliver_envelope_receipt(
+        self,
+        target: SurfaceEgressTarget,
+        *,
+        envelope: SurfaceEnvelope,
+        metadata: dict[str, Any],
+        conversation_id: UUID,
+    ) -> DeliveryReceipt | None:
+        """Hand one envelope to the platform; its receipt, or None if it did not
+        arrive. The receipt says part by part what landed, for a caller that
+        must know (held files are released only when theirs did).
 
         The ladder -- native, then the part's own text, then nothing -- lives in
         ``BaseSurfaceAdapter.deliver``, and this is what is left once the two
         hand-written copies of it are gone: release the connection, send, report.
 
-        Returning ``False`` matters as much as delivering. A prompt that reached
+        Returning ``None`` matters as much as delivering. A prompt that reached
         nobody leaves the run WAITING on an answer that cannot come, so the
         caller un-dedupes and falls back to asking in plain words.
 
@@ -321,7 +401,7 @@ class SurfaceDelivery:
                     platform=target.surface.surface_type.value,
                     exc_info=True,
                 )
-                return False
+                return None
             if receipt.degraded:
                 logger.debug(
                     "agent_surfaces.egress.envelope_degraded.diagnostic",
@@ -339,7 +419,7 @@ class SurfaceDelivery:
                 platform=target.surface.surface_type.value,
                 parts=receipt.undelivered,
             )
-            return False
+            return None
         await remember_a_prompt_that_arrived_as_words(
             self.uow,
             conversation_id=conversation_id,
@@ -355,4 +435,4 @@ class SurfaceDelivery:
                 text=envelope.text,
                 answered=answered_in_group(target.link, target.conversation_user_id),
             )
-        return True
+        return receipt

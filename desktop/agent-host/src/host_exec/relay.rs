@@ -421,6 +421,9 @@ pub struct RelayPaths {
     /// is given only to the workspace that owns it in the directory registry
     /// (`conversation_directory`), the same one Agent Host runs claim theirs in.
     pub target: uuid::Uuid,
+    /// Where the `lemma` CLI shipped with this binary may be, for when Lemma
+    /// names none (`lemma_cli::bundled_cli_candidates`).
+    pub bundled_cli: Vec<PathBuf>,
 }
 
 impl RelayPaths {
@@ -437,6 +440,7 @@ impl RelayPaths {
             folders,
             roots,
             target,
+            bundled_cli: crate::lemma_cli::bundled_cli_candidates(),
         })
     }
 
@@ -723,16 +727,14 @@ impl ExecRelay {
         let (cache, tmp) = prepare_cache(&paths.cache, workspace)
             .map_err(|error| OpFailure::io(&error, &paths.cache))?;
         let home = canonical(&paths.home);
-        let lemma_cli = params.lemma_cli.as_deref().and_then(|raw| {
-            let admitted = super::seatbelt::lemma_cli_root(raw, &home);
-            if admitted.is_none() {
-                tracing::warn!(
-                    cli = raw,
-                    "ignored a lemma CLI folder that is not one; commands use the owner's PATH"
-                );
-            }
-            admitted
-        });
+        // Ops come only from the local pairing (`TargetWorker::new` makes no
+        // relay for any other), so the folder Lemma names is this Mac's own.
+        let lemma_cli = crate::lemma_cli::cli_root(
+            true,
+            params.lemma_cli.as_deref(),
+            &paths.bundled_cli,
+            &home,
+        );
         Ok(LaunchSpec {
             root_base: paths.root_base.clone(),
             confinement: Confinement {

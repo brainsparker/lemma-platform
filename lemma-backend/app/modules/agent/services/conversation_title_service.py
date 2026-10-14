@@ -28,13 +28,13 @@ from uuid import UUID
 from opentelemetry import metrics
 from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
 from pydantic_ai.models import Model
-from pydantic_ai.models.openai import OpenAIChatModelSettings
 
 from app.modules.agent.config import agent_settings
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.repositories import ConversationRepository
@@ -45,7 +45,9 @@ from app.modules.agent.services.realtime import (
     publish_conversation_event,
     title_updated_payload,
 )
+from app.modules.agent.services.generation_settings import title_model_settings
 from app.modules.agent.services.runtime_model_factory import (
+    provider_model_settings,
     require_pydantic_ai_model_from_runtime_profile,
     usage_limits_for,
 )
@@ -62,6 +64,8 @@ from app.modules.agent.services.workspace_model_fallback import (
     WorkspaceRuntimeResolver,
     resolve_workspace_runtime,
 )
+from app.modules.agent.domain.outsiders import Audience
+from app.modules.agent.services.run_usage_recorder import outside_source_for
 from app.modules.usage.contracts.execution import UsageExecutionContext
 from app.modules.usage.contracts.metering import metering_execution
 
@@ -85,14 +89,6 @@ _TITLE_USAGE_LIMITS = UsageLimits(
     total_tokens_limit=12_256,
     count_tokens_before_request=True,
 )
-
-# The title itself is 3-6 words (well under 20 tokens). Reasoning models spend
-# the rest of the budget above on a hidden chain-of-thought trace nobody
-# reads: verified directly against deepseek-v4-flash-0731 that the exact
-# title prompt used 246 completion tokens with 239 of them reasoning, and the
-# same call with reasoning_effort='none' produced the identical title in 5.
-# Providers that don't recognize this key ignore it.
-_TITLE_MODEL_SETTINGS: OpenAIChatModelSettings = {"openai_reasoning_effort": "none"}
 
 _TITLE_SYSTEM_PROMPT = (
     "You generate a concise title for a chat conversation. "
@@ -127,7 +123,6 @@ class ConversationOpeningReader(Protocol):
         self,
         conversation_id: UUID,
         *,
-        include_messages: bool = False,
         include_runs: bool = False,
     ) -> Conversation | None: ...
 
@@ -150,6 +145,7 @@ class TitleGenerator(Protocol):
         pod_id: UUID,
         user_text: str,
         reply_text: str | None,
+        audience: Audience = ...,
     ) -> str | None: ...
 
 
@@ -199,11 +195,18 @@ class ConversationTitleGenerator:
         pod_id: UUID,
         user_text: str,
         reply_text: str | None,
+        audience: Audience = Audience(),
     ) -> str | None:
+        """A title for the conversation, metered as ``audience``'s spend.
+
+        A title for a conversation answering somebody outside the pod costs
+        what their run costs: the contacts cap, never the allowance of the
+        member who owns the conversation.
+        """
         resolved = await self._resolve_runtime(
             organization_id=organization_id, user_id=user_id, pod_id=pod_id
         )
-        runtime_profile = resolved.public_snapshot()
+        runtime_profile = resolved.runtime_snapshot().as_payload()
         model = (
             self._model_for_profile or require_pydantic_ai_model_from_runtime_profile
         )(
@@ -216,6 +219,7 @@ class ConversationTitleGenerator:
             organization_id=organization_id,
             pod_id=pod_id,
             source_type="conversation_title",
+            outside_audience=outside_source_for(audience),
         )
         agent = (self._llm_agent or PydanticAIAgent)(
             model, system_prompt=_TITLE_SYSTEM_PROMPT
@@ -224,7 +228,9 @@ class ConversationTitleGenerator:
             result = await agent.run(
                 _build_user_prompt(user_text, reply_text),
                 usage_limits=usage_limits_for(model, _TITLE_USAGE_LIMITS),
-                model_settings=_TITLE_MODEL_SETTINGS,
+                # No reasoning for a few words -- said only to a model that
+                # declares it reasons; see `title_model_settings`.
+                model_settings=provider_model_settings(title_model_settings(resolved)),
             )
 
         return _sanitize_title(str(result.output))
@@ -272,8 +278,10 @@ class ConversationTitleGenerator:
                 organization_id=organization_id,
                 user_id=user_id,
             )
-        except RuntimeError:
-            # Model not in this deployment's catalog — use the profile default.
+        except RuntimeUnavailableError:
+            # The configured title model is not in this deployment's catalog.
+            # A documented fallback for a background helper, not a teammate's
+            # pinned model: a title on the default model is still a title.
             return await service.resolve(
                 runtime=AgentRuntimeConfig(
                     profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
@@ -365,6 +373,7 @@ class ConversationTitleService:
                         pod_id=conversation.pod_id,
                         user_text=user_text,
                         reply_text=opening.assistant_text,
+                        audience=Audience.of(conversation),
                     )
                 except Exception:
                     # Not a retry point — one shot per conversation, and the

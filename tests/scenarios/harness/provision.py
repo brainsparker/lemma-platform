@@ -200,7 +200,6 @@ async def provision(
             await _administers(boss, administrator, pod, ledger)
             if reset:
                 await _clear_run_debris(boss, pod, ledger, mine=made_by_a_run)
-        await _known_on_telegram(holder, ledger)
         await _standing_reach(holder, standing_pods, ledger)
 
         written = ledger.report(
@@ -591,23 +590,6 @@ async def _clear_run_pods(
         if mine(name):
             await owner.deletes_pod(pod)
             ledger.did(f"removed leftover pod {name!r}")
-
-
-async def _known_on_telegram(holder: Person, ledger: Ledger) -> None:
-    """Tell Lemma which Telegram account the holder is.
-
-    Without it every inbound message is from a stranger — correctly, and the
-    stranger is told how to get access rather than answered. So the live lane
-    would prove the refusal path and never the conversation.
-    """
-    handle = os.getenv("SCENARIOS_TELEGRAM_HANDLE", "").strip().lstrip("@")
-    if not handle:
-        return
-    try:
-        await holder.is_known_on_telegram_as(handle)
-        ledger.did(f"{holder.label} is known on Telegram as @{handle}")
-    except Exception as exc:
-        ledger.did(f"could not set the Telegram handle: {_one_line(exc)}")
 
 
 async def _standing_reach(holder: Person, pods: dict[str, JSON], ledger: Ledger) -> None:

@@ -52,12 +52,29 @@ def _delivery(links, surfaces):
     )
 
 
-async def test_a_conversation_with_no_surface_stays_quiet(caplog):
+def _opened_from(monkeypatch, surface_id: str | None) -> None:
+    """The ``surface_id`` the conversation was opened with, if any.
+
+    `agent` owns that row, so its published read is what is doubled.
+    """
+
+    async def metadata_value(_uow, _conversation_id, key):
+        return surface_id if key == "surface_id" else None
+
+    monkeypatch.setattr(
+        "app.modules.agent.contracts.conversations_for_surfaces."
+        "conversation_metadata_value",
+        metadata_value,
+    )
+
+
+async def test_a_conversation_with_no_surface_stays_quiet(caplog, monkeypatch):
     """The one ordinary case: somebody typed in the web app.
 
     Every agent run asks for an egress target, so warning here would fire on
     conversations that were never on a platform at all.
     """
+    _opened_from(monkeypatch, None)
     with caplog.at_level("DEBUG"):
         target = await _delivery(_Links(None), AsyncMock()).resolve_egress_target(
             uuid4()
@@ -77,6 +94,24 @@ async def test_a_conversation_with_no_surface_stays_quiet(caplog):
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING], [
         r.message for r in caplog.records
     ]
+
+
+async def test_a_platform_conversation_that_lost_its_thread_is_a_warning(
+    caplog, monkeypatch
+):
+    """Opened from a platform, then its thread was repointed at a newer one.
+
+    No link reads exactly like the web app, but somebody on that platform is
+    waiting on this conversation's answer, and it is now going nowhere.
+    """
+    caplog.set_level(logging.DEBUG)
+    _opened_from(monkeypatch, str(uuid4()))
+
+    target = await _delivery(_Links(None), AsyncMock()).resolve_egress_target(uuid4())
+
+    assert target is None
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warnings and "lost_its_thread" in warnings[0].message
 
 
 async def test_a_surface_that_cannot_answer_is_a_warning(caplog):

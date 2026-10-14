@@ -10,11 +10,13 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.surface_channel_route_response import SurfaceChannelRouteResponse
+    from ..models.surface_contacts_config import SurfaceContactsConfig
     from ..models.surface_groups_config import SurfaceGroupsConfig
     from ..models.surface_identity_config_response import SurfaceIdentityConfigResponse
     from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
     from ..models.surface_slack_config_response import SurfaceSlackConfigResponse
     from ..models.surface_telegram_config_input import SurfaceTelegramConfigInput
+    from ..models.surface_whats_app_config_input import SurfaceWhatsAppConfigInput
 
 
 T = TypeVar("T", bound="SurfaceConfigResponse")
@@ -26,19 +28,24 @@ class SurfaceConfigResponse:
 
     Attributes:
         channels (list[SurfaceChannelRouteResponse] | Unset):
+        contacts (SurfaceContactsConfig | Unset): Whom the bot answers in private chats beyond the pod's members.
+            Mirrored.
         groups (SurfaceGroupsConfig | Unset): How the bot treats people outside the pod in its groups. Mirrored.
         identity (SurfaceIdentityConfigResponse | Unset):
         send_policy (SurfaceSendPolicyConfig | Unset): Proactive-send controls. Mirrored across request and response.
         slack (SurfaceSlackConfigResponse | Unset): Slack settings as read back.
         telegram (SurfaceTelegramConfigInput | Unset): Selects the pod app exposed as this bot's Telegram Mini App.
+        whatsapp (SurfaceWhatsAppConfigInput | Unset): WhatsApp settings. Mirrored across request and response.
     """
 
     channels: list[SurfaceChannelRouteResponse] | Unset = UNSET
+    contacts: SurfaceContactsConfig | Unset = UNSET
     groups: SurfaceGroupsConfig | Unset = UNSET
     identity: SurfaceIdentityConfigResponse | Unset = UNSET
     send_policy: SurfaceSendPolicyConfig | Unset = UNSET
     slack: SurfaceSlackConfigResponse | Unset = UNSET
     telegram: SurfaceTelegramConfigInput | Unset = UNSET
+    whatsapp: SurfaceWhatsAppConfigInput | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -48,6 +55,10 @@ class SurfaceConfigResponse:
             for channels_item_data in self.channels:
                 channels_item = channels_item_data.to_dict()
                 channels.append(channels_item)
+
+        contacts: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.contacts, Unset):
+            contacts = self.contacts.to_dict()
 
         groups: dict[str, Any] | Unset = UNSET
         if not isinstance(self.groups, Unset):
@@ -69,11 +80,17 @@ class SurfaceConfigResponse:
         if not isinstance(self.telegram, Unset):
             telegram = self.telegram.to_dict()
 
+        whatsapp: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.whatsapp, Unset):
+            whatsapp = self.whatsapp.to_dict()
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if channels is not UNSET:
             field_dict["channels"] = channels
+        if contacts is not UNSET:
+            field_dict["contacts"] = contacts
         if groups is not UNSET:
             field_dict["groups"] = groups
         if identity is not UNSET:
@@ -84,12 +101,15 @@ class SurfaceConfigResponse:
             field_dict["slack"] = slack
         if telegram is not UNSET:
             field_dict["telegram"] = telegram
+        if whatsapp is not UNSET:
+            field_dict["whatsapp"] = whatsapp
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.surface_channel_route_response import SurfaceChannelRouteResponse
+        from ..models.surface_contacts_config import SurfaceContactsConfig
         from ..models.surface_groups_config import SurfaceGroupsConfig
         from ..models.surface_identity_config_response import (
             SurfaceIdentityConfigResponse,
@@ -97,6 +117,7 @@ class SurfaceConfigResponse:
         from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
         from ..models.surface_slack_config_response import SurfaceSlackConfigResponse
         from ..models.surface_telegram_config_input import SurfaceTelegramConfigInput
+        from ..models.surface_whats_app_config_input import SurfaceWhatsAppConfigInput
 
         d = dict(src_dict)
         _channels = d.pop("channels", UNSET)
@@ -109,6 +130,13 @@ class SurfaceConfigResponse:
                 )
 
                 channels.append(channels_item)
+
+        _contacts = d.pop("contacts", UNSET)
+        contacts: SurfaceContactsConfig | Unset
+        if isinstance(_contacts, Unset):
+            contacts = UNSET
+        else:
+            contacts = SurfaceContactsConfig.from_dict(_contacts)
 
         _groups = d.pop("groups", UNSET)
         groups: SurfaceGroupsConfig | Unset
@@ -145,13 +173,22 @@ class SurfaceConfigResponse:
         else:
             telegram = SurfaceTelegramConfigInput.from_dict(_telegram)
 
+        _whatsapp = d.pop("whatsapp", UNSET)
+        whatsapp: SurfaceWhatsAppConfigInput | Unset
+        if isinstance(_whatsapp, Unset):
+            whatsapp = UNSET
+        else:
+            whatsapp = SurfaceWhatsAppConfigInput.from_dict(_whatsapp)
+
         surface_config_response = cls(
             channels=channels,
+            contacts=contacts,
             groups=groups,
             identity=identity,
             send_policy=send_policy,
             slack=slack,
             telegram=telegram,
+            whatsapp=whatsapp,
         )
 
         surface_config_response.additional_properties = d

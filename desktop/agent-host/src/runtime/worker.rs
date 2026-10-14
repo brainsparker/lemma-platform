@@ -235,7 +235,11 @@ impl TargetWorker {
                 .ok()
             })
             .flatten()
-            .map(|relay_paths| {
+            .map(|mut relay_paths| {
+                // After the bundled CLI, one this host downloaded, if it has.
+                relay_paths.bundled_cli.push(
+                    crate::lemma_cli::download::Downloader::shared(&paths.root).installed_dir(),
+                );
                 crate::host_exec::relay::ExecRelay::new(
                     Arc::new(crate::host_exec::relay::ProcessLauncher {
                         executable: mcp_bridge_executable.clone(),

@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { unbound } from "@/thread/conversation-list";
 import { source, type Pod, type SpaceView, type Tab } from "@/data";
-import { AppsIcon, FileIcon, FolderIcon, GroupsIcon, PlusIcon, SettingsIcon, TableIcon, WorkflowIcon } from "@/ui/icons";
+import { AppsIcon, ContactsIcon, FileIcon, FolderIcon, GroupsIcon, PlusIcon, TableIcon, WorkflowIcon } from "@/ui/icons";
 import { sayWaiting, waitingTotal } from "@/data/groups";
 import { useGroups } from "./group-queries";
 import { useFeature } from "@/site/analytics/flags";
@@ -27,7 +27,7 @@ function RecentGlyph({ tab }: { tab: Tab }) {
  *  chats with it, and what you had open. The teammate itself sits above it,
  *  and going to another is the rail's job. Collapsed, this column goes away
  *  and the rail is what is left. */
-export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenChat, onWorkflows, onSettings }: {
+export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenChat, onWorkflows }: {
     pod: Pod;
     openChatId: string | null;
     onOpenChat: (id: string) => void;
@@ -35,7 +35,6 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
     recents: Tab[];
     onPick: (tabId: string) => void;
     onWorkflows: () => void;
-    onSettings: () => void;
 }) {
     /* Your conversations, one dense line each. Not the ones a resource
        carries (they open from that resource), and not scheduled runs, which
@@ -50,6 +49,7 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
     /* Questions people outside the space are waiting on you for, in any of
        its groups — the list the Groups page reads, under its key. */
     const groupsOn = useFeature("groups");
+    const contactsOn = useFeature("contacts");
     const groups = useGroups(pod.id, false, groupsOn);
     const waiting = waitingTotal(groups.data ?? []);
 
@@ -75,6 +75,9 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
                         <span className="snav__count" aria-hidden="true">{waiting}</span>
                         <span className="sr-only">, {sayWaiting(waiting)}</span>
                     </>}
+                </button>}
+                {contactsOn && <button className="side__item" title="Contacts" aria-current={activeId === "space:contacts" ? "page" : undefined} onClick={() => onPick("space:contacts")}>
+                    <ContactsIcon size={18} /><span>Contacts</span>
                 </button>}
             </div>
 
@@ -103,10 +106,6 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
                     ))}
                 </div>
             )}
-
-            <div className="snav__group snav__foot">
-                <button className="side__item" title="Settings" aria-current={activeId === "space:settings" ? "page" : undefined} onClick={onSettings}><SettingsIcon size={18} /><span>Settings</span></button>
-            </div>
         </nav>
     );
 }

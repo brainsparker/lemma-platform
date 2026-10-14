@@ -27,6 +27,21 @@ def test_changing_mobile_clears_verification_and_emits_cache_invalidation_event(
     assert events[0].user_id == user.id
 
 
+def test_a_telegram_handle_is_not_a_profile_field():
+    """A handle on a profile proved nothing, so a profile no longer holds one.
+
+    An older client may still send it; the profile ignores it rather than
+    storing a claim nobody checks.
+    """
+    user = UserEntity(email="test+tg@example.com")
+
+    user.update_profile(telegram_username="asha", first_name="Asha")
+
+    assert user.first_name == "Asha"
+    assert "telegram_username" not in user.model_dump()
+    assert user.collect_events() == []
+
+
 @pytest.mark.asyncio
 async def test_create_user_emits_signup_event_without_personal_org(
     user_service: UserService,

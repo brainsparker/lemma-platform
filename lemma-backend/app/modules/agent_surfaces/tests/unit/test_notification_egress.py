@@ -1009,6 +1009,40 @@ async def test_a_cold_open_carries_the_senders_name_to_the_platform():
     assert "actor_display_name" not in metadata
 
 
+async def test_a_named_agents_cold_mail_wears_its_name_when_the_caller_gave_none():
+    """A caller may leave ``agent_name`` out; the surface still names the agent.
+
+    Channel resolution picks the named agent's mailbox whether or not the caller
+    said who was writing, and without this the From line fell back to the
+    deployment's name on exactly the mail that had an agent to name.
+    """
+    surface = _email_surface().model_copy(update={"agent_id": uuid4()})
+    notification = _notification()
+    seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
+
+    egress_port = _egress_double()
+    egress_port.open_cold_email_thread.return_value = _thread_for(
+        surface, seed, "bob@example.com"
+    )
+    egress = NotificationEgress(
+        egress=egress_port,
+        uow=AsyncMock(),
+        conversation_link_repository=_links(),
+    )
+
+    await egress.send(
+        DeliveryChannel(surface=surface, email_address="bob@example.com"),
+        conversation_id=uuid4(),
+        notification=notification,
+        message="What did you ship?",
+        agent_name=None,
+    )
+
+    metadata = egress_port.open_cold_email_thread.await_args.kwargs["metadata"]
+    assert metadata["email_sender_name"] == "Ops"
+    egress_port.agent_name_for_surface.assert_awaited_once_with(surface)
+
+
 async def test_an_unknown_agent_name_is_absent_rather_than_None():
     """A present key beats ``setdefault``, and would unname every chat bot.
 

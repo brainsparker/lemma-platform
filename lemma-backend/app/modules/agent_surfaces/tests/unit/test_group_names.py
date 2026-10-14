@@ -262,6 +262,23 @@ async def test_the_agent_that_answered_the_thread_is_the_one_named():
     assert metadata["email_sender_name"] == "Sales"
 
 
+async def test_a_sender_name_the_caller_supplied_is_not_looked_up_again():
+    """A name already in the metadata wins, and the pod table is not read for it."""
+    pod_id = uuid4()
+    session = _Session(
+        pod_name="Sales",
+        agent=(pod_id, "pod_default", AgentKind.POD_DEFAULT.value, None),
+    )
+
+    metadata = await _delivery(session).egress_metadata(
+        _email_target(pod_id=pod_id, agent_id=pod_id),
+        {"email_sender_name": "Support"},
+    )
+
+    assert metadata["email_sender_name"] == "Support"
+    assert session.pod_reads == 0
+
+
 async def test_a_chat_reply_never_carries_an_email_sender_name():
     """The From line is email's, and a chat send must not pay for the lookup."""
     pod_id = uuid4()

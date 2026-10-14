@@ -104,11 +104,17 @@ class NotificationEgress:
         # one send that never passes through ``egress_metadata``, which fills
         # the same key on the reply path — and it is not the agent's display
         # name, because the pod's own assistant goes out under the pod's name.
+        is_pod_default = is_pod_default_agent(
+            channel.surface.agent_id, pod_id=channel.surface.pod_id
+        )
+        # A caller may name the run's agent or not; the surface chosen is a
+        # named agent's either way, and mail from it wears that agent's name
+        # rather than the deployment's.
+        if not is_pod_default and agent_name is None:
+            agent_name = await self.egress.agent_name_for_surface(channel.surface)
         metadata["email_sender_name"] = await sender_name_for(
             self.uow,
-            is_pod_default=is_pod_default_agent(
-                channel.surface.agent_id, pod_id=channel.surface.pod_id
-            ),
+            is_pod_default=is_pod_default,
             agent_name=agent_name,
             pod_id=channel.surface.pod_id,
         )

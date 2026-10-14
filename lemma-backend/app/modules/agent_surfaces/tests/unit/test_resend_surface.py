@@ -1215,6 +1215,33 @@ async def test_the_pods_mailbox_goes_out_as_the_pod_rather_than_as_lem():
 
 
 @pytest.mark.asyncio
+async def test_a_pod_name_that_did_not_resolve_falls_back_to_the_deployment():
+    """``email_sender_name: None`` is an answer, and ``Lem`` does not replace it.
+
+    The pod's row is gone, so nothing names this pod. The chat name beside it is
+    ``Lem``, the platform's word for whatever answers in a pod, which names no
+    pod either -- the header says the deployment, as ``sender_name_for`` means.
+    """
+    service = ResendPlatformService(
+        {
+            "api_key": "re_test",
+            "from_address": "sales@ops.lemma.work",
+            "from_name": "Lemma",
+        }
+    )
+    with platform_http(answer_json({"id": "email-1"})) as http:
+        await service.send_cold_email(
+            recipient_email="bob@example.com",
+            subject="Standup",
+            message="What did you ship?",
+            thread_seed_id="<seed@ops.lemma.work>",
+            metadata={"agent_display_name": "Lem", "email_sender_name": None},
+        )
+
+    assert http.json_of(http.requests[-1])["from"] == "Lemma <sales@ops.lemma.work>"
+
+
+@pytest.mark.asyncio
 async def test_an_agent_name_cannot_inject_a_second_address_into_from():
     """An agent name is 255 characters of unvalidated free text.
 

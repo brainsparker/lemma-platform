@@ -342,15 +342,14 @@ class SurfaceDelivery:
         # already says the product, so it is one name: the pod's own, when the
         # pod's assistant is writing, because that is what a member calls it.
         # Mail only, so no chat send pays for the pod lookup.
-        if target.surface.surface_type.is_email:
-            resolved.setdefault(
-                "email_sender_name",
-                await sender_name_for(
-                    self.uow,
-                    is_pod_default=agent is None or agent.is_pod_default,
-                    agent_name=agent.name if agent is not None else None,
-                    pod_id=target.surface.pod_id,
-                ),
+        # Checked before the read, not through ``setdefault``, which would
+        # await the lookup only to throw its answer away.
+        if target.surface.surface_type.is_email and "email_sender_name" not in resolved:
+            resolved["email_sender_name"] = await sender_name_for(
+                self.uow,
+                is_pod_default=agent is None or agent.is_pod_default,
+                agent_name=agent.name if agent is not None else None,
+                pod_id=target.surface.pod_id,
             )
         return resolved
 

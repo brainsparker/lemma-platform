@@ -413,6 +413,14 @@ export function LiveConversation({
         () => runtimeNotes.filter((note) => note.conversationId === liveConversationId),
         [runtimeNotes, liveConversationId],
     );
+    /* Notes are about one conversation's turns; another conversation's are
+       dropped on the way in rather than kept, filtered out, for as long as
+       this view stays mounted. */
+    useEffect(() => {
+        setRuntimeNotes((was) => was.some((note) => note.conversationId !== liveConversationId)
+            ? was.filter((note) => note.conversationId === liveConversationId)
+            : was);
+    }, [liveConversationId]);
     const turns = useMemo(() => {
         const next = keepUnchanged(shownTurns.current, withRuntimeNotes(buildTurns(transcript), notesHere));
         shownTurns.current = next;
@@ -650,7 +658,14 @@ export function LiveConversation({
                        anything, goes through. Handing the session the id here,
                        in the same tick as the create, leaves the pod's later
                        prop with nothing to switch away from. */
-                    adopt: made => session.setConversationId(made.id),
+                    /* Before the session hears it: the effect that copies
+                       the id across runs a render later, and a notice the
+                       first turn sends in between would be filed under no
+                       conversation and never drawn. */
+                    adopt: made => {
+                        streamingIn.current = made.id;
+                        session.setConversationId(made.id);
+                    },
                     onCreated: made => {
                         createdHere.current = made.id;
                         onCreated?.(made.id);

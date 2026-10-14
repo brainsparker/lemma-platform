@@ -144,6 +144,22 @@ def _egress_double() -> SurfaceEgress:
 #: Where `agent` publishes the conversation operations delivery calls.
 _OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
 
+#: Where a pod's own name is read, for the email ``From`` header.
+_POD_NAMES = "app.modules.agent_surfaces.services.group_names.pod_name_for"
+
+
+@pytest.fixture(autouse=True)
+def pod_name(monkeypatch):
+    """The pod's display name, doubled where the sender name reads it.
+
+    The real lookup is a query on the pod table. Patched at that seam rather
+    than on the callers, so a test can assert what a member sees in the ``From``
+    line without a database.
+    """
+    name = AsyncMock(return_value="Acme")
+    monkeypatch.setattr(_POD_NAMES, name)
+    return name
+
 
 @pytest.fixture(autouse=True)
 def conversations(monkeypatch):
@@ -948,14 +964,18 @@ async def test_the_connection_is_released_before_the_platform_send(
     )
 
 
-async def test_a_cold_open_carries_both_names_to_the_platform():
-    """Email puts the attribution in the From line, so it has to travel.
+async def test_a_cold_open_carries_the_senders_name_to_the_platform():
+    """Email puts the sender in the From line, so it has to travel.
 
     ``attribute()`` writes "On behalf of Deepak" into the body, which is
     invisible until the message is opened — and it never names the agent, so the
     From line is the only place "Priya" appears at all. The sender column is
     what a person scans in a list, and it named the deployment rather than the
     agent.
+
+    ``email_sender_name`` is the one that reaches the header, and for this
+    surface — the pod's own mailbox — it is the pod. The chat name stays "Priya"
+    beside it, because a chat platform puts that on the bot.
     """
     surface = _email_surface()
     notification = _notification()
@@ -979,12 +999,48 @@ async def test_a_cold_open_carries_both_names_to_the_platform():
         notification=notification,
         message="What did you ship?",
         agent_name="Priya",
-        actor_display_name="Deepak Jha",
     )
 
     metadata = egress_port.open_cold_email_thread.await_args.kwargs["metadata"]
     assert metadata["agent_display_name"] == "Priya"
-    assert metadata["actor_display_name"] == "Deepak Jha"
+    assert metadata["email_sender_name"] == "Acme"
+    # Not the actor: "On behalf of Ada Member" is in the body, where a full name
+    # fits. Sending it here as well is the header the report was about.
+    assert "actor_display_name" not in metadata
+
+
+async def test_a_named_agents_cold_mail_wears_its_name_when_the_caller_gave_none():
+    """A caller may leave ``agent_name`` out; the surface still names the agent.
+
+    Channel resolution picks the named agent's mailbox whether or not the caller
+    said who was writing, and without this the From line fell back to the
+    deployment's name on exactly the mail that had an agent to name.
+    """
+    surface = _email_surface().model_copy(update={"agent_id": uuid4()})
+    notification = _notification()
+    seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
+
+    egress_port = _egress_double()
+    egress_port.open_cold_email_thread.return_value = _thread_for(
+        surface, seed, "bob@example.com"
+    )
+    egress = NotificationEgress(
+        egress=egress_port,
+        uow=AsyncMock(),
+        conversation_link_repository=_links(),
+    )
+
+    await egress.send(
+        DeliveryChannel(surface=surface, email_address="bob@example.com"),
+        conversation_id=uuid4(),
+        notification=notification,
+        message="What did you ship?",
+        agent_name=None,
+    )
+
+    metadata = egress_port.open_cold_email_thread.await_args.kwargs["metadata"]
+    assert metadata["email_sender_name"] == "Ops"
+    egress_port.agent_name_for_surface.assert_awaited_once_with(surface)
 
 
 async def test_an_unknown_agent_name_is_absent_rather_than_None():
@@ -1012,12 +1068,10 @@ async def test_an_unknown_agent_name_is_absent_rather_than_None():
         notification=_notification(),
         message="What did you ship?",
         agent_name=None,
-        actor_display_name=None,
     )
 
     kwargs = egress_port.send_agent_message_for_conversation.await_args.kwargs
     assert "agent_display_name" not in kwargs["metadata"]
-    assert "actor_display_name" not in kwargs["metadata"]
 
 
 # ------------------------------------------- the channel the agent chose
@@ -1230,7 +1284,7 @@ async def _deliver_and_read_header(monkeypatch, *, actor_user_id, recipient_user
     )
 
     await service.deliver(
-        notification, agent_name="Priya", actor_display_name="Deepak Jha"
+        notification, agent_name="Priya", actor_display_name="Ada Member"
     )
     return service.egress.egress.open_cold_email_thread.await_args.kwargs
 
@@ -1249,7 +1303,9 @@ async def test_a_message_to_its_own_asker_carries_no_header(monkeypatch):
     )
 
     assert kwargs["message"] == "What did you ship yesterday?"
-    assert kwargs["metadata"]["actor_display_name"] == "Deepak Jha"
+    # Not in the metadata either: the From line is the pod's name, and the
+    # person's own name on a message they asked for is what the body omits.
+    assert "actor_display_name" not in kwargs["metadata"]
 
 
 async def test_a_colleagues_authority_is_still_named(monkeypatch):
@@ -1262,9 +1318,13 @@ async def test_a_colleagues_authority_is_still_named(monkeypatch):
         monkeypatch, actor_user_id=uuid4(), recipient_user_id=uuid4()
     )
 
-    assert kwargs["message"].startswith("On behalf of Deepak Jha:")
+    assert kwargs["message"].startswith("On behalf of Ada Member:")
     # Never the agent: the bot it arrives from is already the answer to that.
     assert "Priya" not in kwargs["message"]
+    # And the body is the only place the person is named. The From line says the
+    # pod, which is the whole of the header's job.
+    assert "actor_display_name" not in kwargs["metadata"]
+    assert kwargs["metadata"]["email_sender_name"] == "Acme"
 
 
 # ------------------------------------------- sent once, and only where it landed

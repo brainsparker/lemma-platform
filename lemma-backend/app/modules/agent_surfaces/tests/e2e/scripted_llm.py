@@ -30,6 +30,9 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+    deliver_replies,
+)
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -216,6 +219,9 @@ async def run_scripted_agent_run(
             egress_factory=build_surface_egress,
         ),
     )
+
+    # The answer is the delivery row the finalize wrote; the pump sends it.
+    await deliver_replies()
 
     db_session.expire_all()
     completed = await db_session.get(AgentRunModel, run_id)

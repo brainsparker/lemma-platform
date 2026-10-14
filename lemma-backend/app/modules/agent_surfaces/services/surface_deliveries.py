@@ -11,11 +11,10 @@ were written, a ``Retry-After`` holds back everything behind it rather than
 letting later messages overtake it, and a burst costs one 429 per window
 instead of one per message.
 
-The run's own observer may send a run's answer itself -- it is the only sender
-that can close a live Slack stream *with* the answer -- through
-:func:`claim_run_reply` / :func:`settle_claimed_send`, which take the same row
-through the same states. No network here: the FAST ``surface.reply_for_run``
-stages through this module.
+Every outbound message the platform must receive once goes this way: a run's
+answer or failure notice (``surface.reply_for_run``), a held WhatsApp reply, a
+reply to a stranger, a "please resend". No network here: the FAST
+``surface.reply_for_run`` stages through this module.
 """
 
 from __future__ import annotations
@@ -27,7 +26,6 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.work import (
     SYSTEM_NAMESPACE,
     WorkWriter,
@@ -37,7 +35,6 @@ from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.deliveries import (
     MAX_SEND_ATTEMPTS,
     RETRY_DELAYS,
-    SENDING_LEASE,
     ConversationTarget,
     DeliveryContent,
     DeliveryStatus,
@@ -196,60 +193,6 @@ def retry_delay(attempts: int, retry_after: float | None) -> timedelta | None:
     return max(step, timedelta(seconds=retry_after or 0.0))
 
 
-# ---------------------------------------------------------------- observer
-
-
-async def claim_run_reply(
-    uow_factory: UnitOfWorkFactory,
-    *,
-    run_id: UUID,
-    conversation_id: UUID,
-    pod_id: UUID | None,
-    content: DeliveryContent,
-) -> UUID | None:
-    """Take a run's answer to send it now, or ``None`` if someone else has it.
-
-    The run's observer asks this before it sends. It wins when nothing has
-    been written yet (it writes the row SENDING) or the row is still PENDING
-    (the backstop the finished run wrote, not yet due); it loses to a send
-    already under way or done. Its own text replaces the backstop's, because
-    the observer saw the answer as it streamed.
-    """
-    async with uow_factory() as uow:
-        repository = DeliveryRepository(uow.session)
-        key = run_reply_idempotency_key(run_id)
-        existing = await repository.by_key(key)
-        if existing is None:
-            destination, surface_id = await conversation_destination(
-                uow, conversation_id
-            )
-            row_id = await repository.insert(
-                idempotency_key=key,
-                destination_key=destination,
-                target=ConversationTarget(conversation_id=conversation_id).model_dump(
-                    mode="json"
-                ),
-                content=content.model_dump(mode="json"),
-                pod_id=pod_id,
-                surface_id=surface_id,
-                conversation_id=conversation_id,
-                agent_run_id=run_id,
-                status=DeliveryStatus.SENDING,
-                sending_until=datetime.now(UTC) + SENDING_LEASE,
-            )
-            if row_id is not None:
-                return row_id
-            existing = await repository.by_key(key)
-            if existing is None:
-                return None
-        if existing.status != DeliveryStatus.PENDING.value:
-            return None
-        claimed = await repository.claim(
-            existing.id, lease=SENDING_LEASE, content=content.model_dump(mode="json")
-        )
-        return existing.id if claimed else None
-
-
 class SendResult(BaseModel):
     delivered: bool
     transient: bool = False
@@ -320,7 +263,6 @@ def content_of(raw: dict[str, Any]) -> DeliveryContent:
 __all__ = [
     "PumpPayload",
     "SendResult",
-    "claim_run_reply",
     "content_of",
     "conversation_destination",
     "ensure_pump",

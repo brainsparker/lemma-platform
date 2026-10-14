@@ -4,20 +4,18 @@ Subscribed to the agent module's ``AgentRunFinished``, so the item is written
 in the transaction that finished the run: once a run has an outcome, the reply
 it owes its thread is on record, and the window in which a worker could die
 between the run ending and the send -- with nothing left to resend from -- is
-gone.
+gone. It is the only way a run's answer reaches a surface: the run's observer
+only shows progress.
 
-The row is the *backstop*. The run's own observer normally sends the answer
-within a second, through the same row (``claim_run_reply``), because it alone
-can close a live Slack stream with the answer in it. So the row is written due
-``OBSERVER_GRACE`` from now: if the observer took it, the pump finds it SENT;
-if the observer's worker died, the pump sends the run's stored answer.
+The text is not copied here. The row names the run, and the sender renders it
+from the run's stored output (or its failure) when it sends, so a run's reply
+is one row however late it goes.
 
 FAST: one run row, one link row, one insert. No network in this module.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -33,7 +31,6 @@ from app.core.infrastructure.work import (
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.contracts.run_replies import run_reply_material
 from app.modules.agent_surfaces.domain.deliveries import (
-    OBSERVER_GRACE,
     ConversationTarget,
     DeliveryContent,
 )
@@ -96,7 +93,6 @@ async def stage_run_reply(ctx: FastContext, payload: RunReplyPayload) -> None:
         surface_id=surface_id,
         conversation_id=payload.conversation_id,
         agent_run_id=payload.run_id,
-        not_before=datetime.now(UTC) + OBSERVER_GRACE,
         work=ctx.work,
     )
 

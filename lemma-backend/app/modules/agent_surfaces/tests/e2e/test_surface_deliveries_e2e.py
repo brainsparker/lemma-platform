@@ -10,10 +10,9 @@ about the rows and the order the "platform" saw:
   the order they were written;
 * a sender killed mid-send leaves the row SENDING; once its deadline passes
   the pump marks it UNKNOWN and never sends it again;
-* the run's observer and the backstop the finished run writes share one row:
-  whichever claims it sends, the other finds it taken;
-* a run whose worker died between finishing and sending is answered by the
-  backstop, once, from the run's stored output.
+* a finished run's answer is written as a row by the finalize's fact and sent
+  once by the pump, from the run's stored output -- whatever happened to the
+  run's own worker.
 """
 
 from __future__ import annotations
@@ -28,9 +27,8 @@ from sqlalchemy import text
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.work import WorkClass, facts
-from app.core.infrastructure.work.testing import dispatcher_for, make_due
+from app.core.infrastructure.work.testing import dispatcher_for
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.deliveries import (
@@ -40,7 +38,6 @@ from app.modules.agent_surfaces.domain.deliveries import (
 )
 from app.modules.agent_surfaces.services.surface_deliveries import (
     SendResult,
-    claim_run_reply,
     stage_delivery,
 )
 from app.modules.agent_surfaces.tests.e2e.helpers import (
@@ -294,7 +291,7 @@ async def _a_finished_run(
     return conversation_id, run_id
 
 
-async def test_a_worker_that_died_before_sending_the_answer_is_covered_once(
+async def test_a_finished_runs_answer_is_sent_once_from_its_stored_output(
     authenticated_client,
     db_session,
     test_pod,
@@ -303,7 +300,11 @@ async def test_a_worker_that_died_before_sending_the_answer_is_covered_once(
     message_store,
     monkeypatch,
 ):
-    """The real sender, against the fake Telegram: the answer is read off the run."""
+    """The finalize's fact writes the reply row; the pump sends the run's answer.
+
+    Nothing of the run's own process is involved -- which is the point: a
+    worker that dies between finishing the run and sending loses nothing.
+    """
     monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     _conversation, run_id = await _a_finished_run(
@@ -316,27 +317,8 @@ async def test_a_worker_that_died_before_sending_the_answer_is_covered_once(
     )
     registry = surface_registry()
     before = len(message_store.get_all("TELEGRAM"))
-    await drain(registry)  # the backstop row is written, due after the grace
-    assert (
-        await scalar(
-            "SELECT status FROM surface_deliveries WHERE idempotency_key = :k",
-            k=f"run-reply:{run_id}",
-        )
-        == DeliveryStatus.PENDING.value
-    )
-    assert len(message_store.get_all("TELEGRAM")) == before
-
-    # No observer ever claims it: the grace passes and the pump sends it.
-    async with async_session_maker() as session:
-        await session.execute(
-            text(
-                "UPDATE surface_deliveries SET not_before = now() WHERE agent_run_id = :r"
-            ),
-            {"r": run_id},
-        )
-        await session.commit()
-    await drain(registry, due=True)
-    await drain(registry, due=True)
+    await drain(registry)
+    await drain(registry)  # a second pass finds nothing left to send
 
     assert (
         await scalar(
@@ -351,69 +333,3 @@ async def test_a_worker_that_died_before_sending_the_answer_is_covered_once(
         if "Three invoices are due." in json.dumps(item)
     ]
     assert len(answers) == 1, message_store.get_all("TELEGRAM")[before:]
-
-
-async def test_the_observer_and_the_backstop_share_one_reply(
-    authenticated_client,
-    db_session,
-    test_pod,
-    fixed_test_user,
-    fake_telegram,
-    monkeypatch,
-):
-    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
-    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
-    platform = Platform()
-    conversation_id, run_id = await _a_finished_run(
-        authenticated_client,
-        db_session,
-        test_pod,
-        fixed_test_user,
-        fake_telegram,
-        "shared-bot",
-    )
-    registry = surface_registry(sender=platform)
-    await drain(registry)
-
-    factory = SessionUnitOfWorkFactory(async_session_maker)
-    content = DeliveryContent(text="Three invoices are due.", purpose="answer")
-    claimed = await claim_run_reply(
-        factory,
-        run_id=run_id,
-        conversation_id=conversation_id,
-        pod_id=UUID(test_pod["id"]),
-        content=content,
-    )
-    assert claimed is not None, "the observer takes a backstop that is not yet due"
-    again = await claim_run_reply(
-        factory,
-        run_id=run_id,
-        conversation_id=conversation_id,
-        pod_id=UUID(test_pod["id"]),
-        content=content,
-    )
-    assert again is None, "and only once"
-    from app.modules.agent_surfaces.services.surface_deliveries import (
-        settle_claimed_send,
-    )
-
-    async with factory() as uow:
-        await settle_claimed_send(uow, claimed, SendResult(delivered=True))
-    await make_due(async_session_maker)
-    async with async_session_maker() as session:
-        await session.execute(
-            text(
-                "UPDATE surface_deliveries SET not_before = now() WHERE agent_run_id = :r"
-            ),
-            {"r": run_id},
-        )
-        await session.commit()
-    await drain(registry, due=True)
-
-    assert platform.calls == 0, "the backstop found it sent"
-    assert (
-        await scalar(
-            "SELECT count(*) FROM surface_deliveries WHERE agent_run_id = :r", r=run_id
-        )
-        == 1
-    )

@@ -18,6 +18,7 @@ from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.contracts.run_failures import user_safe_stored_reason
 from app.modules.agent.contracts.run_replies import run_reply_material
 from app.modules.agent_surfaces.domain.deliveries import (
     ConversationTarget,
@@ -43,6 +44,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 )
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
 from app.modules.agent_surfaces.platforms.delivery import track_sends
+from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.pending_envelope import (
     RunFiles,
@@ -126,7 +128,7 @@ class PlatformDeliverySender:
         if material is None or material.private:
             return None
         if content.purpose == "failure":
-            return failure_notice(material.error, platform)
+            return failure_notice(user_safe_stored_reason(material.error), platform)
         return material.answer
 
     async def _to_conversation(
@@ -138,6 +140,10 @@ class PlatformDeliverySender:
         text = await self._rendered(row, content)
         if not text:
             return SendResult(delivered=False, error="nothing to send")
+        if content.purpose == "answer" and not sanitize_user_visible_text(text):
+            # An answer existed and sanitizing removed all of it (reasoning and
+            # nothing else). Silence is the one outcome the person cannot act on.
+            text = ALL_REASONING_REPLY
         run = (
             RunFiles(content.attach_files_of_run)
             if content.attach_files_of_run is not None
@@ -168,9 +174,9 @@ class PlatformDeliverySender:
                 )
                 delivered = False
                 error = f"{type(exc).__name__}: {exc}"
-        if run is not None and (delivered or not outcome.gave_up_transient):
-            # Released with the reply that carried them, or with a reply that
-            # will not be tried again; a retry still needs them.
+        if run is not None and delivered:
+            # Released with the reply that carried them. A reply that did not
+            # arrive keeps them for its retry, or until they expire.
             await discard_display_paths(target.conversation_id, run)
         return SendResult(
             delivered=delivered,

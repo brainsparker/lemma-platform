@@ -10,9 +10,9 @@ pump (``surface.reply``)::
                        -> FAILED    (a permanent refusal, or attempts exhausted)
 
 A row is claimed SENDING *before* the platform call, with a deadline
-(``sending_until``). Whoever later finds it still SENDING past that deadline
-cannot know whether the message reached the person, and marks it UNKNOWN
-rather than risk saying it twice.
+(``sending_until``). A pump that later finds it still SENDING past that
+deadline cannot know whether the message reached the person, and marks it
+UNKNOWN rather than risk saying it twice.
 """
 
 from __future__ import annotations
@@ -48,13 +48,6 @@ MAX_SEND_ATTEMPTS = 1 + len(RETRY_DELAYS)
 #: How long a claimed send may take before an observer of it reads the outcome
 #: as lost. Above every adapter's own retry budget for one send.
 SENDING_LEASE = timedelta(seconds=90)
-
-#: How long a run's own process has to send the answer before the pump does.
-#: The run's observer is normally done within a second -- it closes a live
-#: stream *with* the answer, which nothing else can -- so this is only the
-#: window in which a worker that died between the run ending and the send is
-#: noticed.
-OBSERVER_GRACE = timedelta(seconds=20)
 
 
 class _Target(BaseModel):
@@ -118,7 +111,6 @@ class DeliveryContent(BaseModel):
 
 __all__ = [
     "MAX_SEND_ATTEMPTS",
-    "OBSERVER_GRACE",
     "RETRY_DELAYS",
     "SENDING_LEASE",
     "ConversationTarget",

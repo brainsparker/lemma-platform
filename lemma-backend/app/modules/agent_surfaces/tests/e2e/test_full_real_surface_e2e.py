@@ -351,7 +351,10 @@ async def test_telegram_native_polling_reaches_outbox_worker_and_provider(
     # deployment wants for this credential, polled by its runner.
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         candidates = await load_receiver_candidates(uow)
-    [candidate] = [c for c in candidates if c.platform.value == "TELEGRAM"]
+    # The custom bot's own candidate (the deployment's shared bot is one too).
+    [candidate] = [
+        c for c in candidates if c.platform.value == "TELEGRAM" and c.surface_ids
+    ]
     receiver_task = asyncio.create_task(TelegramPollingReceiverRunner(candidate).run())
     try:
         messages = await wait_for_messages(

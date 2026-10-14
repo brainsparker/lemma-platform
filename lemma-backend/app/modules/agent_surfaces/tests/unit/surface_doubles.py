@@ -703,33 +703,6 @@ def build_turn_starter(
     )
 
 
-class MemoryReplyLedger:
-    """The run-reply ledger in memory: one claim per run, outcomes recorded.
-
-    The observer claims a run's reply before it sends it (the backstop row the
-    finished run writes in ``surface_deliveries``); these tests are about what
-    it sends, so the ledger only has to say "yours" once per run.
-    """
-
-    def __init__(self) -> None:
-        self.claimed: dict[object, object] = {}
-        self.settled: list[tuple[object, object]] = []
-
-    async def claim(self, *, run_id, conversation_id, pod_id, content):
-        del conversation_id, pod_id
-        if run_id in self.claimed:
-            return None
-        from uuid import uuid4 as _uuid4
-
-        row = _uuid4()
-        self.claimed[run_id] = (row, content)
-        return row
-
-    async def settle(self, row_id, result) -> bool:
-        self.settled.append((row_id, result))
-        return bool(result.transient and not result.partial and not result.delivered)
-
-
 class RecordingNotificationWork:
     """What a notification writes as work, recorded instead of written.
 

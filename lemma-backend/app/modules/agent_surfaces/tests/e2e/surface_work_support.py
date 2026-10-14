@@ -174,3 +174,24 @@ async def clean_surface_work():
             await session.execute(text(f"DELETE FROM {table}"))
         await session.commit()
     yield
+
+
+_REPLY_REGISTRY: WorkRegistry | None = None
+
+
+async def deliver_replies() -> int:
+    """Send what finished runs owe their surfaces, as the worker would.
+
+    A run's answer is the ``surface_deliveries`` row its finalize writes
+    (``surface.reply_for_run``), sent by the destination pump -- not the
+    observer. A test that drives a run in-process runs those two kinds after.
+    """
+    global _REPLY_REGISTRY
+    if _REPLY_REGISTRY is None:
+        _REPLY_REGISTRY = WorkRegistry()
+        register_reply_for_run_work(_REPLY_REGISTRY)
+        register_surface_reply_work(_REPLY_REGISTRY)
+    await make_due(async_session_maker)
+    return await run_until_idle(
+        async_session_maker, registry=_REPLY_REGISTRY, classes=[WorkClass.DELIVERY]
+    )

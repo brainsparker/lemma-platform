@@ -21,3 +21,12 @@ def user_safe_failure_reason(exc: BaseException) -> str | None:
     """The failure's own user-facing sentence, or None when it has none."""
     message = run_failure_message(exc)
     return None if message == _UNCLASSIFIED else message
+
+
+def user_safe_stored_reason(message: str | None) -> str | None:
+    """A run's stored error sentence, or None when it is the unclassified one.
+
+    The finished run's reply is rendered from the run row, after the
+    exception is gone; this is ``user_safe_failure_reason`` for that row.
+    """
+    return None if not message or message == _UNCLASSIFIED else message

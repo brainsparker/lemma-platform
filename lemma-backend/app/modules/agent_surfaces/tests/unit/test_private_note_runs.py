@@ -14,7 +14,6 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent_surfaces.tests.unit.surface_doubles import MemoryReplyLedger
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -40,7 +39,6 @@ def _refusing_observer(touched: list[str]) -> SurfaceAgentRunProgressObserver:
     return SurfaceAgentRunProgressObserver(
         uow_factory=_uow_factory,
         egress_factory=_egress_factory,
-        reply_ledger=MemoryReplyLedger(),
     )
 
 

@@ -158,6 +158,11 @@ def file_repository_mock() -> AsyncMock:
             ids = set(sorted(ids, key=str)[:limit])
         return ids
 
+    # The grant-driven read answers the same question as `visible_file_ids`
+    # above -- that is what makes it usable as a narrowing -- so the double
+    # answers with the same stub rather than a second, divergent one.
+    repository.grant_reachable_file_ids.side_effect = _visible_file_ids
+
     # Derived from the same stub, so a test still describes the pod in one
     # place. Without this, the callers that moved from `get_all_by_datastore` to
     # `get_descendants` would reach an unstubbed `AsyncMock` attribute, get a

@@ -266,10 +266,9 @@ class FileAuthorizer:
         and the searcher reaches for it when post-filtering comes up short.
         """
         ceiling = datastore_settings.datastore_search_readable_id_pushdown_limit
-        readable = await self.file_repository.visible_file_ids(
+        readable = await self.file_repository.grant_reachable_file_ids(
             pod_id=pod_id,
             ctx=ctx,
-            walk_ancestors=not _is_workload(ctx),
             limit=ceiling + 1,
         )
         if len(readable) > ceiling:
@@ -296,10 +295,9 @@ class FileAuthorizer:
         it smaller never makes an answer wrong, only slower.
         """
         return SearchFileScope.only(
-            await self.file_repository.visible_file_ids(
+            await self.file_repository.grant_reachable_file_ids(
                 pod_id=pod_id,
                 ctx=ctx,
-                walk_ancestors=not _is_workload(ctx),
             )
         )
 

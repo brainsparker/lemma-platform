@@ -32,7 +32,11 @@ from app.modules.datastore.infrastructure.repositories.file_tree_sql import (
     tree_statements,
 )
 from app.modules.datastore.infrastructure.repositories.file_visibility_sql import (
+    grant_reachable_statement,
+    granted_paths,
+    granted_resource_ids,
     has_unreadable_ancestor,
+    reads_only_through_grants,
 )
 from app.modules.datastore.infrastructure.repositories._base import (
     DatastoreRepositoryBase,
@@ -375,6 +379,66 @@ class DatastoreFileRepository(
             stmt = stmt.limit(limit)
         result = await self.session.execute(stmt)
         return set(result.scalars().all())
+
+    async def grant_reachable_file_ids(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        limit: int | None = None,
+    ) -> set[UUID]:
+        """The readable file ids, read from the grants instead of from the pod.
+
+        Same question as ``visible_file_ids``, asked from the other end. For a
+        caller whose reads all come through grants (``reads_only_through_grants``)
+        the files the grants reach are a superset of the readable set, and they
+        are reachable by index: the grants are a handful of rows, and each one
+        names a file by primary key or a folder by path -- which
+        ``ix_datastore_file_pod_path_prefix`` serves as a prefix scan. So the
+        statement costs what the answer costs, not what the pod costs.
+
+        The authorization predicate is still applied, on the rows this finds.
+        That is what keeps this an optimization rather than a second, divergent
+        statement of the rule: the grant read narrows, and the CASE decides.
+
+        A pod-wide grant -- one keyed on the pod id -- reaches every row, so
+        there is nothing to narrow to and the ordinary statement runs instead.
+        """
+        if not reads_only_through_grants(ctx):
+            return await self.visible_file_ids(
+                pod_id=pod_id,
+                ctx=ctx,
+                walk_ancestors=False,
+                limit=limit,
+            )
+        resource_ids = set(
+            (await self.session.execute(granted_resource_ids(ctx, pod_id)))
+            .scalars()
+            .all()
+        )
+        if not resource_ids:
+            return set()
+        if pod_id in resource_ids:
+            return await self.visible_file_ids(
+                pod_id=pod_id,
+                ctx=ctx,
+                walk_ancestors=False,
+                limit=limit,
+            )
+        paths = set(
+            (await self.session.execute(granted_paths(pod_id, resource_ids)))
+            .scalars()
+            .all()
+        )
+        stmt = grant_reachable_statement(
+            ctx=ctx,
+            pod_id=pod_id,
+            actions=_file_actions_expr(ctx),
+            resource_ids=resource_ids,
+            paths=paths,
+            limit=limit,
+        )
+        return set((await self.session.execute(stmt)).scalars().all())
 
     async def get_tree_items(
         self,

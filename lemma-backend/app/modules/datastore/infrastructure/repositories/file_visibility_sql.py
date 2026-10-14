@@ -8,16 +8,28 @@ once. The reasoning belongs somewhere it can be read on its own.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from uuid import UUID
 
-from sqlalchemy import case, func, literal, literal_column, select
+from sqlalchemy import and_, case, func, literal, literal_column, or_, select
 from sqlalchemy.orm import aliased
 
-from app.core.authorization.context import Context, ResourceType
-from app.core.authorization.permissions import Permissions
+from app.core.authorization.context import (
+    ActorType,
+    Context,
+    PrincipalRef,
+    ResourceType,
+)
+from app.core.authorization.grants import grant_resource_type_values
+from app.core.authorization.models import ResourcePermissionGrantModel
+from app.core.authorization.permissions import (
+    Permissions,
+    equivalent_permission_ids,
+)
 from app.core.authorization.sql_actions import (
     allowed_actions_contains,
     allowed_actions_expr,
+    read_action_for_resource,
 )
 from app.modules.datastore.infrastructure.models import DatastoreFile
 
@@ -97,3 +109,142 @@ def has_unreadable_ancestor(ctx: Context, pod_id: UUID):
         )
         .exists()
     )
+
+
+def reads_only_through_grants(ctx: Context) -> bool:
+    """Whether every file this caller may read is one its grants reach.
+
+    The readable-set read for search asks the file table, row by row, whether
+    the visibility rule admits the row. That is the right question and it is
+    answerable, but on a pod whose rows are mostly ones the caller cannot read
+    it is also O(pod): the statement has to look at every row to find out that
+    the answer is a short list. ``grant_reachable_file_ids`` asks the same
+    question from the other end -- from the grants, which are few -- and this
+    predicate is what says the two ends meet.
+
+    It is a claim about the authorization rule, so it is spelled out rather
+    than guessed:
+
+    * A superuser reads everything, so nothing is narrowed.
+    * Only AGENT, FUNCTION and DELEGATED_USER_WORKLOAD are considered. A human
+      reads POD files by role, and a POD or anonymous caller reads Public rows;
+      neither is reachable from a grant.
+    * ``ctx.user_id`` must be absent. The owner branch of the visibility CASE
+      admits a caller's own rows without a grant, and the delegated branch
+      admits its own PERSONAL rows, so a context carrying a user id can read
+      rows no grant points at.
+    * The caller must not hold the read permission. A workload that inherits a
+      member's role (the default pod agent) reads POD files the same way a
+      person does.
+
+    When all four hold, the CASE can only yield a read through the grant branch
+    -- so the files the grants reach are a superset of the readable set, and
+    narrowing to them cannot hide a file the caller may read.
+    """
+    if ctx.is_superuser or ctx.user_id is not None:
+        return False
+    if ctx.actor_type not in (
+        ActorType.AGENT,
+        ActorType.FUNCTION,
+        ActorType.DELEGATED_USER_WORKLOAD,
+    ):
+        return False
+    return not ctx.has_permission(read_action_for_resource(ResourceType.DOCUMENT))
+
+
+def _caller_principals(ctx: Context) -> frozenset[PrincipalRef]:
+    """Every principal this context's grants are written against.
+
+    A union rather than one group: which group the rule actually consults
+    depends on the actor, and a superset of principals can only widen the
+    candidate set. The authorization predicate is applied on top, so a wider
+    candidate set costs rows and never admits one.
+    """
+    principals = set(ctx.principal_refs) | set(ctx.workload_principal_refs)
+    principals |= set(ctx.invoker_principal_refs)
+    for group in ctx.grant_principal_sets:
+        principals |= set(group)
+    return frozenset(principals)
+
+
+def granted_resource_ids(ctx: Context, pod_id: UUID):
+    """The resources this caller's read grants point at.
+
+    Small by construction -- it is a read of the grants table, indexed by
+    grantee -- which is the whole point: it is what lets the file read below be
+    driven from the grants rather than from the pod.
+    """
+    principals = _caller_principals(ctx)
+    if not principals:
+        return select(ResourcePermissionGrantModel.resource_id).where(literal(False))
+    return (
+        select(ResourcePermissionGrantModel.resource_id)
+        .where(
+            ResourcePermissionGrantModel.pod_id == pod_id,
+            ResourcePermissionGrantModel.resource_type.in_(
+                grant_resource_type_values(ResourceType.DOCUMENT)
+            ),
+            ResourcePermissionGrantModel.permission_id.in_(
+                equivalent_permission_ids(
+                    read_action_for_resource(ResourceType.DOCUMENT)
+                )
+            ),
+            or_(
+                *[
+                    and_(
+                        ResourcePermissionGrantModel.grantee_type == principal.type,
+                        ResourcePermissionGrantModel.grantee_id == principal.id,
+                    )
+                    for principal in principals
+                ]
+            ),
+        )
+        .distinct()
+    )
+
+
+def granted_paths(pod_id: UUID, resource_ids):
+    """The stored paths of the granted resources that still exist.
+
+    A grant outlives the row it points at, so an id that resolves to nothing is
+    dropped here rather than becoming a predicate that matches nothing.
+    """
+    return select(DatastoreFile.path).where(
+        DatastoreFile.pod_id == pod_id,
+        DatastoreFile.id.in_(resource_ids),
+    )
+
+
+def grant_reachable_statement(
+    *,
+    ctx: Context,
+    pod_id: UUID,
+    actions,
+    resource_ids: Iterable[UUID],
+    paths: Iterable[str],
+    limit: int | None = None,
+):
+    """The readable ids, found from the grants, with the rule still applied.
+
+    A grant names a row by id, and a folder grant reaches its descendants. The
+    two predicates are the two halves of the cascade ``_grant_exists_for_action``
+    applies, written so an index can serve them: the id list is a primary-key
+    lookup, and ``LIKE`` is what ``ix_datastore_file_pod_path_prefix`` -- the
+    ``text_pattern_ops`` index on ``(pod_id, path)`` -- can range-scan, where
+    ``left(path, length(path) + 1)`` cannot.
+
+    ``LIKE`` rather than the CASE's own ``left(...)`` also means an unescaped
+    ``_`` or ``%`` in a stored path matches more rows than the cascade would.
+    That is the safe direction and the reason it is allowed: the authorization
+    predicate is applied on top, so a wider candidate set costs rows and can
+    never admit a file the caller may not read.
+    """
+    reachable = [DatastoreFile.id.in_(list(resource_ids))]
+    reachable.extend(DatastoreFile.path == path for path in paths)
+    reachable.extend(DatastoreFile.path.like(f"{path}/%") for path in paths)
+    stmt = select(DatastoreFile.id).where(
+        DatastoreFile.pod_id == pod_id,
+        allowed_actions_contains(actions, Permissions.FOLDER_READ),
+        or_(*reachable),
+    )
+    return stmt if limit is None else stmt.limit(limit)

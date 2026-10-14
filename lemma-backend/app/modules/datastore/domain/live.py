@@ -4,7 +4,7 @@ One socket per (client, pod) carries many subscriptions. A client names each
 subscription with its own ``id`` and the server answers on that id::
 
     -> {"op":"subscribe","id":"s1","topic":"records","table":"tickets",
-        "ops":["insert","update"],"since":"<cursor>"}
+        "ops":["insert","update"],"when":{"status":"open"},"since":"<cursor>"}
     -> {"op":"unsubscribe","id":"s1"}
     -> {"op":"ping"}
     <- {"type":"ready","connection":"…","cursor":"…"}
@@ -14,6 +14,14 @@ subscription with its own ``id`` and the server answers on that id::
     <- {"type":"error","id":"s1","code":"forbidden|not_found|invalid|limit","message":"…"}
     <- {"type":"unsubscribed","id":"s1","reason":"…"}
     <- {"type":"pong"}
+
+``when`` takes the trigger grammar (``app/core/domain/record_conditions.py``)
+restricted to its value operators -- equals, not_equals, in, not_in -- because a
+live subscription is sent the row as it is now, with no prior image to ask
+``changed`` / ``written`` / ``from`` / ``to`` of. It needs a ``table``. An insert
+or update is sent when the current row matches; a delete is always sent, since
+the row it would be tested against is gone and a client holding the record
+needs to drop it. A row updated out of the filter is not sent.
 
 Everything here is pure: parsing, the frame shapes, and the change values the
 hub moves around. The hub and the socket live in ``services/live``.
@@ -28,6 +36,11 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
+from app.core.domain.record_conditions import (
+    ColumnCondition,
+    evaluate_match_conditions,
+    parse_match_conditions,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -88,6 +101,38 @@ class SubscribeRequest(BaseModel):
     table: Annotated[str, Field(min_length=1, max_length=255)] | None = None
     ops: tuple[LiveOp, ...] | None = None
     since: Annotated[str, Field(min_length=1, max_length=512)] | None = None
+    #: Conditions over the current row; see the module docstring.
+    when: dict[str, JsonValue] | None = None
+
+    def conditions(self) -> LiveConditions | None:
+        """The parsed ``when``, or ``None``; raises ``ValueError`` saying why not."""
+        if self.when is None:
+            return None
+        if self.table is None:
+            raise ValueError("`when` needs a `table`.")
+        parsed = parse_match_conditions(self.when)
+        moving = sorted(c for c, cond in parsed.items() if cond.asks_about_movement)
+        if moving:
+            raise ValueError(
+                "Live subscriptions see the current row only; `changed`, "
+                "`written`, `from` and `to` are not available "
+                f"(column {', '.join(moving)})."
+            )
+        return LiveConditions(parsed)
+
+
+@dataclass(frozen=True, slots=True)
+class LiveConditions:
+    """A live subscription's ``when``: value operators over the current row."""
+
+    columns: dict[str, ColumnCondition]
+
+    def admit(self, op: LiveOp, row: RowPayload | None) -> bool:
+        if op == "delete":
+            return True
+        return evaluate_match_conditions(
+            self.columns, operation=op.upper(), payload=row
+        )
 
 
 class UnsubscribeRequest(BaseModel):
@@ -124,20 +169,23 @@ def parse_request(raw: str) -> SubscribeRequest | UnsubscribeRequest | PingReque
     except json.JSONDecodeError as exc:
         raise LiveRequestInvalid("Frame is not JSON.") from exc
     subscription_id = decoded.get("id") if isinstance(decoded, dict) else None
-    if isinstance(decoded, dict) and decoded.get("when") is not None:
-        raise LiveRequestInvalid(
-            "`when` is not supported on live subscriptions; filter on the client.",
-            subscription_id=subscription_id
-            if isinstance(subscription_id, str)
-            else None,
-        )
     try:
-        return _REQUEST.validate_python(decoded)
+        request = _REQUEST.validate_python(decoded)
+        if isinstance(request, SubscribeRequest):
+            request.conditions()
+        return request
     except ValidationError as exc:
         first = exc.errors()[0] if exc.errors() else {"msg": "invalid frame"}
         location = ".".join(str(part) for part in first.get("loc", ()))
         raise LiveRequestInvalid(
             f"{location}: {first['msg']}" if location else str(first["msg"]),
+            subscription_id=subscription_id
+            if isinstance(subscription_id, str)
+            else None,
+        ) from exc
+    except ValueError as exc:
+        raise LiveRequestInvalid(
+            f"when: {exc}",
             subscription_id=subscription_id
             if isinstance(subscription_id, str)
             else None,

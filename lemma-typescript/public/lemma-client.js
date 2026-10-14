@@ -19472,9 +19472,14 @@ var LemmaClient = (() => {
     }
     subscribeFrame() {
       var _a;
-      const frame = { op: "subscribe", id: this.id, topic: "records" };
+      const frame = {
+        op: "subscribe",
+        id: this.id,
+        topic: "records"
+      };
       if (this.options.table) frame.table = this.options.table;
       if ((_a = this.options.ops) == null ? void 0 : _a.length) frame.ops = this.options.ops;
+      if (this.options.when) frame.when = this.options.when;
       if (this.cursor) frame.since = this.cursor;
       return JSON.stringify(frame);
     }
@@ -19508,14 +19513,19 @@ var LemmaClient = (() => {
       }
       const subscription = new Subscription(`s${this.nextId++}`, options);
       this.subscriptions.set(subscription.id, subscription);
-      subscription.setStatus(this.attempt === 0 ? "connecting" : "reconnecting");
+      subscription.setStatus(
+        this.attempt === 0 ? "connecting" : "reconnecting"
+      );
       if (this.ready) this.send(subscription.subscribeFrame());
       else this.ensureConnecting();
       return subscription;
     }
     remove(subscription) {
       if (!this.subscriptions.delete(subscription.id)) return;
-      if (this.ready) this.send(JSON.stringify({ op: "unsubscribe", id: subscription.id }));
+      if (this.ready)
+        this.send(
+          JSON.stringify({ op: "unsubscribe", id: subscription.id })
+        );
       if (this.subscriptions.size === 0 && this.idleTimer == null) {
         this.idleTimer = setTimeout(() => {
           this.idleTimer = null;
@@ -19531,7 +19541,8 @@ var LemmaClient = (() => {
       }
     }
     ensureConnecting() {
-      if (this.socket || this.connecting || this.reconnectTimer != null || this.closed) return;
+      if (this.socket || this.connecting || this.reconnectTimer != null || this.closed)
+        return;
       void this.connect();
     }
     async connect() {
@@ -19553,7 +19564,10 @@ var LemmaClient = (() => {
         ws = new WebSocket(liveWsUrl(this.apiUrl, this.podId, token));
       } catch (error) {
         for (const sub of this.subscriptions.values()) {
-          (_b = (_a = sub.options).onError) == null ? void 0 : _b.call(_a, error instanceof Error ? error : new Error(String(error)));
+          (_b = (_a = sub.options).onError) == null ? void 0 : _b.call(
+            _a,
+            error instanceof Error ? error : new Error(String(error))
+          );
         }
         this.scheduleReconnect();
         return;
@@ -19570,7 +19584,9 @@ var LemmaClient = (() => {
       var _a, _b, _c, _d, _e, _f;
       let frame;
       try {
-        const parsed = JSON.parse(typeof event.data === "string" ? event.data : "");
+        const parsed = JSON.parse(
+          typeof event.data === "string" ? event.data : ""
+        );
         if (!parsed || typeof parsed !== "object") return;
         frame = parsed;
       } catch {
@@ -19580,7 +19596,8 @@ var LemmaClient = (() => {
         this.ready = true;
         this.attempt = 0;
         this.authRefreshed = false;
-        for (const sub2 of this.subscriptions.values()) this.send(sub2.subscribeFrame());
+        for (const sub2 of this.subscriptions.values())
+          this.send(sub2.subscribeFrame());
         this.startPing();
         return;
       }
@@ -19596,7 +19613,8 @@ var LemmaClient = (() => {
         case "changes": {
           sub.cursor = cursor != null ? cursor : sub.cursor;
           const changes = Array.isArray(frame.changes) ? frame.changes : [];
-          for (const change of changes) sub.options.onChange(this.toFrame(change, sub.cursor));
+          for (const change of changes)
+            sub.options.onChange(this.toFrame(change, sub.cursor));
           return;
         }
         case "resync":
@@ -19614,7 +19632,10 @@ var LemmaClient = (() => {
           return;
         case "unsubscribed":
           if (frame.reason === "client") return;
-          this.end(sub, `subscription ended by the server (${String(frame.reason)})`);
+          this.end(
+            sub,
+            `subscription ended by the server (${String(frame.reason)})`
+          );
           return;
         default:
           return;
@@ -19662,7 +19683,11 @@ var LemmaClient = (() => {
       }
       if (code === WS_UNAUTHENTICATED) {
         if (this.authRefreshed) {
-          this.failAll(new Error("Datastore change stream: session rejected after refresh"));
+          this.failAll(
+            new Error(
+              "Datastore change stream: session rejected after refresh"
+            )
+          );
           return;
         }
         this.authRefreshed = true;
@@ -19677,11 +19702,17 @@ var LemmaClient = (() => {
         return;
       }
       if (code === WS_FORBIDDEN) {
-        this.failAll(new Error("Datastore change stream: no access to this pod's changes"));
+        this.failAll(
+          new Error(
+            "Datastore change stream: no access to this pod's changes"
+          )
+        );
         return;
       }
       if (code === WS_NOT_FOUND) {
-        this.failAll(new Error("Datastore change stream: pod or table not found"));
+        this.failAll(
+          new Error("Datastore change stream: pod or table not found")
+        );
         return;
       }
       this.scheduleReconnect();
@@ -19700,7 +19731,8 @@ var LemmaClient = (() => {
         }
       }
       if (this.closed || this.subscriptions.size === 0) return;
-      for (const sub of this.subscriptions.values()) sub.setStatus("reconnecting");
+      for (const sub of this.subscriptions.values())
+        sub.setStatus("reconnecting");
       const delay = reconnectDelayMs(this.attempt);
       this.attempt += 1;
       this.reconnectTimer = setTimeout(() => {
@@ -19710,7 +19742,10 @@ var LemmaClient = (() => {
     }
     startPing() {
       this.stopPing();
-      this.pingTimer = setInterval(() => this.send('{"op":"ping"}'), PING_INTERVAL_MS);
+      this.pingTimer = setInterval(
+        () => this.send('{"op":"ping"}'),
+        PING_INTERVAL_MS
+      );
     }
     stopPing() {
       if (this.pingTimer != null) clearInterval(this.pingTimer);
@@ -19747,9 +19782,15 @@ var LemmaClient = (() => {
     const existing = byKey.get(key);
     if (existing && !existing.isClosed) return existing;
     const map = byKey;
-    const connection = new LiveConnection(apiUrl, auth, podId, useCookie, (gone) => {
-      if (map.get(key) === gone) map.delete(key);
-    });
+    const connection = new LiveConnection(
+      apiUrl,
+      auth,
+      podId,
+      useCookie,
+      (gone) => {
+        if (map.get(key) === gone) map.delete(key);
+      }
+    );
     map.set(key, connection);
     return connection;
   }
@@ -19771,7 +19812,12 @@ var LemmaClient = (() => {
       stopped = true;
     } else {
       (_b = options.signal) == null ? void 0 : _b.addEventListener("abort", close, { once: true });
-      connection = sharedConnection(apiUrl, auth, podId, Boolean(options.useCookie));
+      connection = sharedConnection(
+        apiUrl,
+        auth,
+        podId,
+        Boolean(options.useCookie)
+      );
       subscription = connection.add(options);
     }
     return {

@@ -62,6 +62,13 @@ A lost wake costs latency only: the hub also reads on an idle poll.
   only their owner (the change row carries `owner_user_id`). When the pod's
   authorization epoch moves, the hub re-checks every subscription and ends the
   ones that lost their table with `unsubscribed`.
+- **`when`**: a subscription on one table may carry `when` conditions in the
+  trigger grammar (`app/core/domain/record_conditions.py`, the one evaluator
+  both use), limited to its value operators (`equals`, `not_equals`, `in`,
+  `not_in`): the socket sees the current row, with no prior image to ask
+  `changed`/`written`/`from`/`to` of, so those are refused with `invalid`. The
+  hub tests each insert or update against the row it fetched, after the RLS
+  check; deletes always pass, and a row updated out of the filter is not sent.
 - **Resume**: `subscribe` with `since` replays that subscription's gap from the
   log. A cursor older than the log keeps, or one that is not a change-log
   cursor, answers `resync`; so does a batch with more than

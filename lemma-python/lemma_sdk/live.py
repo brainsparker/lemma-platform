@@ -22,7 +22,7 @@ import asyncio
 import json
 import random
 import ssl
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -113,6 +113,7 @@ class _Subscription:
     table: str | None
     ops: tuple[LiveOp, ...] | None
     cursor: str | None
+    when: Mapping[str, object] | None = None
 
 
 @dataclass(slots=True)
@@ -132,11 +133,18 @@ class LiveSession:
         table: str | None = None,
         ops: Sequence[LiveOp] | None = None,
         since: str | None = None,
+        when: Mapping[str, object] | None = None,
     ) -> str:
+        """Add a subscription; ``when`` filters by the row's current values.
+
+        ``when`` uses the trigger grammar's value operators (``equals``,
+        ``not_equals``, ``in``, ``not_in``, or a bare value for equality) and
+        needs ``table``. Deletes are always delivered.
+        """
         subscription_id = f"s{self._next}"
         self._next += 1
         self._subscriptions[subscription_id] = _Subscription(
-            subscription_id, table, tuple(ops) if ops else None, since
+            subscription_id, table, tuple(ops) if ops else None, since, when
         )
         return subscription_id
 
@@ -162,6 +170,8 @@ class LiveSession:
                 frame["ops"] = list(subscription.ops)
             if subscription.cursor:
                 frame["since"] = subscription.cursor
+            if subscription.when:
+                frame["when"] = dict(subscription.when)
             frames.append(json.dumps(frame))
         return frames
 
@@ -239,6 +249,7 @@ async def watch_changes(
     table: str | None = None,
     ops: Sequence[LiveOp] | None = None,
     since: str | None = None,
+    when: Mapping[str, object] | None = None,
     verify_ssl: bool = True,
     max_reconnects: int | None = None,
 ) -> AsyncIterator[LiveEvent]:
@@ -257,7 +268,7 @@ async def watch_changes(
         ) from exc
 
     session = LiveSession()
-    session.add(table=table, ops=ops, since=since)
+    session.add(table=table, ops=ops, since=since, when=when)
     url = live_ws_url(base_url, pod_id)
     ssl_option: ssl.SSLContext | None = None
     if url.startswith("wss://") and not verify_ssl:

@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 from app.modules.datastore.domain.live import (
     ChangePosition,
     EncodedChange,
+    LiveConditions,
     LiveErrorCode,
     LiveOp,
     ResyncReason,
@@ -45,6 +46,8 @@ class LiveSubscription:
     #: ``position`` as the client's cursor: what a resume from here sends.
     cursor: str = ""
     active: bool = True
+    #: ``when`` over the current row; applied once the row is fetched.
+    when: LiveConditions | None = None
 
     def advance(self, position: ChangePosition, cursor: str) -> None:
         self.position = position

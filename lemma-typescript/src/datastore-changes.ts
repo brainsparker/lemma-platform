@@ -35,91 +35,98 @@
  */
 
 export interface DatastoreChangeFrame {
-  /** e.g. "datastore.record.insert" | ".update" | ".delete" */
-  type: string;
-  pod_id: string;
-  table_name: string;
-  record_id: string;
-  operation: "insert" | "update" | "delete";
-  /**
-   * The row as it stands now — including columns this write never touched and
-   * defaults the database filled in. Several changes to one record close
-   * together arrive as one frame carrying its latest state. `{}` on `delete`.
-   */
-  payload: Record<string, unknown>;
-  /**
-   * The row body was not carried. `payload` is `{}`; fetch the record by
-   * `record_id` if you need its values.
-   */
-  payload_truncated?: boolean;
-  occurred_at?: string;
-  /** Change-log cursor — pass back as `since` to resume after this change. */
-  cursor?: string;
-  /** @deprecated Alias of `cursor`, kept for one release. */
-  stream_id?: string;
+    /** e.g. "datastore.record.insert" | ".update" | ".delete" */
+    type: string;
+    pod_id: string;
+    table_name: string;
+    record_id: string;
+    operation: "insert" | "update" | "delete";
+    /**
+     * The row as it stands now — including columns this write never touched and
+     * defaults the database filled in. Several changes to one record close
+     * together arrive as one frame carrying its latest state. `{}` on `delete`.
+     */
+    payload: Record<string, unknown>;
+    /**
+     * The row body was not carried. `payload` is `{}`; fetch the record by
+     * `record_id` if you need its values.
+     */
+    payload_truncated?: boolean;
+    occurred_at?: string;
+    /** Change-log cursor — pass back as `since` to resume after this change. */
+    cursor?: string;
+    /** @deprecated Alias of `cursor`, kept for one release. */
+    stream_id?: string;
 }
 
 export type ChangeStreamStatus =
-  | "connecting"
-  | "open"
-  | "reconnecting"
-  | "closed";
+    "connecting" | "open" | "reconnecting" | "closed";
 
 /** Why the server asked a subscription to refetch instead of replaying. */
 export type ChangeStreamResyncReason =
-  | "cursor_expired"
-  | "too_many"
-  | "permission_changed"
-  | "overflow"
-  | (string & {});
+    | "cursor_expired"
+    | "too_many"
+    | "permission_changed"
+    | "overflow"
+    | (string & {});
 
 /** Minimal token source; the SDK's AuthManager satisfies this structurally. */
 export interface ChangeStreamTokenProvider {
-  getAccessToken(): Promise<string>;
-  refreshAccessToken(): Promise<string>;
-  /**
-   * The session's state, when the provider knows it. A signed-out session ends
-   * the stream: the server refuses the handshake before accepting it, which a
-   * browser reports as 1006 rather than 1008, so the close code alone cannot
-   * say "not you" and the socket would otherwise retry that refusal forever.
-   */
-  getState?(): { status: string };
+    getAccessToken(): Promise<string>;
+    refreshAccessToken(): Promise<string>;
+    /**
+     * The session's state, when the provider knows it. A signed-out session ends
+     * the stream: the server refuses the handshake before accepting it, which a
+     * browser reports as 1006 rather than 1008, so the close code alone cannot
+     * say "not you" and the socket would otherwise retry that refusal forever.
+     */
+    getState?(): { status: string };
 }
 
 export interface WatchChangesOptions {
-  /** Restrict to one table; omit to watch every readable table in the pod. */
-  table?: string;
-  /** Only these operations; omit for all three. */
-  ops?: Array<"insert" | "update" | "delete">;
-  /** Resume after a previously seen `cursor` (or legacy `stream_id`). */
-  since?: string;
-  /** Invoked for every record change. */
-  onChange: (frame: DatastoreChangeFrame) => void;
-  /**
-   * The server could not replay what this watch missed — the gap was older than
-   * the server keeps, or larger than is worth sending. Refetch your view, then
-   * keep applying changes: they continue from `cursor`.
-   */
-  onResync?: (info: { cursor: string; reason: ChangeStreamResyncReason }) => void;
-  /** Invoked each time the subscription is live; carries the resume cursor. */
-  onReady?: (info: { since: string }) => void;
-  /** Connection lifecycle notifications. */
-  onStatus?: (status: ChangeStreamStatus) => void;
-  /** Terminal errors (e.g. auth failed, access revoked, max retries reached). */
-  onError?: (error: Error) => void;
-  /** Abort to stop the stream (equivalent to calling `handle.close()`). */
-  signal?: AbortSignal;
-  /** Rely on a same-site session cookie instead of a token in the URL. */
-  useCookie?: boolean;
-  /** Cap reconnect attempts; unlimited by default. */
-  maxRetries?: number;
+    /** Restrict to one table; omit to watch every readable table in the pod. */
+    table?: string;
+    /** Only these operations; omit for all three. */
+    ops?: Array<"insert" | "update" | "delete">;
+    /**
+     * Only rows whose current values match, in the trigger `when` grammar's value
+     * operators: `{ status: "open" }`, `{ status: { in: ["open", "new"] } }`,
+     * `equals` / `not_equals` / `in` / `not_in`. Needs `table`. Deletes are always
+     * delivered; a row updated out of the filter is not.
+     */
+    when?: Record<string, unknown>;
+    /** Resume after a previously seen `cursor` (or legacy `stream_id`). */
+    since?: string;
+    /** Invoked for every record change. */
+    onChange: (frame: DatastoreChangeFrame) => void;
+    /**
+     * The server could not replay what this watch missed — the gap was older than
+     * the server keeps, or larger than is worth sending. Refetch your view, then
+     * keep applying changes: they continue from `cursor`.
+     */
+    onResync?: (info: {
+        cursor: string;
+        reason: ChangeStreamResyncReason;
+    }) => void;
+    /** Invoked each time the subscription is live; carries the resume cursor. */
+    onReady?: (info: { since: string }) => void;
+    /** Connection lifecycle notifications. */
+    onStatus?: (status: ChangeStreamStatus) => void;
+    /** Terminal errors (e.g. auth failed, access revoked, max retries reached). */
+    onError?: (error: Error) => void;
+    /** Abort to stop the stream (equivalent to calling `handle.close()`). */
+    signal?: AbortSignal;
+    /** Rely on a same-site session cookie instead of a token in the URL. */
+    useCookie?: boolean;
+    /** Cap reconnect attempts; unlimited by default. */
+    maxRetries?: number;
 }
 
 export interface ChangeStreamHandle {
-  /** Stop the stream and prevent further reconnects. */
-  close(): void;
-  /** Whether the stream has been stopped. */
-  readonly closed: boolean;
+    /** Stop the stream and prevent further reconnects. */
+    close(): void;
+    /** Whether the stream has been stopped. */
+    readonly closed: boolean;
 }
 
 const RECONNECT_BASE_DELAY_MS = 500;
@@ -135,59 +142,68 @@ const WS_FORBIDDEN = 4403;
 const WS_NOT_FOUND = 4404;
 
 function reconnectDelayMs(attempt: number): number {
-  const ceiling = Math.min(
-    RECONNECT_MAX_DELAY_MS,
-    RECONNECT_BASE_DELAY_MS * 2 ** Math.max(0, attempt),
-  );
-  return Math.random() * ceiling;
+    const ceiling = Math.min(
+        RECONNECT_MAX_DELAY_MS,
+        RECONNECT_BASE_DELAY_MS * 2 ** Math.max(0, attempt),
+    );
+    return Math.random() * ceiling;
 }
 
-function liveWsUrl(apiUrl: string, podId: string, token: string | null): string {
-  const root = apiUrl.replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
-  const url = new URL(`${root}/pods/${podId}/live`);
-  if (token) url.searchParams.set("access_token", token);
-  return url.toString();
+function liveWsUrl(
+    apiUrl: string,
+    podId: string,
+    token: string | null,
+): string {
+    const root = apiUrl.replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
+    const url = new URL(`${root}/pods/${podId}/live`);
+    if (token) url.searchParams.set("access_token", token);
+    return url.toString();
 }
 
 interface WireChange {
-  op: "insert" | "update" | "delete";
-  table: string;
-  record_id: string;
-  row: Record<string, unknown> | null;
+    op: "insert" | "update" | "delete";
+    table: string;
+    record_id: string;
+    row: Record<string, unknown> | null;
 }
 
 type ServerFrame = Record<string, unknown> & { type?: unknown; id?: unknown };
 
 function frameCursor(frame: ServerFrame): string | undefined {
-  const cursor = frame.cursor ?? frame.stream_id;
-  return typeof cursor === "string" && cursor ? cursor : undefined;
+    const cursor = frame.cursor ?? frame.stream_id;
+    return typeof cursor === "string" && cursor ? cursor : undefined;
 }
 
 class Subscription {
-  status: ChangeStreamStatus | null = null;
-  stopped = false;
-  cursor: string | undefined;
+    status: ChangeStreamStatus | null = null;
+    stopped = false;
+    cursor: string | undefined;
 
-  constructor(
-    readonly id: string,
-    readonly options: WatchChangesOptions,
-  ) {
-    this.cursor = options.since;
-  }
+    constructor(
+        readonly id: string,
+        readonly options: WatchChangesOptions,
+    ) {
+        this.cursor = options.since;
+    }
 
-  setStatus(next: ChangeStreamStatus): void {
-    if (this.status === next) return;
-    this.status = next;
-    this.options.onStatus?.(next);
-  }
+    setStatus(next: ChangeStreamStatus): void {
+        if (this.status === next) return;
+        this.status = next;
+        this.options.onStatus?.(next);
+    }
 
-  subscribeFrame(): string {
-    const frame: Record<string, unknown> = { op: "subscribe", id: this.id, topic: "records" };
-    if (this.options.table) frame.table = this.options.table;
-    if (this.options.ops?.length) frame.ops = this.options.ops;
-    if (this.cursor) frame.since = this.cursor;
-    return JSON.stringify(frame);
-  }
+    subscribeFrame(): string {
+        const frame: Record<string, unknown> = {
+            op: "subscribe",
+            id: this.id,
+            topic: "records",
+        };
+        if (this.options.table) frame.table = this.options.table;
+        if (this.options.ops?.length) frame.ops = this.options.ops;
+        if (this.options.when) frame.when = this.options.when;
+        if (this.cursor) frame.since = this.cursor;
+        return JSON.stringify(frame);
+    }
 }
 
 /**
@@ -195,303 +211,359 @@ class Subscription {
  * Exported for tests; use `watchDatastoreChanges`.
  */
 export class LiveConnection {
-  private socket: WebSocket | null = null;
-  private ready = false;
-  private attempt = 0;
-  private authRefreshed = false;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private idleTimer: ReturnType<typeof setTimeout> | null = null;
-  private pingTimer: ReturnType<typeof setInterval> | null = null;
-  private connecting = false;
-  private nextId = 1;
-  private closed = false;
-  readonly subscriptions = new Map<string, Subscription>();
+    private socket: WebSocket | null = null;
+    private ready = false;
+    private attempt = 0;
+    private authRefreshed = false;
+    private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    private idleTimer: ReturnType<typeof setTimeout> | null = null;
+    private pingTimer: ReturnType<typeof setInterval> | null = null;
+    private connecting = false;
+    private nextId = 1;
+    private closed = false;
+    readonly subscriptions = new Map<string, Subscription>();
 
-  constructor(
-    private readonly apiUrl: string,
-    private readonly auth: ChangeStreamTokenProvider,
-    private readonly podId: string,
-    private readonly useCookie: boolean,
-    private readonly onDispose: (connection: LiveConnection) => void,
-  ) {}
+    constructor(
+        private readonly apiUrl: string,
+        private readonly auth: ChangeStreamTokenProvider,
+        private readonly podId: string,
+        private readonly useCookie: boolean,
+        private readonly onDispose: (connection: LiveConnection) => void,
+    ) {}
 
-  get isClosed(): boolean {
-    return this.closed;
-  }
-
-  add(options: WatchChangesOptions): Subscription {
-    if (this.idleTimer != null) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = null;
+    get isClosed(): boolean {
+        return this.closed;
     }
-    const subscription = new Subscription(`s${this.nextId++}`, options);
-    this.subscriptions.set(subscription.id, subscription);
-    subscription.setStatus(this.attempt === 0 ? "connecting" : "reconnecting");
-    if (this.ready) this.send(subscription.subscribeFrame());
-    else this.ensureConnecting();
-    return subscription;
-  }
 
-  remove(subscription: Subscription): void {
-    if (!this.subscriptions.delete(subscription.id)) return;
-    if (this.ready) this.send(JSON.stringify({ op: "unsubscribe", id: subscription.id }));
-    if (this.subscriptions.size === 0 && this.idleTimer == null) {
-      this.idleTimer = setTimeout(() => {
-        this.idleTimer = null;
-        if (this.subscriptions.size === 0) this.dispose();
-      }, IDLE_CLOSE_MS);
-    }
-  }
-
-  private send(text: string): void {
-    try {
-      this.socket?.send(text);
-    } catch {
-      // A send on a closing socket is lost; onclose resubscribes everything.
-    }
-  }
-
-  private ensureConnecting(): void {
-    if (this.socket || this.connecting || this.reconnectTimer != null || this.closed) return;
-    void this.connect();
-  }
-
-  private async connect(): Promise<void> {
-    if (this.closed) return;
-    this.connecting = true;
-    let token: string | null = null;
-    if (!this.useCookie) {
-      try {
-        token = await this.auth.getAccessToken();
-      } catch {
-        token = null; // fall back to cookie auth
-      }
-    }
-    this.connecting = false;
-    if (this.closed || this.subscriptions.size === 0) return;
-
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(liveWsUrl(this.apiUrl, this.podId, token));
-    } catch (error) {
-      for (const sub of this.subscriptions.values()) {
-        sub.options.onError?.(error instanceof Error ? error : new Error(String(error)));
-      }
-      this.scheduleReconnect();
-      return;
-    }
-    this.socket = ws;
-    ws.onmessage = (event: MessageEvent) => this.onMessage(event);
-    ws.onclose = (event: CloseEvent) => {
-      if (this.socket === ws) this.onClose(event.code);
-    };
-    // onerror is followed by onclose, where reconnect is handled.
-    ws.onerror = () => {};
-  }
-
-  private onMessage(event: MessageEvent): void {
-    let frame: ServerFrame;
-    try {
-      const parsed: unknown = JSON.parse(typeof event.data === "string" ? event.data : "");
-      if (!parsed || typeof parsed !== "object") return;
-      frame = parsed as ServerFrame;
-    } catch {
-      return;
-    }
-    if (frame.type === "ready") {
-      // Not `onopen`: the server accepts before it authenticates, so only
-      // `ready` says the session was taken. Backoff resets here too, so a
-      // server that accepts and then drops the socket is not hammered.
-      this.ready = true;
-      this.attempt = 0;
-      this.authRefreshed = false;
-      for (const sub of this.subscriptions.values()) this.send(sub.subscribeFrame());
-      this.startPing();
-      return;
-    }
-    const sub = typeof frame.id === "string" ? this.subscriptions.get(frame.id) : undefined;
-    if (!sub) return;
-    const cursor = frameCursor(frame);
-    switch (frame.type) {
-      case "subscribed":
-        sub.cursor = cursor ?? sub.cursor;
-        sub.setStatus("open");
-        if (sub.cursor) sub.options.onReady?.({ since: sub.cursor });
-        return;
-      case "changes": {
-        sub.cursor = cursor ?? sub.cursor;
-        const changes = Array.isArray(frame.changes) ? (frame.changes as WireChange[]) : [];
-        for (const change of changes) sub.options.onChange(this.toFrame(change, sub.cursor));
-        return;
-      }
-      case "resync":
-        sub.cursor = cursor ?? sub.cursor;
-        sub.options.onResync?.({
-          cursor: sub.cursor ?? "",
-          reason: typeof frame.reason === "string" ? frame.reason : "unknown",
-        });
-        return;
-      case "error":
-        this.end(
-          sub,
-          `subscription refused (${String(frame.code)}): ${String(frame.message ?? "")}`,
+    add(options: WatchChangesOptions): Subscription {
+        if (this.idleTimer != null) {
+            clearTimeout(this.idleTimer);
+            this.idleTimer = null;
+        }
+        const subscription = new Subscription(`s${this.nextId++}`, options);
+        this.subscriptions.set(subscription.id, subscription);
+        subscription.setStatus(
+            this.attempt === 0 ? "connecting" : "reconnecting",
         );
-        return;
-      case "unsubscribed":
-        if (frame.reason === "client") return;
-        this.end(sub, `subscription ended by the server (${String(frame.reason)})`);
-        return;
-      default:
-        return;
+        if (this.ready) this.send(subscription.subscribeFrame());
+        else this.ensureConnecting();
+        return subscription;
     }
-  }
 
-  private toFrame(change: WireChange, cursor: string | undefined): DatastoreChangeFrame {
-    return {
-      type: `datastore.record.${change.op}`,
-      pod_id: this.podId,
-      table_name: change.table,
-      record_id: change.record_id,
-      operation: change.op,
-      payload: change.row ?? {},
-      cursor,
-      stream_id: cursor,
-    };
-  }
+    remove(subscription: Subscription): void {
+        if (!this.subscriptions.delete(subscription.id)) return;
+        if (this.ready)
+            this.send(
+                JSON.stringify({ op: "unsubscribe", id: subscription.id }),
+            );
+        if (this.subscriptions.size === 0 && this.idleTimer == null) {
+            this.idleTimer = setTimeout(() => {
+                this.idleTimer = null;
+                if (this.subscriptions.size === 0) this.dispose();
+            }, IDLE_CLOSE_MS);
+        }
+    }
 
-  private end(sub: Subscription, message: string): void {
-    this.subscriptions.delete(sub.id);
-    sub.stopped = true;
-    sub.setStatus("closed");
-    sub.options.onError?.(new Error(`Datastore change stream: ${message}`));
-    if (this.subscriptions.size === 0) this.dispose();
-  }
+    private send(text: string): void {
+        try {
+            this.socket?.send(text);
+        } catch {
+            // A send on a closing socket is lost; onclose resubscribes everything.
+        }
+    }
 
-  private failAll(error: Error): void {
-    for (const sub of [...this.subscriptions.values()]) {
-      this.subscriptions.delete(sub.id);
-      sub.stopped = true;
-      sub.setStatus("closed");
-      sub.options.onError?.(error);
+    private ensureConnecting(): void {
+        if (
+            this.socket ||
+            this.connecting ||
+            this.reconnectTimer != null ||
+            this.closed
+        )
+            return;
+        void this.connect();
     }
-    this.dispose();
-  }
 
-  private onClose(code: number): void {
-    this.socket = null;
-    this.ready = false;
-    this.stopPing();
-    if (this.closed) return;
-    if (this.subscriptions.size === 0) {
-      this.dispose();
-      return;
-    }
-    if (code === WS_UNAUTHENTICATED) {
-      if (this.authRefreshed) {
-        this.failAll(new Error("Datastore change stream: session rejected after refresh"));
-        return;
-      }
-      this.authRefreshed = true;
-      this.auth.refreshAccessToken().then(
-        () => this.scheduleReconnect(),
-        (error: unknown) =>
-          this.failAll(
-            new Error(
-              `Datastore change stream: session refresh failed (${
-                error instanceof Error ? error.message : String(error)
-              })`,
-            ),
-          ),
-      );
-      return;
-    }
-    if (code === WS_FORBIDDEN) {
-      this.failAll(new Error("Datastore change stream: no access to this pod's changes"));
-      return;
-    }
-    if (code === WS_NOT_FOUND) {
-      this.failAll(new Error("Datastore change stream: pod or table not found"));
-      return;
-    }
-    this.scheduleReconnect();
-  }
+    private async connect(): Promise<void> {
+        if (this.closed) return;
+        this.connecting = true;
+        let token: string | null = null;
+        if (!this.useCookie) {
+            try {
+                token = await this.auth.getAccessToken();
+            } catch {
+                token = null; // fall back to cookie auth
+            }
+        }
+        this.connecting = false;
+        if (this.closed || this.subscriptions.size === 0) return;
 
-  private scheduleReconnect(): void {
-    if (this.closed) return;
-    if (this.auth.getState?.().status === "unauthenticated") {
-      this.failAll(new Error("Datastore change stream: signed out"));
-      return;
+        let ws: WebSocket;
+        try {
+            ws = new WebSocket(liveWsUrl(this.apiUrl, this.podId, token));
+        } catch (error) {
+            for (const sub of this.subscriptions.values()) {
+                sub.options.onError?.(
+                    error instanceof Error ? error : new Error(String(error)),
+                );
+            }
+            this.scheduleReconnect();
+            return;
+        }
+        this.socket = ws;
+        ws.onmessage = (event: MessageEvent) => this.onMessage(event);
+        ws.onclose = (event: CloseEvent) => {
+            if (this.socket === ws) this.onClose(event.code);
+        };
+        // onerror is followed by onclose, where reconnect is handled.
+        ws.onerror = () => {};
     }
-    for (const sub of [...this.subscriptions.values()]) {
-      const max = sub.options.maxRetries;
-      if (max != null && this.attempt >= max) {
-        this.end(sub, "max reconnect attempts reached");
-      }
+
+    private onMessage(event: MessageEvent): void {
+        let frame: ServerFrame;
+        try {
+            const parsed: unknown = JSON.parse(
+                typeof event.data === "string" ? event.data : "",
+            );
+            if (!parsed || typeof parsed !== "object") return;
+            frame = parsed as ServerFrame;
+        } catch {
+            return;
+        }
+        if (frame.type === "ready") {
+            // Not `onopen`: the server accepts before it authenticates, so only
+            // `ready` says the session was taken. Backoff resets here too, so a
+            // server that accepts and then drops the socket is not hammered.
+            this.ready = true;
+            this.attempt = 0;
+            this.authRefreshed = false;
+            for (const sub of this.subscriptions.values())
+                this.send(sub.subscribeFrame());
+            this.startPing();
+            return;
+        }
+        const sub =
+            typeof frame.id === "string"
+                ? this.subscriptions.get(frame.id)
+                : undefined;
+        if (!sub) return;
+        const cursor = frameCursor(frame);
+        switch (frame.type) {
+            case "subscribed":
+                sub.cursor = cursor ?? sub.cursor;
+                sub.setStatus("open");
+                if (sub.cursor) sub.options.onReady?.({ since: sub.cursor });
+                return;
+            case "changes": {
+                sub.cursor = cursor ?? sub.cursor;
+                const changes = Array.isArray(frame.changes)
+                    ? (frame.changes as WireChange[])
+                    : [];
+                for (const change of changes)
+                    sub.options.onChange(this.toFrame(change, sub.cursor));
+                return;
+            }
+            case "resync":
+                sub.cursor = cursor ?? sub.cursor;
+                sub.options.onResync?.({
+                    cursor: sub.cursor ?? "",
+                    reason:
+                        typeof frame.reason === "string"
+                            ? frame.reason
+                            : "unknown",
+                });
+                return;
+            case "error":
+                this.end(
+                    sub,
+                    `subscription refused (${String(frame.code)}): ${String(frame.message ?? "")}`,
+                );
+                return;
+            case "unsubscribed":
+                if (frame.reason === "client") return;
+                this.end(
+                    sub,
+                    `subscription ended by the server (${String(frame.reason)})`,
+                );
+                return;
+            default:
+                return;
+        }
     }
-    if (this.closed || this.subscriptions.size === 0) return;
-    for (const sub of this.subscriptions.values()) sub.setStatus("reconnecting");
-    const delay = reconnectDelayMs(this.attempt);
-    this.attempt += 1;
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      void this.connect();
-    }, delay);
-  }
 
-  private startPing(): void {
-    this.stopPing();
-    this.pingTimer = setInterval(() => this.send('{"op":"ping"}'), PING_INTERVAL_MS);
-  }
-
-  private stopPing(): void {
-    if (this.pingTimer != null) clearInterval(this.pingTimer);
-    this.pingTimer = null;
-  }
-
-  dispose(): void {
-    if (this.closed) return;
-    this.closed = true;
-    this.stopPing();
-    if (this.reconnectTimer != null) clearTimeout(this.reconnectTimer);
-    if (this.idleTimer != null) clearTimeout(this.idleTimer);
-    this.reconnectTimer = null;
-    this.idleTimer = null;
-    const socket = this.socket;
-    this.socket = null;
-    this.ready = false;
-    if (socket) {
-      try {
-        socket.close(1000, "client closed");
-      } catch {
-        // ignore
-      }
+    private toFrame(
+        change: WireChange,
+        cursor: string | undefined,
+    ): DatastoreChangeFrame {
+        return {
+            type: `datastore.record.${change.op}`,
+            pod_id: this.podId,
+            table_name: change.table,
+            record_id: change.record_id,
+            operation: change.op,
+            payload: change.row ?? {},
+            cursor,
+            stream_id: cursor,
+        };
     }
-    this.onDispose(this);
-  }
+
+    private end(sub: Subscription, message: string): void {
+        this.subscriptions.delete(sub.id);
+        sub.stopped = true;
+        sub.setStatus("closed");
+        sub.options.onError?.(new Error(`Datastore change stream: ${message}`));
+        if (this.subscriptions.size === 0) this.dispose();
+    }
+
+    private failAll(error: Error): void {
+        for (const sub of [...this.subscriptions.values()]) {
+            this.subscriptions.delete(sub.id);
+            sub.stopped = true;
+            sub.setStatus("closed");
+            sub.options.onError?.(error);
+        }
+        this.dispose();
+    }
+
+    private onClose(code: number): void {
+        this.socket = null;
+        this.ready = false;
+        this.stopPing();
+        if (this.closed) return;
+        if (this.subscriptions.size === 0) {
+            this.dispose();
+            return;
+        }
+        if (code === WS_UNAUTHENTICATED) {
+            if (this.authRefreshed) {
+                this.failAll(
+                    new Error(
+                        "Datastore change stream: session rejected after refresh",
+                    ),
+                );
+                return;
+            }
+            this.authRefreshed = true;
+            this.auth.refreshAccessToken().then(
+                () => this.scheduleReconnect(),
+                (error: unknown) =>
+                    this.failAll(
+                        new Error(
+                            `Datastore change stream: session refresh failed (${
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error)
+                            })`,
+                        ),
+                    ),
+            );
+            return;
+        }
+        if (code === WS_FORBIDDEN) {
+            this.failAll(
+                new Error(
+                    "Datastore change stream: no access to this pod's changes",
+                ),
+            );
+            return;
+        }
+        if (code === WS_NOT_FOUND) {
+            this.failAll(
+                new Error("Datastore change stream: pod or table not found"),
+            );
+            return;
+        }
+        this.scheduleReconnect();
+    }
+
+    private scheduleReconnect(): void {
+        if (this.closed) return;
+        if (this.auth.getState?.().status === "unauthenticated") {
+            this.failAll(new Error("Datastore change stream: signed out"));
+            return;
+        }
+        for (const sub of [...this.subscriptions.values()]) {
+            const max = sub.options.maxRetries;
+            if (max != null && this.attempt >= max) {
+                this.end(sub, "max reconnect attempts reached");
+            }
+        }
+        if (this.closed || this.subscriptions.size === 0) return;
+        for (const sub of this.subscriptions.values())
+            sub.setStatus("reconnecting");
+        const delay = reconnectDelayMs(this.attempt);
+        this.attempt += 1;
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            void this.connect();
+        }, delay);
+    }
+
+    private startPing(): void {
+        this.stopPing();
+        this.pingTimer = setInterval(
+            () => this.send('{"op":"ping"}'),
+            PING_INTERVAL_MS,
+        );
+    }
+
+    private stopPing(): void {
+        if (this.pingTimer != null) clearInterval(this.pingTimer);
+        this.pingTimer = null;
+    }
+
+    dispose(): void {
+        if (this.closed) return;
+        this.closed = true;
+        this.stopPing();
+        if (this.reconnectTimer != null) clearTimeout(this.reconnectTimer);
+        if (this.idleTimer != null) clearTimeout(this.idleTimer);
+        this.reconnectTimer = null;
+        this.idleTimer = null;
+        const socket = this.socket;
+        this.socket = null;
+        this.ready = false;
+        if (socket) {
+            try {
+                socket.close(1000, "client closed");
+            } catch {
+                // ignore
+            }
+        }
+        this.onDispose(this);
+    }
 }
 
-const connections = new WeakMap<ChangeStreamTokenProvider, Map<string, LiveConnection>>();
+const connections = new WeakMap<
+    ChangeStreamTokenProvider,
+    Map<string, LiveConnection>
+>();
 
 function sharedConnection(
-  apiUrl: string,
-  auth: ChangeStreamTokenProvider,
-  podId: string,
-  useCookie: boolean,
+    apiUrl: string,
+    auth: ChangeStreamTokenProvider,
+    podId: string,
+    useCookie: boolean,
 ): LiveConnection {
-  let byKey = connections.get(auth);
-  if (!byKey) {
-    byKey = new Map();
-    connections.set(auth, byKey);
-  }
-  const key = `${apiUrl.replace(/\/$/, "")}|${podId}|${useCookie ? "cookie" : "token"}`;
-  const existing = byKey.get(key);
-  if (existing && !existing.isClosed) return existing;
-  const map = byKey;
-  const connection = new LiveConnection(apiUrl, auth, podId, useCookie, (gone) => {
-    if (map.get(key) === gone) map.delete(key);
-  });
-  map.set(key, connection);
-  return connection;
+    let byKey = connections.get(auth);
+    if (!byKey) {
+        byKey = new Map();
+        connections.set(auth, byKey);
+    }
+    const key = `${apiUrl.replace(/\/$/, "")}|${podId}|${useCookie ? "cookie" : "token"}`;
+    const existing = byKey.get(key);
+    if (existing && !existing.isClosed) return existing;
+    const map = byKey;
+    const connection = new LiveConnection(
+        apiUrl,
+        auth,
+        podId,
+        useCookie,
+        (gone) => {
+            if (map.get(key) === gone) map.delete(key);
+        },
+    );
+    map.set(key, connection);
+    return connection;
 }
 
 /**
@@ -499,37 +571,42 @@ function sharedConnection(
  * provided `signal`) to stop. Watches on the same pod share one socket.
  */
 export function watchDatastoreChanges(
-  apiUrl: string,
-  auth: ChangeStreamTokenProvider,
-  podId: string,
-  options: WatchChangesOptions,
+    apiUrl: string,
+    auth: ChangeStreamTokenProvider,
+    podId: string,
+    options: WatchChangesOptions,
 ): ChangeStreamHandle {
-  let subscription: Subscription | null = null;
-  let connection: LiveConnection | null = null;
-  let stopped = false;
+    let subscription: Subscription | null = null;
+    let connection: LiveConnection | null = null;
+    let stopped = false;
 
-  const close = (): void => {
-    if (stopped) return;
-    stopped = true;
-    if (subscription && connection && !subscription.stopped) {
-      subscription.stopped = true;
-      connection.remove(subscription);
-      subscription.setStatus("closed");
+    const close = (): void => {
+        if (stopped) return;
+        stopped = true;
+        if (subscription && connection && !subscription.stopped) {
+            subscription.stopped = true;
+            connection.remove(subscription);
+            subscription.setStatus("closed");
+        }
+    };
+
+    if (options.signal?.aborted) {
+        stopped = true;
+    } else {
+        options.signal?.addEventListener("abort", close, { once: true });
+        connection = sharedConnection(
+            apiUrl,
+            auth,
+            podId,
+            Boolean(options.useCookie),
+        );
+        subscription = connection.add(options);
     }
-  };
 
-  if (options.signal?.aborted) {
-    stopped = true;
-  } else {
-    options.signal?.addEventListener("abort", close, { once: true });
-    connection = sharedConnection(apiUrl, auth, podId, Boolean(options.useCookie));
-    subscription = connection.add(options);
-  }
-
-  return {
-    close,
-    get closed() {
-      return stopped || Boolean(subscription?.stopped);
-    },
-  };
+    return {
+        close,
+        get closed() {
+            return stopped || Boolean(subscription?.stopped);
+        },
+    };
 }

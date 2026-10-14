@@ -10,7 +10,7 @@ from .settings import load_settings
 from .transport import MISSING as _MISSING, LemmaTransport
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator, Mapping, Sequence
 
     from .live import LiveEvent, LiveOp
     from .resources import (
@@ -291,6 +291,7 @@ class Pod:
         *,
         ops: "Sequence[LiveOp] | None" = None,
         since: str | None = None,
+        when: "Mapping[str, object] | None" = None,
         max_reconnects: int | None = None,
     ) -> "AsyncIterator[LiveEvent]":
         """Live record changes for one table (or every readable one), as an
@@ -307,6 +308,7 @@ class Pod:
             table=table,
             ops=ops,
             since=since,
+            when=when,
             verify_ssl=bool(generated._verify_ssl),
             max_reconnects=max_reconnects,
         )

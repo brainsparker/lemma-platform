@@ -275,6 +275,39 @@ async def test_expired_or_foreign_since_answers_resync(
     assert live.record_ids("t") == [record["id"]]
 
 
+async def test_when_sends_only_rows_that_match_now(
+    live_pod: DatastoreApi, fixed_test_user, backend_server, sockets
+) -> None:
+    live = await _open(backend_server, live_pod.pod_id, fixed_test_user["token"])
+    sockets.append(live)
+    await live.subscribe("w", "tickets", when={"body": {"in": ["a"]}})
+    await live.subscribe("all", "tickets")
+    gone = await live_pod.create_record("tickets", {"body": "a"})
+    moved = await live_pod.create_record("tickets", {"body": "b"})
+    never = await live_pod.create_record("tickets", {"body": "c"})
+    await live_pod.update_record("tickets", moved["id"], {"body": "a"})
+    await live_pod.delete_record("tickets", gone["id"])
+    last = await live_pod.create_record("tickets", {"body": "a"})
+
+    async def _seen(sub: str, record_id: str) -> None:
+        while record_id not in live.record_ids(sub):
+            await live.recv()
+
+    await asyncio.wait_for(_seen("w", last["id"]), 20)
+    await asyncio.wait_for(_seen("all", never["id"]), 20)
+    sent = [
+        change
+        for frame in live.frames
+        if frame["type"] == "changes" and frame["id"] == "w"
+        for change in frame["changes"]
+    ]
+    assert never["id"] not in {change["record_id"] for change in sent}
+    assert all(c["row"]["body"] == "a" for c in sent if c["op"] != "delete")
+    assert moved["id"] in {change["record_id"] for change in sent}
+    # The deleted row cannot be tested any more; a client holding it must hear.
+    assert [c["op"] for c in sent if c["record_id"] == gone["id"]][-1] == "delete"
+
+
 async def test_refused_subscription_keeps_the_socket(
     live_pod: DatastoreApi, fixed_test_user, backend_server, sockets
 ) -> None:
@@ -284,6 +317,12 @@ async def test_refused_subscription_keeps_the_socket(
     assert (await live.until("error", "x"))["code"] == "not_found"
     await live.send(op="subscribe", id="w", table="tickets", when={"body": {"eq": "a"}})
     assert (await live.until("error", "w"))["code"] == "invalid"
+    # A live subscription sees the current row only: nothing to ask "changed" of.
+    await live.send(
+        op="subscribe", id="m", table="tickets", when={"body": {"changed": True}}
+    )
+    moved = await live.until("error", "m")
+    assert (moved["code"], "changed" in moved["message"]) == ("invalid", True)
     await live.send(op="ping")
     assert (await live.until("pong"))["type"] == "pong"
     await live.subscribe("t", "tickets")

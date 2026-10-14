@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-import subprocess
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -59,63 +58,68 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _client_ports(pid: int) -> list[int]:
-    listing = subprocess.run(
-        ["lsof", "-a", "-p", str(pid), "-i", "TCP", "-n", "-P", "-Fn"],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout
-    ports: list[int] = []
-    for line in listing.splitlines():
-        # ``n127.0.0.1:54012->127.0.0.1:33201``: the left side is the worker's.
-        if line.startswith("n") and "->" in line:
-            local = line[1:].split("->", 1)[0]
-            ports.append(int(local.rsplit(":", 1)[1]))
-    return ports
-
-
 def _libpq_url(database_url: str) -> str:
     scheme, rest = database_url.split("://", 1)
     return f"{scheme.split('+', 1)[0]}://{rest}"
 
 
-async def _in_transaction(database_url: str, ports: list[int]) -> bool:
-    """Whether any of these connections is inside a statement or transaction now.
+def _database_names(database_url: str) -> list[str]:
+    from app.modules.datastore.config import datastore_settings
 
-    ``pg_stat_activity`` is cluster-wide, so one probe covers the worker's
-    connections to the main and the datastore database alike.
+    urls = {database_url, datastore_settings.datastore_database_url}
+    return sorted({url.rsplit("/", 1)[1].split("?", 1)[0] for url in urls if url})
+
+
+async def _anyone_in_transaction(database_url: str) -> bool:
+    """Whether any client of this process's databases is mid-statement or mid-transaction.
+
+    Asked of the databases, not of the worker's sockets: Docker rewrites the
+    client port, so a backend cannot be matched to the worker's connections by
+    port. Nothing else in this pytest process is in a transaction while a hold
+    is being taken (it is a fixture's setup, after the tables were reset), so a
+    busy backend here is the worker's -- or something about to finish, which
+    the retry waits out.
     """
     async with await psycopg.AsyncConnection.connect(
         _libpq_url(database_url), autocommit=True
     ) as connection:
         cursor = await connection.execute(
             "SELECT count(*) FROM pg_stat_activity "
-            "WHERE client_port = ANY(%s) AND (state <> 'idle' "
+            "WHERE datname = ANY(%s) AND pid <> pg_backend_pid() "
+            "AND backend_type = 'client backend' AND (state <> 'idle' "
             "OR backend_xid IS NOT NULL OR backend_xmin IS NOT NULL)",
-            (ports,),
+            (_database_names(database_url),),
         )
         row = await cursor.fetchone()
     return bool(row and row[0])
 
 
-async def _stop_between_transactions(worker: _Worker) -> None:
-    ports = _client_ports(worker.pid)
+async def _stop_between_transactions(workers: list[_Worker]) -> None:
+    """Stop them all at a moment none of them is inside a transaction.
+
+    All at once: the probe sees every client of the databases, so one worker
+    left running could keep it busy while another stays stopped mid-way.
+    """
+
+    def signal_all(sig: signal.Signals) -> None:
+        for worker in workers:
+            if _alive(worker.pid):
+                os.kill(worker.pid, sig)
 
     async def stopped() -> bool:
-        os.kill(worker.pid, signal.SIGSTOP)
-        # A statement the worker wrote just before it stopped may still be in
+        signal_all(signal.SIGSTOP)
+        # A statement a worker wrote just before it stopped may still be in
         # the socket, unread: the backend shows ``idle`` now and opens the
         # transaction a moment later, held for as long as the worker is. Look
         # once that has had time to land.
         await asyncio.sleep(_SETTLE_SECONDS)
-        if not ports or not await _in_transaction(worker.database_url, ports):
+        if not await _anyone_in_transaction(workers[0].database_url):
             return True
-        os.kill(worker.pid, signal.SIGCONT)
+        signal_all(signal.SIGCONT)
         return False
 
     await eventually(
-        label=f"session worker {worker.pid} idle between transactions",
+        label=f"session workers {[w.pid for w in workers]} idle between transactions",
         probe=stopped,
         done=bool,
         timeout_seconds=30,
@@ -126,17 +130,16 @@ async def _stop_between_transactions(worker: _Worker) -> None:
 @asynccontextmanager
 async def worker_held() -> AsyncIterator[None]:
     """Stop every live registered worker between transactions; resume on exit."""
-    held: list[int] = []
+    for worker in list(_WORKERS.values()):
+        if not _alive(worker.pid):
+            unregister_session_worker(worker.pid)
+    held = list(_WORKERS.values())
     try:
-        for worker in list(_WORKERS.values()):
-            if not _alive(worker.pid):
-                unregister_session_worker(worker.pid)
-                continue
-            # Recorded before the attempt: a failed attempt may leave it stopped.
-            held.append(worker.pid)
-            await _stop_between_transactions(worker)
+        if held:
+            await _stop_between_transactions(held)
         yield
     finally:
-        for pid in held:
-            if _alive(pid):
-                os.kill(pid, signal.SIGCONT)
+        # Also after a failed attempt, which may leave them stopped.
+        for worker in held:
+            if _alive(worker.pid):
+                os.kill(worker.pid, signal.SIGCONT)

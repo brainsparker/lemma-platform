@@ -7,9 +7,11 @@ from typing import Optional
 from app.core.authorization.cache import invalidate_role_snapshot_cache
 from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.permissions import Permissions
+from app.core.infrastructure.work import facts
 from app.core.ports.plan_limits import PlanLimits
 from app.modules.identity.contracts import OrganizationJoinPolicy, OrganizationRole
 from app.modules.icon.contracts import IconCleanupPort
+from app.modules.pod.contracts.trigger_settings import PodTriggerDefaultsChanged
 from app.modules.pod.domain.errors import (
     PodAccessDeniedError,
     PodLimitReachedError,
@@ -232,6 +234,10 @@ class PodService:
 
         updated_entity = PodEntity(**merged_dict)
         updated = await self.pod_repository.update(updated_entity)
+        if self._uow is not None and _trigger_defaults(pod_entity) != _trigger_defaults(
+            updated
+        ):
+            await facts.emit(self._uow, PodTriggerDefaultsChanged(pod_id=pod_id))
 
         if (
             self.icon_service
@@ -417,3 +423,7 @@ class PodService:
         suffix = token_hex(4)
         deleted_name = f"deleted-{suffix}-{name}"
         return deleted_name[:255]
+
+
+def _trigger_defaults(pod: PodEntity) -> object:
+    return (pod.model_dump().get("config") or {}).get("triggers")

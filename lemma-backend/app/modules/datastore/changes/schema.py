@@ -3,8 +3,9 @@
 ``reserved_changes`` is the pod's record change log. Every record write appends
 one slim row per changed record in the same statement as the write; the row and
 the prior values are filled in only while a durable subscriber watches that
-``(table, operation)``. ``reserved_change_subscribers`` names who watches what
-and how far each has read.
+``(table, operation)`` and acts on that write's intent -- a trigger that skips
+bulk writes is woken for them, to record the skip, but never reads their rows.
+``reserved_change_subscribers`` names who watches what and how far each has read.
 
 The ``reserved_`` prefix is the namespace the platform already owns inside a pod
 schema (a table name starting with it is refused at creation), so neither table
@@ -34,6 +35,7 @@ PENDING_TABLE = "public.lemma_change_pending"
 FLOORS_TABLE = "public.lemma_change_floors"
 #: Notified by a watched write's transaction; the handoff listens on it.
 PENDING_CHANNEL = "lemma_change_pending"
+_ALL_INTENTS = "'{normal,bulk,import}'"
 
 
 def changes_table(schema: str) -> str:
@@ -104,10 +106,18 @@ async def create_change_log(conn: AsyncConnection, schema: str) -> None:
             # How long a wake waits before delivery, so a batching subscriber
             # reads what accumulated rather than one change at a time.
             "delay_ms integer NOT NULL DEFAULT 0, "
+            # The write intents whose changes it acts on with their rows; a
+            # watched write of any other intent is logged slim.
+            f"snapshot_intents text[] NOT NULL DEFAULT {_ALL_INTENTS}, "
             "cursor_xid xid8 NOT NULL, "
             "cursor_seq bigint NOT NULL, "
             "created_at timestamptz NOT NULL DEFAULT now(), "
             "updated_at timestamptz NOT NULL DEFAULT now())"
+        ),
+        # A schema created by an earlier build of version 3.
+        (
+            f"ALTER TABLE {subscribers} ADD COLUMN IF NOT EXISTS snapshot_intents "
+            f"text[] NOT NULL DEFAULT {_ALL_INTENTS}"
         ),
         (
             "CREATE INDEX IF NOT EXISTS ix_reserved_change_subscribers_table "

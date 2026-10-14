@@ -232,7 +232,7 @@ async def _bulk_update_logged(
                     RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
                 )
             await changes.begin(session)
-            if "U" in changes.watched:
+            if "U" in changes.snapshot:
                 grouped = _with_prior_image(
                     ctx, updates, user_id, enforce_user_scope=enforce_user_scope
                 )

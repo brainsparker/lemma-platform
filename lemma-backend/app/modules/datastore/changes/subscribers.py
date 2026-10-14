@@ -28,6 +28,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.datastore.changes.cursor import ChangePosition
 from app.modules.datastore.changes.reader import Change, ChangeOp
 from app.modules.datastore.changes.schema import changes_table, subscribers_table
+from app.modules.datastore.domain.write_intent import WriteIntent
 from app.modules.datastore.infrastructure.pod_schema_migrations import (
     schema_name_for_pod,
 )
@@ -52,6 +53,10 @@ class SubscriberSpec:
     #: How long a wake waits before delivering, so a batching subscriber reads
     #: what accumulated in the window instead of one change at a time.
     delay: timedelta = field(default=timedelta(0))
+    #: The write intents whose changes it acts on with their rows. A watched
+    #: write of another intent (a bulk write a trigger skips) is still logged
+    #: and delivered, without its row, so the subscriber can record the skip.
+    snapshot_intents: frozenset[WriteIntent] = frozenset(WriteIntent)
 
 
 class DurableSubscriber(Protocol):
@@ -109,6 +114,7 @@ class SubscriberRow:
     ops: frozenset[ChangeOp]
     delay: timedelta
     cursor: ChangePosition
+    snapshot_intents: frozenset[WriteIntent] = frozenset(WriteIntent)
 
 
 class SubscriberTable:
@@ -127,6 +133,7 @@ class SubscriberTable:
         ops: frozenset[ChangeOp],
         delay: timedelta,
         since: datetime | None = None,
+        snapshot_intents: frozenset[WriteIntent] = frozenset(WriteIntent),
     ) -> None:
         """Create the row, or update what it watches.
 
@@ -143,11 +150,14 @@ class SubscriberTable:
             await conn.execute(
                 text(
                     f"INSERT INTO {self._table} AS s "
-                    "(subscriber, table_id, ops, delay_ms, cursor_xid, cursor_seq) "
+                    "(subscriber, table_id, ops, delay_ms, snapshot_intents, "
+                    "cursor_xid, cursor_seq) "
                     "VALUES (:key, CAST(:table_id AS uuid), CAST(:ops AS text[]), "
-                    ":delay_ms, CAST(CAST(:xid AS text) AS xid8), :seq) "
+                    ":delay_ms, CAST(:intents AS text[]), "
+                    "CAST(CAST(:xid AS text) AS xid8), :seq) "
                     "ON CONFLICT (subscriber) DO UPDATE SET "
                     "ops = EXCLUDED.ops, delay_ms = EXCLUDED.delay_ms, "
+                    "snapshot_intents = EXCLUDED.snapshot_intents, "
                     "updated_at = now(), "
                     "cursor_xid = CASE WHEN s.table_id = EXCLUDED.table_id "
                     "THEN s.cursor_xid ELSE EXCLUDED.cursor_xid END, "
@@ -160,6 +170,7 @@ class SubscriberTable:
                     "table_id": str(table_id),
                     "ops": sorted(op.value for op in ops),
                     "delay_ms": int(delay.total_seconds() * 1000),
+                    "intents": sorted(intent.value for intent in snapshot_intents),
                     "xid": str(start.xid),
                     "seq": start.seq,
                 },
@@ -234,7 +245,8 @@ class SubscriberTable:
                 await conn.execute(
                     text(
                         "SELECT subscriber, table_id, ops, delay_ms, "
-                        f"cursor_xid::text, cursor_seq FROM {self._table} {where} "
+                        "cursor_xid::text, cursor_seq, snapshot_intents "
+                        f"FROM {self._table} {where} "
                         "ORDER BY subscriber"
                     ),
                     params,
@@ -247,6 +259,7 @@ class SubscriberTable:
                 ops=frozenset(ChangeOp(str(op)) for op in row[2]),
                 delay=timedelta(milliseconds=int(row[3])),
                 cursor=ChangePosition(int(row[4]), int(row[5])),
+                snapshot_intents=frozenset(WriteIntent(str(i)) for i in row[6]),
             )
             for row in rows
         ]

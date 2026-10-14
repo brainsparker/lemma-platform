@@ -2,9 +2,7 @@
 
 streaq kept each queued job's data under ``streaq:<queue>:task:data:<id>`` as a
 pickled ``{"f": <function>, "a": args, "k": kwargs, ...}`` written by this
-application. The converters take the jobs that were owed work
-(``check_and_start_flows_for_schedule``); the operator check counts every job
-left, by function.
+application. The operator check counts every job left, by function.
 """
 
 from __future__ import annotations
@@ -31,7 +29,7 @@ async def queued_jobs(redis: Redis) -> AsyncIterator[QueuedJob]:
     """Every job whose data is still in Redis; ``redis`` must not decode."""
     async for key in redis.scan_iter(match=_DATA_PATTERN, count=500):
         raw = await redis.get(key)
-        if raw is None:
+        if not isinstance(raw, bytes):
             continue
         try:
             data = pickle.loads(raw)  # noqa: S301 - see the module docstring
@@ -46,11 +44,6 @@ async def queued_jobs(redis: Redis) -> AsyncIterator[QueuedJob]:
             args=tuple(data.get("a") or ()),
             kwargs=dict(data.get("k") or {}),
         )
-
-
-async def forget_job(redis: Redis, job: QueuedJob) -> None:
-    """Delete a converted job's data, so nothing (and no check) sees it again."""
-    await redis.delete(job.key)
 
 
 async def jobs_by_function(redis: Redis) -> dict[str, int]:

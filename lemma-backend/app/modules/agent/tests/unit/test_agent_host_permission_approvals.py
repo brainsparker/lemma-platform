@@ -540,7 +540,7 @@ class TestResolutionRouting:
             return uuid4()
 
         monkeypatch.setattr(
-            approval_reconciliation, "enqueue_agent_host_permission", _enqueue
+            approval_reconciliation, "stage_agent_host_permission", _enqueue
         )
         monkeypatch.setattr(approval_reconciliation, "_wake_host", _noop)
         monkeypatch.setattr(

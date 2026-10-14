@@ -357,7 +357,7 @@ def _seed_statements() -> list[str]:
         .resolve()
         .parents[5]
         .joinpath("migrations", "versions")
-        .glob("*_agent_wait_approval_work_0059.py")
+        .glob("*_agent_wait_approval_work_0060.py")
     )
     spec = importlib.util.spec_from_file_location("migration_0059", path)
     assert spec is not None and spec.loader is not None

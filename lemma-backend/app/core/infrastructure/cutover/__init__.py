@@ -1,7 +1,6 @@
-"""The cutover off the old event transport (design §13): what is left of it.
+"""What the cutover check (``app/cutover_check.py``) reads of the old transport.
 
-FastStream, streaq and the outbox dispatcher are gone from the code. What they
-left behind in Redis and in ``domain_event_outbox`` is read here with plain
-Redis commands and SQL, by the drain converters and by the operator check
-(``check``) that gates migration ``0063_drop_event_outbox``.
+FastStream, streaq and the outbox are gone; their leftovers in Redis are read
+here with plain Redis commands, so an operator can confirm nothing owed is
+left before migration ``0063_drop_event_outbox`` (design §13 rule 4).
 """

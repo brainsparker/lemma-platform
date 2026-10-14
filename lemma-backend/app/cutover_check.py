@@ -34,7 +34,10 @@ import json
 import sys
 from dataclasses import asdict, dataclass, field
 
+from collections.abc import Callable
+
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 CONVERTER_KINDS = (
     "changes.drain",
@@ -60,11 +63,19 @@ class Report:
         return not self.problems
 
 
-async def cutover_report() -> Report:
+async def cutover_report(
+    *,
+    session_maker: Callable[[], AsyncSession] | None = None,
+    datastore_engine: AsyncEngine | None = None,
+) -> Report:
+    """The report; the process's own database and Redis unless given others."""
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.modules.datastore.infrastructure.session import get_datastore_engine
+
     report = Report()
     await _check_redis(report)
-    await _check_main_database(report)
-    await _check_datastore_database(report)
+    await _check_main_database(report, session_maker or async_session_maker)
+    await _check_datastore_database(report, datastore_engine or get_datastore_engine())
     return report
 
 
@@ -95,11 +106,12 @@ async def _check_redis(report: Report) -> None:
         report.problems.append(f"streaq jobs left in Redis: {report.streaq_jobs}")
 
 
-async def _check_main_database(report: Report) -> None:
+async def _check_main_database(
+    report: Report, session_maker: Callable[[], AsyncSession]
+) -> None:
     from app.core.infrastructure.cutover.legacy_streams import OWED_OUTBOX_TYPES
-    from app.core.infrastructure.db.session import async_session_maker
 
-    async with async_session_maker() as session:
+    async with session_maker() as session:
         counts = await session.execute(
             text(
                 "SELECT kind, count(*) FROM work_items "
@@ -136,11 +148,9 @@ async def _check_main_database(report: Report) -> None:
             report.main_outbox_other = count
 
 
-async def _check_datastore_database(report: Report) -> None:
+async def _check_datastore_database(report: Report, engine: AsyncEngine) -> None:
     from app.modules.datastore.changes.gate import schemas_blocking_switch
-    from app.modules.datastore.infrastructure.session import get_datastore_engine
 
-    engine = get_datastore_engine()
     async with engine.connect() as conn:
         if await conn.scalar(
             text("SELECT to_regclass('domain_event_outbox') IS NOT NULL")

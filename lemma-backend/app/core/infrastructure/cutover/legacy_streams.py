@@ -1,23 +1,16 @@
-"""The legacy Redis streams and consumer groups, read without FastStream.
+"""The legacy Redis streams and consumer groups, as the cutover check reads them.
 
 Every group the old transport ever declared (``LEGACY_GROUPS``), and which of
 them were *owed* work that exists nowhere else (``OWED_GROUPS``, design §13
 rule 2): a webhook already answered 200, a record change, a schedule fire. The
 rest moved to work seeded from domain state (rule 1) or are analytics, so
-their backlog is redundant once their consumer is gone.
-
-``decode_entry`` reads FastStream's envelope (binary ``BinaryMessageFormatV1``
-or the older JSON ``{"data": ...}``) itself; ``read_group`` takes a converter's
-next batch from a group (its own pending entries first, then new ones, then
-what departed consumers left pending), so the group itself is the converter's
-cursor and an ``XACK`` is its progress.
+their backlog is redundant once their consumer is gone. The converters that
+drained the owed groups shipped in the release before migration 0063 and
+destroyed each group when done.
 """
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping
-from struct import pack, unpack
 from typing import Any
 
 from redis.asyncio import Redis
@@ -82,92 +75,6 @@ OWED_OUTBOX_TYPES: tuple[str, ...] = (
     "schedule.fired",
 )
 
-#: FastStream's binary envelope (``BinaryMessageFormatV1``).
-_BINARY_MAGIC = b"\x89BIN\x0d\x0a\x1a\x0a"
-_DATA_KEYS = (b"__data__", "__data__")
-
-
-def encode_binary_entry(data: bytes, headers: Mapping[str, str] | None = None) -> bytes:
-    """An entry body in FastStream's binary envelope, as the old publisher wrote it.
-
-    For tests that plant a legacy backlog; ``decode_entry`` reads it back.
-    """
-    header_bytes = bytearray()
-    items = list((headers or {}).items())
-    for key, value in items:
-        for text_value in (key, value):
-            raw = text_value.encode()
-            header_bytes += pack(">H", len(raw)) + raw
-    headers_start = len(_BINARY_MAGIC) + 2 + 8
-    data_start = headers_start + 2 + len(header_bytes)
-    return (
-        _BINARY_MAGIC
-        + pack(">H", 1)
-        + pack(">I", headers_start)
-        + pack(">I", data_start)
-        + pack(">H", len(items))
-        + bytes(header_bytes)
-        + data
-    )
-
-
-def decode_entry(fields: Mapping[Any, Any]) -> dict[str, Any] | None:
-    """The event a stream entry carries, however FastStream wrapped it."""
-    blob = next((fields[key] for key in _DATA_KEYS if key in fields), None)
-    if blob is None:
-        return None
-    if isinstance(blob, str):
-        blob = blob.encode()
-    data: bytes = blob
-    if blob.startswith(_BINARY_MAGIC):
-        (data_start,) = unpack(">I", blob[14:18])
-        data = blob[data_start:]
-    try:
-        decoded = json.loads(data)
-    except ValueError:
-        return None
-    if isinstance(decoded, dict) and isinstance(decoded.get("data"), str):
-        try:
-            decoded = json.loads(decoded["data"])
-        except ValueError:
-            return None
-    return decoded if isinstance(decoded, dict) else None
-
-
-async def read_group(
-    redis: Redis, stream: str, group: str, consumer: str, *, count: int
-) -> list[tuple[bytes, Mapping[bytes, bytes]]]:
-    """``consumer``'s next batch of ``group``: empty when the group is done or gone.
-
-    Its own pending entries first (a pass that crashed before acking), then new
-    ones, then entries departed consumers left pending. ``redis`` must not
-    decode responses: the binary envelope is not UTF-8.
-    """
-    try:
-        for start in ("0", ">"):
-            reply = await redis.xreadgroup(
-                group, consumer, {stream: start}, count=count
-            )
-            entries = [entry for _, batch in reply or [] for entry in batch]
-            if entries:
-                return entries
-        claimed = await redis.xautoclaim(
-            stream, group, consumer, min_idle_time=0, count=count
-        )
-    except ResponseError as exc:
-        if "NOGROUP" in str(exc):
-            return []
-        raise
-    return list(claimed[1]) if claimed else []
-
-
-async def destroy_group(redis: Redis, stream: str, group: str) -> bool:
-    """Remove a drained group; False when it (or its stream) was already gone."""
-    try:
-        return bool(await redis.xgroup_destroy(stream, group))
-    except ResponseError:
-        return False
-
 
 async def group_backlog(redis: Redis, stream: str, group: str) -> int | None:
     """Pending plus unread entries of ``group``; None when the group is absent."""
@@ -184,7 +91,7 @@ async def group_backlog(redis: Redis, stream: str, group: str) -> int | None:
         if lag is None:
             # Redis < 7 has no lag; count what is past the last delivered id.
             last = _text(_field(info, "last-delivered-id")) or "0-0"
-            lag = len(await redis.xrange(stream, min=f"({last}", max="+"))
+            lag = len(await redis.xrange(stream, min=f"({last}", max="+") or [])
         return pending + int(lag)
     return None
 

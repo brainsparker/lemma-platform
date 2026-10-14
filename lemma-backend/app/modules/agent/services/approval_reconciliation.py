@@ -111,7 +111,7 @@ def runs_in_worker(
     )
 
 
-async def enqueue_agent_host_permission(
+async def stage_agent_host_permission(
     uow: SqlAlchemyUnitOfWork,
     *,
     request: AgentHostPermissionRequest,
@@ -221,7 +221,7 @@ async def agent_host_permission_tool_return(
     Shaped as a ``request_approval`` return like every other approval, so the
     conversation transcript reads the same however the pause arose. The host
     command is written in the caller's transaction (see
-    ``enqueue_agent_host_permission``); only the wake-up waits for the commit,
+    ``stage_agent_host_permission``); only the wake-up waits for the commit,
     because a Redis publish has no business inside an open write transaction
     and losing one costs at most the link's floor tick.
 
@@ -233,7 +233,7 @@ async def agent_host_permission_tool_return(
     # Lazy: the tool models import the tool registry, which imports back here.
     from app.modules.agent.tools.user_interaction.models import RequestApprovalResponse
 
-    host_id = await enqueue_agent_host_permission(
+    host_id = await stage_agent_host_permission(
         uow, request=request, agent_run_id=agent_run_id, decision=decision
     )
     if host_id is not None:

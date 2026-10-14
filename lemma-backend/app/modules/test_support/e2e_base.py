@@ -817,9 +817,6 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     datastore_settings.datastore_database_url = (
         f"{base_url}/{_postgres_worker_datastore_db_name(worker_id)}"
     )
-    # Every schema a test makes is new, so record writes go to the change log
-    # from the first one, as they do once a deployment's backfill is done.
-    datastore_settings.datastore_change_log_mode = "on"
     settings.redis_url = test_redis_url
     settings.supertokens_core_url = get_supertokens_url(supertokens_container)
     settings.environment = "testing"
@@ -998,7 +995,6 @@ def _import_e2e_models() -> None:
     module first. The other modules listed below re-export their submodels
     through a package ``__init__``, so importing the package is enough.
     """
-    from app.core.infrastructure.cutover import legacy_tables as event_models
     from app.core.infrastructure.work import models as work_models
     from app.modules.agent.infrastructure import models as agent_models
     from app.modules.agent.infrastructure import runtime_models as agent_runtime_models
@@ -1028,7 +1024,6 @@ def _import_e2e_models() -> None:
     _ = (
         workspace_models,
         agent_runtime_models,
-        event_models,
         work_models,
         user_models,
         organization_models,

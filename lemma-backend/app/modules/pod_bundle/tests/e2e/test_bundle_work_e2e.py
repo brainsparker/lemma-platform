@@ -302,7 +302,7 @@ async def test_the_cutover_seeds_one_item_per_job_a_worker_owes(
         Path(__file__).resolve().parents[5]
         / "migrations"
         / "versions"
-        / "2026-10-14_pod_bundle_work_0061.py",
+        / "2026-10-14_pod_bundle_work_0062.py",
     )
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)

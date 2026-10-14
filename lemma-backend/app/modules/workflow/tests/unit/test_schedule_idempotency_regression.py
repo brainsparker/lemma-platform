@@ -492,53 +492,6 @@ async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
 
 
 @pytest.mark.anyio
-async def test_the_cutover_skips_an_entry_that_is_not_a_schedule_fire(
-    monkeypatch,
-) -> None:
-    """A leftover entry with no schedule (or another type) is acknowledged, not started."""
-    from app.modules.workflow.events import schedule_fire_drain
-
-    started = AsyncMock()
-    monkeypatch.setattr(schedule_fire_drain, "start_legacy_job", started)
-
-    assert not await schedule_fire_drain.start_fire(
-        {"event_type": "schedule.fired", "payload": {}}
-    )
-    assert not await schedule_fire_drain.start_fire(
-        {"event_type": "schedule.paused", "schedule_id": str(uuid4())}
-    )
-    started.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_the_cutover_keeps_an_owner_less_fire_owner_less(monkeypatch) -> None:
-    """An owner-less fire reaches the start as None, never the string ``"None"``.
-
-    ``str(None)`` is truthy, so the legacy-timer branch would try
-    ``UUID("None")`` and the run would never wake.
-    """
-    from app.modules.workflow.events import schedule_fire_drain
-
-    started = AsyncMock()
-    monkeypatch.setattr(schedule_fire_drain, "start_legacy_job", started)
-    owner = uuid4()
-    for user_id, expected in ((None, None), (str(owner), str(owner))):
-        started.reset_mock()
-        assert await schedule_fire_drain.start_fire(
-            {
-                "event_type": "schedule.fired",
-                "schedule_id": str(uuid4()),
-                "user_id": user_id,
-                "payload": {"workflow_run_id": str(uuid4())},
-                "source_event_id": "timer:boundary-1",
-                "scheduled_at": "2026-10-14T10:00:00Z",
-            }
-        )
-        assert started.await_args.kwargs["user_id"] == expected
-        assert started.await_args.kwargs["schedule_event_id"] == "timer:boundary-1"
-
-
-@pytest.mark.anyio
 async def test_an_assistant_schedule_dispatches_down_the_ordinary_agent_path(
     monkeypatch,
 ):

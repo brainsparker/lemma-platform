@@ -26,8 +26,6 @@ SURFACE_PLATFORM_UPDATE: Final = "surface.platform_update"
 SURFACE_MOBILE_CHANGED: Final = "surfaces.mobile_changed"
 #: Expires a notification nobody answered in time.
 NOTIFICATION_EXPIRE: Final = "notification.expire"
-#: Cutover: converts what the old surface stream still holds, then exits.
-SURFACE_DRAIN_EVENTS: Final = "surfaces.drain_events"
 
 #: Periodic names (``periodic(name, every, kind)``).
 RECEIVERS_RECONCILE_PERIODIC: Final = "surfaces.receivers.reconcile"
@@ -54,7 +52,6 @@ __all__ = [
     "NOTIFICATION_EXPIRE",
     "ONBOARDING_CLEANUP_PERIODIC",
     "RECEIVERS_RECONCILE_PERIODIC",
-    "SURFACE_DRAIN_EVENTS",
     "SURFACE_INGEST",
     "SURFACE_MOBILE_CHANGED",
     "SURFACE_PLATFORM_UPDATE",

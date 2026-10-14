@@ -61,7 +61,6 @@ def test_global_settings_exclude_module_owned_controls() -> None:
         "datastore_markdown_batch_max_bytes",
         "datastore_cell_max_bytes",
         "datastore_row_max_bytes",
-        "datastore_event_payload_max_bytes",
         "app_source_archive_max_bytes",
         "app_dist_archive_max_bytes",
         "app_bundle_upload_max_bytes",

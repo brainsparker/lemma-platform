@@ -85,7 +85,6 @@ async def production_worker_process(
         "PYTHONUNBUFFERED": "1",
         "DATABASE_URL": e2e_settings.database_url,
         "DATASTORE_DATABASE_URL": datastore_settings.datastore_database_url,
-        "DATASTORE_CHANGE_LOG_MODE": datastore_settings.datastore_change_log_mode,
         "REDIS_URL": e2e_settings.redis_url,
         "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
         "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,

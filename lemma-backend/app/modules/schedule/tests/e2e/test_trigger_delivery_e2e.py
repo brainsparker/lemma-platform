@@ -226,7 +226,7 @@ def _seed_statements() -> list[str]:
         Path(__file__).resolve().parents[5]
         / "migrations"
         / "versions"
-        / "2026-10-14_trigger_work_items_0055.py"
+        / "2026-10-14_trigger_work_items_0056.py"
     )
     spec = importlib.util.spec_from_file_location("trigger_work_items_0055", path)
     assert spec is not None and spec.loader is not None

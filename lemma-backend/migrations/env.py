@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
 from app.core.infrastructure.db.base import Base
-from app.core.infrastructure.events import models as event_models  # noqa: F401
+from app.core.infrastructure.cutover import legacy_tables as event_models  # noqa: F401
 from app.core.infrastructure.work import models as work_models  # noqa: F401
 
 # Import all models to ensure they are attached to Base.metadata

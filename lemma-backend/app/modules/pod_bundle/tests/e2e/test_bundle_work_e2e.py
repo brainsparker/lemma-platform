@@ -52,6 +52,7 @@ async def _job_status(job_id: UUID) -> str | None:
     return await scalar("SELECT status FROM pod_bundle_jobs WHERE id = :id", id=job_id)
 
 
+@pytest.mark.drives_work
 async def test_an_export_request_commits_its_state_and_its_item_together(
     authenticated_client, fixed_test_org
 ) -> None:
@@ -125,6 +126,7 @@ async def test_a_request_that_fails_leaves_neither_state_nor_item(
     )
 
 
+@pytest.mark.drives_work
 async def test_a_second_identical_request_is_refused_while_the_first_is_queued(
     authenticated_client, fixed_test_org, fixed_test_user
 ) -> None:
@@ -193,6 +195,7 @@ async def test_cancelling_a_queued_import_drops_its_item_and_ends_it(
     await pause_admin(pod_id, paused=False)
 
 
+@pytest.mark.drives_work
 async def test_a_dead_item_ends_its_job_failed_in_the_dead_transaction(
     authenticated_client, fixed_test_org, fixed_test_user
 ) -> None:

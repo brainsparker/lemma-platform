@@ -6,6 +6,7 @@ import asyncio
 import time
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app.core.analytics import domain_events
 from app.core.analytics.domain_events import DomainEventSink, projection
@@ -69,7 +70,8 @@ async def test_a_failing_projection_does_not_stop_the_rest(
     @projection(_Probe.get_event_type())
     async def boom(event: dict) -> None:
         if event["n"] == 1:
-            raise RuntimeError("projection bug")
+            # What a projection's scope read raises when the database is down.
+            raise OperationalError("SELECT 1", {}, OSError("connection refused"))
         got.append(int(event["n"]))
 
     sink = DomainEventSink(interval_seconds=60)

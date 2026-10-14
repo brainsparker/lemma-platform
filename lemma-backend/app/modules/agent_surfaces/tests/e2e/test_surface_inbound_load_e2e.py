@@ -140,6 +140,7 @@ async def test_a_day_of_slack_webhooks_is_classified_in_the_request(
     assert p99 < 0.3
 
 
+@pytest.mark.drives_work
 async def test_a_flooded_pod_does_not_hold_back_another_pods_ingest(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,

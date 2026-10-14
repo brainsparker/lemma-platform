@@ -54,6 +54,7 @@ def _p(values: list[float], q: float) -> float:
     return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
 
 
+@pytest.mark.drives_work
 async def test_five_hundred_turns_across_fifty_pods(
     authenticated_client, fixed_test_org, monkeypatch
 ) -> None:

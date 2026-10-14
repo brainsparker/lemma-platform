@@ -15,7 +15,9 @@ from datetime import timedelta
 
 from app.worker import main
 
-import app.events  # noqa: E402,F401  every module's kinds, as app.worker imports them
+from app.worker import register_worker_modules  # noqa: E402
+
+register_worker_modules()  # every module's kinds, as the worker registers them
 from app.core.infrastructure.work import registry  # noqa: E402
 from app.modules.pod_bundle.events import work as bundle_work  # noqa: E402
 from app.modules.pod_bundle.infrastructure import applier  # noqa: E402

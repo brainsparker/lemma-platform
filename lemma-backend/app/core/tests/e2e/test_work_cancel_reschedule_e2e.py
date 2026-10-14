@@ -70,6 +70,7 @@ async def _mark_running(work_db: WorkDb, key: str) -> None:
     )
 
 
+@pytest.mark.drives_work
 async def test_cancel_drops_a_queued_item_due_or_not_and_it_never_runs(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:
@@ -103,6 +104,7 @@ async def test_cancel_only_touches_its_own_kind_and_namespace(
     assert await work_db.count() == 1
 
 
+@pytest.mark.drives_work
 async def test_a_rolled_back_cancel_leaves_the_item_to_run(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:
@@ -118,6 +120,7 @@ async def test_a_rolled_back_cancel_leaves_the_item_to_run(
     assert await work_db.effects() == ["ran:x"]
 
 
+@pytest.mark.drives_work
 async def test_cancel_while_running_leaves_the_running_item_alone(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:
@@ -171,6 +174,7 @@ async def test_cancel_with_a_running_item_and_a_queued_twin_drops_only_the_twin(
     assert row is not None and row["state"] == "running"
 
 
+@pytest.mark.drives_work
 async def test_a_cancel_holding_the_row_makes_a_concurrent_claim_skip_it(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:
@@ -217,6 +221,7 @@ async def test_a_cancel_behind_a_claim_holding_the_row_sees_it_running(
     assert row is not None and row["state"] == "running"
 
 
+@pytest.mark.drives_work
 @pytest.mark.parametrize("round_", range(30))
 async def test_cancel_racing_a_dispatcher_ends_in_exactly_one_outcome(
     work_db: WorkDb, registry: WorkRegistry, round_: int
@@ -247,6 +252,7 @@ async def test_cancel_racing_a_dispatcher_ends_in_exactly_one_outcome(
     assert await work_db.count() == 0
 
 
+@pytest.mark.drives_work
 async def test_cancel_matching_drops_queued_items_by_payload(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:
@@ -266,6 +272,7 @@ async def test_cancel_matching_drops_queued_items_by_payload(
     assert sorted(await work_db.effects()) == ["ran:a", "ran:b"]
 
 
+@pytest.mark.drives_work
 async def test_reschedule_later_holds_an_item_back(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:
@@ -281,6 +288,7 @@ async def test_reschedule_later_holds_an_item_back(
     assert row is not None and row["run_at"] > datetime.now(UTC) + timedelta(minutes=59)
 
 
+@pytest.mark.drives_work
 async def test_reschedule_earlier_moves_an_item_ahead_of_older_work(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:
@@ -337,6 +345,7 @@ async def _record_dead(ctx: DeadContext) -> None:
     await write_effect(ctx.uow.session, f"terminal:{ctx.reason}", ctx.item.id)
 
 
+@pytest.mark.drives_work
 async def test_a_job_past_its_max_runtime_is_cancelled_and_goes_dead(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:
@@ -377,6 +386,7 @@ async def test_a_job_past_its_max_runtime_is_cancelled_and_goes_dead(
     assert await work_db.effects() == ["terminal:max_runtime"]
 
 
+@pytest.mark.drives_work
 async def test_a_job_inside_its_max_runtime_completes_normally(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:

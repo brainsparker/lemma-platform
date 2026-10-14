@@ -1,8 +1,6 @@
 """Printing every pending coroutine's stack, on demand, from a wedged worker.
 
-Startup housekeeping the lane runner installs, kept beside `cron_pruning` for
-the same reason: neither is about running tasks, and both were making the file
-that *is* about running tasks longer than it should be.
+Installed by the worker process at startup (``work/process.py``).
 """
 
 from __future__ import annotations

@@ -5,10 +5,6 @@
     "app.app": {
       "modules": 5258,
       "rss_mib": null
-    },
-    "app.events": {
-      "modules": 4549,
-      "rss_mib": null
     }
   }
 }

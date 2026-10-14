@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import func, or_, select, update
-from sqlalchemy.orm import selectinload
+from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy.orm import aliased, selectinload
 
 from app.modules.agent.domain.entities import (
     AgentRun as AgentRunEntity,
@@ -146,22 +146,18 @@ class ConversationRunQueriesMixin:
         Scoped to the run, so another run's calls -- a pause still open in the
         conversation -- are never this run's to settle.
         """
-        returned = (
-            select(MessageModel.tool_call_id)
-            .where(
-                MessageModel.agent_run_id == agent_run_id,
-                MessageModel.kind == MessageKind.TOOL_RETURN.value,
-                MessageModel.tool_call_id.is_not(None),
-            )
-            .scalar_subquery()
-        )
+        returned = aliased(MessageModel)
         result = await self.session.execute(
             select(MessageModel)
             .where(
                 MessageModel.agent_run_id == agent_run_id,
                 MessageModel.kind == MessageKind.TOOL_CALL.value,
                 MessageModel.tool_call_id.is_not(None),
-                MessageModel.tool_call_id.not_in(returned),
+                ~exists().where(
+                    returned.agent_run_id == agent_run_id,
+                    returned.kind == MessageKind.TOOL_RETURN.value,
+                    returned.tool_call_id == MessageModel.tool_call_id,
+                ),
             )
             .order_by(MessageModel.sequence.asc())
             .limit(limit)

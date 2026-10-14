@@ -28,7 +28,7 @@ sandbox_reachable_backend = e2e_fixtures.sandbox_reachable_backend
 
 # Slow: owns its worker processes, which must not share an e2e process with
 # the session-scoped base worker.
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.drives_work]
 
 
 async def _live_periodics() -> dict[str, int]:

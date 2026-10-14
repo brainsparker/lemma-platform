@@ -9,7 +9,6 @@ from app.core.infrastructure.db.transaction_locks import (
     clear_transaction_scoped_lock,
 )
 from app.core.domain.uow import IUnitOfWork
-from app.core.domain.message_bus import MessageBus
 from app.core.log.log import get_logger
 
 if TYPE_CHECKING:
@@ -30,11 +29,8 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
     rolled-back transaction offers nothing.
     """
 
-    def __init__(self, session: AsyncSession, message_bus: MessageBus | None = None):
+    def __init__(self, session: AsyncSession):
         self.session = session
-        # Kept as a constructor compatibility shim for callers that still pass
-        # a bus. Publication never occurs from inside the UoW.
-        self._message_bus = message_bus
         self._pending_events: list["DomainEvent"] = []
         self._after_commit: list[Callable[[], Awaitable[None]]] = []
         # Back-reference so a service that only holds the session can still
@@ -63,10 +59,6 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
         invalidation and the commit.
         """
         self._after_commit.append(callback)
-
-    def set_message_bus(self, message_bus: MessageBus) -> None:
-        """Backward-compatible no-op setter; dispatch is outbox-driven."""
-        self._message_bus = message_bus
 
     def collect_events(self, events: Sequence["DomainEvent"]) -> None:
         """Collect domain events for publishing on commit.

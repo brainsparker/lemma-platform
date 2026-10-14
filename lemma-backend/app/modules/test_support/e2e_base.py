@@ -270,22 +270,11 @@ async def _close_e2e_process_clients() -> None:
     Call it only through the ``e2e_process_clients`` fixture, which exists to
     put it after every fixture that could still be using one of these -- see
     that fixture for what goes wrong when it runs earlier.
-
-    The message bus is deliberately not in the list, and nothing else in the
-    harness closes it either. It is the one process-wide client an E2E request
-    cannot open: ``SqlAlchemyUnitOfWork`` stages domain events in the outbox
-    and a separate dispatcher publishes them, so no request path ever reaches
-    ``FastStreamRedisMessageBus._get_broker``. The only connect in this process
-    is ``app/app.py``'s lifespan, which closes it in the same ``finally``.
-    Measured rather than assumed: ``_get_broker`` is called 0 times across the
-    112 tests of ``app/modules/pod/tests/e2e``, and exactly as many times as
-    ``close`` on a suite that runs ``backend_server``.
     """
 
     from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
     from app.core.infrastructure.channels.channel_service import channel_service
     from app.core.infrastructure.db.session import close_engine
-    from app.core.infrastructure.jobs.streaq_job_queue import close_streaq_job_queue
     from app.modules.agent_surfaces.infrastructure.adapters.stranger_reply_window import (
         close_stranger_reply_window,
     )
@@ -308,7 +297,6 @@ async def _close_e2e_process_clients() -> None:
     await _run_cleanup_step("close_user_cache", close_user_cache)
     await _run_cleanup_step("close_auth_abuse_store", close_auth_abuse_store)
     await _run_cleanup_step("close_telegram_oidc_store", close_telegram_oidc_store)
-    await _run_cleanup_step("close_streaq_job_queue", close_streaq_job_queue)
     await _run_cleanup_step("close_redis_json_caches", close_redis_json_caches)
     await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
     await _run_cleanup_step("close_datastore_engine", close_datastore_engine)
@@ -1010,7 +998,7 @@ def _import_e2e_models() -> None:
     module first. The other modules listed below re-export their submodels
     through a package ``__init__``, so importing the package is enough.
     """
-    from app.core.infrastructure.events import models as event_models
+    from app.core.infrastructure.cutover import legacy_tables as event_models
     from app.core.infrastructure.work import models as work_models
     from app.modules.agent.infrastructure import models as agent_models
     from app.modules.agent.infrastructure import runtime_models as agent_runtime_models
@@ -1200,7 +1188,8 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 # spent its whole grace draining, overran, and got SIGKILLed. SIGKILL
                 # cannot be trapped, so coverage's `sigterm = true` handler never
                 # flushed and the subprocess's coverage was lost.
-                "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
+                "WORK_SHUTDOWN_GRACE_SECONDS": "1",
+                "WORK_SHUTDOWN_GRACE_JSON": '{"interactive": 1}',
                 "DEBUG": "true",
                 "EMAIL_TRANSPORT": "filesystem",
                 # `settings`, not `e2e_settings`: they are the same object --
@@ -1227,7 +1216,7 @@ async def worker(e2e_settings, sandbox_reachable_backend):
         )
 
         readiness_markers = (
-            '"logger": "app.core.infrastructure.jobs.streaq_runtime"',
+            '"logger": "app.core.infrastructure.work.process"',
             '"event": "service.started"',
         )
         startup_ok = False

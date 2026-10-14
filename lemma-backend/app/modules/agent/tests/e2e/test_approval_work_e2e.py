@@ -232,6 +232,7 @@ def _executor_env() -> dict[str, str]:
     }
 
 
+@pytest.mark.drives_work
 async def test_a_worker_killed_after_the_claim_never_runs_the_tool_again(
     scenario,
 ) -> None:

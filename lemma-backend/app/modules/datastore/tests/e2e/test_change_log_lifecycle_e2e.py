@@ -3,6 +3,8 @@ and the cutover that converts what the old event path still held."""
 
 from __future__ import annotations
 
+import json
+
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -12,7 +14,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.events.message_bus import get_message_bus
+from app.core.infrastructure.cutover.legacy_streams import encode_binary_entry
 from app.core.infrastructure.redis.client import get_redis
 from app.core.infrastructure.work import SYSTEM_NAMESPACE, WorkClass, WorkWriter
 from app.core.infrastructure.work.testing import make_due, run_until_idle
@@ -233,12 +235,13 @@ async def test_the_drain_converts_the_old_paths_backlog_once(
             )
         except ResponseError:
             pass
-    bus = get_message_bus()
-    await bus.connect()
     streamed = [await _legacy_event(pod_id, str(uuid4())) for _ in range(3)]
-    for event in streamed:
-        await bus.publish(DATASTORE_EVENTS_STREAM, event)
-    await bus.publish(DATASTORE_EVENTS_STREAM, streamed[0])  # a redelivery
+    # Written as the old publisher wrote them: FastStream's binary envelope.
+    for event in [*streamed, streamed[0]]:  # the last one is a redelivery
+        await raw.xadd(
+            DATASTORE_EVENTS_STREAM,
+            {"__data__": encode_binary_entry(json.dumps(event).encode())},
+        )
 
     async with async_session_maker() as session:
         await WorkWriter(session).add(DRAIN, SYSTEM_NAMESPACE, {}, dedup_key=DRAIN)

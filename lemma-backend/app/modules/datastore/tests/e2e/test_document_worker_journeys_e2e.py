@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import text
 
-from app.core.infrastructure.events.message_bus import get_message_bus
-from app.core.infrastructure.events.models import DomainEventOutbox
-from app.core.infrastructure.events.outbox import OutboxDispatcher
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.tests.e2e.harness import (
     DatastoreApi,
@@ -33,16 +29,6 @@ def _uploads_enqueue_processing(monkeypatch):
     monkeypatch.setattr(datastore_settings, "e2e_disable_worker_file_autoindex", False)
 
 
-async def _dispatch_outbox(db_manager) -> None:
-    dispatcher = OutboxDispatcher(
-        db_manager.session_factory,
-        get_message_bus(),
-        poll_seconds=0.01,
-    )
-    while await dispatcher.dispatch_once():
-        pass
-
-
 async def _wait_for_status(
     api: DatastoreApi,
     path: str,
@@ -63,20 +49,6 @@ async def _wait_for_status(
         timeout_seconds=timeout_seconds,
         interval_seconds=0.1,
     )
-
-
-async def _outbox_event_for_file(db_manager, file_id: str) -> DomainEventOutbox:
-    async with db_manager.session_factory() as session:
-        rows = list(
-            (
-                await session.scalars(
-                    select(DomainEventOutbox).where(
-                        DomainEventOutbox.event_type == "datastore.file.created"
-                    )
-                )
-            ).all()
-        )
-    return next(row for row in rows if row.payload.get("file_id") == file_id)
 
 
 # 52 seconds against a 45-second pull-request budget, and four times the next
@@ -121,7 +93,6 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
             content_type="application/pdf",
         )
 
-        await _dispatch_outbox(db_manager)
         completed = await _wait_for_status(pod_api, uploaded["path"], {"COMPLETED"})
         assert completed["metadata"]["page_count"] == 1
 
@@ -156,31 +127,8 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
         )
         assert hit["page_number"] == 1
 
-        # Redis redelivery carries the same durable event id. The inbox must
-        # acknowledge it without creating another extraction/job side effect.
-        #
-        # Measured as "unchanged by the redelivery", not "exactly one, ever.
-        # The absolute form asserted that no transient retry had happened on
-        # the way here, which is not something the product promises and is not
-        # what this test is about: `KREUZBERG_REQUEST_TIMEOUT_SECONDS` is 1, so
-        # a loaded runner can time the first extract out, `release_claim`
-        # returns the row to PENDING with its attempt refunded (PS-DATA-041),
-        # and the re-drive extracts again — correct behaviour that read as a
-        # duplicate. It cost a red required check on an unrelated pull request.
-        before_redelivery = fake_document_processor_server.requests[
-            "kreuzberg:success.pdf"
-        ]
-        assert before_redelivery >= 1, "the document was never extracted at all"
-
-        event = await _outbox_event_for_file(db_manager, uploaded["id"])
-        bus = get_message_bus()
-        await bus.publish(event.stream, event.payload)
-        await bus.publish(event.stream, event.payload)
-        await asyncio.sleep(0.5)
-        assert (
-            fake_document_processor_server.requests["kreuzberg:success.pdf"]
-            == before_redelivery
-        ), "a redelivered event with the same id extracted the document again"
+        before_rename = fake_document_processor_server.requests["kreuzberg:success.pdf"]
+        assert before_rename >= 1, "the document was never extracted at all"
 
         # A rename is not a content change, and the whole point of carrying the
         # derived container across is that this stays true end to end: the
@@ -212,7 +160,7 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
         )
         assert (
             fake_document_processor_server.requests["kreuzberg:success.pdf"]
-            == before_redelivery
+            == before_rename
         ), "the rename re-extracted a document whose bytes had not changed"
 
         # Changing the *name* is the other half, and it is the one that can
@@ -260,7 +208,6 @@ async def test_kreuzberg_extractor_behaviour_matrix(
                 )
             )
 
-        await _dispatch_outbox(db_manager)
         completed = [
             await _wait_for_status(pod_api, item["path"], {"COMPLETED"})
             for item in files
@@ -333,7 +280,6 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
             build_pdf_bytes("Provider failure"),
             content_type="application/pdf",
         )
-        await _dispatch_outbox(db_manager)
 
         # A response we cannot make sense of is a DOCUMENT-level failure: the
         # extractor answered, we just can't use the answer. It spends an attempt
@@ -430,7 +376,6 @@ async def test_docling_adapter_runs_through_http_outbox_and_worker(
             b"<h1>Submit error source</h1>",
             content_type="text/html",
         )
-        await _dispatch_outbox(db_manager)
         await _wait_for_status(pod_api, docling["path"], {"COMPLETED"})
         for failed_file in (
             docling_failure,
@@ -506,7 +451,6 @@ async def test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wh
             b"this is definitely not a pdf",
             content_type="application/pdf",
         )
-        await _dispatch_outbox(db_manager)
 
         await _wait_for_status(pod_api, pdf["path"], {"COMPLETED"})
         await _wait_for_status(pod_api, markdown["path"], {"COMPLETED"})

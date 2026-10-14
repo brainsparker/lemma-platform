@@ -8,6 +8,8 @@ observer owns the run lifecycle; this owns the bytes.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -19,6 +21,13 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
 from app.modules.agent_surfaces.services.live_display import record_live_display
 from app.modules.agent_surfaces.services.progress_events import _surface_platform
 
+if TYPE_CHECKING:
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+    from app.modules.agent_surfaces.platforms.rendering import ThinkingStreamFilter
+    from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
+    from app.modules.agent_surfaces.services.pending_envelope import RunFiles
+
 logger = get_logger(__name__)
 
 # Batch deltas so a fast model does not spend the Slack rate limit one word at a
@@ -29,6 +38,12 @@ _TOKEN_FLUSH_INTERVAL_SECONDS = 0.8
 
 class TokenStreamMixin:
     """The token-streaming half of the progress observer."""
+
+    # Set by the observer this is mixed into.
+    uow_factory: UnitOfWorkFactory
+    egress_factory: Callable[[SqlAlchemyUnitOfWork], SurfaceEgress]
+    _run_files: RunFiles
+    _think_filter: ThinkingStreamFilter
 
     async def _open_stream(self, conversation: Conversation) -> None:
         """Open the live stream before any text exists."""

@@ -1,4 +1,11 @@
-"""Durable transactional event delivery models."""
+"""The old transport's tables, mapped until migration 0063 drops them.
+
+``domain_event_outbox`` is no longer written by the unit of work; the record
+write path still stages events in the datastore database's copy until the
+change log is on everywhere, and the cutover converters read what is left.
+``domain_event_inbox`` is read by nothing. Mapped so the main metadata still
+describes the schema (``migrations/env.py``).
+"""
 
 from __future__ import annotations
 

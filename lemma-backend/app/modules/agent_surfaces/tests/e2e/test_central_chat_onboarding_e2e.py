@@ -266,6 +266,7 @@ async def test_telegram_requires_own_contact_without_a_username_or_existing_surf
     )
 
 
+@pytest.mark.drives_work
 async def test_removing_the_number_hands_it_back_as_a_stranger(
     authenticated_client, fixed_test_user, db_session, fake_whatsapp, monkeypatch
 ):
@@ -426,6 +427,7 @@ async def test_removing_the_number_hands_it_back_as_a_stranger(
     )
 
 
+@pytest.mark.drives_work
 async def test_phone_replacement_revokes_old_binding_and_preserves_new_proof(
     authenticated_client, fixed_test_user, db_session, fake_whatsapp, monkeypatch
 ):

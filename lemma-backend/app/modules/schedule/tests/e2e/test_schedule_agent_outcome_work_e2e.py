@@ -140,6 +140,7 @@ async def _status(run_id: UUID) -> str | None:
     )
 
 
+@pytest.mark.drives_work
 async def test_each_agent_outcome_lands_on_its_schedule_run(
     authenticated_client, fixed_test_org
 ) -> None:

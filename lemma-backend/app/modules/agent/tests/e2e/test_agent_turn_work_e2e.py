@@ -80,6 +80,7 @@ async def _items(kind: str) -> int:
     return await scalar("SELECT count(*) FROM work_items WHERE kind = :k", k=kind)
 
 
+@pytest.mark.drives_work
 async def test_a_turn_commits_with_its_run_and_finishes_with_its_followups(
     pod: TurnPod,
 ) -> None:
@@ -119,6 +120,7 @@ async def test_a_turn_commits_with_its_run_and_finishes_with_its_followups(
     assert left == [], "nothing left"
 
 
+@pytest.mark.drives_work
 async def test_two_dispatchers_never_run_two_turns_of_one_conversation(
     pod: TurnPod, model_latency
 ) -> None:
@@ -193,6 +195,7 @@ def text_insert_duplicate():
     )
 
 
+@pytest.mark.drives_work
 async def test_a_stop_that_beats_the_claim_ends_the_run_with_no_harness_call(
     pod: TurnPod,
 ) -> None:
@@ -211,6 +214,7 @@ async def test_a_stop_that_beats_the_claim_ends_the_run_with_no_harness_call(
     assert roles == {"user"}, "the harness never ran"
 
 
+@pytest.mark.drives_work
 async def test_a_stop_that_loses_to_the_claim_ends_the_run_at_its_next_check(
     pod: TurnPod, model_latency
 ) -> None:
@@ -275,6 +279,7 @@ async def _followups_of(run_id: str) -> int:
     )
 
 
+@pytest.mark.drives_work
 async def test_a_worker_dying_mid_finalize_commits_nothing_and_finalizes_once(
     pod: TurnPod,
 ) -> None:
@@ -315,6 +320,7 @@ async def test_a_worker_dying_mid_finalize_commits_nothing_and_finalizes_once(
     assert await _followups_of(run_id) == 1, "written exactly once"
 
 
+@pytest.mark.drives_work
 async def test_a_transient_failure_mid_finalize_retries_from_the_last_step(
     pod: TurnPod,
 ) -> None:
@@ -347,6 +353,7 @@ async def test_a_transient_failure_mid_finalize_retries_from_the_last_step(
     assert await _followups_of(run_id) == 1
 
 
+@pytest.mark.drives_work
 async def test_a_long_silent_step_keeps_its_lease(pod: TurnPod, model_latency) -> None:
     """A model request that says nothing for many leases is not a dead worker.
 
@@ -377,6 +384,7 @@ async def test_a_long_silent_step_keeps_its_lease(pod: TurnPod, model_latency) -
     assert await pod.run_status(run_id) == "COMPLETED"
 
 
+@pytest.mark.drives_work
 async def test_racing_children_and_their_parent_deliver_each_result_once(
     pod: TurnPod,
 ) -> None:

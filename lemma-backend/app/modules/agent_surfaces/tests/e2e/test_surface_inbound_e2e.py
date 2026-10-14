@@ -114,6 +114,7 @@ async def _user_messages(surface_id: str) -> int:
     )
 
 
+@pytest.mark.drives_work
 async def test_two_bots_numbering_from_one_are_two_deliveries_both_answered(
     authenticated_client,
     db_session,
@@ -165,6 +166,7 @@ async def test_two_bots_numbering_from_one_are_two_deliveries_both_answered(
     assert await _turns_for(second) == 1
 
 
+@pytest.mark.drives_work
 async def test_a_redelivery_now_and_three_days_later_is_answered_once(
     authenticated_client,
     db_session,
@@ -243,6 +245,7 @@ async def test_a_redelivery_now_and_three_days_later_is_answered_once(
     assert await _user_messages(surface_id) == 1
 
 
+@pytest.mark.drives_work
 async def test_an_ingest_that_failed_after_its_claim_is_routed_once_on_retry(
     authenticated_client,
     db_session,
@@ -304,6 +307,7 @@ async def test_an_ingest_that_failed_after_its_claim_is_routed_once_on_retry(
     assert await _user_messages(surface_id) == 1
 
 
+@pytest.mark.drives_work
 async def test_an_ingest_out_of_attempts_fails_and_asks_the_sender_once(
     authenticated_client,
     db_session,

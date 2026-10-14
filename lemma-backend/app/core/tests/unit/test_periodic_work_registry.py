@@ -1,6 +1,7 @@
 """Every former streaq cron is a periodic work item, registered exactly once.
 
-The worker's wiring (``app.events``) imports every module's periodic work; this
+The worker's registration (``register_worker_modules``) imports every module's
+periodic work; this
 holds the list, so a sweep that is deleted, renamed or left unregistered is a
 failing test rather than retention that quietly stops.
 """
@@ -10,22 +11,21 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import app.events  # noqa: F401  the worker's wiring: every module's periodics
 from app.core.infrastructure.work import WorkClass, registry
+from app.worker import register_worker_modules
+
+register_worker_modules()
 
 #: periodic name -> class. Retention is admin; anything that calls out of the
 #: process (MCP servers, sandbox providers, Agent Host links, lost schedule
 #: fires) is automation.
 FORMER_CRONS = {
-    "events.prune_delivery_records": WorkClass.ADMIN,
-    "events.reap_abandoned_consumer_groups": WorkClass.ADMIN,
     "agent.host_dispatch_reconcile": WorkClass.AUTOMATION,
     "agent.host_retained_state_cleanup": WorkClass.ADMIN,
     "apps.release_retention": WorkClass.ADMIN,
     "connectors.mcp_subscriptions_renew": WorkClass.AUTOMATION,
     "datastore.signed_links_purge": WorkClass.ADMIN,
     "datastore.orphan_schemas_reap": WorkClass.ADMIN,
-    "datastore.outbox_prune": WorkClass.ADMIN,
     "function.runs_prune": WorkClass.ADMIN,
     "function.revisions_sweep": WorkClass.ADMIN,
     "mcp_access.grants_sweep": WorkClass.ADMIN,
@@ -62,10 +62,10 @@ def test_each_periodic_is_one_chain() -> None:
 
 
 def test_nothing_registers_a_streaq_cron_any_more() -> None:
-    """``expire_past_due_notifications`` is gone (``notification.expire``)."""
+    """streaq is gone; a leftover decorator would be a NameError at import."""
     offenders = []
     for path in APP.rglob("*.py"):
-        if "/tests/" in str(path) or path.name == "streaq_runtime.py":
+        if "/tests/" in str(path):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):

@@ -8,8 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError
 
 from app.core.domain.events import DomainEvent
-from app.core.infrastructure.events.models import DomainEventOutbox
-from app.core.infrastructure.events.outbox_wake import notify_outbox_wake
+from app.core.infrastructure.cutover.legacy_tables import DomainEventOutbox
 
 _outbox_ready = False
 _outbox_lock = asyncio.Lock()
@@ -110,7 +109,3 @@ async def stage_domain_events(session, events: list[DomainEvent]) -> None:
         insert(DomainEventOutbox).on_conflict_do_nothing(index_elements=["id"]),
         rows,
     )
-    # Same transaction as the insert. The datastore outbox has its own
-    # dispatcher and, when configured separately, its own database and its own
-    # listener -- but the contract is identical.
-    await notify_outbox_wake(session)

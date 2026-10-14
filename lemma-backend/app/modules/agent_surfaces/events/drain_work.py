@@ -44,7 +44,7 @@ from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     UnitOfWorkFactory,
 )
-from app.core.infrastructure.events.models import DomainEventOutbox
+from app.core.infrastructure.cutover.legacy_tables import DomainEventOutbox
 from app.core.infrastructure.redis.client import get_redis
 from app.core.infrastructure.work import (
     Defer,

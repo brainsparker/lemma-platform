@@ -228,9 +228,9 @@ async def test_the_pruner_reports_nothing_when_the_table_is_clean(deleted) -> No
 
 
 @pytest.mark.anyio
-async def test_delete_batch_is_shared_with_the_event_pruner() -> None:
+async def test_delete_batch_is_the_shared_retention_helper() -> None:
     """Reused, not reimplemented: SKIP LOCKED is what makes it concurrent-safe."""
-    from app.core.infrastructure.events.retention import delete_batch
+    from app.core.infrastructure.db.retention import delete_batch
 
     assert run_retention.delete_batch is delete_batch
 

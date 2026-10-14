@@ -24,7 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from app.core.infrastructure.events.outbox_wake import OutboxWakeListener
+from app.core.infrastructure.db.notify_listener import NotifyWakeListener
 from app.core.infrastructure.work import WorkWriter
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
@@ -119,7 +119,7 @@ async def change_handoff_lifespan(
     engine: AsyncEngine, main_sessions: SessionMaker, *, database_url: str
 ) -> AsyncIterator[ChangeHandoff]:
     handoff = ChangeHandoff(engine, main_sessions)
-    listener = OutboxWakeListener(
+    listener = NotifyWakeListener(
         database_url, label="change-pending", channel=PENDING_CHANNEL
     )
     listen = create_background_task(listener.run(), name="change-pending-listener")

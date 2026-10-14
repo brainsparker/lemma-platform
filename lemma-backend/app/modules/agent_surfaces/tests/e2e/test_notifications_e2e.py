@@ -241,6 +241,7 @@ async def test_only_the_recipient_can_see_their_notifications(
     assert created["id"]
 
 
+@pytest.mark.drives_work
 async def test_a_workflow_form_assignment_notifies_and_closes_on_submit(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,

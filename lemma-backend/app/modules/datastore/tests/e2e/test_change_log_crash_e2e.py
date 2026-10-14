@@ -31,7 +31,12 @@ from app.modules.datastore.tests.e2e.harness import DatastoreApi
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e.worker_process import production_worker_process
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.asyncio]
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.slow,
+    pytest.mark.asyncio,
+    pytest.mark.drives_work,
+]
 
 ROWS = 100_000
 PER_REQUEST = 1_000

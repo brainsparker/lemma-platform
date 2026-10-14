@@ -373,6 +373,7 @@ async def _seed() -> None:
         await session.commit()
 
 
+@pytest.mark.drives_work
 async def test_the_cutover_seeds_each_open_wait_and_approval_once(
     scenario, monkeypatch
 ) -> None:

@@ -1127,6 +1127,7 @@ async def test_duplicate_function_completion_event_is_idempotent(
     assert len(record_steps) == 1
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_agent_failure_fails_workflow_run(
     authenticated_client: AsyncClient,
@@ -1419,6 +1420,7 @@ async def test_form_submit_validates_against_schema_and_merges_defaults(
     assert run["execution_context"]["intake"] == {"category": "a", "note": "n/a"}
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_agent_without_output_schema_resumes_workflow_with_answer(
     authenticated_client: AsyncClient,
@@ -1472,6 +1474,7 @@ async def test_agent_without_output_schema_resumes_workflow_with_answer(
     assert run["execution_context"]["ack"] == {"answer": "All done here."}
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_cancel_waiting_run_and_drop_stale_completion(
     authenticated_client: AsyncClient,

@@ -21,11 +21,14 @@ from datetime import timedelta
 
 import pytest
 
-import app.events  # noqa: F401  the worker's wiring: every module's periodics
 from app.core.infrastructure.work import registry
+from app.worker import register_worker_modules
 from app.core.infrastructure.work.registry import PeriodicSpec
 
 pytestmark = pytest.mark.unit
+
+# Every module's kinds and periodics, as the worker registers them.
+register_worker_modules()
 
 #: Distinct periodics allowed to fall due in any single minute after a boot.
 MAX_JOBS_PER_MINUTE = 4

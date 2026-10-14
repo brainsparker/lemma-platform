@@ -66,11 +66,13 @@ from app.modules.agent_surfaces.services.surface_deliveries import SendResult
 
 logger = get_logger(__name__)
 
+
 def _send_errors() -> tuple[type[BaseException], ...]:
     """What one send can fail with and still be an outcome rather than a bug.
 
     A call, read where it is matched (``platform_transport_errors``)."""
     return (AgentSurfaceError, SQLAlchemyError, *platform_transport_errors())
+
 
 #: Sends one claimed row; the seam a test replaces with a fake platform.
 type DeliverySender = Callable[[SurfaceDeliveryModel], Awaitable[SendResult]]

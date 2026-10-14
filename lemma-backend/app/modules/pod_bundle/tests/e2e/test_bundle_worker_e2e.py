@@ -37,7 +37,7 @@ from app.modules.test_support.e2e.worker_process import production_worker_proces
 
 # Slow and in the protected lane: each test owns its worker processes, which
 # must not share an e2e process with the session-scoped base worker.
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.drives_work]
 
 LEASE_SECONDS = 3.0
 TABLES = [f"work_table_{n}" for n in range(6)]

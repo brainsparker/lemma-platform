@@ -247,7 +247,7 @@ class WorkWriter:
                 "kind": kind,
                 "ns": ns,
                 "cls": spec.cls.value,
-                "match": json.dumps(dict(match), separators=(",", ":")),
+                "match": _match_json(match),
             },
         )
         return int(result.rowcount)  # type: ignore[attr-defined]
@@ -328,6 +328,11 @@ class WorkWriter:
             )
             return
         await self._session.execute(_NOTIFY, {"channel": wake_channel(cls)})
+
+
+def _match_json(match: Mapping[str, JsonValue]) -> str:
+    """On the loop, deliberately: a containment filter is a key or two."""
+    return json.dumps(dict(match), separators=(",", ":"))
 
 
 def _payload_json(

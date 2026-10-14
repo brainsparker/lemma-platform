@@ -84,6 +84,7 @@ async def _xadd(redis, event: dict, *, binary: bool) -> str:
     return entry.decode() if isinstance(entry, bytes) else entry
 
 
+@pytest.mark.drives_work
 async def test_the_drain_converts_what_was_left_once_and_exits(
     authenticated_client,
     db_session,

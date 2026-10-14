@@ -100,6 +100,7 @@ def _registry():
     return turn_registry(extra=(register_run_work, register_agent_resume_work))
 
 
+@pytest.mark.drives_work
 async def test_an_agent_step_resumes_its_run_from_the_agents_finish(
     authenticated_client, fixed_test_org
 ) -> None:
@@ -139,6 +140,7 @@ async def test_an_agent_step_resumes_its_run_from_the_agents_finish(
     )
 
 
+@pytest.mark.drives_work
 async def test_at_its_ceiling_a_finished_agent_step_resumes_rather_than_expires(
     authenticated_client, fixed_test_org
 ) -> None:

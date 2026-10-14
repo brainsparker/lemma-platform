@@ -110,6 +110,7 @@ async def _interrupted_run(
         return run.id
 
 
+@pytest.mark.drives_work
 async def test_a_resumed_turn_settles_each_open_call_by_its_class(
     authenticated_client, fixed_test_org, fixed_test_user
 ) -> None:

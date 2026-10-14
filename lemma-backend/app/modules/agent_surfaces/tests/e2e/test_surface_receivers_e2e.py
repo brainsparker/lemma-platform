@@ -71,6 +71,7 @@ async def _stored_updates() -> list[str]:
         return [row[0] for row in rows.all()]
 
 
+@pytest.mark.drives_work
 async def test_a_dead_pollers_bot_is_taken_over_from_its_stored_offset(
     authenticated_client,
     db_session,
@@ -173,6 +174,7 @@ async def test_a_dead_pollers_bot_is_taken_over_from_its_stored_offset(
     )
 
 
+@pytest.mark.drives_work
 async def test_the_manager_bot_is_polled_by_exactly_one_worker():
     starts: list[str] = []
 

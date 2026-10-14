@@ -105,6 +105,7 @@ async def _statuses(destination: str) -> list[str]:
         return [row[0] for row in rows.all()]
 
 
+@pytest.mark.drives_work
 async def test_a_retry_after_is_honoured_and_nothing_overtakes_it(test_pod):
     platform = Platform()
     registry = surface_registry(sender=platform)
@@ -145,6 +146,7 @@ async def test_a_retry_after_is_honoured_and_nothing_overtakes_it(test_pod):
     assert await _statuses(destination) == ["SENT", "SENT"]
 
 
+@pytest.mark.drives_work
 async def test_five_hundred_replies_to_one_group_arrive_once_and_in_order(test_pod):
     platform = Platform()
     registry = surface_registry(sender=platform)
@@ -174,6 +176,7 @@ async def test_five_hundred_replies_to_one_group_arrive_once_and_in_order(test_p
     assert platform.calls == 510
 
 
+@pytest.mark.drives_work
 async def test_a_sender_killed_mid_send_leaves_unknown_and_is_never_resent(test_pod):
     """The worker dies with the message on the wire: it may have arrived."""
     sent: list[str] = []
@@ -291,6 +294,7 @@ async def _a_finished_run(
     return conversation_id, run_id
 
 
+@pytest.mark.drives_work
 async def test_a_finished_runs_answer_is_sent_once_from_its_stored_output(
     authenticated_client,
     db_session,

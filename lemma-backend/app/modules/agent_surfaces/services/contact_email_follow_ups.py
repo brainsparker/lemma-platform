@@ -41,7 +41,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_re
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (  # noqa: E501
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.modules.agent_surfaces.services.cold_email_thread import (
     follow_up_seed_id,
@@ -125,7 +125,7 @@ async def email_contact(
                     )
                 },
             )
-    except PLATFORM_TRANSPORT_ERRORS as exc:
+    except platform_transport_errors() as exc:
         logger.warning(
             "agent_surfaces.contact_follow_ups.email_failed.degraded",
             error_type=type(exc).__name__,

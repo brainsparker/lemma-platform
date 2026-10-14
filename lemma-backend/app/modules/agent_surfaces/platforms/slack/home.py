@@ -19,7 +19,7 @@ from app.modules.agent_surfaces.domain.credentials import (
 )
 
 
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
@@ -95,7 +95,7 @@ class SlackHomeSurface:
                 ),
             )
             return True
-        except SlackApiError:
+        except slack_api_error():
             logger.debug("agent_surfaces.service.slack_channel_setup_prompt.diagnostic")
             return False
 
@@ -128,7 +128,7 @@ class SlackHomeSurface:
                 ),
             )
             return True
-        except SlackApiError as exc:
+        except slack_api_error() as exc:
             logger.debug(
                 "agent_surfaces.service.slack_open_setup_modal.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
@@ -164,7 +164,7 @@ class SlackHomeSurface:
                 ],
             )
             return True
-        except SlackApiError as exc:
+        except slack_api_error() as exc:
             logger.debug(
                 "agent_surfaces.service.slack_starter_prompt.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
@@ -206,7 +206,7 @@ class SlackHomeSurface:
                 ),
             )
             return True
-        except SlackApiError as exc:
+        except slack_api_error() as exc:
             logger.debug(
                 "agent_surfaces.service.slack_publish_home_view.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
@@ -223,7 +223,7 @@ class SlackHomeSurface:
             response = await client.conversations_info(channel=str(channel_id))
             name = ((response.get("channel") or {}).get("name") or "").strip()
             return name or None
-        except SlackApiError:
+        except slack_api_error():
             return None
 
     async def set_thread_title(
@@ -254,6 +254,6 @@ class SlackHomeSurface:
                 title=clean_title,
             )
             return True
-        except SlackApiError:
+        except slack_api_error():
             logger.debug("agent_surfaces.service.slack_set_thread_title.diagnostic")
             return False

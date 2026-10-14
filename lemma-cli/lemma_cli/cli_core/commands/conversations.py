@@ -6,13 +6,13 @@ import typer
 
 from ..chat import (
     emit_stream_events,
-    iter_sse_events,
     read_chat_prompt,
     render_chat_header,
     render_chat_help,
     render_chat_stream,
     render_user_message,
 )
+from ..sse import STREAM_READ_TIMEOUT_SECONDS, SseResponse, iter_sse_events
 from lemma_sdk.errors import LemmaAPIError
 from lemma_sdk.openapi_client.models.resolve_user_approval_request import (
     ResolveUserApprovalRequest,
@@ -112,10 +112,25 @@ def chat_once(
     def stream(client, s):  # type: ignore[no-untyped-def]
         # Render inside the client session: the SSE response is only readable
         # while the underlying httpx client is open.
-        response = pod_client(client, s, pod).conversations.send_stream(
-            conversation_id, message
+        conversations = pod_client(client, s, pod).conversations
+        response = conversations.send_stream(
+            conversation_id, message, read_timeout=STREAM_READ_TIMEOUT_SECONDS
         )
-        render_chat_stream(state=s, response=response, agent=agent, verbose=verbose)
+
+        def reattach(agent_run_id: str) -> SseResponse:
+            return conversations.stream(
+                conversation_id,
+                agent_run_id=agent_run_id,
+                read_timeout=STREAM_READ_TIMEOUT_SECONDS,
+            )
+
+        render_chat_stream(
+            state=s,
+            response=response,
+            agent=agent,
+            verbose=verbose,
+            reattach=reattach,
+        )
         return True
 
     run_with_client(ctx, stream)

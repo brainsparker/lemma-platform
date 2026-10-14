@@ -78,17 +78,16 @@ async def handle_datastore_event(
 
     Two filters, cheapest first, and the order is the whole point. This is by a
     wide margin the noisiest stream on the platform -- every row written
-    anywhere lands here -- while only 42 of 1282 live pods hold an active
+    anywhere lands here -- while only a small share of pods hold an active
     DATASTORE schedule. Claiming the inbox before knowing whether anyone is
-    watching meant ~97% of record events each bought a durable Postgres row, a
+    watching meant nearly every record event bought a durable Postgres row, a
     claim transaction, a jsonb match query, an unmatched-lookup query and a
     completion transaction, to decide there was nothing to do.
 
-    That is what stalled production: one tenant's bulk import (100% of a
-    300-entry sample) put this consumer minutes behind, its pending list grew
-    past 28,000, and a pending list is what stops the stream being trimmed --
-    so the stream kept growing and entries aged out undelivered. Other
-    tenants' triggers simply never fired.
+    That is how one pod's bulk import can stall everyone: the consumer falls
+    minutes behind, its pending list grows, and a pending list is what stops
+    the stream being trimmed -- so the stream keeps growing and entries age
+    out undelivered, and other pods' triggers never fire.
     """
     event_type = event.get("event_type", "")
     if not event_type.startswith("datastore.record."):

@@ -7,7 +7,7 @@ from app.modules.agent_surfaces.platforms.telegram.addressing import (
     mention_is_provisional,
 )
 
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 
 from app.modules.agent_surfaces.domain.models import ProgressHandle
 
@@ -156,7 +156,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
                 bot_username=await service.get_bot_username() or "",
                 bot_user_id=await service.get_bot_user_id(),
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.telegram.mention_unsettled.degraded", exc_info=True
             )

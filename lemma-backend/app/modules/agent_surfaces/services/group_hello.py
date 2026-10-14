@@ -25,7 +25,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
 )
 from app.modules.agent_surfaces.domain.groups import GROUP_LOG_RETENTION
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.group_names import visible_bot_name
 from app.modules.agent_surfaces.services.pod_name_lookup import pod_name_for
 
@@ -71,7 +71,7 @@ async def say_hello_in_group(
             await adapter.send_message(
                 credentials=credentials, event=event, message=message
             )
-    except PLATFORM_TRANSPORT_ERRORS:
+    except platform_transport_errors():
         logger.info(
             "agent_surfaces.group_hello.send_failed.observed",
             surface_id=str(surface.id),

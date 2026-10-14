@@ -479,6 +479,16 @@ class AgentHostLinkSession:
     async def _harnesses(self, frame: LinkFrame) -> None:
         host, _ = self._linked()
         body = HarnessesBody.model_validate(frame.body)
+        for snapshot in body.harnesses:
+            # An option the agent added that this build cannot offer. Named by
+            # its type, never by its content; the rest of the harness stands.
+            if snapshot.skipped_config_options:
+                logger.info(
+                    "agent.agent_host_link.config_options_skipped",
+                    host_id=str(host.host_id),
+                    harness_key=snapshot.harness_key,
+                    skipped=sorted(set(snapshot.skipped_config_options)),
+                )
         try:
             items = await self._store.publish_harnesses(
                 host_id=host.host_id, snapshots=body.harnesses

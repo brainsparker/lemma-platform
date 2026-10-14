@@ -326,8 +326,6 @@ class SurfaceInboundMixin:
         if surface is not None:
             if self.router.is_self_addressed(surface=surface, parsed=parsed):
                 return None
-            if surface.should_ignore_sender(parsed.sender_external_user_id):
-                return None
         if resolved_user is None:
             credentials = (
                 await self.credential_resolver.for_surface(
@@ -376,9 +374,6 @@ class SurfaceInboundMixin:
         claim_delivery: bool = True,
     ) -> AgentSurfaceContext | None:
         if self.router.is_self_addressed(surface=surface, parsed=parsed):
-            return None
-
-        if surface.should_ignore_sender(parsed.sender_external_user_id):
             return None
 
         credentials = await self.credential_resolver.for_surface(

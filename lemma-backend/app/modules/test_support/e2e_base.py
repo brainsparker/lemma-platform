@@ -18,7 +18,8 @@ import subprocess
 import sys
 import asyncio
 import logging
-from typing import TYPE_CHECKING, AsyncGenerator, Any, Callable
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, AsyncGenerator, Any, Callable, Iterator
 from uuid import uuid4
 
 import pytest
@@ -328,7 +329,9 @@ def _close_shared_contexts() -> None:
     _SHARED_RESOURCES.clear()
 
 
-def _reset_supertokens_testing_state() -> None:
+def _supertokens_singleton_classes() -> tuple[type, ...]:
+    """Every SDK class that keeps process-wide state between ``init`` calls."""
+    from supertokens_python.querier import Querier
     from supertokens_python.recipe.accountlinking.recipe import AccountLinkingRecipe
     from supertokens_python.recipe.dashboard.recipe import DashboardRecipe
     from supertokens_python.recipe.emailpassword.recipe import EmailPasswordRecipe
@@ -345,8 +348,9 @@ def _reset_supertokens_testing_state() -> None:
     from supertokens_python.recipe.usermetadata.recipe import UserMetadataRecipe
     from supertokens_python.supertokens import Supertokens
 
-    Supertokens.reset()
-    for recipe in (
+    return (
+        Supertokens,
+        Querier,
         SessionRecipe,
         AccountLinkingRecipe,
         EmailPasswordRecipe,
@@ -359,8 +363,57 @@ def _reset_supertokens_testing_state() -> None:
         MultitenancyRecipe,
         UserMetadataRecipe,
         OAuth2ProviderRecipe,
-    ):
-        recipe.reset()
+    )
+
+
+def _reset_supertokens_testing_state() -> None:
+    from supertokens_python.querier import Querier
+    from supertokens_python.supertokens import Supertokens
+
+    Supertokens.reset()
+    for recipe in _supertokens_singleton_classes():
+        if recipe not in (Supertokens, Querier):
+            recipe.reset()
+
+
+#: Class state the SDK keeps under plain names: ``Querier.init`` installs a
+#: ``network_interceptor``, and the first request caches the core's
+#: ``api_version``. A test that initialises with its own leaves both behind.
+_SUPERTOKENS_PUBLIC_CLASS_STATE = frozenset({"network_interceptor", "api_version"})
+
+
+@contextmanager
+def supertokens_state_restored() -> Iterator[None]:
+    """Reset SuperTokens for the body, then put back what was there before.
+
+    Importing ``app.app`` initialises the SDK once for the whole process, and
+    unit tests that drive the app without its lifespan rely on that. A test
+    that resets the SDK and leaves it reset turns every later request in the
+    same worker into "Initialisation not done" -- a failure that depends on
+    which tests xdist happened to put together. Restoring the private class
+    attributes (the singletons and the querier's host list) is the only way
+    back, because the SDK has no public "re-install this instance" call.
+    """
+    snapshot = [
+        (
+            cls,
+            {
+                k: v
+                for k, v in vars(cls).items()
+                if k.startswith(f"_{cls.__name__}__")
+                or k in _SUPERTOKENS_PUBLIC_CLASS_STATE
+            },
+        )
+        for cls in _supertokens_singleton_classes()
+    ]
+    _reset_supertokens_testing_state()
+    try:
+        yield
+    finally:
+        _reset_supertokens_testing_state()
+        for cls, attributes in snapshot:
+            for name, value in attributes.items():
+                setattr(cls, name, value)
 
 
 async def verify_emailpassword_for_tests(user_id: str, email: str) -> None:

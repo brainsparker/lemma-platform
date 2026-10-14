@@ -1396,6 +1396,17 @@
             ],
             "title": "Harness Id"
           },
+          "harness_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Key"
+          },
           "has_credentials": {
             "default": false,
             "title": "Has Credentials",
@@ -1418,11 +1429,6 @@
           "kind": {
             "$ref": "#/components/schemas/RuntimeProfileKind"
           },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          },
           "model_catalog": {
             "items": {
               "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
@@ -1433,6 +1439,11 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "organization_default": {
+            "default": false,
+            "title": "Organization Default",
+            "type": "boolean"
           },
           "organization_id": {
             "anyOf": [
@@ -1564,6 +1575,17 @@
             ],
             "title": "Harness Id"
           },
+          "harness_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Key"
+          },
           "has_credentials": {
             "default": false,
             "title": "Has Credentials",
@@ -1576,11 +1598,6 @@
           "kind": {
             "$ref": "#/components/schemas/RuntimeProfileKind"
           },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          },
           "model_catalog": {
             "items": {
               "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
@@ -1591,6 +1608,11 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "organization_default": {
+            "default": false,
+            "title": "Organization Default",
+            "type": "boolean"
           },
           "organization_id": {
             "anyOf": [

@@ -232,28 +232,43 @@ class PodConversations(BoundResource):
         *,
         metadata: Metadata | None = None,
         client_message_id: str | None = None,
+        read_timeout: float | None = None,
     ) -> httpx.Response:
         """Send a message and return the live SSE response for the run.
 
         The caller iterates the frames and calls ``close()``. Not retried on a
         gateway error: a replay would start a second run.
+
+        ``read_timeout`` bounds the wait between two reads. The server sends a
+        keepalive through a quiet run, so a stream that goes longer than that
+        with nothing at all is a dead connection, not a slow agent. ``None``
+        waits for ever.
         """
         return self._stream(
             agent_conversation_message_send,
             self._pod_uuid(),
             as_uuid(conversation_id),
+            read_timeout=read_timeout,
             body=SendMessageRequest.from_dict(
                 _message_body(content, metadata, client_message_id)
             ),
         )
 
     def stream(
-        self, conversation_id: str, *, agent_run_id: str | None = None
+        self,
+        conversation_id: str,
+        *,
+        agent_run_id: str | None = None,
+        read_timeout: float | None = None,
     ) -> httpx.Response:
+        """Attach to a conversation's run. A run that has already ended
+        replays its terminal event and closes; ``read_timeout`` is as for
+        ``send_stream``."""
         return self._stream(
             agent_conversation_stream,
             self._pod_uuid(),
             as_uuid(conversation_id),
+            read_timeout=read_timeout,
             agent_run_id=as_uuid(agent_run_id) if agent_run_id else UNSET,
         )
 

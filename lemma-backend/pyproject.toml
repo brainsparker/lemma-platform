@@ -37,11 +37,11 @@ dependencies = [
     "scalar-fastapi>=1.6.1",
     "composio>=0.11.0",
     "openinference-instrumentation-pydantic-ai>=0.1.12",
-    "opentelemetry-exporter-otlp>=1.39.1",
-    "opentelemetry-instrumentation-aiohttp-client>=0.60b1",
-    "opentelemetry-instrumentation-fastapi>=0.60b1",
-    "opentelemetry-instrumentation-httpx>=0.60b1",
-    "opentelemetry-instrumentation-sqlalchemy>=0.60b1",
+    "opentelemetry-exporter-otlp>=1.44.0",
+    "opentelemetry-instrumentation-aiohttp-client>=0.65b0",
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
+    "opentelemetry-instrumentation-httpx>=0.65b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.65b0",
     "authlib>=1.6.6",
     # Upper-bounded on purpose: the agent harness reaches into a few pydantic-ai
     # internals (see infrastructure/pydantic_ai_compat.py), so a major bump is a

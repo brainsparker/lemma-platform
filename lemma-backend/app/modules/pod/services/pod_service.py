@@ -275,10 +275,7 @@ class PodService:
 
         updated_entity = PodEntity(**merged_dict)
         updated = await self.pod_repository.update(updated_entity)
-        if self._uow is not None and _trigger_defaults(pod_entity) != _trigger_defaults(
-            updated
-        ):
-            await facts.emit(self._uow, PodTriggerDefaultsChanged(pod_id=pod_id))
+        await self._announce_trigger_defaults_change(pod_entity, updated)
 
         if (
             self.icon_service
@@ -288,6 +285,15 @@ class PodService:
             await self.icon_service.delete_by_url(pod_entity.icon_url)
 
         return updated
+
+    async def _announce_trigger_defaults_change(
+        self, before: PodEntity, after: PodEntity
+    ) -> None:
+        """Resync the pod's triggers when its trigger defaults changed."""
+        if self._uow is not None and _trigger_defaults(before) != _trigger_defaults(
+            after
+        ):
+            await facts.emit(self._uow, PodTriggerDefaultsChanged(pod_id=after.id))
 
     async def _require_join_policy_authority(
         self,

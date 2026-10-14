@@ -56,11 +56,9 @@ _NAME_TO_MODULE = {
     'AgentRuntimeConfig': 'agent_runtime_config',
     'AgentRuntimeProfileDetailResponse': 'agent_runtime_profile_detail_response',
     'AgentRuntimeProfileDetailResponseConfig': 'agent_runtime_profile_detail_response_config',
-    'AgentRuntimeProfileDetailResponseMetadata': 'agent_runtime_profile_detail_response_metadata',
     'AgentRuntimeProfileListResponse': 'agent_runtime_profile_list_response',
     'AgentRuntimeProfileResponse': 'agent_runtime_profile_response',
     'AgentRuntimeProfileResponseConfig': 'agent_runtime_profile_response_config',
-    'AgentRuntimeProfileResponseMetadata': 'agent_runtime_profile_response_metadata',
     'AgentRuntimeProfileTestResponse': 'agent_runtime_profile_test_response',
     'AgentSummaryResponse': 'agent_summary_response',
     'AgentSummaryResponseMetadataType0': 'agent_summary_response_metadata_type_0',
@@ -695,11 +693,9 @@ if TYPE_CHECKING:
     from .agent_runtime_config import AgentRuntimeConfig
     from .agent_runtime_profile_detail_response import AgentRuntimeProfileDetailResponse
     from .agent_runtime_profile_detail_response_config import AgentRuntimeProfileDetailResponseConfig
-    from .agent_runtime_profile_detail_response_metadata import AgentRuntimeProfileDetailResponseMetadata
     from .agent_runtime_profile_list_response import AgentRuntimeProfileListResponse
     from .agent_runtime_profile_response import AgentRuntimeProfileResponse
     from .agent_runtime_profile_response_config import AgentRuntimeProfileResponseConfig
-    from .agent_runtime_profile_response_metadata import AgentRuntimeProfileResponseMetadata
     from .agent_runtime_profile_test_response import AgentRuntimeProfileTestResponse
     from .agent_summary_response import AgentSummaryResponse
     from .agent_summary_response_metadata_type_0 import AgentSummaryResponseMetadataType0
@@ -1347,11 +1343,9 @@ __all__ = [
     'AgentRuntimeConfig',
     'AgentRuntimeProfileDetailResponse',
     'AgentRuntimeProfileDetailResponseConfig',
-    'AgentRuntimeProfileDetailResponseMetadata',
     'AgentRuntimeProfileListResponse',
     'AgentRuntimeProfileResponse',
     'AgentRuntimeProfileResponseConfig',
-    'AgentRuntimeProfileResponseMetadata',
     'AgentRuntimeProfileTestResponse',
     'AgentSummaryResponse',
     'AgentSummaryResponseMetadataType0',

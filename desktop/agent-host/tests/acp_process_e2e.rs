@@ -99,7 +99,7 @@ fn fake_adapter_in_mode(directory: &TempDir, mode: Option<&str>) -> (ResolvedAda
 async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
     let directory = TempDir::new().unwrap();
     let (adapter, log) = fake_adapter(&directory);
-    let driver = AcpDriver;
+    let driver = AcpDriver::default();
     let probe = driver
         .probe(adapter.clone(), directory.path().join("probe"))
         .await
@@ -212,7 +212,7 @@ async fn every_harness_opens_and_resumes_in_the_same_saved_directory() {
             cancel_grace: Duration::from_secs(5),
             steer: lemma_agent_host::acp::SteerInbox::default(),
         };
-        AcpDriver
+        AcpDriver::default()
             .run(
                 request.clone(),
                 std::sync::Arc::new(CapturingCallbacks::default()),
@@ -223,7 +223,7 @@ async fn every_harness_opens_and_resumes_in_the_same_saved_directory() {
         let mut resumed = request;
         resumed.run_spec.agent_run_id = Uuid::new_v4();
         resumed.run_spec.resume_session_id = Some("fake-session".into());
-        AcpDriver
+        AcpDriver::default()
             .run(resumed, std::sync::Arc::new(CapturingCallbacks::default()))
             .await
             .unwrap();
@@ -271,7 +271,7 @@ async fn a_forgotten_session_is_answered_and_reported_rather_than_silently_lost(
     let cwd = directory.path().join("cwd");
     std::fs::create_dir_all(&cwd).unwrap();
 
-    AcpDriver
+    AcpDriver::default()
         .run(
             AcpRunRequest {
                 adapter,
@@ -348,4 +348,211 @@ async fn a_forgotten_session_is_answered_and_reported_rather_than_silently_lost(
         .find(|(_, payload)| payload.get("status") == Some(&Value::from("session_lost")))
         .expect("Lemma is told which session was lost, not just the log file");
     assert_eq!(reported.1["requested_session"], "fake-session");
+}
+
+/// A run of `adapter` with nothing special about it, working in `cwd`.
+fn plain_run(adapter: ResolvedAdapter, cwd: PathBuf) -> AcpRunRequest {
+    AcpRunRequest {
+        adapter,
+        agent_environment: std::collections::BTreeMap::default(),
+        own_settings: false,
+        lemma_cli_bin: None,
+        run_spec: RunSpec {
+            agent_run_id: Uuid::new_v4(),
+            conversation_id: Uuid::new_v4(),
+            harness_id: Uuid::new_v4(),
+            profile_revision: "r".into(),
+            model_name: None,
+            config_selections: JsonMap::new(),
+            system_prompt: String::new(),
+            prompt: vec![serde_json::json!({"type": "text", "text": "Reply with exactly: OK"})],
+            resume_session_id: None,
+            workspace_cwd: None,
+            context: JsonMap::new(),
+            mcp: Value::Null,
+            run_deadline: chrono::Utc::now() + chrono::Duration::minutes(2),
+            system_prompt_delivery: None,
+            pre_approvals: Vec::new(),
+        },
+        scratch_directory: cwd,
+        mcp_server: None,
+        can_load_session: false,
+        published_config_options: Vec::new(),
+        permissions: PermissionGate::new(),
+        permission_timeout: Duration::ZERO,
+        cancel: lemma_agent_host::acp::never_cancelled(),
+        cancel_grace: Duration::from_secs(5),
+        steer: lemma_agent_host::acp::SteerInbox::default(),
+    }
+}
+
+/// How many agent processes were started against `log`.
+fn processes_started(log: &Path) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|message| message["method"] == "initialize")
+        .count()
+}
+
+/// Several conversations started at once on Codex used to fail together:
+/// each run cold-starts its own Codex, and copies opening a session side by
+/// side time out inside Codex. The fake agent fails exactly that way whenever
+/// two copies open a session at the same time, so every run answering -- and
+/// no copy having needed a second start -- is the start-up gate letting one
+/// through at a time.
+#[tokio::test]
+async fn a_burst_of_runs_on_one_agent_all_start_and_answer() {
+    let directory = TempDir::new().unwrap();
+    let (mut adapter, log) = fake_adapter_in_mode(&directory, Some("contended"));
+    adapter.spec.key = "codex".to_owned();
+    let driver = AcpDriver::default();
+    let burst = 5;
+
+    let runs = (0..burst).map(|index| {
+        let driver = driver.clone();
+        let request = plain_run(
+            adapter.clone(),
+            directory.path().join(format!("run-{index}")),
+        );
+        async move {
+            driver
+                .run(request, std::sync::Arc::new(CapturingCallbacks::default()))
+                .await
+        }
+    });
+    let outcomes = futures_util::future::join_all(runs).await;
+
+    for outcome in outcomes {
+        let outcome = outcome.expect("every run in the burst starts");
+        assert_eq!(outcome.state, RunState::Succeeded);
+    }
+    assert_eq!(
+        processes_started(&log),
+        burst,
+        "queued starts never collided, so none had to be tried again"
+    );
+}
+
+/// A start that timed out is the shape a busy computer produces, and nothing
+/// was asked of the agent yet, so it is started once more rather than failed.
+#[tokio::test]
+async fn a_start_that_timed_out_is_tried_once_more() {
+    let directory = TempDir::new().unwrap();
+    let (adapter, log) = fake_adapter_in_mode(&directory, Some("times-out-once"));
+    let callbacks = std::sync::Arc::new(CapturingCallbacks::default());
+
+    let outcome = AcpDriver::default()
+        .run(
+            plain_run(adapter, directory.path().join("run")),
+            callbacks.clone(),
+        )
+        .await
+        .expect("the second start answers");
+
+    assert_eq!(outcome.state, RunState::Succeeded);
+    assert!(callbacks.dispatched.load(Ordering::SeqCst));
+    assert_eq!(processes_started(&log), 2);
+}
+
+/// A failure no retry can fix is reported at once, from the one start.
+#[tokio::test]
+async fn a_misconfigured_agent_is_not_started_twice() {
+    let directory = TempDir::new().unwrap();
+    let (adapter, log) = fake_adapter_in_mode(&directory, Some("misconfigured"));
+    let callbacks = std::sync::Arc::new(CapturingCallbacks::default());
+
+    let error = AcpDriver::default()
+        .run(
+            plain_run(adapter, directory.path().join("run")),
+            callbacks.clone(),
+        )
+        .await
+        .expect_err("a configuration error fails the run");
+
+    assert!(
+        error.to_string().contains("unknown model provider"),
+        "the agent's own reason is kept: {error}"
+    );
+    assert!(!callbacks.dispatched.load(Ordering::SeqCst));
+    assert_eq!(processes_started(&log), 1);
+}
+
+/// An agent released after this host, through the real driver: what it adds
+/// is skipped, what the host knows still arrives, and a permission it offers
+/// only in a kind the host does not know is refused, never allowed.
+#[tokio::test]
+async fn a_newer_agent_runs_and_its_unknowns_are_skipped_not_fatal() {
+    let directory = TempDir::new().unwrap();
+    let (adapter, log) = fake_adapter_in_mode(&directory, Some("future"));
+    let callbacks = std::sync::Arc::new(CapturingCallbacks::default());
+    let outcome = AcpDriver::default()
+        .run(
+            AcpRunRequest {
+                adapter,
+                agent_environment: std::collections::BTreeMap::default(),
+                own_settings: false,
+                lemma_cli_bin: None,
+                run_spec: RunSpec {
+                    agent_run_id: Uuid::new_v4(),
+                    conversation_id: Uuid::new_v4(),
+                    harness_id: Uuid::new_v4(),
+                    profile_revision: "revision".into(),
+                    model_name: None,
+                    config_selections: JsonMap::new(),
+                    system_prompt: String::new(),
+                    prompt: vec![serde_json::json!({"type": "text", "text": "hello"})],
+                    resume_session_id: None,
+                    workspace_cwd: None,
+                    context: BTreeMap::new(),
+                    mcp: Value::Null,
+                    run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),
+                    system_prompt_delivery: None,
+                    pre_approvals: Vec::new(),
+                },
+                scratch_directory: directory.path().join("run"),
+                mcp_server: None,
+                can_load_session: false,
+                published_config_options: Vec::new(),
+                permissions: PermissionGate::new(),
+                permission_timeout: Duration::ZERO,
+                cancel: lemma_agent_host::acp::never_cancelled(),
+                cancel_grace: Duration::from_secs(5),
+                steer: lemma_agent_host::acp::SteerInbox::default(),
+            },
+            callbacks.clone(),
+        )
+        .await
+        .expect("a newer agent's turn ends as a turn, not a protocol error");
+    // A stop reason ACP did not have is reported by name.
+    assert_eq!(outcome.state, RunState::Failed);
+    assert_eq!(outcome.stop_reason, "budget_exhausted");
+    assert!(outcome.message.unwrap().contains("budget_exhausted"));
+
+    let events = callbacks.events.lock().unwrap();
+    let chunks: Vec<_> = events
+        .iter()
+        .filter(|(kind, _)| *kind == EventType::AgentMessageChunk)
+        .collect();
+    assert_eq!(chunks.len(), 1, "only the chunk this host can read");
+    assert_eq!(chunks[0].1["text"], "hello from fake");
+    // Only the request offering a known option was put to anyone, and the
+    // unknown option it also offered was not part of the card.
+    let asked: Vec<_> = events
+        .iter()
+        .filter(|(kind, _)| *kind == EventType::PermissionRequest)
+        .collect();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].1["options"].as_array().unwrap().len(), 1);
+    let usage = events
+        .iter()
+        .find(|(kind, _)| *kind == EventType::Usage)
+        .expect("the turn's usage, read count by count");
+    assert_eq!(usage.1["output_tokens"], 2);
+    drop(events);
+
+    let messages = std::fs::read_to_string(log).unwrap();
+    assert!(messages.contains("\"id\":901,\"result\":{\"outcome\":{\"outcome\":\"cancelled\"}}"));
+    assert!(!messages.contains("\"optionId\":\"forever\"}"));
 }

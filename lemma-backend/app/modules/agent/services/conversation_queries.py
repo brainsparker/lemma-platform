@@ -206,7 +206,7 @@ class ConversationQueries:
         latest = conversation.agent_runs[-1] if conversation.agent_runs else None
         if latest is None or latest.status != AgentRunStatus.FAILED:
             return False
-        return await self.conversation_repository.run_has_only_user_messages(latest.id)
+        return await self.conversation_repository.run_is_replay_safe(latest.id)
 
     async def list_messages(
         self,

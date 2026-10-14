@@ -15,7 +15,7 @@ from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapte
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.plain_reply import reply_text
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     TelegramMiniApp,
@@ -45,7 +45,7 @@ async def _reply(
             event=context.event,
             message=message,
         )
-    except (AgentSurfaceError, *PLATFORM_TRANSPORT_ERRORS):
+    except (AgentSurfaceError, *platform_transport_errors()):
         logger.warning(
             "agent_surfaces.telegram_command.reply_failed.degraded",
             conversation_id=str(context.conversation_id),

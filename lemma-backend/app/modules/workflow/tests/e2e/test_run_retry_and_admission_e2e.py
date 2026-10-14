@@ -74,6 +74,7 @@ async def _agent_then_function_workflow(client: AsyncClient, pod_id: str) -> str
     return workflow["name"]
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_retry_resumes_at_the_failed_function_without_rerunning_the_agent(
     authenticated_client: AsyncClient,

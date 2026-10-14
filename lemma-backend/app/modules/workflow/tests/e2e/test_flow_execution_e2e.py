@@ -962,6 +962,7 @@ async def test_single_job_function_workflow_runs_with_function_wait_not_waiting(
     assert run["active_wait"]["external_ref"]
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_job_function_failure_fails_workflow_run(
     authenticated_client: AsyncClient,
@@ -1015,6 +1016,7 @@ async def test_job_function_failure_fails_workflow_run(
     assert failed_steps and failed_steps[0]["node_id"] == "record"
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_job_function_completion_resumes_run_via_event(
     authenticated_client: AsyncClient,
@@ -1070,6 +1072,7 @@ async def test_job_function_completion_resumes_run_via_event(
     assert completed["execution_context"]["record"] == output
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_duplicate_function_completion_event_is_idempotent(
     authenticated_client: AsyncClient,

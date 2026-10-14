@@ -123,6 +123,7 @@ async def _answer() -> None:
     )
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_a_run_waits_on_its_question_then_takes_the_answers_branch(
     authenticated_client: AsyncClient, fixed_test_org
@@ -161,6 +162,7 @@ async def test_a_run_waits_on_its_question_then_takes_the_answers_branch(
     assert taken == ["triage", expected], taken
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_a_cancelled_run_is_not_resumed_by_its_answer(
     authenticated_client: AsyncClient, fixed_test_org, fixed_test_user, db_session

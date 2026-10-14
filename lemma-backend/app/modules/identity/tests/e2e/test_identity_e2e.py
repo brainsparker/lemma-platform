@@ -402,6 +402,7 @@ async def test_domain_without_explicit_mx_is_rejected_before_account_creation(
     assert local_user is None
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_emailpassword_verification_welcome_and_password_reset_filesystem_flow(
     async_client: AsyncClient,
@@ -1564,11 +1565,14 @@ async def test_existing_google_user_can_signinup_again(
     google_signinup,
     mock_google_provider,
 ):
-    email = "test+google-repeat@example.com"
+    # Unique per run: with LEMMA_E2E_REUSE the SuperTokens core outlives the
+    # session, and a fixed identity would already exist on the second run.
+    suffix = uuid4().hex[:12]
+    email = f"test+google-repeat-{suffix}@example.com"
 
     first_response = await google_signinup(
         email,
-        third_party_user_id="google-repeat-user",
+        third_party_user_id=f"google-repeat-{suffix}",
     )
     first_payload = first_response.json()
     assert first_response.status_code == 200
@@ -1577,7 +1581,7 @@ async def test_existing_google_user_can_signinup_again(
 
     second_response = await google_signinup(
         email,
-        third_party_user_id="google-repeat-user",
+        third_party_user_id=f"google-repeat-{suffix}",
     )
     second_payload = second_response.json()
     assert second_response.status_code == 200

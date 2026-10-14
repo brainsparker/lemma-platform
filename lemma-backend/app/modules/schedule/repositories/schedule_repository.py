@@ -31,7 +31,14 @@ from app.modules.schedule.domain.value_objects import (
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.repositories.last_fire import with_last_fire
 from app.modules.schedule.repositories.schedule_filters import list_filters
-from app.modules.schedule.repositories.time_arming import arm_time_fire, cursor_for
+from app.modules.schedule.repositories.change_subscription import (
+    sync_trigger_subscription,
+)
+from app.modules.schedule.repositories.time_arming import (
+    arm_time_fire,
+    cursor_for,
+    recompute_cursor,
+)
 from app.core.log.log import get_logger
 from app.modules.schedule.repositories.schedule_config_sql import (
     datastore_operations_array,
@@ -86,6 +93,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         )
         self.session.add(schedule)
         await self.session.flush()
+        await sync_trigger_subscription(self.uow, schedule.id, schedule)
         if schedule.next_fire_at is not None:
             await arm_time_fire(
                 self.session,
@@ -175,12 +183,16 @@ class ScheduleRepository(ScheduleRepositoryInterface):
 
     async def pause(self, schedule_id: UUID, *, reason: str) -> bool:
         """The platform turns a schedule off, saying why. False if it already was."""
-        changed = await self.session.scalar(
-            update(Schedule)
-            .where(Schedule.id == schedule_id, Schedule.is_active.is_(True))
-            .values(is_active=False, paused_reason=reason)
-            .returning(Schedule.id)
-        )
+        changed = (
+            await self.session.execute(
+                update(Schedule)
+                .where(Schedule.id == schedule_id, Schedule.is_active.is_(True))
+                .values(is_active=False, paused_reason=reason)
+                .returning(Schedule.pod_id, Schedule.schedule_type)
+            )
+        ).one_or_none()
+        if changed is not None:
+            await sync_trigger_subscription(self.uow, schedule_id, changed)
         return changed is not None
 
     async def lock_breaker_candidates(self, threshold: int) -> list[ScheduleEntity]:
@@ -255,20 +267,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         # touches the row, and a reactivated schedule never becomes claimable at
         # all -- the two bugs the old "tell the scheduler after you save" dance
         # was there to prevent, now handled by the write itself.
-        armed_row: Schedule | None = None
-        if "config" in update_data or "is_active" in update_data:
-            # Locked before the cursor is computed: a fire holding the row
-            # commits its own next cursor first, and this edit then computes
-            # from that, so the two can never leave two fire chains behind.
-            armed_row = await self.session.get(
-                Schedule, schedule_id, with_for_update=True, populate_existing=True
-            )
-            if armed_row is not None:
-                update_data["next_fire_at"] = cursor_for(
-                    update_data.get("config", armed_row.config),
-                    is_active=update_data.get("is_active", armed_row.is_active),
-                    schedule_type=armed_row.schedule_type,
-                )
+        armed_row = await recompute_cursor(self.session, schedule_id, update_data)
         if update_data.get("is_active") is True:
             update_data["paused_reason"] = None
 
@@ -300,6 +299,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         await self.session.flush()
         if schedule is None:
             return None
+        await sync_trigger_subscription(self.uow, schedule.id, schedule, update_data)
         next_fire_at = update_data.get("next_fire_at")
         if armed_row is not None and isinstance(next_fire_at, datetime):
             await arm_time_fire(
@@ -312,10 +312,16 @@ class ScheduleRepository(ScheduleRepositoryInterface):
 
     async def delete(self, schedule_id: UUID) -> bool:
         """Delete a schedule."""
-        stmt = delete(Schedule).where(Schedule.id == schedule_id)
-        result = await self.session.execute(stmt)
+        stmt = (
+            delete(Schedule)
+            .where(Schedule.id == schedule_id)
+            .returning(Schedule.pod_id, Schedule.schedule_type)
+        )
+        deleted = (await self.session.execute(stmt)).one_or_none()
         await self.session.flush()
-        return result.rowcount > 0
+        if deleted is not None:
+            await sync_trigger_subscription(self.uow, schedule_id, deleted)
+        return deleted is not None
 
     async def list(
         self,

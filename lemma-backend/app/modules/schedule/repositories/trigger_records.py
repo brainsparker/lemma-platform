@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.modules.schedule.infrastructure.models.trigger import TriggerBatch, Tri
 
 @dataclass(frozen=True, slots=True)
 class SkipRecord:
+    id: UUID
     reason: str
     first: str
     last: str
@@ -63,17 +64,24 @@ class TriggerRecords:
             )
         )
 
-    async def recent_skips(
-        self, schedule_id: UUID, *, limit: int = 50
+    async def list_skips(
+        self,
+        schedule_id: UUID,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None = None,
     ) -> list[SkipRecord]:
+        """Newest first; ``before`` is the ``(at, id)`` of the last row of the previous page."""
+        query = select(TriggerSkip).where(TriggerSkip.schedule_id == schedule_id)
+        if before is not None:
+            query = query.where(
+                tuple_(TriggerSkip.at, TriggerSkip.id) < tuple_(*before)
+            )
         rows = await self._session.scalars(
-            select(TriggerSkip)
-            .where(TriggerSkip.schedule_id == schedule_id)
-            .order_by(TriggerSkip.at.desc(), TriggerSkip.id.desc())
-            .limit(limit)
+            query.order_by(TriggerSkip.at.desc(), TriggerSkip.id.desc()).limit(limit)
         )
         return [
-            SkipRecord(row.reason, row.first, row.last, row.count, row.at)
+            SkipRecord(row.id, row.reason, row.first, row.last, row.count, row.at)
             for row in rows.all()
         ]
 

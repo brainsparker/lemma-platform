@@ -31,7 +31,11 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from app.core.infrastructure.work import WorkWriter, pod_namespace
-from app.modules.workflow.domain.wait import WorkflowRunWaitEntity, WorkflowRunWaitType
+from app.modules.workflow.domain.wait import (
+    WorkflowRunWaitEntity,
+    WorkflowRunWaitType,
+    wait_expire_key,
+)
 from app.modules.workflow.execution.wait_ceiling import expires_at
 
 WORKFLOW_RESUME = "workflow.resume"
@@ -76,6 +80,14 @@ def _registered() -> None:
     import app.modules.workflow.events.step_jobs  # noqa: F401
 
 
+async def cancel_wait_expire(work: WorkWriter, *, pod_id: UUID, wait_id: UUID) -> None:
+    """Drop a resolved wait's queued expiry: claimed, it would find nothing to do."""
+    _registered()
+    await work.cancel(
+        WORKFLOW_WAIT_EXPIRE, pod_namespace(pod_id), wait_expire_key(wait_id)
+    )
+
+
 async def write_timer(
     work: WorkWriter, *, pod_id: UUID, external_ref: str, fire_at: datetime
 ) -> None:
@@ -117,7 +129,7 @@ async def write_wait_items(
             ns,
             WaitWork(wait_id=wait.id),
             run_at=deadline,
-            dedup_key=f"workflow-expire:{wait.id}",
+            dedup_key=wait_expire_key(wait.id),
         )
     if (
         wait.wait_type is WorkflowRunWaitType.HUMAN

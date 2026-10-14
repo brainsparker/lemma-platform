@@ -29,7 +29,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from app.core.authorization.context import Context
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.domain.errors import DomainError
@@ -58,12 +57,14 @@ from app.modules.workflow.contracts.run_work import (
 from app.modules.workflow.domain.context import TriggerContext
 from app.modules.workflow.domain.run import WorkflowRunEntity
 from app.modules.workflow.domain.wait import (
+    wait_expire_key,
     WorkflowRunWaitEntity,
     WorkflowRunWaitStatus,
     WorkflowRunWaitType,
 )
 from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.execution.engine import WorkflowEngine
+from app.modules.workflow.execution.resume_target import ResumeTarget
 from app.modules.workflow.execution.wait_ceiling import ceiling_seconds, expiry_error
 from app.modules.workflow.services.run_resume_service import RunResumeService
 from app.modules.workflow.services.schedule_start_service import ScheduleStartService
@@ -88,28 +89,30 @@ def _engine(uow: SqlAlchemyUnitOfWork, work: WorkWriter) -> WorkflowEngine:
     return build_workflow_engine(uow, work=work)
 
 
-async def _owner_context(engine: WorkflowEngine, run_id: UUID) -> Context | None:
-    """The run's owner, as of now -- a resumed step acts for them."""
-    run: WorkflowRunEntity | None = await engine.run_repo.get(run_id)
-    if run is None:
-        return None
-    return await create_authorization_data_service(engine.uow).build_user_context(
-        user_id=run.user_id, pod_id=run.pod_id
-    )
-
-
 async def _resume(
     engine: WorkflowEngine,
     wait: WorkflowRunWaitEntity,
     output: dict[str, object],
 ) -> None:
+    """Resume ``wait``'s run as its owner, as of now -- a resumed step acts for them."""
     assert wait.external_ref is not None
-    ctx = await _owner_context(engine, wait.run_id)
-    if ctx is None:
+    # Locked here rather than inside the engine: the owner is read from the
+    # same row the resume must hold anyway.
+    run: WorkflowRunEntity | None = await engine.run_repo.get_for_update(wait.run_id)
+    if run is None:
         return
+    ctx = await create_authorization_data_service(engine.uow).build_user_context(
+        user_id=run.user_id, pod_id=run.pod_id
+    )
     token = set_current_context(ctx)
     try:
-        await engine.resume_internal(wait.wait_type, wait.external_ref, output, ctx=ctx)
+        await engine.resume_internal(
+            wait.wait_type,
+            wait.external_ref,
+            output,
+            ctx=ctx,
+            found=ResumeTarget(wait=wait, locked_run=run),
+        )
     finally:
         reset_current_context(token)
 
@@ -203,7 +206,7 @@ async def expire_wait(ctx: FastContext, payload: WaitWork) -> None:
             ctx.item.ns,
             payload,
             run_at=due,
-            dedup_key=f"workflow-expire:{wait.id}",
+            dedup_key=wait_expire_key(wait.id),
         )
         return
     logger.warning(
@@ -278,6 +281,7 @@ async def _start_requested(
             trigger=trigger,
             schedule_event_id=payload.schedule_event_id,
             ctx=user_ctx,
+            flow=flow,
         )
     finally:
         reset_current_context(token)

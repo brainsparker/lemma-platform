@@ -40,7 +40,7 @@ from app.modules.function.tests.e2e.function_work_support import (
 )
 from app.modules.test_support.e2e.waiters import eventually
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 CAP = 3
 

@@ -8,13 +8,15 @@ the property whose absence made every reconcile cron necessary.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from datetime import datetime, timedelta
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
 from uuid import UUID, uuid7
 
 from pydantic import BaseModel, JsonValue
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.core.infrastructure.work.db import side_connection
@@ -58,13 +60,52 @@ _ENSURE_QUEUE = text(
 )
 
 _DROP_QUEUED = text("DELETE FROM work_items WHERE ns = :ns AND state = 'queued'")
-
 # Postgres folds identical notifications within one transaction into one.
 _NOTIFY = text("SELECT pg_notify(:channel, '')")
 
 
+#: An item due later than this is found by the dispatchers' poll; waking them
+#: now would only make them look and find nothing due.
+_WAKE_HORIZON = timedelta(seconds=1)
+
+
+def _due_soon(run_at: datetime | None, delay: timedelta | None) -> bool:
+    """Whether an item is due soon enough to be worth a wake.
+
+    NOTIFY takes a database-wide lock at commit, so every notifying commit is
+    serialised behind the others; a burst of transactions that each arm a
+    future timer (a TIME schedule's next fire) paid that for nothing.
+    """
+    later = delay or timedelta(0)
+    if run_at is not None:
+        later += run_at - datetime.now(UTC)
+    return later <= _WAKE_HORIZON
+
+
 def wake_channel(cls: WorkClass) -> str:
     return f"work_{cls.value}"
+
+
+#: Set while a work handler runs: how to wake this process's own dispatcher
+#: of a class. Work a handler enqueues wakes that, after its transaction
+#: commits, instead of sending a NOTIFY -- a burst of handler commits that each
+#: notify serialises on NOTIFY's database-wide commit lock, and the
+#: dispatchers it would wake are already looping or will find it on their
+#: poll. Requests from the API are the ones a NOTIFY is for.
+LocalWake = Callable[[WorkClass], None]
+_handler_wake: ContextVar[LocalWake | None] = ContextVar(
+    "work_handler_wake", default=None
+)
+
+
+@contextmanager
+def waking_locally(wake: LocalWake) -> Iterator[None]:
+    """Within this block, enqueued work wakes ``wake`` after commit, never NOTIFY."""
+    token = _handler_wake.set(wake)
+    try:
+        yield
+    finally:
+        _handler_wake.reset(token)
 
 
 class HasSession(Protocol):
@@ -147,7 +188,8 @@ class WorkWriter:
             },
         )
         await self._ensure_queue(spec.cls, ns)
-        await self._notify(spec.cls)
+        if _due_soon(run_at, delay):
+            await self._notify(spec.cls)
         return item_id
 
     async def drop_queued(self, ns: str) -> int:
@@ -275,8 +317,17 @@ class WorkWriter:
     async def _notify(self, cls: WorkClass) -> None:
         if cls in self._notified:
             return
-        await self._session.execute(_NOTIFY, {"channel": wake_channel(cls)})
         self._notified.add(cls)
+        local = _handler_wake.get()
+        if local is not None:
+            event.listen(
+                self._session.sync_session,
+                "after_commit",
+                lambda _session: local(cls),
+                once=True,
+            )
+            return
+        await self._session.execute(_NOTIFY, {"channel": wake_channel(cls)})
 
 
 def _payload_json(

@@ -146,7 +146,7 @@ async def fire_trigger(
     )
     if reservation is None or not reservation.created:
         return FireOutcome.DUPLICATE
-    await enqueue_start(writer, schedule, reservation.run_id)
+    await add_start_work(writer, schedule, reservation.run_id)
     return FireOutcome.STARTED
 
 
@@ -191,11 +191,11 @@ async def start_after_filter(
             run_id, metadata={"skipped_because": "max_concurrent_runs"}
         )
         return FireOutcome.AT_CAPACITY
-    await enqueue_start(work, schedule, run_id)
+    await add_start_work(work, schedule, run_id)
     return FireOutcome.STARTED
 
 
-async def enqueue_start(
+async def add_start_work(
     work: WorkWriter, schedule: ScheduleEntity, run_id: UUID
 ) -> None:
     await work.add(
@@ -211,7 +211,7 @@ __all__ = [
     "FireOutcome",
     "FireTrigger",
     "TriggerEvent",
-    "enqueue_start",
+    "add_start_work",
     "fire_trigger",
     "jsonable",
     "start_after_filter",

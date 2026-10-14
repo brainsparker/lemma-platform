@@ -6,17 +6,14 @@ The distinctions these tests pin down are the ones the feature exists for:
 
 import pytest
 
-from app.modules.schedule.domain.match_conditions import (
+from app.core.domain.record_conditions import (
+    DELETE,
+    INSERT,
+    UPDATE,
     ColumnCondition,
     evaluate_match_conditions,
     parse_match_conditions,
 )
-from app.modules.schedule.domain.value_objects import DatastoreOperation
-
-
-INSERT = DatastoreOperation.INSERT
-UPDATE = DatastoreOperation.UPDATE
-DELETE = DatastoreOperation.DELETE
 
 
 def match(when, *, operation, payload, changed=None, previous=None) -> bool:

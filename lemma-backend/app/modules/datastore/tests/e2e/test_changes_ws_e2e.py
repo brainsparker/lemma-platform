@@ -1,8 +1,10 @@
-"""E2E tests for the datastore changes websocket.
+"""E2E tests for the previous change socket, now a shim on the pod hub.
 
 Drives ``/pods/{pod_id}/datastore/changes`` over a raw ASGI websocket
-(``ApplicationCommunicator``) and asserts the live record-change stream, table
-filtering, RLS per-user row scoping, and auth rejection.
+(``ApplicationCommunicator``) and asserts what a client built against the
+previous SDK relies on: the record-change frames, table filtering, RLS per-user
+row scoping, resume by ``stream_id``, and auth rejection. The pod live socket
+that replaced it is covered by ``test_live_ws_e2e.py``.
 """
 
 from __future__ import annotations
@@ -15,9 +17,17 @@ import pytest
 import pytest_asyncio
 from asgiref.testing import ApplicationCommunicator
 
+from app.modules.datastore.changes.gate import reset_change_log_gate
+from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
 
-pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("datastore_outbox_dispatcher")]
+pytestmark = [pytest.mark.e2e]
+
+
+@pytest.fixture(autouse=True)
+def _change_log_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(datastore_settings, "datastore_change_log_mode", "on")
+    reset_change_log_gate()
 
 
 def _ws_communicator(

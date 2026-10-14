@@ -81,6 +81,9 @@ DEFAULT_RATES: Mapping[str, Rate] = MappingProxyType(
         # the ceiling past which a trigger pauses itself (schedule module), kept
         # here so the same override seam reaches it.
         "trigger_fire_day": Rate(2000, 86400),
+        # Webhook deliveries per MCP event subscription (keyed by its id): a
+        # bulk write reaches the receiver at this pace instead of in one burst.
+        "mcp_delivery": Rate(120, 60),
     }
 )
 

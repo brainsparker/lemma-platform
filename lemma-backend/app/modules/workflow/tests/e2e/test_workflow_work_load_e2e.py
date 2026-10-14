@@ -7,14 +7,14 @@ the worker's own dispatch loops, its own sized pool -- runs everything.
 
 Measured, and printed as one JSON line (``WORKFLOW_LOAD_RESULT``): runs per
 second, per-step latency percentiles, end-to-end run latency, and the peak
-number of database connections. Sized by ``WORKFLOW_LOAD_RUNS`` and
+number of database connections -- the runtime's own (held to its budget) and
+the whole database's. Sized by ``WORKFLOW_LOAD_RUNS`` and
 ``WORKFLOW_LOAD_PODS``; the default is small enough for the protected lane, and
 ``WORKFLOW_LOAD_RUNS=10000 WORKFLOW_LOAD_PODS=100`` is the full measurement.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import time
@@ -36,6 +36,7 @@ from app.modules.workflow.tests.e2e.workflow_work_support import (
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 RUNS = int(os.environ.get("WORKFLOW_LOAD_RUNS", "400"))
+RUNTIME_APP = "lemma-work-load-runtime"
 PODS = int(os.environ.get("WORKFLOW_LOAD_PODS", "8"))
 
 THREE_STEPS_EDGES = [
@@ -160,8 +161,14 @@ async def test_thousands_of_three_step_runs_across_pods(
             )
 
         budget = DbBudget.from_settings(CLASSES)
+        # Named, so the runtime's connections can be told apart from the
+        # harness's own (the callback settler stands in for the API and uses
+        # the test's pool), autovacuum and the probe itself.
         engine = create_async_engine(
-            e2e_settings.database_url, pool_size=budget.total, max_overflow=0
+            e2e_settings.database_url,
+            pool_size=budget.total,
+            max_overflow=0,
+            connect_args={"server_settings": {"application_name": RUNTIME_APP}},
         )
         runtime = WorkRuntime(
             async_sessionmaker(engine, expire_on_commit=False),
@@ -169,40 +176,43 @@ async def test_thousands_of_three_step_runs_across_pods(
             registry=flows.registry,
             budget=budget,
         )
-        peak_connections = 0
-        sampling = True
+        peak_runtime = peak_database = 0
 
-        async def sample() -> None:
-            nonlocal peak_connections
-            while sampling:
-                count = await flows.scalar(
-                    "SELECT count(*) FROM pg_stat_activity "
-                    "WHERE datname = current_database()"
-                )
-                peak_connections = max(peak_connections, int(count))  # type: ignore[arg-type]
-                await asyncio.sleep(0.5)
+        async def completed() -> int:
+            # Sampled on each probe: the peaks are what was held while the
+            # burst ran, not a timing measurement.
+            nonlocal peak_runtime, peak_database
+            counts = await flows.scalar(
+                "SELECT json_build_object('runtime', "
+                "count(*) FILTER (WHERE application_name = :app), "
+                "'database', count(*)) FROM pg_stat_activity "
+                "WHERE datname = current_database()",
+                app=RUNTIME_APP,
+            )
+            assert isinstance(counts, dict)
+            peak_runtime = max(peak_runtime, int(counts["runtime"]))
+            peak_database = max(peak_database, int(counts["database"]))
+            done = await flows.scalar(
+                "SELECT count(*) FROM workflow_flow_runs WHERE status = 'COMPLETED'"
+            )
+            return int(done)  # type: ignore[arg-type]
 
         await _enqueue_starts(flows, flows_by_pod)
         total = (RUNS // PODS) * PODS
-        sampler = asyncio.create_task(sample())
         began = time.monotonic()
         await runtime.start()
         try:
             await eventually(
                 label="every run completed",
-                probe=lambda: flows.scalar(
-                    "SELECT count(*) FROM workflow_flow_runs WHERE status = 'COMPLETED'"
-                ),
-                done=lambda n: int(n) >= total,  # type: ignore[call-overload]
+                probe=completed,
+                done=lambda n: n >= total,
                 timeout_seconds=max(600, total / 5),
-                interval_seconds=1.0,
+                interval_seconds=0.5,
                 fail_fast=lambda _: None,
             )
             elapsed = time.monotonic() - began
         finally:
-            sampling = False
             await runtime.stop()
-            await sampler
             await engine.dispose()
 
         steps = {
@@ -234,12 +244,16 @@ async def test_thousands_of_three_step_runs_across_pods(
             "step_latency_seconds": steps,
             "run_latency_seconds": runs,
             "runtime_pool": budget.total,
-            "peak_db_connections": peak_connections,
+            "peak_runtime_connections": peak_runtime,
+            # Everything on the database: the runtime, the harness's pool (the
+            # callback settler and these probes), autovacuum.
+            "peak_db_connections": peak_database,
             "not_completed": failed,
             "dead_items": dead,
             "function_invocations": flows.runtime.invocations.total(),
         }
         print("WORKFLOW_LOAD_RESULT " + json.dumps(result))
+        assert 0 < peak_runtime <= budget.total, result
         assert failed == 0
         assert dead == 0
         assert flows.runtime.invocations.total() == total

@@ -43,7 +43,10 @@ from app.modules.workflow.infrastructure.repositories import (
     SqlAlchemyWorkflowRunRepository,
     SqlAlchemyWorkflowRunWaitRepository,
 )
-from app.modules.workflow.infrastructure.run_channel import publish_run_state
+from app.modules.workflow.infrastructure.run_channel import (
+    publish_run_state,
+    run_is_watched,
+)
 
 logger = get_logger(__name__)
 
@@ -102,6 +105,8 @@ class RunPublication:
         # already committed, so a failure to *tell anyone* cannot be allowed to
         # turn a successful advance into a raised exception. Clients still poll.
         try:
+            if not await run_is_watched(run.id):
+                return
             wait = await self.wait_repo.get_active_for_run(run.id)
             title = await self.flow_repo.run_title_of(run.flow_id)
             payload = run_response_from_domain(run, wait, title).model_dump(mode="json")

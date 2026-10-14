@@ -22,7 +22,7 @@ from app.modules.test_support.e2e.waiters import eventually
 from app.modules.workflow.tests.e2e.test_workflow_work_e2e import FORM_SCHEMA
 from app.modules.workflow.tests.e2e.workflow_work_support import FlowWork, flow_work
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 
 def _seed_statements() -> list[str]:

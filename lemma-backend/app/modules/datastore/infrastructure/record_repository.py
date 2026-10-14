@@ -60,6 +60,8 @@ from app.modules.datastore.infrastructure.transactional_events import (
     ensure_datastore_event_outbox,
     stage_domain_events,
 )
+from app.modules.datastore.infrastructure import record_logged_writes as logged
+from app.modules.datastore.changes.capture import ChangeCapture
 
 logger = get_logger(__name__)
 
@@ -211,13 +213,23 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         *,
         event_factory: RecordEventFactory | None = None,
         existing_on_conflict: bool = False,
+        changes: ChangeCapture | None = None,
     ) -> RecordEntity:
         """Insert one row; ``existing_on_conflict`` returns the row a repeat hits.
 
         With it, a create whose primary key is already taken is not an error:
         it is the same create again (``services/record_idempotency``), and the
-        stored row comes back with no second change event.
+        stored row comes back with no second change.
         """
+        if changes is not None:
+            return await logged.create_logged(
+                self,
+                ctx,
+                data,
+                user_id,
+                changes,
+                existing_on_conflict=existing_on_conflict,
+            )
         converted_data = convert_record(ctx.columns, data, skip_auto=False)
         if event_factory is not None:
             await ensure_datastore_event_outbox()
@@ -281,7 +293,12 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         *,
         event_factory: RecordEventFactory | None = None,
+        changes: ChangeCapture | None = None,
     ) -> int:
+        if changes is not None:
+            return await logged.bulk_write_logged(
+                self, ctx, records, user_id, changes, upsert=False
+            )
         return await self._bulk_write_records(
             ctx, records, user_id, upsert=False, event_factory=event_factory
         )
@@ -293,7 +310,12 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         *,
         event_factory: RecordEventFactory | None = None,
+        changes: ChangeCapture | None = None,
     ) -> int:
+        if changes is not None:
+            return await logged.bulk_write_logged(
+                self, ctx, records, user_id, changes, upsert=True
+            )
         return await self._bulk_write_records(
             ctx, records, user_id, upsert=True, event_factory=event_factory
         )
@@ -454,7 +476,19 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         enforce_user_scope: bool = True,
         event_factory: RecordEventFactory | None = None,
         expected_updated_at: datetime | None = None,
+        changes: ChangeCapture | None = None,
     ) -> RecordEntity:
+        if changes is not None:
+            return await logged.update_logged(
+                self,
+                ctx,
+                record_id,
+                data,
+                user_id,
+                changes,
+                enforce_user_scope=enforce_user_scope,
+                expected_updated_at=expected_updated_at,
+            )
         if event_factory is not None:
             await ensure_datastore_event_outbox()
         parsed_id = ctx.parse_primary_key(record_id)
@@ -538,7 +572,17 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         *,
         enforce_user_scope: bool = True,
         event_factory: RecordEventFactory | None = None,
+        changes: ChangeCapture | None = None,
     ) -> RecordEntity:
+        if changes is not None:
+            return await logged.delete_logged(
+                self,
+                ctx,
+                record_id,
+                user_id,
+                changes,
+                enforce_user_scope=enforce_user_scope,
+            )
         if event_factory is not None:
             await ensure_datastore_event_outbox()
         parsed_id = ctx.parse_primary_key(record_id)

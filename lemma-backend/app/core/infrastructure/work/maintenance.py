@@ -10,7 +10,6 @@ repaired on a timer, for namespaces that have queued work.
 
 from __future__ import annotations
 
-import json
 from datetime import timedelta
 
 from pydantic import BaseModel
@@ -88,7 +87,10 @@ async def refresh_queues(
         limits_now = await limits.limits_for(row.ns)
         cap = limits_now.cap(cls)
         rates = rates_json(limits_now.rates)
-        if cap != row.max_running or json.loads(rates) != row.rates:
+        # Compared as the stored object rather than by parsing `rates` back:
+        # same values, no JSON work per queue on the loop.
+        stored = {name: rate.as_json() for name, rate in limits_now.rates.items()}
+        if cap != row.max_running or stored != row.rates:
             await session.execute(
                 _SET_LIMITS,
                 {"cap": cap, "rates": rates, "cls": cls.value, "ns": row.ns},

@@ -21,9 +21,10 @@ import signal
 import socket
 import subprocess
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from uuid import UUID
 
 import pypdfium2 as pdfium
@@ -40,11 +41,12 @@ from app.core.infrastructure.work import (
     WorkRegistry,
     WorkWriter,
 )
-from app.core.infrastructure.work.testing import run_until_idle
+from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.events.storage_work import (
     PARENT_BACKFILL,
     STORAGE_COPY,
+    STORAGE_RELEASE,
     register_storage_work,
 )
 from app.modules.datastore.infrastructure.kreuzberg_circuit import (
@@ -67,7 +69,7 @@ from app.modules.datastore.tests.e2e.harness import (
 )
 from app.modules.test_support.e2e.waiters import eventually
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 _PDF = "application/pdf"
 
@@ -630,6 +632,29 @@ async def _scope_cache_keys(pod_id: str) -> list[str]:
     ]
 
 
+def _admin_runner(file_work: FileWork) -> Callable[..., Awaitable[None]]:
+    registry = WorkRegistry()
+    register_storage_work(registry)
+
+    async def run(kind: str | None = None, *, due: str | None = None) -> None:
+        if kind is not None:
+            async with file_work.session_maker() as session:
+                await WorkWriter(session, registry=registry).add(kind, SYSTEM_NAMESPACE)
+                await session.commit()
+        if due is not None:
+            assert await make_due(file_work.session_maker, kind=due)
+        await run_until_idle(
+            file_work.session_maker, registry=registry, classes=[WorkClass.ADMIN]
+        )
+
+    return run
+
+
+async def _fetch_signed(pod_api: DatastoreApi, url: str):
+    token = parse_qs(urlparse(url).query)["token"][0]
+    return await pod_api.client.get("/public/datastore/files", params={"token": token})
+
+
 async def test_the_backfills_fill_parents_and_move_bytes_to_the_object_layout(
     pod_api: DatastoreApi, file_work: FileWork, monkeypatch
 ) -> None:
@@ -640,16 +665,7 @@ async def test_the_backfills_fill_parents_and_move_bytes_to_the_object_layout(
     assert folder_id is not None
     # Rows written before the column existed.
     await file_work.execute("UPDATE datastore_files SET parent_id = NULL")
-    registry = WorkRegistry()
-    register_storage_work(registry)
-
-    async def run(kind: str) -> None:
-        async with file_work.session_maker() as session:
-            await WorkWriter(session, registry=registry).add(kind, SYSTEM_NAMESPACE)
-            await session.commit()
-        await run_until_idle(
-            file_work.session_maker, registry=registry, classes=[WorkClass.ADMIN]
-        )
+    run = _admin_runner(file_work)
 
     await run(PARENT_BACKFILL)
     assert (await file_work.row(document["id"]))["parent_id"] == folder_id
@@ -661,15 +677,60 @@ async def test_the_backfills_fill_parents_and_move_bytes_to_the_object_layout(
     await run(STORAGE_COPY)  # the switch is off: nothing moves
     assert (await file_work.row(document["id"]))["storage_layout"] == "path"
 
+    # A link handed out before the copy names the path key.
+    minted = (await pod_api.file_url("/old/kept.pdf"))["url"]
+
     monkeypatch.setattr(datastore_settings, "datastore_object_storage_layout", True)
     await run(STORAGE_COPY)
 
     assert (await file_work.row(document["id"]))["storage_layout"] == "object"
     moved = root / f"objects/{document['id']}/{row['content_sha256']}"
-    assert (moved / "content").read_bytes() == await pod_api.download_file(
-        "/old/kept.pdf"
-    )
+    original = await pod_api.download_file("/old/kept.pdf")
+    assert (moved / "content").read_bytes() == original
     assert any((moved / "derived").iterdir())
-    assert not legacy.exists()
     hits = await pod_api.search_files("Deterministic extracted", scope_path="/old")
     assert [hit["file_id"] for hit in hits["items"]] == [document["id"]]
+
+    # The old keys outlive every link that could name them: the link minted
+    # before the copy still serves the file.
+    response = await _fetch_signed(pod_api, minted)
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.content == original
+    assert legacy.exists()
+
+    # Once those links have expired, the release drops the old keys.
+    await run(due=STORAGE_RELEASE)
+    assert not legacy.exists()
+    assert not (root / "files/old/kept.pdf").exists()
+    assert await pod_api.download_file("/old/kept.pdf") == original
+    assert await file_work.queued() == 0
+
+
+async def test_the_release_keeps_old_keys_a_path_layout_file_has_taken_over(
+    pod_api: DatastoreApi, file_work: FileWork, monkeypatch
+) -> None:
+    """The delay is long enough for the path to be written again, with the
+    switch off, by another file -- whose bytes are then at those keys."""
+    document = await _upload_pdf(pod_api, "reused.pdf", "first edition")
+    await file_work.drain()
+    run = _admin_runner(file_work)
+    monkeypatch.setattr(datastore_settings, "datastore_object_storage_layout", True)
+    await run(STORAGE_COPY)
+    assert (await file_work.row(document["id"]))["storage_layout"] == "object"
+
+    await pod_api.update_file("/reused.pdf", new_path="/moved.pdf")
+    monkeypatch.setattr(datastore_settings, "datastore_object_storage_layout", False)
+    replacement = _pdf("second edition")
+    await pod_api.upload_file("reused.pdf", replacement, content_type=_PDF)
+    await file_work.drain()
+    legacy = (
+        local_object_storage_path("datastore")
+        / f"pods/{pod_api.pod_id}/files/reused.pdf"
+    )
+    assert legacy.read_bytes() == replacement
+
+    await run(due=STORAGE_RELEASE)
+
+    assert legacy.read_bytes() == replacement
+    assert await pod_api.download_file("/reused.pdf") == replacement
+    assert await pod_api.download_file("/moved.pdf") != replacement

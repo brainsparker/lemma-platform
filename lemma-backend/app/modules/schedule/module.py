@@ -53,15 +53,10 @@ def _routers():
     return [schedule, events, webhook]
 
 
-def _event_routers():
-    from app.modules.schedule.handlers import datastore_consumer
-
-    return [datastore_consumer.router]
-
-
 def _register_work() -> None:
     # Every process: a pod deletion (API) writes this through `PodDeleted`.
     import app.modules.schedule.events.pod_deleted_work  # noqa: F401
+    import app.modules.schedule.events.trigger_defaults_work  # noqa: F401
 
     # Every process: the API arms TIME fires and fires webhooks inline, the
     # worker runs them.
@@ -70,6 +65,10 @@ def _register_work() -> None:
     # Every process: an agent run that ends (worker, or a stop in the API)
     # writes this through `AgentRunFinished`.
     import app.modules.schedule.work.agent_outcome  # noqa: F401
+
+    # Every process: DATASTORE triggers are change-log subscribers; the
+    # worker's `changes.*` items find them by prefix.
+    import app.modules.schedule.services.datastore_event_handler  # noqa: F401
 
 
 def _register_periodic_work() -> None:
@@ -107,9 +106,7 @@ module = LemmaModule(
     name="schedule",
     resource_names=_resource_names,
     routers=_routers,
-    event_routers=_event_routers,
     register_periodic_work=_register_periodic_work,
     register_work=_register_work,
     worker_lifespans=(_reconcile_failure_breakers,),
-    stream_groups=(("datastore.events", "schedule-datastore-events"),),
 )

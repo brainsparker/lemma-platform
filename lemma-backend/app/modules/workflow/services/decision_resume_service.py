@@ -40,6 +40,7 @@ from app.modules.workflow.domain.run import WorkflowRunStatus
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.domain.workflow import WorkflowEntity
 from app.modules.workflow.execution.engine import WorkflowEngine
+from app.modules.workflow.execution.resume_target import ResumeTarget
 
 _LIVE = (WorkflowRunStatus.RUNNING, WorkflowRunStatus.WAITING)
 _DECISION = WorkflowRunWaitType.DECISION
@@ -119,7 +120,7 @@ class DecisionResumeService:
             )
             return True
         output["route"] = route.next_node_id
-        run = await self._engine.run_repo.get(wait.run_id)
+        run = await self._engine.run_repo.get_for_update(wait.run_id)
         if run is None:
             return False
         ctx = await self._user_context(run.user_id, run.pod_id)
@@ -131,6 +132,7 @@ class DecisionResumeService:
                 output,
                 ctx=ctx,
                 next_node_id=route.next_node_id,
+                found=ResumeTarget(wait=wait, locked_run=run, flow=flow),
             )
         finally:
             reset_current_context(token)

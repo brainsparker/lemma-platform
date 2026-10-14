@@ -58,6 +58,7 @@ from app.modules.agent.domain.prompts import (
     load_pod_prompt,
     load_skills_prompt,
     load_speech_prompt,
+    load_subagents_prompt,
     load_web_search_prompt,
     load_user_interaction_prompt,
     load_workspace_cli_prompt,
@@ -72,6 +73,7 @@ from app.modules.agent.tools.user_interaction.pydantic_adapter import (
 )
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
+from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
 from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
@@ -104,6 +106,10 @@ _INSTRUCTED_TOOLSETS: tuple[tuple[object, str, Callable[[], str]], ...] = (
     # `pod_*` sits behind a search with a one-line hint. Runs that never thought
     # to search did every read through the CLI. The fragment names the default.
     (pod_toolset, "pod", load_pod_prompt),
+    # Deferred for the pod default assistant. The hint names the three tools;
+    # it cannot say that the cheap way to collect a child is `wait_for` and
+    # ending the turn, not blocking in `interact_subagent`.
+    (subagents_toolset, "subagents", load_subagents_prompt),
 )
 
 

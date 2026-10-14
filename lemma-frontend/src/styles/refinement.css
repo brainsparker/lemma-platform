@@ -1412,6 +1412,17 @@ button svg, a svg { flex-shrink:0; }
     font-size:11.5px;line-height:1.5;color:var(--wait);
 }
 .pick__note > svg { flex:none;margin-top:2px; }
+/* A coding agent's options under the model it runs — effort first. Small and
+   inline, because they adjust the pick above them rather than being one. */
+.agentopts { display:flex;flex-wrap:wrap;gap:8px 16px;margin:10px 0 0; }
+.agentopts label { display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-3); }
+.agentopts select {
+    font:inherit;font-size:12.5px;color:var(--ink);cursor:pointer;
+    background:var(--paper);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:4px 8px;
+}
+.agentopts select:hover:not(:disabled) { border-color:var(--ink-3); }
+.agentopts select:disabled { cursor:default;color:var(--ink-3); }
+.agentopts--group { margin:0;padding:10px 16px;border-top:1px solid var(--line); }
 
 .pick__menu {
     position:absolute;top:calc(100% + 6px);left:0;z-index:60;

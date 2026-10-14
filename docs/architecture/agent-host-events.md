@@ -54,7 +54,7 @@ de-duplication are described in [agent-host.md](agent-host.md#the-link).
 | `tool_call_result` | call id | [tool result](#tool-results) | `MESSAGE` tool return |
 | `usage` | none | [token usage](#usage) | `USAGE` |
 | `session_update` | none | `title`, `mode`, `commands`, `context` | `STATUS` |
-| `config_update` | none | `kind` plus detail | `STATUS` |
+| `config_update` | none | `kind` or `status`, `detail`, `option` | `STATUS`, flat: `{status: "config_update", notice, detail, option?}` — `detail` is always the sentence |
 | `permission_request` | request id | [permission](#permission-requests) | `request_approval` call |
 | `steer_result` | Lemma message id | [steering](#steering) | marks the message delivered (no message) |
 | `terminal` | none | `state`, `error`, `supersedes_stream` | run end |

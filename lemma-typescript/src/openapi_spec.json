@@ -1283,6 +1283,20 @@
       "AgentRuntimeConfig": {
         "description": "Select an agent runtime profile, an optional catalog model, and how it generates.",
         "properties": {
+          "config_selections": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Selections"
+          },
           "model_name": {
             "anyOf": [
               {

@@ -773,10 +773,17 @@ def _instrument_libraries() -> None:
     from opentelemetry.instrumentation.aiohttp_client import (
         AioHttpClientInstrumentor,
     )
-    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    from opentelemetry.instrumentation.httpx import (
+        HTTPX2ClientInstrumentor,
+        HTTPXClientInstrumentor,
+    )
 
     AioHttpClientInstrumentor().instrument()
     HTTPXClientInstrumentor().instrument()
+    # A separate package, not a newer httpx: instrumenting httpx does not
+    # reach it. The model provider SDKs are built on httpx2, so without this
+    # every model request ran with no client span of its own.
+    HTTPX2ClientInstrumentor().instrument()
     _libraries_instrumented = True
 
 

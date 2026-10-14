@@ -11,12 +11,14 @@ changes.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import AgentEvent
 from app.modules.agent.infrastructure.agent_host.recovery import BusyHost
 from app.modules.agent.infrastructure.harnesses.agent_host.event_text import (
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
         AgentHostDispatchRepository,
     )
 
+logger = get_logger(__name__)
+
 
 @dataclass(slots=True)
 class SlotWait:
@@ -37,6 +41,9 @@ class SlotWait:
     wait_seconds: int
     #: The busy computer the conversation was last told about.
     waiting_on: BusyHost | None = None
+    #: When this run began waiting on a full computer, for the log that says
+    #: how long it waited: nothing else records it.
+    waiting_since: float | None = None
 
     async def check(
         self,
@@ -56,10 +63,24 @@ class SlotWait:
             )
             await uow.commit()
         if busy is None:
+            if self.waiting_since is not None:
+                logger.info(
+                    "agent.agent_host.run.slot_wait_ended",
+                    agent_run_id=str(agent_run_id),
+                    waited_seconds=round(time.monotonic() - self.waiting_since, 1),
+                )
             self.waiting_on = None
+            self.waiting_since = None
             return False, None
         if busy == self.waiting_on:
             return True, None
+        if self.waiting_since is None:
+            self.waiting_since = time.monotonic()
+            logger.info(
+                "agent.agent_host.run.waiting_for_slot",
+                agent_run_id=str(agent_run_id),
+                active_runs=busy.active_runs,
+            )
         self.waiting_on = busy
         return True, waiting_for_slot_event(
             agent_run_id, host_name=busy.name, active_runs=busy.active_runs

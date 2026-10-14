@@ -728,3 +728,10 @@ export interface OpenSignIn {
     toolCallId?: string;
     card: SignInAsk;
 }
+
+/** The message a run's activity would change: the newest one. Loading older
+ *  history adds messages without the run doing anything, so a notice keyed on
+ *  this survives it, where one keyed on the count would be cleared. */
+export function newestMessageId(messages: readonly { id: string }[]): string | null {
+    return messages.at(-1)?.id ?? null;
+}

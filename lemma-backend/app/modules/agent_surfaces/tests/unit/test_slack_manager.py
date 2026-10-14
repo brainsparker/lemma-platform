@@ -293,6 +293,26 @@ async def test_the_channel_picker_names_each_teammate_on_its_button():
     assert len({button["action_id"] for button in buttons}) == 2
 
 
+async def test_a_roster_that_leaves_teammates_off_says_how_many():
+    home = views.roster_home(
+        team_name="Acme",
+        teammates=[views.RosterEntry(pod_id="p1", name="Ada")],
+        lemma_url="https://lemma.test",
+        more=3,
+    )
+    assert "3 more teammates are in Lemma." in str(home["blocks"])
+
+
+async def test_a_long_picker_fits_slacks_rows_and_says_who_it_left_off():
+    teammates = [(f"s{i}", f"Mate {i}") for i in range(103)]
+    _, blocks = views.channel_picker(channel_id="C1", teammates=teammates)
+    rows = [block for block in blocks if block["type"] == "actions"]
+    assert all(len(row["elements"]) <= 25 for row in rows)
+    action_ids = [button["action_id"] for row in rows for button in row["elements"]]
+    assert len(action_ids) == len(set(action_ids)) == 100
+    assert "3 more aren't listed" in str(blocks[-1])
+
+
 async def test_with_nobody_in_slack_the_picker_says_where_to_add_one():
     text, blocks = views.channel_picker(channel_id="C1", teammates=[])
     assert "Home tab" in text and len(blocks) == 1

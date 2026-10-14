@@ -157,13 +157,15 @@ async def show_home(uow: SqlAlchemyUnitOfWork, ctx: ManagerContext) -> None:
             link_url=person_link_url(ctx.team_id, ctx.slack_user_id),
         )
     else:
-        roster = [
-            await _roster_entry(uow, ctx, mate) for mate in await teammates(uow, ctx)
-        ]
+        mates = await teammates(uow, ctx)
+        # Credentials only for the teammates the Home shows: each is its own
+        # app, so each is its own read.
+        shown = mates[: views.ROSTER_SHOWN]
         view = views.roster_home(
             team_name=ctx.install.team_name,
-            teammates=roster,
+            teammates=[await _roster_entry(uow, ctx, mate) for mate in shown],
             lemma_url=settings.frontend_url,
+            more=len(mates) - len(shown),
         )
     async with connection_released(uow.session):
         await slack.publish_home(ctx.credentials, user_id=ctx.slack_user_id, view=view)

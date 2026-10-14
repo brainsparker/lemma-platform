@@ -23,6 +23,13 @@ JOIN_ACTION_ID = "lemma_mgr_join"
 LINK_ACTION_ID = "lemma_mgr_link"
 ADD_VIEW_CALLBACK_ID = "lemma_mgr_add_view"
 
+#: Teammates a Home lists before pointing at Lemma for the rest; a Home holds
+#: 100 blocks and each teammate is one.
+ROSTER_SHOWN = 40
+#: Teammates a channel hand-off offers: four rows of Slack's 25 per actions block.
+_PICKER_SHOWN = 100
+_BUTTONS_PER_ROW = 25
+
 TOKEN_BLOCK_ID = "lemma_mgr_token"
 CLIENT_ID_BLOCK_ID = "lemma_mgr_client_id"
 CLIENT_SECRET_BLOCK_ID = "lemma_mgr_client_secret"
@@ -121,8 +128,13 @@ def roster_home(
     team_name: str | None,
     teammates: Sequence[RosterEntry],
     lemma_url: str,
+    more: int = 0,
 ) -> dict[str, object]:
-    """The roster: who answers here, and an "Add to Slack" for who does not."""
+    """The roster: who answers here, and an "Add to Slack" for who does not.
+
+    ``teammates`` is at most :data:`ROSTER_SHOWN`; ``more`` is how many the
+    caller left off, so the Home can say so rather than quietly end.
+    """
     blocks: list[dict[str, object]] = [
         {
             "type": "header",
@@ -144,7 +156,7 @@ def roster_home(
                 "text": _text("You're not on any teammate yet. Hire one in Lemma."),
             }
         )
-    for teammate in teammates[:40]:
+    for teammate in teammates[:ROSTER_SHOWN]:
         if teammate.bot_user_id:
             status = f"In Slack as <@{teammate.bot_user_id}>"
             accessory = (
@@ -165,6 +177,13 @@ def roster_home(
         if accessory:
             section["accessory"] = accessory
         blocks.append(section)
+    if more > 0:
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [_text(f"{more} more teammates are in Lemma.")],
+            }
+        )
     blocks += [
         {"type": "divider"},
         {"type": "actions", "elements": [_url_button("Open Lemma", lemma_url)]},
@@ -329,16 +348,34 @@ def channel_picker(
         {
             "type": "button",
             "text": _plain(name[:75]),
-            # Unique per button, as Slack requires within one actions block.
+            # Unique per button, as Slack requires within one message.
             "action_id": f"{JOIN_ACTION_ID}:{index}",
             "value": json.dumps({"channel": channel_id, "surface": surface_id}),
         }
-        for index, (surface_id, name) in enumerate(teammates[:20])
+        for index, (surface_id, name) in enumerate(teammates[:_PICKER_SHOWN])
     ]
-    return text, [
-        {"type": "section", "text": _text(f"{text} Pick one and I'll step out.")},
-        {"type": "actions", "elements": buttons},
+    blocks: list[dict[str, object]] = [
+        {"type": "section", "text": _text(f"{text} Pick one and I'll step out.")}
     ]
+    # An actions block holds 25 elements, so the buttons go in rows of it.
+    blocks += [
+        {"type": "actions", "elements": buttons[start : start + _BUTTONS_PER_ROW]}
+        for start in range(0, len(buttons), _BUTTONS_PER_ROW)
+    ]
+    if len(teammates) > _PICKER_SHOWN:
+        hidden = len(teammates) - _PICKER_SHOWN
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [
+                    _text(
+                        f"{hidden} more aren't listed. Invite one by name with "
+                        "`/invite @name` instead."
+                    )
+                ],
+            }
+        )
+    return text, blocks
 
 
 def handed_over(

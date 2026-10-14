@@ -21,23 +21,29 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
-from app.modules.agent.domain.value_objects import HarnessKind
+from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.private_notes import keeper_started, run_is_private
+from app.modules.agent.domain.run_context_prompt import (
+    render_run_context,
+    task_list_section,
+)
+from app.modules.agent.capabilities.open_notifications import open_notification_text
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.attached_document_brief import (
     build_attached_document_section,
 )
 from app.modules.agent.services.outsider_brief import outsider_brief
+from app.modules.agent.services.link_brief import link_brief
 from app.modules.agent.services.brief_lines import run_source_of
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.services.surface_context import (
     surface_context_from_conversation,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     has_recorded_cwd,
     pod_cwd_from_workspace_cwd,
     resolve_workspace_location,
@@ -67,14 +73,12 @@ async def build_run_context(
     user_id: UUID,
     resolved_runtime: Any,
     runtime_profile_snapshot: dict[str, object | None] | None,
-    runtime_credentials: dict[str, Any],
     resolve_configured_accounts: Any,
 ) -> ConversationContext:
     """The context this run's tools execute against.
 
-    `runtime_profile_snapshot` and `runtime_credentials` are passed in rather
-    than recomputed: the caller needs the same snapshot for the run identity and
-    the harness options, and two calls to `public_snapshot()` would be two
+    `runtime_profile_snapshot` is passed in rather than recomputed: the caller needs the same snapshot for the run identity and
+    the harness options, and two calls to `runtime_snapshot()` would be two
     objects that only happen to agree.
     """
     surface_context = surface_context_from_conversation(conversation)
@@ -101,7 +105,8 @@ async def build_run_context(
     # can reuse it instead of reading the same grants again.
     grant_summary = await load_agent_grant_summary(uow_factory, agent=agent)
     run_toolsets, _ = resolve_toolset_names(agent, conversation, grants=grant_summary)
-    for_outsider = answers_outsiders(conversation)
+    audience = Audience.of(conversation)
+    for_outsider = audience.answers_outsiders
     ctx = ConversationContext(
         user_id=user_id,
         org_id=conversation.organization_id,
@@ -119,7 +124,6 @@ async def build_run_context(
             else await resolve_configured_accounts(agent=agent, user_id=user_id)
         ),
         runtime_profile=runtime_profile_snapshot,
-        runtime_credentials=runtime_credentials,
         workspace_id=workspace_location.workspace_id,
         workspace_cwd=workspace_location.cwd,
         workspace_repo=workspace_location.repo,
@@ -131,19 +135,32 @@ async def build_run_context(
         supports_pause_signal=(resolved_runtime.harness_kind == HarnessKind.LEMMA),
         is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
         memory_enabled=memory_is_active(run_toolsets),
+        run_toolsets=run_toolsets,
+        workspace_readable=AgentToolset.WORKSPACE_CLI in run_toolsets,
         grant_summary=grant_summary,
-        answers_outsider=for_outsider,
+        audience=audience,
         delivers_to_surface=not run_is_private(agent_run.metadata),
         keeper_asking=for_outsider and keeper_started(agent_run.metadata),
         **surface_context,
     )
+    run_brief = ""
     try:
-        ctx.context_brief = (
-            await outsider_brief(
-                uow_factory, pod_id=conversation.pod_id, owner_user_id=user_id
+        if audience.asking_pod_id is not None:
+            ctx.context_brief = await link_brief(
+                uow_factory,
+                pod_id=conversation.pod_id,
+                asking_pod_id=audience.asking_pod_id,
+                steward_user_id=user_id,
             )
-            if for_outsider
-            else await AgentContextBriefBuilder(uow_factory).build(
+        elif for_outsider:
+            ctx.context_brief = await outsider_brief(
+                uow_factory,
+                pod_id=conversation.pod_id,
+                owner_user_id=user_id,
+                contact_id=audience.contact_id,
+            )
+        else:
+            brief = await AgentContextBriefBuilder(uow_factory).build(
                 agent=agent,
                 conversation=conversation,
                 toolsets=run_toolsets,
@@ -155,7 +172,7 @@ async def build_run_context(
                 # this turn.
                 run_source=run_source_of(agent_run),
             )
-        )
+            ctx.context_brief, run_brief = brief.stable, brief.per_run
     # The failures a run should survive: a denied grant, a missing file, a
     # database or storage blip. Not a TypeError -- `agent_memory_brief` says a
     # real authorization failure "should fail the brief, not hide as an empty
@@ -186,6 +203,17 @@ async def build_run_context(
             conversation_id=str(conversation.id),
             exc_info=True,
         )
+    # Never on a stranger's run: an open request is the owner's to answer.
+    if not for_outsider:
+        ctx.open_notifications = await open_notification_text(conversation.id)
+    ctx.run_context = render_run_context(
+        sections=(
+            run_brief,
+            ctx.attached_document,
+            task_list_section(conversation, toolsets=run_toolsets),
+            ctx.open_notifications,
+        )
+    )
     # How image-returning tools answer on this run. Settled before the
     # toolset is built, because the assembler needs it: `view_image` is
     # offered whenever the mode can answer at all, and withholding it on
@@ -202,7 +230,9 @@ async def build_run_context(
     # graph.
     from app.modules.agent.services.host_execution_selection import (
         choose_host_workspace,
-        host_runs_native_commands,
+    )
+    from app.modules.agent.services.host_native_commands import (
+        settle_native_commands,
     )
 
     if for_outsider:
@@ -214,5 +244,18 @@ async def build_run_context(
             conversation=conversation, agent_run=agent_run, user_id=user_id
         )
     else:
-        ctx.host_runs_native_commands = await host_runs_native_commands(conversation)
+        ctx.host_runs_native_commands = await settle_native_commands(
+            conversation=conversation,
+            agent_run=agent_run,
+            harness_id=_harness_id(runtime_profile_snapshot),
+        )
     return ctx
+
+
+def _harness_id(snapshot: dict[str, object | None] | None) -> UUID | None:
+    """The Agent Host harness a coding-agent run's profile names, if any."""
+    raw = (snapshot or {}).get("harness_id")
+    try:
+        return UUID(str(raw)) if raw else None
+    except ValueError:
+        return None

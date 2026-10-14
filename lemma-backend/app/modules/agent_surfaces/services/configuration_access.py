@@ -16,7 +16,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from aiohttp import ClientError
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.transaction_locks import connection_released
@@ -92,13 +92,7 @@ class ConfigurationAccess:
         if not self._can_resolve_configuration_actor(actor, candidates):
             return None
         first = candidates[0]
-        existing = await self.external_user_repository.get_by_identity(
-            platform=first.surface_type.value,
-            tenant_id=first.external_workspace_id,
-            external_user_id=actor,
-        )
-        if existing is not None and existing.resolved_user_id is not None:
-            return existing.resolved_user_id
+        installation_id = first.account_id or first.id
         event = ParsedInboundSurfaceEvent(
             platform=first.surface_type,
             conversation_type=ConversationType.EXTERNAL_DM,
@@ -108,6 +102,21 @@ class ConfigurationAccess:
             message_text="",
             is_dm=True,
         )
+        existing = await self.external_user_repository.get_by_identity(
+            platform=first.surface_type.value,
+            tenant_id=first.external_workspace_id,
+            external_user_id=actor,
+        )
+        if existing is not None and existing.resolved_user_id is not None:
+            # A cached answer is asked of identity resolution, not read off the
+            # row: it is what checks the user is still live, the binding has not
+            # been revoked and the match did not rest on an unverified number.
+            # The profile fetch is skipped because the cache needs none.
+            resolved = await self.identity_service.resolve(
+                event=event, installation_id=installation_id
+            )
+            if resolved.internal_user_id is not None:
+                return resolved.internal_user_id
         # Credentials are resolved first, inside the session; the profile fetch
         # that follows is an HTTP call to the platform, so the connection goes
         # back for it. Only reads have happened at this point, so the release is
@@ -118,10 +127,10 @@ class ConfigurationAccess:
                 profile = await adapter.fetch_sender_profile(
                     credentials=credentials, event=event
                 )
-        except SlackApiError, ClientError:
+        except slack_api_error(), ClientError:
             profile = None
         resolved = await self.identity_service.resolve(
-            event=event, sender_profile=profile
+            event=event, sender_profile=profile, installation_id=installation_id
         )
         return resolved.internal_user_id
 

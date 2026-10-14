@@ -86,6 +86,9 @@ class MessageReplyService:
                     wait=wait, reason=AgentWaitWakeReason.ANSWERED
                 )
 
+            # Never past a question the owner has not answered: this is news,
+            # not their answer, and starting a turn would deny the question on
+            # their behalf. It waits behind the pause and the resume carries it.
             result = await self._conversation_service().turns.start(
                 conversation,
                 user_id=conversation.user_id,
@@ -93,6 +96,7 @@ class MessageReplyService:
                 content=REPLIES_ARRIVED,
                 agent_name=None,
                 message_metadata={"source": REPLY_SOURCE},
+                supersede_pauses=False,
             )
         finally:
             reset_current_context(token)
@@ -117,7 +121,6 @@ class MessageReplyService:
 
     def _conversation_service(self):
         from app.modules.usage.contracts.execution import build_usage_service
-        from app.core.authorization.factory import create_authorization_data_service
         from app.modules.agent.infrastructure.repositories import AgentRepository
         from app.modules.agent.services.conversation_service import ConversationService
 
@@ -125,6 +128,5 @@ class MessageReplyService:
             uow=self.uow,
             conversation_repository=self.conversations,
             agent_repository=AgentRepository(self.uow),
-            authorization_service=create_authorization_data_service(self.uow),
             usage_service=build_usage_service(self.uow),
         )

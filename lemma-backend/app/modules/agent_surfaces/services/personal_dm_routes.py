@@ -15,6 +15,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
 )
+from app.modules.agent_surfaces.domain.personal_route import PersonalRouteUnavailable
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
@@ -33,10 +34,6 @@ from app.modules.agent_surfaces.services.surface_route_types import ResolvedSurf
 from app.modules.connectors.contracts.surfaces import account
 from app.modules.identity.contracts.onboarding import active_chat_user
 from app.modules.pod.contracts.agent_access import live_pod_organization_id
-
-
-class PersonalRouteUnavailable(ValueError):
-    pass
 
 
 async def validate_personal_dm_route(

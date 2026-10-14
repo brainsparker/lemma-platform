@@ -179,16 +179,6 @@ class AgentRunStatus(str, Enum):
     FAILED = "FAILED"
     STOPPED = "STOPPED"
 
-    @classmethod
-    def _missing_(cls, value: object) -> "AgentRunStatus | None":
-        if not isinstance(value, str):
-            return None
-        normalized = value.upper()
-        for member in cls:
-            if member.value == normalized:
-                return member
-        return None
-
 
 class ConversationStatus(str, Enum):
     """User-visible lifecycle for a conversation."""
@@ -199,16 +189,6 @@ class ConversationStatus(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     STOPPED = "STOPPED"
-
-    @classmethod
-    def _missing_(cls, value: object) -> "ConversationStatus | None":
-        if not isinstance(value, str):
-            return None
-        normalized = value.upper()
-        for member in cls:
-            if member.value == normalized:
-                return member
-        return None
 
 
 class AgentRunApprovalDecision(str, Enum):
@@ -248,8 +228,6 @@ class AgentRunFinishResult:
     status: AgentRunStatus
     conversation_status: ConversationStatus
     updated: bool
-    #: An already-terminal run whose conversation this call put back in step.
-    conversation_repaired: bool = False
 
 
 ACTIVE_AGENT_RUN_STATUSES = frozenset(
@@ -296,18 +274,6 @@ class MessageKind(str, Enum):
     THINKING = "THINKING"
     TOOL_CALL = "TOOL_CALL"
     TOOL_RETURN = "TOOL_RETURN"
-
-    @classmethod
-    def _missing_(cls, value: object) -> "MessageKind | None":
-        # Case-insensitive so a lowercase kind from a harness payload or a
-        # pre-migration row still resolves to the CAPS member.
-        if not isinstance(value, str):
-            return None
-        normalized = value.strip().upper()
-        for member in cls:
-            if member.value == normalized:
-                return member
-        return None
 
 
 TEXTUAL_MESSAGE_KINDS = frozenset(
@@ -530,6 +496,10 @@ class AgentEvent(BaseModel):
     data: object
     agent_run_id: UUID | None = None
     sequence: int | None = None
+    #: An ERROR's stable code and reason, recorded on the failed run beside
+    #: the sentence in ``data`` -- which is written to be read, not matched on.
+    error_code: str | None = None
+    error_reason: str | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -540,6 +510,10 @@ class AgentRunStartResult(BaseModel):
     conversation_id: UUID
     agent_run_id: UUID
     started_new_run: bool
+    #: This send was already received -- same client message id, or the same
+    #: words from the same person moments ago -- so nothing new was stored and
+    #: ``agent_run_id`` is the run already answering it.
+    deduplicated: bool = False
 
 
 def to_json_value(value: object) -> JsonValue:

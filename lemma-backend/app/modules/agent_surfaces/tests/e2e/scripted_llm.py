@@ -161,14 +161,24 @@ async def run_scripted_agent_run(
     pod_id: UUID,
     agent_name: str | None,
     script: list[ScriptTurn] | None = None,
+    expected_status: AgentRunStatus = AgentRunStatus.COMPLETED,
+    observer_class: type[
+        SurfaceAgentRunProgressObserver
+    ] = SurfaceAgentRunProgressObserver,
 ) -> None:
     """Drive the conversation's latest RUNNING agent run through the real
     ``PydanticAIHarness`` (mock-LLM mode).
+
+    ``observer_class`` is the seam for a test about the runner surviving an
+    observer that fails part-way: a subclass, constructed here like the real one.
 
     If ``script`` is given, it is (re-)written onto conversation metadata
     before driving the run. Pass it on the first call for a flat script that
     spans an initial run + its resume run(s); omit it on a resume call to keep
     reading the script already persisted from the first call.
+
+    ``expected_status`` is FAILED for a test about what a failed run tells the
+    person; everything else expects the run to complete (or pause).
     """
     if script is not None:
         await set_mock_llm_script(
@@ -201,7 +211,7 @@ async def run_scripted_agent_run(
         user_id=user_id,
         pod_id=pod_id,
         agent_name=agent_name,
-        observer=SurfaceAgentRunProgressObserver(
+        observer=observer_class(
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
             egress_factory=build_surface_egress,
         ),
@@ -213,7 +223,7 @@ async def run_scripted_agent_run(
     # A run that paused on ask_user/request_approval also ends as COMPLETED
     # (the WAITING state lives on the conversation, not the run) — so this
     # assertion holds for both a fully-finished run and a paused one.
-    assert completed.status == AgentRunStatus.COMPLETED.value
+    assert completed.status == expected_status.value
 
 
 async def process_ingress_and_run_scripted(
@@ -221,6 +231,10 @@ async def process_ingress_and_run_scripted(
     request: SurfacePlatformWebhookIngress | SurfaceDirectWebhookIngress,
     *,
     script: list[ScriptTurn] | None = None,
+    expected_status: AgentRunStatus = AgentRunStatus.COMPLETED,
+    observer_class: type[
+        SurfaceAgentRunProgressObserver
+    ] = SurfaceAgentRunProgressObserver,
 ) -> SurfaceContext:
     """Process one inbound surface event and drive the real harness.
 
@@ -255,6 +269,8 @@ async def process_ingress_and_run_scripted(
             pod_id=context.pod_id,
             agent_name=context.agent_name,
             script=script,
+            expected_status=expected_status,
+            observer_class=observer_class,
         )
     return context
 

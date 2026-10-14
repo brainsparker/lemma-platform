@@ -5,7 +5,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent_surfaces.api.schemas import SurfaceConnectionStatus
+from app.modules.agent_surfaces.domain.surface_representation import (
+    SurfaceConnectionStatus,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceConfig,

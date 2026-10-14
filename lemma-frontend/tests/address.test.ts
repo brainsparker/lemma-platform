@@ -32,9 +32,10 @@ const PLACES: [Address, string][] = [
     [at("run:run_42"), "/t/" + POD + "/run/run_42"],
     [at("workflow:budget-sign-off"), "/t/" + POD + "/workflow/budget-sign-off"],
     [at("space:groups"), "/t/" + POD + "/groups"],
+    [at("space:contacts"), "/t/" + POD + "/contacts"],
     [at("group:7f3c9a2e-4b1d-4e8a"), "/t/" + POD + "/group/7f3c9a2e-4b1d-4e8a"],
-    [at("space:settings"), "/t/" + POD + "/settings"],
     [at("space:about"), "/t/" + POD + "/about"],
+    [at("space:about", { section: "schedules" }), "/t/" + POD + "/about/schedules"],
     [at("library"), "/t/" + POD + "/library"],
     [at("history"), "/t/" + POD + "/history"],
     [at("computer"), "/t/" + POD + "/computer"],
@@ -51,6 +52,27 @@ test("every place has a URL, and every URL reads back as the place", () => {
         assert.equal(writeAddress(address), url, "writing " + (address.tabId ?? "the teammate"));
         assert.deepEqual(readAddress(url), address, "reading " + url);
     }
+});
+
+test("a link to the space's old Settings page opens the teammate's page", () => {
+    // The space's settings are sections of the teammate's page now. An address
+    // from before that opens the page carrying them, rather than falling back
+    // to wherever this teammate happened to be left.
+    assert.deepEqual(readAddress("/t/" + POD + "/settings"), at("space:about"));
+});
+
+test("a part of About is a page under it, and Back steps out to the overview", () => {
+    const overview = at("space:about");
+    const people = at("space:about", { section: "people" });
+    assert.equal(isNewPlace(overview, people), true);
+    assert.equal(isNewPlace(people, overview), true);
+    assert.equal(isNewPlace(people, at("space:about", { section: "memory" })), true);
+    // A section that moved to Settings, or one this build has never heard of,
+    // still opens About rather than nothing.
+    assert.deepEqual(readAddress("/t/" + POD + "/about/org-usage"), overview);
+    assert.deepEqual(readAddress("/t/" + POD + "/about/people/more"), at(null));
+    // The overview's address carries no section at all.
+    assert.equal("section" in readAddress("/t/" + POD + "/about"), false);
 });
 
 test("every teammate at once has an address of its own", () => {

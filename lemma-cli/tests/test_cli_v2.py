@@ -26,7 +26,7 @@ from lemma_cli.cli_core.commands import (
     system,
     workflows,
 )
-from lemma_cli.cli_core.chat import iter_sse_events
+from lemma_cli.cli_core.sse import iter_sse_events
 from lemma_cli.cli_app.pod_bundle import (
     _normalize_function_payload,
     _sanitize_function_payload_for_import,
@@ -2474,13 +2474,10 @@ def test_profile_update_dispatches_user_profile(monkeypatch):
         ],
     )
 
+    # The handle flag is still accepted, so older scripts do not break, and
+    # is not sent: a handle on a profile proves nothing.
     assert result.exit_code == 0, result.stdout
-    assert captured == {
-        "request": {
-            "mobile_number": "+15551234567",
-            "telegram_username": "surfaceuser",
-        },
-    }
+    assert captured == {"request": {"mobile_number": "+15551234567"}}
 
 
 def test_feedback_dispatches_the_tool_api(monkeypatch):

@@ -54,7 +54,7 @@ de-duplication are described in [agent-host.md](agent-host.md#the-link).
 | `tool_call_result` | call id | [tool result](#tool-results) | `MESSAGE` tool return |
 | `usage` | none | [token usage](#usage) | `USAGE` |
 | `session_update` | none | `title`, `mode`, `commands`, `context` | `STATUS` |
-| `config_update` | none | `kind` plus detail | `STATUS` |
+| `config_update` | none | `kind` or `status`, `detail`, `option` | `STATUS`, flat: `{status: "config_update", notice, detail, option?}` — `detail` is always the sentence |
 | `permission_request` | request id | [permission](#permission-requests) | `request_approval` call |
 | `steer_result` | Lemma message id | [steering](#steering) | marks the message delivered (no message) |
 | `terminal` | none | `state`, `error`, `supersedes_stream` | run end |
@@ -316,7 +316,21 @@ labels it with that option's name), and says when the request runs out. The
 host denies an unanswered request itself after 30 minutes
 (`PERMISSION_DECISION_TIMEOUT`), so a card past that point, or one whose run
 has ended, reads "Expired — the agent continued without it" instead of
-offering buttons.
+offering buttons. Lemma ends a turn parked on a request well before that, at
+its parked window (see [the link](agent-host.md#delivery)); that card stays
+open, and its decision resumes a new run instead of reaching the host.
+
+An approval given that late is carried into the resume run, so the person is
+not asked twice. The run's `START_RUN` spec lists it under `pre_approvals`
+(`approval_id`, the card's `tool_name` and `input`, and the `decision`), sent
+only to a harness that publishes the capability `pre_approval`. The first
+request in that run for exactly the same tool and input -- compared whole,
+never by prefix -- is answered on the host with the agent's own "allow once",
+and the approval is spent; a request that offers no "allow once" spends
+nothing and is asked. Denials are never carried. The host still emits the
+request, with `"pre_approved": { "approval_id": "…" }`, and the backend records
+it as a `request_approval` call already answered ("Allowed without asking
+again"), with no STATUS event, so no surface posts buttons for it.
 
 A request that gates one of Lemma's own MCP tools never reaches Lemma. The host
 answers it itself, because Lemma already authorizes those tools on every

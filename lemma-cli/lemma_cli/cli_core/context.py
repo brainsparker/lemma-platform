@@ -90,6 +90,36 @@ def selected_conversation(
     return str(value) if value else None
 
 
+def chat_conversation(
+    state: CliState, explicit: str | None = None, *, agent: str | None
+) -> str | None:
+    """The conversation a chat should post into, or None to start a new one.
+
+    Narrower than ``selected_conversation`` on purpose. ``LEMMA_CONVERSATION_ID``
+    is ambient: an agent sandbox sets it to the *calling* agent's own
+    conversation, so that read commands (``conversations get/messages/stream``)
+    can act on "this conversation" with no id. A chat is a send that starts a
+    run; posting into the caller's own conversation makes the caller answer
+    itself. `lemma chat builder -m "…"` from inside an agent did exactly that —
+    the message never reached the builder. So chat never reads the env var.
+
+    What still counts: an id typed on this command line (``--conversation`` or
+    the global ``--conversation-id``), and — only when no agent is named — the
+    default a person picked with ``lemma conversations select``. Naming an agent
+    means "talk to that agent", which a saved default for some other
+    conversation must not override.
+    """
+    runtime = (
+        state.config.get("_runtime")
+        if isinstance(state.config.get("_runtime"), dict)
+        else {}
+    )
+    value = explicit or runtime.get("conversation")
+    if not value and not agent:
+        value = _defaults(state).get("conversation_id")
+    return str(value) if value else None
+
+
 def remember_org(
     state: CliState, org_id: str, *, clear_pod: bool = False
 ) -> dict[str, Any]:

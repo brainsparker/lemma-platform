@@ -216,6 +216,45 @@ class SandboxRepository:
             .values(state=SandboxInstanceState.DESTROYED.value)
         )
 
+    async def claim_for_destroy(
+        self, sandbox_id: UUID, *, expected_epoch: int | None
+    ) -> SandboxInstance | None:
+        """The instance a destroy may act on; with an epoch, claimed atomically.
+
+        Without ``expected_epoch`` this is the current instance, unchanged.
+
+        With one, it is a compare-and-set: the instance is marked DESTROYED
+        only if it is still the sandbox's current one, at that epoch, and not
+        already destroyed -- in one statement, so two callers holding the same
+        stale handle cannot both win, and a caller whose handle predates a
+        replacement claims nothing. Returns None when the claim fails.
+
+        Marked before the provider call rather than after, unlike the
+        unconditional path, because the mark *is* the claim. A provider call
+        that then fails leaves a container behind a DESTROYED row; the next
+        ensure inspects the name and adopts it if it is still there.
+        """
+        if expected_epoch is None:
+            return await self.current_instance(sandbox_id)
+        current_epoch = (
+            select(SandboxModel.epoch)
+            .where(SandboxModel.id == sandbox_id)
+            .scalar_subquery()
+        )
+        result = await self.session.execute(
+            update(SandboxInstanceModel)
+            .where(
+                SandboxInstanceModel.sandbox_id == sandbox_id,
+                SandboxInstanceModel.epoch == expected_epoch,
+                SandboxInstanceModel.epoch == current_epoch,
+                SandboxInstanceModel.state != SandboxInstanceState.DESTROYED.value,
+            )
+            .values(state=SandboxInstanceState.DESTROYED.value)
+            .returning(SandboxInstanceModel)
+        )
+        row = result.scalar_one_or_none()
+        return row.to_entity() if row is not None else None
+
     async def current_instance(self, sandbox_id: UUID) -> SandboxInstance | None:
         """The instance at the sandbox's current epoch, whatever its state."""
 

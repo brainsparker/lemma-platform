@@ -134,7 +134,7 @@ async def test_an_outsider_sees_no_notifications(world, team):
     outsider = await world.person("hannah")
 
     response = await outsider.api.call("GET", f"/pods/{pod['id']}/notifications")
-    assert response.status_code >= 400, (
+    assert response.status_code == 403, (
         f"an outsider read pod notifications ({response.status_code})"
     )
 
@@ -173,10 +173,10 @@ async def test_removal_closes_the_inbox_it_left_behind(world, team):
 
     # All three reported together: which of them is still open says how much of
     # the inbox a removed person keeps, and stopping at the first would hide it.
-    assert (
-        answered.status_code >= 400
-        and dismissed.status_code >= 400
-        and read.status_code >= 400
+    assert (answered.status_code, dismissed.status_code, read.status_code) == (
+        403,
+        403,
+        403,
     ), (
         f"a removed member could still act on their old notifications: "
         f"respond={answered.status_code} acknowledge={dismissed.status_code} "

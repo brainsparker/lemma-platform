@@ -22,6 +22,7 @@ EXPECTED = [
     ("microsoft_bot_tenant_id", "MICROSOFT_BOT_TENANT_ID", None),
     ("microsoft_bot_openid_config_url", "MICROSOFT_BOT_OPENID_CONFIG_URL", None),
     ("microsoft_bot_oauth_base_url", "MICROSOFT_BOT_OAUTH_BASE_URL", None),
+    ("microsoft_bot_service_extra_host", "MICROSOFT_BOT_SERVICE_EXTRA_HOST", None),
     ("microsoft_bot_app_name", "MICROSOFT_BOT_APP_NAME", None),
     ("slack_signing_secret", "SLACK_SIGNING_SECRET", None),
     ("slack_app_id", "SLACK_APP_ID", None),
@@ -35,6 +36,12 @@ EXPECTED = [
     ("whatsapp_verify_token", "WHATSAPP_VERIFY_TOKEN", None),
     ("whatsapp_app_secret", "WHATSAPP_APP_SECRET", None),
     ("whatsapp_display_phone_number", "WHATSAPP_DISPLAY_PHONE_NUMBER", None),
+    ("whatsapp_reengage_template", "WHATSAPP_REENGAGE_TEMPLATE", None),
+    (
+        "whatsapp_reengage_template_language",
+        "WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE",
+        "en_US",
+    ),
     ("telegram_bot_token", "TELEGRAM_BOT_TOKEN", None),
     ("telegram_webhook_secret", "TELEGRAM_WEBHOOK_SECRET", None),
     ("telegram_manager_bot_token", "TELEGRAM_MANAGER_BOT_TOKEN", None),
@@ -77,6 +84,47 @@ EXPECTED = [
         "surface_outsider_turns_per_group_per_day",
         "SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY",
         200,
+    ),
+    (
+        "surface_contact_turns_per_person_per_10_minutes",
+        "SURFACE_CONTACT_TURNS_PER_PERSON_PER_10_MINUTES",
+        10,
+    ),
+    (
+        "surface_contact_turns_per_surface_per_day",
+        "SURFACE_CONTACT_TURNS_PER_SURFACE_PER_DAY",
+        1000,
+    ),
+    (
+        "surface_web_sessions_per_widget_per_day",
+        "SURFACE_WEB_SESSIONS_PER_WIDGET_PER_DAY",
+        2000,
+    ),
+    (
+        "surface_web_submissions_per_widget_per_day",
+        "SURFACE_WEB_SUBMISSIONS_PER_WIDGET_PER_DAY",
+        500,
+    ),
+    (
+        "surface_web_reads_per_widget_per_day",
+        "SURFACE_WEB_READS_PER_WIDGET_PER_DAY",
+        20000,
+    ),
+    ("surface_web_stream_seconds", "SURFACE_WEB_STREAM_SECONDS", 300),
+    (
+        "surface_new_contacts_per_surface_per_day",
+        "SURFACE_NEW_CONTACTS_PER_SURFACE_PER_DAY",
+        200,
+    ),
+    (
+        "surface_contact_follow_ups_per_contact_per_day",
+        "SURFACE_CONTACT_FOLLOW_UPS_PER_CONTACT_PER_DAY",
+        10,
+    ),
+    (
+        "surface_parked_mail_notes_per_surface_per_hour",
+        "SURFACE_PARKED_MAIL_NOTES_PER_SURFACE_PER_HOUR",
+        20,
     ),
     ("enable_telegram_polling_mode", "ENABLE_TELEGRAM_POLLING_MODE", False),
     (

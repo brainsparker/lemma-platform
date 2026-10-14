@@ -7,6 +7,9 @@ import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
 import { readGroup, readGroupDetail, readGroups, readTimeline } from "./groups";
+import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget } from "./contacts";
+import { readOpening } from "./public-rows";
+import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
 import {
     agentChanges,
     agentRows,
@@ -22,8 +25,10 @@ import {
     readRuns,
     readSchedule,
     readSchedules,
+    readServerEvents,
     type ScheduleDraft,
     type ScheduleRun,
+    type ServerEvent,
     type StandingJob,
     type TargetChoice,
 } from "@/schedule/schedules";
@@ -52,6 +57,9 @@ import {
 } from "./runtimes";
 import type {
     AccountConnect,
+    AskablePod,
+    LinkShare,
+    PodLink,
     Conversation,
     ConversationPage,
     ConversationRef,
@@ -452,6 +460,59 @@ export const liveSource: PodSource = {
             .map((pod) => podSummary({ ...pod, organization_id: pod.organization_id ?? orgId }));
     },
 
+    async askablePods(podId: string): Promise<AskablePod[]> {
+        const listed = (await lemma(podId).request("GET", `/pods/${encodeURIComponent(podId)}/askable-pods`)) as Listish;
+        return itemsOf(listed)
+            .map((raw) => raw as { pod_id?: string; name?: string; icon_url?: string | null; description?: string | null; through_you?: boolean; connected?: boolean })
+            .filter((pod): pod is { pod_id: string; name: string; icon_url?: string | null; description?: string | null; through_you?: boolean; connected?: boolean } => Boolean(pod.pod_id && pod.name))
+            .map((pod) => ({
+                id: pod.pod_id,
+                name: pod.name,
+                iconUrl: pod.icon_url ?? null,
+                ...(pod.description ? { description: pod.description } : {}),
+                throughYou: pod.through_you === true,
+                connected: pod.connected === true,
+            }));
+    },
+
+    async podLinks(podId: string): Promise<PodLink[]> {
+        const listed = (await lemma(podId).request("GET", `/pods/${encodeURIComponent(podId)}/pod-links`)) as Listish;
+        return itemsOf(listed)
+            .map((raw) => raw as {
+                pod_id?: string; name?: string; icon_url?: string | null; description?: string | null;
+                steward_name?: string | null;
+                shared?: { resource_type?: string; resource_name?: string }[];
+            })
+            .filter((link): link is typeof link & { pod_id: string; name: string } => Boolean(link.pod_id && link.name))
+            .map((link) => ({
+                podId: link.pod_id,
+                name: link.name,
+                iconUrl: link.icon_url ?? null,
+                ...(link.description ? { description: link.description } : {}),
+                ...(link.steward_name ? { stewardName: link.steward_name } : {}),
+                shared: (link.shared ?? [])
+                    .filter((one) => typeof one.resource_name === "string")
+                    .map((one) => ({
+                        kind: one.resource_type === "datastore_table" ? "table" as const : "folder" as const,
+                        name: one.resource_name as string,
+                    })),
+            }));
+    },
+
+    async connectPod(podId: string, askingPodId: string, shares: LinkShare[]): Promise<void> {
+        await lemma(podId).request("PUT", `/pods/${encodeURIComponent(podId)}/pod-links/${encodeURIComponent(askingPodId)}`, {
+            body: {
+                shares: shares.map((share) => share.kind === "table"
+                    ? { resource_type: "datastore_table", resource_name: share.name, permission_ids: ["datastore.table.read", "datastore.record.read"] }
+                    : { resource_type: "folder", resource_name: share.name, permission_ids: ["folder.read"] }),
+            },
+        });
+    },
+
+    async disconnectPod(podId: string, askingPodId: string): Promise<void> {
+        await lemma(podId).request("DELETE", `/pods/${encodeURIComponent(podId)}/pod-links/${encodeURIComponent(askingPodId)}`);
+    },
+
     async getPod(podId: string): Promise<Pod> {
         /* Through the held row: the surfaces, the agents and the schedules
            each read the same pod for its name while the space opens. */
@@ -642,6 +703,93 @@ export const liveSource: PodSource = {
     async answerGroupQuestion(podId, notificationId, answer) {
         await lemma(podId).notifications.respond(notificationId, { summary: answer });
     },
+    async listContacts(podId) {
+        return everyPage(async (before) => readContacts(await lemma(podId).contacts.list(podId, { limit: 200, before })));
+    },
+    async renameContact(podId, contactId, name) {
+        return readContact(await lemma(podId).contacts.rename(podId, contactId, name));
+    },
+    async forgetContact(podId, contactId) {
+        await lemma(podId).contacts.remove(podId, contactId);
+    },
+    async exportContact(podId, contactId) {
+        return lemma(podId).contacts.export(podId, contactId);
+    },
+    async followUpContact(podId, contactId, message) {
+        const sent = await lemma(podId).contacts.followUp(podId, contactId, message);
+        return { delivered: sent.delivered, platform: sent.platform };
+    },
+    async listWidgets(podId) {
+        return ((await lemma(podId).contacts.widgets.list(podId)).items ?? []).map(readWidget);
+    },
+    async createWidget(podId, draft) {
+        const made = await lemma(podId).contacts.widgets.create(podId, {
+            name: draft.name.trim(),
+            allowed_origins: readOrigins(draft.origins),
+            answer: draft.answer as WebWidgetCreateRequest["answer"],
+        });
+        return { ...readWidget(made), signingSecret: made.signing_secret };
+    },
+    async updateWidget(podId, widgetId, change) {
+        return readWidget(await lemma(podId).contacts.widgets.update(podId, widgetId, {
+            ...(change.answer ? { answer: change.answer as WebWidgetUpdateRequest["answer"] } : {}),
+            ...(change.origins ? { allowed_origins: change.origins } : {}),
+        }));
+    },
+    async reissueWidget(podId, widgetId) {
+        return (await lemma(podId).contacts.widgets.reissue(podId, widgetId)).signing_secret;
+    },
+    async deleteWidget(podId, widgetId) {
+        await lemma(podId).contacts.widgets.remove(podId, widgetId);
+    },
+    async tableOpening(podId, table) {
+        return readOpening(await lemma(podId).tables.publicRows.get(table));
+    },
+    async openTable(podId, table, audience, columns) {
+        return readOpening(await lemma(podId).tables.publicRows.open(table, { audience: audience as OpenTableRequest["audience"], columns }));
+    },
+    async closeTable(podId, table) {
+        await lemma(podId).tables.publicRows.close(table);
+    },
+    async contactReach(podId) {
+        const client = lemma(podId);
+        const [tables, functions] = await Promise.all([
+            everyPage(async (pageToken) => {
+                const page = await client.tables.list({ limit: 100, pageToken });
+                return { items: page.items ?? [], next: page.next_page_token };
+            }),
+            everyPage(async (pageToken) => {
+                const page = await client.functions.list({ limit: 100, pageToken });
+                return { items: page.items ?? [], next: page.next_page_token };
+            }),
+        ]);
+        return {
+            tables: tables.map((table) => ({
+                name: table.name,
+                contactOwned: Boolean(table.contact_owned),
+                perPerson: Boolean(table.enable_rls),
+                contactColumns: (table as { contact_columns?: string[] }).contact_columns ?? [],
+            })),
+            functions: functions.map((fn) => ({
+                name: fn.name,
+                description: fn.description ?? null,
+                contactsInvoke: Boolean(fn.contacts_invoke),
+            })),
+        };
+    },
+    async setTableContactOwned(podId, table, on, columns) {
+        const change = { contact_owned: on, ...(on && columns ? { contact_columns: columns } : {}) };
+        await lemma(podId).tables.update(table, change as UpdateTableRequest);
+    },
+    async setFunctionContactsInvoke(podId, fn, on) {
+        await lemma(podId).functions.setContactsInvoke(fn, on);
+    },
+    async contactsCap(orgId) {
+        return readCap(await lemma().contacts.cap(orgId));
+    },
+    async setContactsCap(orgId, limit) {
+        return readCap(await lemma().contacts.setCap(orgId, limit));
+    },
     async createSurfaceAccount(orgId, entry, credentials) {
         const client = lemma();
         const install = await client.connectors.enableApp(orgId, entry.connectorId, { kind: entry.kind });
@@ -688,6 +836,10 @@ export const liveSource: PodSource = {
         return itemsOf(listed as Listish)
             .map(readRuntime)
             .filter((entry): entry is Runtime => entry !== null);
+    },
+
+    async getRuntime(orgId: string, runtimeId: string): Promise<Runtime | null> {
+        return readRuntime(await lemma().agentRuntime.getProfile(orgId, runtimeId));
     },
 
     async defaultRuntime(orgId: string): Promise<Choice | null> {
@@ -812,11 +964,21 @@ export const liveSource: PodSource = {
            resolving through it (`resolved_default_runtime` falls back to the
            mirror). "Inherit again" would have saved cleanly and changed
            nothing. */
+        /* Selections go up only when there are some. `default_runtime` is
+           replaced whole by the merge, so leaving the key out is how a pick
+           with none clears the ones a previous pick carried. */
+        const selections = choice?.selections && Object.keys(choice.selections).length ? choice.selections : null;
         await lemma(podId).pods.update(podId, {
             config: choice
-                ? { default_runtime: { profile_id: choice.runtimeId, model_name: choice.model || null } }
+                ? {
+                    default_runtime: {
+                        profile_id: choice.runtimeId,
+                        model_name: choice.model || null,
+                        ...(selections ? { config_selections: selections } : {}),
+                    },
+                }
                 : { default_runtime: null, default_profile_id: null },
-        });
+        } as Parameters<ReturnType<typeof lemma>["pods"]["update"]>[1]);
         forgetPod(podId);
     },
 
@@ -1173,7 +1335,7 @@ export const liveSource: PodSource = {
             max_hits?: number;
         };
         const rawUrl = minted.signed_url ?? "";
-        /* The code is the last segment of `{api}/s/{code}`. Taken from the URL
+        /* The code is the last segment of `{api}/public/s/{code}`. Taken from the URL
            the server returned rather than minted here, so a change of shape on
            that side cannot leave this one confidently wrong. */
         const code = rawUrl.split("/").filter(Boolean).pop() ?? "";
@@ -1494,14 +1656,14 @@ export const liveSource: PodSource = {
             : job));
     },
 
-    async listScheduleRuns(podId: string, scheduleId: string): Promise<ScheduleRun[]> {
+    async listScheduleRuns(podId: string, scheduleId: string, options: { skipped?: boolean } = {}): Promise<ScheduleRun[]> {
         /* Newest first is the server's order (`list_for_schedule` orders by
            `created_at DESC`), so nothing here sorts. Twenty is a screenful of
            history; the route's own ceiling is a thousand. */
         return readRuns(await lemma(podId).request(
             "GET",
             `/pods/${podId}/schedules/${scheduleId}/runs`,
-            { params: { limit: 20 } },
+            { params: { limit: 20, skipped: options.skipped ?? false } },
         ));
     },
 
@@ -1531,6 +1693,10 @@ export const liveSource: PodSource = {
             { body: createRequest(draft) },
         );
         return readSchedule(made);
+    },
+
+    async serverEvents(podId: string): Promise<ServerEvent[]> {
+        return readServerEvents(await lemma(podId).request("GET", `/pods/${podId}/events`));
     },
 
     async scheduleTargets(podId: string): Promise<TargetChoice[]> {
@@ -1603,7 +1769,7 @@ export const liveSource: PodSource = {
  *  Shared by the list reads and by a conversation created here, which goes
  *  into the history the moment it exists rather than after a refetch. */
 export function conversationRefOf(conversation: unknown): ConversationRef {
-    const row = conversation as { id: string; title?: string | null; type?: string; updated_at?: string; last_activity_at?: string | null; created_at?: string; metadata?: Record<string, unknown> | null; agent_id?: string | null };
+    const row = conversation as { id: string; title?: string | null; type?: string; updated_at?: string; last_activity_at?: string | null; created_at?: string; metadata?: Record<string, unknown> | null; agent_id?: string | null; status?: string | null; has_pending_interaction?: boolean };
     const bound = row.metadata?.[RESOURCE_KEY];
     /* The list is ordered by last activity, so the time beside a row
        is that — not `updated_at`, which a rename also moves and
@@ -1617,5 +1783,7 @@ export function conversationRefOf(conversation: unknown): ConversationRef {
         boundTo: typeof bound === "string" ? bound : null,
         origin: originOf(row.metadata, row.type),
         agentId: row.agent_id ?? null,
+        status: row.status ?? null,
+        waitingOnYou: row.has_pending_interaction === true,
     };
 }

@@ -35,6 +35,15 @@ OUTSIDER_TOOL_NAMES = frozenset(
         # and to notifications this conversation sent.
         "message_user",
         "check_messages",
+        # CONTACT -- offered only on a contact's run (``tools/contact_tools``):
+        # the contact's own rows of a contact-owned table, and functions the
+        # pod opened to contacts. Both take the contact from the run, never
+        # from the model.
+        "contact_records",
+        "contact_function",
+        # FORM -- offered only to a web visitor's run (``tools/form_tools``):
+        # fills fields of a form on their page; writes nothing.
+        "fill_form",
     }
 )
 
@@ -45,6 +54,8 @@ OUTSIDER_TOOLS_WITHHELD: dict[str, str] = {
     "pod_write_file": "writes; a stranger's run is read-only",
     "pod_edit_file": "writes; a stranger's run is read-only",
     "list_pod_members": "the directory is not the stranger's to read",
+    "list_teammates": "lists the owner's other pods, which are not the stranger's to see",
+    "ask_teammate": "another pod would answer with the owner's access there",
 }
 
 

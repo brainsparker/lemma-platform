@@ -16,6 +16,11 @@ from uuid import uuid7
 
 import pytest
 
+from app.modules.agent.domain.runtime_profiles import (
+    RuntimeProfileProtocol,
+    RuntimeProfileScope,
+)
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
 from app.modules.agent.infrastructure.agent_host.event_stream import (
@@ -24,6 +29,9 @@ from app.modules.agent.infrastructure.agent_host.event_stream import (
 )
 from app.modules.agent.infrastructure.harnesses.agent_host import (
     harness as harness_module,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host import (
+    harness_events as harness_events_module,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.harness import RemoteHarness
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
@@ -51,13 +59,15 @@ def _options():
     return SimpleNamespace(
         model_name=None,
         should_stop=None,
-        extra={
-            "runtime_profile": {
-                "harness_id": str(uuid7()),
-                "profile_id": str(uuid7()),
-                "config": {"harness_snapshot_revision": "1"},
-            }
-        },
+        runtime_profile=RuntimeSnapshot(
+            profile_id=str(uuid7()),
+            profile_name="Laptop",
+            harness_id=str(uuid7()),
+            scope=RuntimeProfileScope.PERSONAL,
+            protocol=RuntimeProfileProtocol.AGENT_HOST,
+            config={"harness_snapshot_revision": "1"},
+        ),
+        extra={},
     )
 
 
@@ -268,6 +278,7 @@ class TestARunRefusedBeforeItStarted:
                 del run_id
                 return SimpleNamespace(
                     state=AgentHostRunState.FAILED.value,
+                    accepted_at=None,
                     error_code="CONFIG_REVISION_STALE",
                     error_detail=detail,
                 )
@@ -350,7 +361,7 @@ class TestATurnEndedForASleepingAgent:
         )
         _stub_dispatch(harness, monkeypatch)
         monkeypatch.setattr(
-            harness_module,
+            harness_events_module,
             "run_suspended_on",
             _sleeping_since(tool_call_id="lemma-mcp-1"),
         )
@@ -374,7 +385,11 @@ class TestATurnEndedForASleepingAgent:
             stream_block_ms=1,
         )
         _stub_dispatch(harness, monkeypatch)
-        monkeypatch.setattr(harness_module, "run_suspended_on", _awake())
+        monkeypatch.setattr(harness_events_module, "run_suspended_on", _awake())
+        # Nor ended by Lemma for a pause it sat parked on past its window.
+        monkeypatch.setattr(
+            harness_events_module, "run_suspended_while_parked", _awake()
+        )
 
         events = [event async for event in await _drive(harness, agent_run_id)]
 
@@ -398,7 +413,9 @@ class TestATurnEndedForASleepingAgent:
         )
         _stub_dispatch(harness, monkeypatch)
         monkeypatch.setattr(
-            harness_module, "run_suspended_on", _sleeping_since(tool_call_id="x")
+            harness_events_module,
+            "run_suspended_on",
+            _sleeping_since(tool_call_id="x"),
         )
 
         events = [event async for event in await _drive(harness, agent_run_id)]

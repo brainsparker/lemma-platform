@@ -272,6 +272,20 @@ def test_pod_schedules_retry_run_binds_schedule_and_source_run():
     )
 
 
+def test_pod_schedules_events_lists_the_pods_catalog():
+    transport = StubTransport()
+    pod = _bound_pod(transport)
+
+    pod.schedules.events()
+
+    assert transport.calls[0]["endpoint"] == (
+        "lemma_sdk.openapi_client.api.schedules.schedule_event_list"
+    )
+    assert transport.calls[0]["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+    )
+
+
 def test_pod_connectors_execute_uses_bound_org_id():
     transport = StubTransport()
     pod = Pod(
@@ -423,7 +437,7 @@ def test_user_update_profile_uses_generated_model():
     lemma.user._transport = transport
 
     lemma.user.update_profile(
-        {"mobile_number": "+15551234567", "telegram_username": "surfaceuser"}
+        {"mobile_number": "+15551234567", "first_name": "Surface"}
     )
 
     assert transport.calls[0]["endpoint"].endswith("user_profile_upsert")
@@ -431,7 +445,7 @@ def test_user_update_profile_uses_generated_model():
     assert transport.calls[0]["body_model"] == "UserProfileRequest"
     assert transport.calls[0]["body"] == {
         "mobile_number": "+15551234567",
-        "telegram_username": "surfaceuser",
+        "first_name": "Surface",
     }
 
 

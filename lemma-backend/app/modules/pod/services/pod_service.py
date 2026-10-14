@@ -7,6 +7,7 @@ from typing import Optional
 from app.core.authorization.cache import invalidate_role_snapshot_cache
 from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.permissions import Permissions
+from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.ports.plan_limits import PlanLimits
 from app.modules.identity.contracts import OrganizationJoinPolicy, OrganizationRole
 from app.modules.icon.contracts import IconCleanupPort
@@ -76,6 +77,12 @@ class PodService:
         entity.name = self._normalize_name(entity.name)
         await self._refuse_past_pod_allowance(
             owner_user_id=entity.user_id, organization_id=entity.organization_id
+        )
+
+        await self._check_default_runtime_selections(
+            entity.config.default_runtime,
+            organization_id=entity.organization_id,
+            user_id=creator_user_id,
         )
 
         # Aggregate method registers pod.created event.
@@ -189,6 +196,32 @@ class PodService:
 
         return pod
 
+    async def _check_default_runtime_selections(
+        self,
+        runtime: AgentRuntimeConfig | None,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+    ) -> None:
+        """Refuse a default runtime whose coding-agent selections are not offered.
+
+        Only the selections: the pod default's profile and model were never
+        checked on save, and a pod is not the place to start. ``_uow`` is
+        absent only where a caller built the service without one.
+        """
+        if self._uow is None or runtime is None or not runtime.config_selections:
+            return
+        from app.modules.agent.contracts.runtime_selections import (
+            check_pod_default_runtime_selections,
+        )
+
+        await check_pod_default_runtime_selections(
+            self._uow,
+            runtime,
+            organization_id=organization_id,
+            user_id=user_id,
+        )
+
     async def update_pod(
         self,
         pod_id: UUID,
@@ -223,6 +256,14 @@ class PodService:
             if isinstance(default_runtime, dict) and default_runtime.get("profile_id"):
                 merged_config["default_profile_id"] = default_runtime["profile_id"]
             update_data["config"] = merged_config
+            if data.config is not None and "default_runtime" in (
+                data.config.model_fields_set
+            ):
+                await self._check_default_runtime_selections(
+                    data.config.default_runtime,
+                    organization_id=pod_entity.organization_id,
+                    user_id=requester_user_id,
+                )
             await self._require_join_policy_authority(
                 ctx=ctx,
                 pod=pod_entity,

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hmac
 from uuid import UUID
 
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.function.config import execution_budget_seconds
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenKey,
 )
@@ -19,6 +20,7 @@ from app.modules.function.domain.entities import (
     FunctionRunRuntimeContext,
     FunctionRunStatus,
     FunctionSessionPrincipal,
+    FunctionType,
 )
 from app.modules.function.domain.events import (
     FunctionRunCompletedEvent,
@@ -94,6 +96,7 @@ class FunctionExecutionRepository:
             or run.revision_hash != dispatch.revision_hash
             or (run.input_data or {}) != dispatch.input_data
             or run.user_id != dispatch.user_id
+            or run.contact_id != dispatch.contact_id
             or function.pod_id != dispatch.pod_id
             or run.function_id != dispatch.function_id
         ):
@@ -101,6 +104,10 @@ class FunctionExecutionRepository:
 
         run.status = FunctionRunStatus.RUNNING
         run.started_at = timestamp
+        # The execution budget starts now, not when the run was created: time
+        # spent queued, waiting for a pod slot, or on a cold start is not the
+        # function's to lose.
+        run.deadline_at = timestamp + timedelta(seconds=dispatch.execution_seconds)
         self.uow.collect_events(
             [
                 FunctionRunStartedEvent(
@@ -143,6 +150,7 @@ class FunctionExecutionRepository:
             function_name=function.name,
             revision_hash=run.revision_hash,
             delegated_tokens_enabled=delegated_tokens_enabled,
+            run_id=run.id,
         ):
             return None
         return self._runtime_context(run, function)
@@ -275,6 +283,42 @@ class FunctionExecutionRepository:
             error=error,
         )
 
+    async def fail_in_flight_on_pod(
+        self,
+        pod_id: UUID,
+        *,
+        started_before: datetime,
+        error: str,
+        limit: int,
+    ) -> list[UUID]:
+        """Fail up to ``limit`` asynchronous runs a destroyed pod sandbox was
+        executing, oldest first.
+
+        Only job-backed runs: a synchronous one holds its own connection to
+        the sandbox and fails through it. Rows another transaction holds are
+        skipped -- that holder is settling the run already.
+        """
+        runs = (
+            await self.session.scalars(
+                select(FunctionRunModel)
+                .join(FunctionModel, FunctionModel.id == FunctionRunModel.function_id)
+                .where(
+                    FunctionModel.pod_id == pod_id,
+                    FunctionRunModel.status == FunctionRunStatus.RUNNING,
+                    FunctionRunModel.job_id.is_not(None),
+                    FunctionRunModel.started_at <= started_before,
+                )
+                .order_by(FunctionRunModel.started_at, FunctionRunModel.id)
+                .limit(limit)
+                .with_for_update(of=FunctionRunModel, skip_locked=True)
+            )
+        ).all()
+        for run in runs:
+            self._mark_finished(run, run_status=FunctionRunStatus.FAILED, error=error)
+        if runs:
+            await self.session.flush()
+        return [run.id for run in runs]
+
     async def _finish_without_result(
         self,
         run_id: UUID,
@@ -292,6 +336,17 @@ class FunctionExecutionRepository:
         if run.status in TERMINAL_RUN_STATES:
             return run.to_entity()
 
+        self._mark_finished(run, run_status=run_status, error=error)
+        await self.session.flush()
+        return run.to_entity()
+
+    def _mark_finished(
+        self,
+        run: FunctionRunModel,
+        *,
+        run_status: FunctionRunStatus,
+        error: str,
+    ) -> None:
         timestamp = datetime.now(timezone.utc)
         run.status = run_status
         run.error = error
@@ -307,8 +362,6 @@ class FunctionExecutionRepository:
                 )
             ]
         )
-        await self.session.flush()
-        return run.to_entity()
 
     async def _run_and_function(
         self,
@@ -345,9 +398,13 @@ class FunctionExecutionRepository:
             function_name=function.name,
             user_id=run.user_id,
             user_email=run.user_email,
+            contact_id=run.contact_id,
             config=function.config,
             mode=mode,
             deadline_at=run.deadline_at,
+            execution_seconds=execution_budget_seconds(
+                is_job=function.type == FunctionType.JOB
+            ),
             revision_hash=run.revision_hash,
             input_data=run.input_data or {},
         )
@@ -370,6 +427,7 @@ class FunctionExecutionRepository:
             config=function.config,
             user_id=run.user_id,
             user_email=run.user_email,
+            contact_id=run.contact_id,
             pod_id=function.pod_id,
             function_id=function.id,
             function_name=function.name,
@@ -379,18 +437,29 @@ class FunctionExecutionRepository:
     def _principal_matches(
         principal: FunctionSessionPrincipal,
         *,
-        user_id: UUID,
+        user_id: UUID | None,
         pod_id: UUID,
         function_id: UUID,
         function_name: str,
         revision_hash: str,
         delegated_tokens_enabled: bool,
+        run_id: UUID | None = None,
     ) -> bool:
-        if (
-            principal.user_id != user_id
-            or principal.pod_id != pod_id
-            or principal.function_id != function_id
-        ):
+        if principal.pod_id != pod_id or principal.function_id != function_id:
+            return False
+        if principal.run_id is not None:
+            # A function-run token was minted for one run of one revision. It
+            # fetches that revision's code and reports that run's end, and
+            # nothing else -- in particular not a member's run of the same
+            # function, which ``user_id`` being set marks.
+            return (
+                user_id is None
+                and principal.revision_hash == revision_hash
+                and (run_id is None or principal.run_id == run_id)
+            )
+        if user_id is None or principal.user_id != user_id:
+            return False
+        if principal.session_id is None:
             return False
         expected_session_id = FunctionSessionTokenKey(
             user_id=user_id,

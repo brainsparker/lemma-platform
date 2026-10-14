@@ -11,19 +11,19 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, status
 
 from app.modules.usage.contracts.execution import build_usage_service
-from app.core.authorization.factory import create_authorization_data_service
 from app.core.domain.errors import BadRequestError
 from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
     get_channel_service,
 )
-from app.modules.agent.domain.value_objects import JsonObject
+from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
+from app.modules.agent.domain.value_objects import (
+    ConversationAgentSelection,
+    JsonObject,
+)
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
-)
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
 )
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.realtime import (
@@ -52,17 +52,6 @@ def _build_conversation_service(uow) -> ConversationService:
         uow=uow,
         conversation_repository=ConversationRepository(uow),
         agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_data_service(uow),
-        usage_service=build_usage_service(uow),
-    )
-
-
-def _build_conversation_retry_service(uow) -> ConversationRetryService:
-    return ConversationRetryService(
-        uow=uow,
-        conversation_repository=ConversationRepository(uow),
-        agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_data_service(uow),
         usage_service=build_usage_service(uow),
     )
 
@@ -192,3 +181,18 @@ async def with_keepalive(
         # which runs at an unrelated moment and, for a subscription iterator,
         # after the client has already gone.
         await chunks.aclose()
+
+
+def parse_conversation_agent_selection(
+    agent_name: str | None,
+) -> ConversationAgentSelection[str]:
+    if agent_name is None:
+        return ConversationAgentSelection.all()
+    if not agent_name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="agent_name cannot be empty",
+        )
+    if agent_name in POD_DEFAULT_AGENT_SELECTOR_ALIASES:
+        return ConversationAgentSelection.pod_default()
+    return ConversationAgentSelection.named(agent_name)

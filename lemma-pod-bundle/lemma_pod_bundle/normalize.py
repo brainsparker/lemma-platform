@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .apply_fields import without_time_schedule_filter
 from .diff import _is_system_table_column
 from .layout import FORMAT_VERSION, _parse_function_headers
 
@@ -264,6 +265,8 @@ def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
     portable = {"provider_trigger_id", "installation_id"}
     if isinstance(config, dict) and portable & set(config):
         stripped = {**stripped, "config": _strip_keys(config, portable)}
+    # A filter on a time schedule was never asked and is refused on import.
+    stripped, _ = without_time_schedule_filter(stripped)
     return stripped
 
 
@@ -300,6 +303,17 @@ def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:
     app_name = str(telegram.get("app_name") or "").strip()
     if app_name:
         behavior_config["telegram"] = {"app_name": app_name}
+    # The approved template a closed 24-hour window is reopened with. Without
+    # it an imported WhatsApp surface refuses every message to a member who has
+    # not written in a day, where the exported one held it and asked them back.
+    whatsapp = config.get("whatsapp") or {}
+    template = str(whatsapp.get("reengage_template") or "").strip()
+    if template:
+        whatsapp_entry = {"reengage_template": template}
+        language = str(whatsapp.get("language") or "").strip()
+        if language:
+            whatsapp_entry["language"] = language
+        behavior_config["whatsapp"] = whatsapp_entry
 
     status = str(surface.get("status") or "").upper()
     # Prefer the surface's own pod-unique name so several surfaces of the same

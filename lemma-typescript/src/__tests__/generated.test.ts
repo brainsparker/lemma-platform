@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthManager } from "../auth.js";
+import { AuthManager as RealAuthManager } from "../auth.js";
 import { GeneratedClientAdapter } from "../generated.js";
 import { NetworkError, NotFoundError } from "../http.js";
 import { ApiError as GeneratedApiError } from "../openapi_client/core/ApiError.js";
@@ -11,6 +12,8 @@ function fakeAuth(): { auth: AuthManager; markUnauthenticated: ReturnType<typeof
     isTokenMode: false,
     getBearerToken: () => null,
     markUnauthenticated,
+    ready: async () => undefined,
+    renewEmbeddedToken: async () => false,
   } as unknown as AuthManager;
   return { auth, markUnauthenticated };
 }
@@ -29,6 +32,7 @@ function genError(
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -133,5 +137,26 @@ describe("GeneratedClientAdapter retry + error mapping", () => {
     const adapter = new GeneratedClientAdapter("https://api.test", auth, { maxRetries: 0 });
     await expect(adapter.request(() => Promise.reject(genError(401)))).rejects.toBeDefined();
     expect(markUnauthenticated).toHaveBeenCalled();
+  });
+
+  /* `connectors.execute` runs through this adapter, not HttpClient, so a pod
+     app executing an operation with a wrong third-party key arrives here. */
+  it("keeps the caller signed in when a 401 relays a connector provider refusing its key", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "user-1" }), { status: 200 })));
+    const auth = new RealAuthManager("https://api.test", "https://auth.test", "TESTTOKEN");
+    await auth.checkAuth();
+    expect(auth.getState().status).toBe("authenticated");
+    const adapter = new GeneratedClientAdapter("https://api.test", auth, { maxRetries: 0 });
+    const refused = genError(
+      401,
+      { message: "Connector account authorization failed.", code: "OPERATION_EXECUTION_UNAUTHORIZED" },
+      "POST",
+    );
+
+    await expect(adapter.request(() => Promise.reject(refused))).rejects.toMatchObject({
+      statusCode: 401,
+      code: "OPERATION_EXECUTION_UNAUTHORIZED",
+    });
+    expect(auth.getState().status).toBe("authenticated");
   });
 });

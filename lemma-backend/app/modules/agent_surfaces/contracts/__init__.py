@@ -1,6 +1,8 @@
 """Public surface bundle DTOs."""
 
-from app.modules.agent_surfaces.api.schemas import SurfaceCreateRequest
+from app.modules.agent_surfaces.domain.surface_representation import (
+    SurfaceCreateRequest,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,

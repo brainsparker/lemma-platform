@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -14,11 +15,13 @@ from app.core.authorization.dependencies import (
     assert_pod_membership,
     require_pod_membership,
 )
-from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
 from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.outsiders import without_audience
+from app.modules.agent.domain.server_metadata import client_metadata
+from app.modules.agent.services.runtime_availability import (
+    check_conversation_runtime_for_pod,
+)
 from app.modules.agent.api.controllers.conversation_streaming import (
     load_authorized_agent_run,
     start_and_stream_run,
@@ -26,12 +29,12 @@ from app.modules.agent.api.controllers.conversation_streaming import (
 )
 from app.modules.agent.api.controllers.shared import (
     ChannelServiceDep,
-    _build_conversation_retry_service,
     _build_conversation_service,
     _parse_message_page_token,
     _parse_metadata_filters,
     conversation_channel,
     iter_subscription,
+    parse_conversation_agent_selection,
     with_keepalive,
 )
 from app.modules.agent.api.controllers.conversation_page_token import (
@@ -58,12 +61,8 @@ from app.modules.agent.domain.errors import (
     AgentNotFoundError,
     ConversationNotFoundError,
 )
-from app.modules.agent.domain.value_objects import (
-    AgentRunStartResult,
-    ConversationAgentSelection,
-    ConversationStatus,
-    ConversationType,
-)
+from app.modules.agent.domain.value_objects import ConversationStatus, ConversationType
+from app.modules.agent.services.conversation_service import ConversationService
 
 logger = get_logger(__name__)
 
@@ -89,21 +88,6 @@ CONVERSATION_MEMBERSHIP = require_pod_membership(_CONVERSATION_ACCESS)
 CONVERSATION_ENUMERATION = require_pod_membership(_CONVERSATION_ACCESS, enumerates=True)
 
 
-def _parse_conversation_agent_selection(
-    agent_name: str | None,
-) -> ConversationAgentSelection[str]:
-    if agent_name is None:
-        return ConversationAgentSelection.all()
-    if not agent_name.strip():
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="agent_name cannot be empty",
-        )
-    if agent_name in POD_DEFAULT_AGENT_SELECTOR_ALIASES:
-        return ConversationAgentSelection.pod_default()
-    return ConversationAgentSelection.named(agent_name)
-
-
 @router.post(
     "",
     response_model=ConversationResponse,
@@ -124,6 +108,10 @@ async def create_conversation(
     user: CurrentUser,
     service: ConversationServiceDep,
 ) -> ConversationResponse:
+    # Refused when saved, with the reason, rather than at the first turn.
+    await check_conversation_runtime_for_pod(
+        service.uow, data.agent_runtime, pod_id=pod_id, user_id=user.id
+    )
     conversation = await service.create_conversation(
         pod_id=pod_id,
         agent_name=data.agent_name,
@@ -133,9 +121,9 @@ async def create_conversation(
         agent_runtime=data.agent_runtime,
         parent_id=data.parent_id,
         type=data.type,
-        # Only routing opens a conversation for people outside the pod; a
-        # client cannot make one look like it.
-        metadata=without_audience(data.metadata),
+        # Only the server opens a conversation for people outside the pod, or
+        # one answering another pod; a client cannot make one look like either.
+        metadata=client_metadata(data.metadata),
     )
     return ConversationResponse.model_validate(conversation)
 
@@ -174,7 +162,7 @@ async def list_conversations(
 ) -> ConversationListResponse:
     conversations, next_cursor = await service.queries.list_conversations(
         pod_id=pod_id,
-        agent_selection=_parse_conversation_agent_selection(agent_name),
+        agent_selection=parse_conversation_agent_selection(agent_name),
         user_id=user.id,
         status=run_status,
         type=conversation_type,
@@ -240,6 +228,12 @@ async def update_conversation(
     update_payload = data.model_dump(exclude_unset=True)
     if "agent_runtime" in update_payload:
         update_payload["agent_runtime"] = data.agent_runtime
+        await check_conversation_runtime_for_pod(
+            service.uow,
+            data.agent_runtime,
+            pod_id=pod_id,
+            user_id=user.id,
+        )
     # Null is not a state a conversation can be in: the field is optional so
     # omitting it means "leave it alone", and an explicit null means the same.
     if update_payload.get("is_archived") is None:
@@ -387,29 +381,32 @@ async def send_message(
     request: Request,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> StreamingResponse:
-    # Build the authorization context inside the SHORT uow below rather than via a
-    # request-scoped PodContextDep: a StreamingResponse keeps request-scoped
-    # dependencies (and their pooled connection) alive for the whole SSE stream,
-    # which pins one DB connection per in-flight stream. Here the connection is
+    # The auth context is built in the SHORT uow below, not a request-scoped
+    # PodContextDep: a StreamingResponse keeps those (and their pooled
+    # connection) alive for the whole SSE stream. Here the connection is
     # released the moment send_from_lemma commits, before streaming.
-    async def start_run() -> AgentRunStartResult:
+    @asynccontextmanager
+    async def conversations() -> AsyncIterator[ConversationService]:
         async with pod_context_scope(
             uow_factory, request=request, user_id=user.id, pod_id=pod_id
         ) as scope:
             assert_pod_membership(scope.ctx, "use conversations in this pod")
-            service = _build_conversation_service(scope.uow)
-            return await service.send_from_lemma(
-                conversation_id=conversation_id,
-                user_id=user.id,
-                content=data.content,
-                pod_id=pod_id,
-                message_metadata=data.metadata,
-            )
+            yield _build_conversation_service(scope.uow)
 
     return await start_and_stream_run(
         channel_service=channel_service,
+        conversations=conversations,
         conversation_id=conversation_id,
-        start_run=start_run,
+        user_id=user.id,
+        pod_id=pod_id,
+        start_run=lambda service: service.send_from_lemma(
+            conversation_id=conversation_id,
+            user_id=user.id,
+            content=data.content,
+            pod_id=pod_id,
+            message_metadata=data.metadata,
+            client_message_id=data.client_message_id,
+        ),
     )
 
 
@@ -425,8 +422,7 @@ async def send_message(
         "any stream already subscribed to the conversation surfaces the "
         "resulting events, so callers steering an in-flight run should attach "
         "to that stream rather than opening a second one here. When no run is "
-        "active, this starts a new one exactly like the streaming send route, "
-        "just without attaching a stream to it."
+        "active, this starts a new one like the streaming send route, unstreamed."
     ),
     responses={
         404: {"description": "Conversation was not found or is not visible"},
@@ -452,6 +448,7 @@ async def append_message(
             content=data.content,
             pod_id=pod_id,
             message_metadata=data.metadata,
+            client_message_id=data.client_message_id,
         )
     return AgentRunStartResponse.model_validate(result)
 
@@ -484,7 +481,7 @@ async def retry_failed_run(
         uow_factory, request=request, user_id=user.id, pod_id=pod_id
     ) as scope:
         assert_pod_membership(scope.ctx, "use conversations in this pod")
-        service = _build_conversation_retry_service(scope.uow)
+        service = _build_conversation_service(scope.uow)
         result = await service.retry_failed_run(
             conversation_id=conversation_id,
             user_id=user.id,

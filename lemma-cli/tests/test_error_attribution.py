@@ -183,6 +183,24 @@ def test_both_error_paths_name_a_next_step(status, hint):
     assert hint in humanize_error(exc)
 
 
+def test_a_delete_that_needs_approval_says_so_not_that_a_role_is_missing():
+    """An agent's delete is refused until the person approves it. "A pod grant or
+    an org role is missing" sent the agent and the person looking for a setting
+    that does not exist, when the answer was to ask for approval."""
+    from lemma_cli.cli_core.state import humanize_error
+    from lemma_sdk.errors import api_error
+
+    exc = api_error(
+        403,
+        "Destructive action requires approval",
+        code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+    )
+
+    message = humanize_error(exc)
+    assert "approve" in message
+    assert "role is missing" not in message
+
+
 def test_a_status_with_no_obvious_next_step_gets_no_advice():
     """A guessed instruction is worse than none: a 500 is not the user's to fix."""
     from lemma_cli.cli_core.state import humanize_error

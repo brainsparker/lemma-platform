@@ -37,6 +37,7 @@ from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
 from app.modules.agent.services.pause_resume import PauseResume
+from app.modules.test_support.fakes import EmptyResultSession
 
 pytestmark = pytest.mark.unit
 
@@ -45,6 +46,9 @@ _POD_ID = uuid7()
 
 
 class _Uow:
+    # The pod names no default runtime of its own.
+    session = EmptyResultSession()
+
     def collect_events(self, _events) -> None:
         return None
 
@@ -131,6 +135,16 @@ class _Repository:
         self.created_runs += 1
         return SimpleNamespace(id=uuid7())
 
+    async def get_conversation_status(self, _conversation_id):
+        return None
+
+    # Nothing was said while this approval was open.
+    async def count_queued_user_messages(self, _run_id, **_kwargs) -> int:
+        return 0
+
+    async def claim_queued_user_messages(self, _run_id, **_kwargs) -> list:
+        return []
+
 
 class _AgentRepository:
     """The one agent the resume run would be started for."""
@@ -173,6 +187,7 @@ def _conversation(repository: _Repository):
         id=repository.conversation_id,
         agent_id=None,
         pod_id=_POD_ID,
+        organization_id=None,
         agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
     )
 

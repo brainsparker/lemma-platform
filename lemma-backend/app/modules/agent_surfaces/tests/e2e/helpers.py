@@ -94,9 +94,16 @@ async def fake_slack(message_store, fixed_test_user):
 
 
 @pytest_asyncio.fixture
-async def fake_teams(message_store, fixed_test_user):
+async def fake_teams(message_store, fixed_test_user, monkeypatch):
+    from app.modules.agent_surfaces.config import surface_settings
+
     server = FakeTeamsServer(fixed_test_user["email"], message_store)
     await server.start()
+    # The bot token only goes to Bot Framework hosts; the double is local. The
+    # worker subprocess gets the same host through its environment.
+    monkeypatch.setattr(
+        surface_settings, "microsoft_bot_service_extra_host", "127.0.0.1"
+    )
     try:
         yield server
     finally:
@@ -547,7 +554,6 @@ async def _set_user_mobile_number(
     *,
     user_id: str,
     mobile_number: str,
-    telegram_username: str | None = None,
     verified: bool = True,
 ) -> None:
     """Give the user a number the sender can be matched to.
@@ -559,8 +565,6 @@ async def _set_user_mobile_number(
     assert user is not None
     user.mobile_number = mobile_number
     user.mobile_verified_at = datetime.now(timezone.utc) if verified else None
-    if telegram_username is not None:
-        user.telegram_username = telegram_username
     await db_session.commit()
 
 

@@ -10,6 +10,7 @@ import type { ConversationStatus } from '../models/ConversationStatus.js';
 import type { ConversationType } from '../models/ConversationType.js';
 import type { CreateConversationRequest } from '../models/CreateConversationRequest.js';
 import type { MessageListResponse } from '../models/MessageListResponse.js';
+import type { PendingInteractionListResponse } from '../models/PendingInteractionListResponse.js';
 import type { ResolveUserApprovalRequest } from '../models/ResolveUserApprovalRequest.js';
 import type { SendMessageRequest } from '../models/SendMessageRequest.js';
 import type { UpdateConversationRequest } from '../models/UpdateConversationRequest.js';
@@ -85,6 +86,35 @@ export class AgentConversationsService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Interactions Waiting On You
+     * List every ask_user question, request_approval and Agent Host permission request waiting on the caller, across their own conversations in the pod, sub-agent conversations included and archived ones left out. Longest-waiting first. Resolve one through the conversation's approval decision endpoint, using tool_call_id as the approval id. A permission request drops off once the Agent Host has stopped waiting for it.
+     * @param podId
+     * @param pageToken
+     * @param limit
+     * @returns PendingInteractionListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationPendingInteractionList(
+        podId: string,
+        pageToken?: (string | null),
+        limit: number = 50,
+    ): CancelablePromise<PendingInteractionListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/conversations/pending-interactions',
+            path: {
+                'pod_id': podId,
+            },
+            query: {
+                'page_token': pageToken,
+                'limit': limit,
+            },
             errors: {
                 422: `Validation Error`,
             },
@@ -265,7 +295,7 @@ export class AgentConversationsService {
     }
     /**
      * Append Pod Conversation Message
-     * Append a user message without opening a Server-Sent Events stream. When a run is already active for the conversation, the message joins that run and the next harness step sees it in persisted history -- any stream already subscribed to the conversation surfaces the resulting events, so callers steering an in-flight run should attach to that stream rather than opening a second one here. When no run is active, this starts a new one exactly like the streaming send route, just without attaching a stream to it.
+     * Append a user message without opening a Server-Sent Events stream. When a run is already active for the conversation, the message joins that run and the next harness step sees it in persisted history -- any stream already subscribed to the conversation surfaces the resulting events, so callers steering an in-flight run should attach to that stream rather than opening a second one here. When no run is active, this starts a new one like the streaming send route, unstreamed.
      * @param podId
      * @param conversationId
      * @param requestBody

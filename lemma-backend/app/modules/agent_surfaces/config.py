@@ -75,6 +75,15 @@ class SurfaceSettings(BaseSettings):
             "testing of Bot Framework/Graph token acquisition."
         ),
     )
+    microsoft_bot_service_extra_host: Optional[str] = Field(
+        default=None,
+        description=(
+            "One more host, besides Microsoft's Bot Framework endpoints, that a "
+            "Teams activity's serviceUrl may name and so receive the bot token. "
+            "For test doubles and gateways only; it joins the allow-list, it "
+            "does not replace it."
+        ),
+    )
     microsoft_bot_app_name: Optional[str] = Field(
         default=None,
         description=(
@@ -131,6 +140,19 @@ class SurfaceSettings(BaseSettings):
     whatsapp_app_secret: Optional[SecretStr] = Field(
         default=None,
         description="Meta app secret for verifying WhatsApp webhook signatures",
+    )
+    whatsapp_reengage_template: str | None = Field(
+        default=None,
+        description=(
+            "An approved message template on the shared WhatsApp number's "
+            "business account, sent to a member whose 24-hour window has closed "
+            "on a surface with no template of its own. Unset, such a message is "
+            "refused."
+        ),
+    )
+    whatsapp_reengage_template_language: str = Field(
+        default="en_US",
+        description="The language code of WHATSAPP_REENGAGE_TEMPLATE.",
     )
     whatsapp_display_phone_number: Optional[str] = Field(
         default=None,
@@ -249,6 +271,76 @@ class SurfaceSettings(BaseSettings):
             "How many questions from people outside the pod one group may put to "
             "its bot in a day. A ceiling on what a busy or hostile group can "
             "spend, not a quota a working group should meet."
+        ),
+    )
+    surface_contact_turns_per_person_per_10_minutes: int = Field(
+        default=10,
+        description=(
+            "How many messages one contact may put to a bot within ten minutes "
+            "before it stops answering them for the rest of the window."
+        ),
+    )
+    surface_contact_turns_per_surface_per_day: int = Field(
+        default=1000,
+        description=(
+            "How many messages from contacts one bot answers in a day. A ceiling "
+            "on what a flood can spend; the organization's contacts cap is the "
+            "ceiling on money."
+        ),
+    )
+    surface_web_sessions_per_widget_per_day: int = Field(
+        default=2000,
+        description=(
+            "How many chats one web widget may start in a day. Its public key "
+            "is on a web page for anybody to copy, so this is the ceiling on "
+            "what copying it can cost."
+        ),
+    )
+    surface_web_submissions_per_widget_per_day: int = Field(
+        default=500,
+        description="How many times one web form may be submitted in a day.",
+    )
+    surface_web_reads_per_widget_per_day: int = Field(
+        default=20000,
+        description=(
+            "How many times pages may read Public tables through one web widget "
+            "in a day. Reads start no agent work, so this is a crawl ceiling, "
+            "not a cost one."
+        ),
+    )
+    surface_web_stream_seconds: int = Field(
+        default=300,
+        description=(
+            "How long one visitor's live stream stays open before the page "
+            "reconnects. Each open stream holds a realtime subscription, so "
+            "this bounds what an open tab costs."
+        ),
+    )
+    surface_new_contacts_per_surface_per_day: int = Field(
+        default=200,
+        description=(
+            "How many strangers one bot set to answer anyone may turn into "
+            "contacts in a day. Past it, new senders go unanswered until the "
+            "next day; contacts it already knows are unaffected."
+        ),
+    )
+    surface_contact_follow_ups_per_contact_per_day: int = Field(
+        default=10,
+        ge=0,
+        description=(
+            "How many messages members may write first to one contact in a "
+            "day. A follow-up speaks for the pod to somebody who did not ask, "
+            "on a number or address whose sender reputation the pod depends on."
+        ),
+    )
+    surface_parked_mail_notes_per_surface_per_hour: int = Field(
+        default=20,
+        ge=0,
+        description=(
+            "How many inbox notes about unverified email one bot leaves in an "
+            "hour. Anybody can forge mail from as many addresses as they like; "
+            "past this, one note says more arrived, and the rest of the hour's "
+            "are logged only."
         ),
     )
     surface_allow_unverified_phone_match: bool = Field(

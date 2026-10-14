@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
+
+from collections.abc import Callable
 from enum import StrEnum
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from app.core.domain.aggregate import AggregateRoot
 from app.core.domain.entity import Entity
@@ -138,7 +141,7 @@ def is_slack_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
     """A Slack conversation between several people and the bot (an ``mpim``)."""
     return (
         event.platform is SurfacePlatform.SLACK
-        and event.metadata.get("channel_type") == "mpim"
+        and InboundRoutingFacts.of(event).channel_type == "mpim"
     )
 
 
@@ -237,6 +240,9 @@ class ParsedSurfaceInteraction(BaseModel):
     external_user_id: str | None = None
     callback_id: str = ""
     action: str | None = None
+    #: ``"expired"`` (nothing the tap carried can be resolved), ``"other"``
+    #: (they want to type the answer) or ``"unreadable"`` (what the tap carried
+    #: could not be looked up just now, and tapping again may work).
     interaction_state: str | None = None
     values: dict[str, Any] = Field(default_factory=dict)
     # Set when the tapped control is a native approval button; carries the
@@ -289,7 +295,9 @@ class AgentSurfaceEntity(AggregateRoot):
     surface_identity_username: str | None = None
     #: The address this surface receives on, and the one it replies from.
     surface_identity_email: str | None = None
-    webhook_secret: str | None = None
+    #: Telegram's per-surface `secret_token`. A secret on the aggregate, so a
+    #: `repr` or a logged entity shows it masked; revealed where it is sent.
+    webhook_secret: SecretStr | None = None
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
 
     @property
@@ -381,8 +389,13 @@ class AgentSurfaceEntity(AggregateRoot):
         self.status = AgentSurfaceStatus.ACTIVE
         self.updated_at = datetime.now(timezone.utc)
 
+    def mark_webhook_unregistered(self) -> None:
+        """The platform never accepted this surface's webhook: nothing arrives."""
+        self.status = AgentSurfaceStatus.ERROR
+        self.updated_at = datetime.now(timezone.utc)
+
     def configure_webhook_secret(self, *, secret: str) -> None:
-        self.webhook_secret = secret
+        self.webhook_secret = SecretStr(secret)
         self.updated_at = datetime.now(timezone.utc)
 
     def update_config(
@@ -428,21 +441,19 @@ class AgentSurfaceEntity(AggregateRoot):
         return self.surface_type.value == str(platform).upper()
 
     def matches_tenant(self, tenant_id: str | None) -> bool:
-        if self.surface_type is SurfacePlatform.TEAMS:
-            expected = self.external_tenant_id
-            return not expected or not tenant_id or expected == tenant_id
-        if self.surface_type is SurfacePlatform.SLACK:
-            expected = self.external_workspace_id
-            return not expected or not tenant_id or expected == tenant_id
-        return True
+        """Whether an event from this tenant (or workspace) is this surface's.
 
-    def should_ignore_sender(self, sender_external_user_id: str | None) -> bool:
-        if self.surface_type is SurfacePlatform.SLACK:
-            return bool(
-                sender_external_user_id
-                and self.surface_identity_id == sender_external_user_id
-            )
-        return False
+        Fails closed on the two platforms whose installations are scoped to a
+        tenant: a surface that never recorded its tenant, or an event that
+        names none, matches nothing. Reading either as "any" let a tenantless
+        row accept every tenant's events, and an event with no tenant reach
+        every surface.
+        """
+        tenant_key = _TENANT_KEY.get(self.surface_type)
+        if tenant_key is None:
+            return True
+        expected = tenant_key(self)
+        return bool(expected) and bool(tenant_id) and expected == tenant_id
 
     def matches_channel(self, channel_id: str | None) -> bool:
         if not channel_id:
@@ -517,26 +528,21 @@ class AgentSurfaceEntity(AggregateRoot):
         # its own it admitted every threaded reply in a connected channel,
         # whoever it was to. The caller resolves the rest; see
         # `SurfaceInboundMixin._admit`.
-        if event.metadata.get("is_thread_reply") and thread_is_ours:
+        if InboundRoutingFacts.of(event).is_thread_reply and thread_is_ours:
             return True
-        if not event.mentioned_agent:
-            return False
-        if self.surface_type is SurfacePlatform.SLACK:
-            # Slack delivers `app_mention` only to the app that was mentioned,
-            # so the event type is itself the answer.
-            if event.metadata.get("event_type") == "app_mention":
-                return True
-            # A plain `message` reaches here whenever *anyone* was @-mentioned,
-            # because that is all the parser can tell. So it needs this
-            # surface's own bot id among them — and fails closed when there is
-            # no bot id to compare, which a surface created through the
-            # bundle/CLI path has not recorded. That case used to be read as
-            # "allow": the agent then answered every channel message in which
-            # two colleagues mentioned each other.
-            bot_user_id = self.surface_identity_id
-            mentioned_user_ids = set(event.metadata.get("mentioned_user_ids") or [])
-            return bool(bot_user_id) and bot_user_id in mentioned_user_ids
-        return True
+        # `mentioned_agent` means *this* bot by now: where the parser could
+        # not tell (a Slack `message` mentioning anyone, a Telegram @name),
+        # the platform's adapter settled it before admission
+        # (`InboundReader.settle_mention`).
+        return event.mentioned_agent
+
+
+#: Where a surface records the tenant its installation is scoped to, on the
+#: platforms that scope one. A platform absent here is not tenant-scoped.
+_TENANT_KEY: dict[SurfacePlatform, Callable[[AgentSurfaceEntity], str | None]] = {
+    SurfacePlatform.TEAMS: lambda surface: surface.external_tenant_id,
+    SurfacePlatform.SLACK: lambda surface: surface.external_workspace_id,
+}
 
 
 class AgentSurfaceConversationLink(Entity):

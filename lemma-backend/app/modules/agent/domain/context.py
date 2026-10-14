@@ -6,7 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.domain.outsiders import Audience
+from app.modules.agent.domain.value_objects import AgentToolset, JsonObject
 
 
 class ApprovedExecution(BaseModel):
@@ -75,19 +76,33 @@ class AgentContext(BaseModel):
     # rather than reading the same rows a second time. Typed loosely here to
     # keep this domain model free of a tools-layer import.
     grant_summary: object | None = None
-    # Rendered runtime brief (pod/user/granted resources) appended to the system
-    # prompt. Built once per run by the runner; harness-neutral so it just rides
-    # along on the context.
+    # The toolsets this run actually has -- declared, always-on and
+    # grant-derived -- resolved once by the run-context builder. The prompt
+    # reads its toolset guidance from this, so it describes the tools the run
+    # was given rather than the ones the agent row lists.
+    run_toolsets: list[AgentToolset] | None = None
+    # The part of the runtime brief that holds for the whole conversation (pod,
+    # user, this agent, what it can reach), appended to the system prompt.
+    # Built once per run by the runner; harness-neutral so it just rides along.
     context_brief: str | None = None
     # The text of the doc this conversation is attached to, rendered as a prompt
     # section; read fresh each run because the doc changes between turns.
     attached_document: str | None = None
-    # This run answers somebody outside the pod (see `domain/outsiders`). Tools
-    # then authorize as nobody -- Public reads only -- rather than as
-    # `user_id`, which on such a run is whoever looks after the conversation,
-    # not whoever asked. Resolved once from the conversation by every builder of
-    # this context, so no tool has to read the conversation to find out.
-    answers_outsider: bool = False
+    # What this person still owes somebody an answer to, rendered; None when
+    # nothing is open. Its tools are offered only when it is set.
+    open_notifications: str | None = None
+    # Everything that changes from one run of the conversation to the next,
+    # rendered once per run (`domain/run_context_prompt`). Sent next to the
+    # current turn and never stored, so the system prompt and the replayed
+    # history stay byte-identical between runs.
+    run_context: str | None = None
+    # Whom this run answers (see `domain/outsiders`). On a run answering
+    # somebody outside the pod, tools authorize as nobody -- Public reads only,
+    # plus a contact's own rows -- rather than as `user_id`, which on such a run
+    # is whoever looks after the conversation, not whoever asked. Resolved once
+    # from the conversation by every builder of this context, so no tool has to
+    # read the conversation to find out, and none can read it differently.
+    audience: Audience = Audience()
     # False for a run started by a private note (see `domain/private_notes`):
     # its answer stays in Lemma instead of going to the chat platform the
     # conversation also lives on. Read by the surface's run observer.

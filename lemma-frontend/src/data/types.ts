@@ -1,10 +1,12 @@
-import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChannelsResponse, GroupUpdateRequest, SurfaceUpdateRequest } from "lemma-sdk";
+import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChannelsResponse, GroupUpdateRequest, SurfaceUpdateRequest, ContactExportResponse } from "lemma-sdk";
+import type { Contact, ContactReach, ContactsCap, NewWebWidget, WebWidget, WidgetAnswer, WidgetDraft } from "./contacts";
+import type { Audience, TableOpening } from "./public-rows";
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
 import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
 import type { Choice, Computer, Runtime, RuntimeTest } from "./runtimes";
 import type { JoinPolicy, JoinRequest, OrgJoin } from "./joining";
-import type { ScheduleDraft, ScheduleRun, StandingJob, TargetChoice } from "@/schedule/schedules";
+import type { ScheduleDraft, ScheduleRun, ServerEvent, StandingJob, TargetChoice } from "@/schedule/schedules";
 
 /** The shapes the app renders. Both sources produce exactly these, so which
  *  one is in front of you is a configuration detail rather than a rewrite. */
@@ -309,6 +311,36 @@ export interface Pod {
     hiredBy?: string;
 }
 
+/** Another teammate this one can ask. Through you: you are in both, so it asks
+ *  as you, with your access there. Connected: that teammate let this one ask
+ *  it, with nobody present, reading only what it shared. Often both. */
+export interface AskablePod {
+    id: string;
+    name: string;
+    iconUrl: string | null;
+    description?: string;
+    throughYou: boolean;
+    connected: boolean;
+}
+
+/** What a connection lets the other teammate read, past what is Public. */
+export interface LinkShare {
+    kind: "table" | "folder";
+    name: string;
+}
+
+/** Another teammate connected to this one: it can ask this one with nobody
+ *  present, and read what was shared with it. */
+export interface PodLink {
+    podId: string;
+    name: string;
+    iconUrl: string | null;
+    description?: string;
+    /** Who connected it, and looks after it. */
+    stewardName?: string;
+    shared: LinkShare[];
+}
+
 /** Conversation is a tab like any other. It is always first, and it is the
  *  only one that carries a composer. */
 /** `status` is the datastore's processing status for a file (PENDING,
@@ -338,7 +370,7 @@ export interface ResourcePage<T> { items: T[]; next?: string | null }
  *  and fifty opens by default, a day and a hundred at the ceiling — so what
  *  comes back is the truth rather than what was asked for. */
 export interface SharedLink {
-    /** `{api}/s/{code}` — the bytes. */
+    /** `{api}/public/s/{code}` — the bytes. */
     rawUrl: string;
     /** The same document, rendered, for a person rather than a browser. */
     readUrl: string;
@@ -349,7 +381,7 @@ export interface SharedLink {
 
 /** A view of the space's own contents, filtered by kind — and `about`, the
  *  teammate the space belongs to. */
-export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "groups" | "settings" | "about";
+export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "groups" | "contacts" | "about";
 
 export type Tab =
     | { id: string; kind: "space"; label: string; view: SpaceView }
@@ -429,6 +461,12 @@ export interface ConversationRef {
     /** Where it came from — a channel, a schedule, a workflow run, a doc — as
      *  the backend recorded it on the conversation. */
     origin?: import("@/thread/conversation-origin").ConversationOrigin;
+    /** The run state as the server last said it (`RUNNING`, `WAITING`, …). */
+    status?: string | null;
+    /** A question, an approval or a permission request in it is waiting on
+     *  you. Not the same as WAITING: a run can wait on a timer, and an agent
+     *  asking permission on your computer is still running. */
+    waitingOnYou?: boolean;
 }
 
 /** One page of a teammate's conversations, most recently active first.
@@ -559,6 +597,14 @@ export interface PodSource {
     joinOrg(orgId: string): Promise<void>;
     createOrg(wanted: NewOrg): Promise<Org>;
     listPods(orgId: string): Promise<Pod[]>;
+    /** The other teammates this one can ask: through you, or connected. */
+    askablePods(podId: string): Promise<AskablePod[]>;
+    /** The teammates connected to this one, which can ask it. */
+    podLinks(podId: string): Promise<PodLink[]>;
+    /** Let another teammate ask this one, reading what is shared. Connecting
+     *  again replaces what is shared. */
+    connectPod(podId: string, askingPodId: string, shares: LinkShare[]): Promise<void>;
+    disconnectPod(podId: string, askingPodId: string): Promise<void>;
     getPod(podId: string): Promise<Pod | null>;
     listTabs(podId: string): Promise<Tab[]>;
     createPod(orgId: string, name: string, description?: string): Promise<Pod>;
@@ -622,6 +668,36 @@ export interface PodSource {
     /** Answer a question a group's people outside the space are waiting on
      *  you for. The bot passes the answer on in the group. */
     answerGroupQuestion(podId: string, notificationId: string, answer: string): Promise<void>;
+    /** The people the space's bots answer who are not in it, newest first. */
+    listContacts(podId: string): Promise<Contact[]>;
+    renameContact(podId: string, contactId: string, name: string | null): Promise<Contact>;
+    /** Forget a contact: their handles and every conversation with them. */
+    forgetContact(podId: string, contactId: string): Promise<void>;
+    /** What the space holds about a contact, as the API gives it, to hand over. */
+    exportContact(podId: string, contactId: string): Promise<ContactExportResponse>;
+    /** Write to a contact in their latest conversation, where its channel
+     *  allows. Throws with the API's `code` when it does not. */
+    followUpContact(podId: string, contactId: string, message: string): Promise<{ delivered: boolean; platform: string }>;
+    listWidgets(podId: string): Promise<WebWidget[]>;
+    createWidget(podId: string, draft: WidgetDraft): Promise<NewWebWidget>;
+    updateWidget(podId: string, widgetId: string, change: { answer?: WidgetAnswer; origins?: string[] }): Promise<WebWidget>;
+    /** A new signing secret, shown this once. */
+    /** A new signing secret for a widget; tokens signed with the old one stop working. */
+    reissueWidget(podId: string, widgetId: string): Promise<string>;
+    deleteWidget(podId: string, widgetId: string): Promise<void>;
+    /** Who outside the space may add rows to a table, and which columns could be open. */
+    tableOpening(podId: string, table: string): Promise<TableOpening>;
+    /** Let people outside add rows to a table — the rows a form adds. */
+    openTable(podId: string, table: string, audience: Audience, columns: string[]): Promise<TableOpening>;
+    closeTable(podId: string, table: string): Promise<void>;
+    /** The space's tables and functions, with which ones contacts can reach. */
+    contactReach(podId: string): Promise<ContactReach>;
+    /** Turning it on needs `columns`: what a contact may read of their own rows. */
+    setTableContactOwned(podId: string, table: string, on: boolean, columns?: string[]): Promise<void>;
+    setFunctionContactsInvoke(podId: string, fn: string, on: boolean): Promise<void>;
+    /** What answering contacts may cost the organization a month. */
+    contactsCap(orgId: string): Promise<ContactsCap>;
+    setContactsCap(orgId: string, limit: number | null): Promise<ContactsCap>;
     createSurfaceAccount(orgId: string, entry: Connectable, credentials: Record<string, unknown>): Promise<string>;
     /** The one-click path: a Lemma-run identity answers, with no account of
      *  yours. Returns the surface, which already carries the address. */
@@ -631,6 +707,10 @@ export interface PodSource {
      *  Archived ones come too — the ledger hides them behind a toggle rather
      *  than pretending they were deleted. */
     listRuntimes(orgId: string): Promise<Runtime[]>;
+    /** One runtime with what the list leaves out: for a coding agent, the
+     *  options its computer publishes now, per model. `null` when it is gone
+     *  or not this person's to read. */
+    getRuntime(orgId: string, runtimeId: string): Promise<Runtime | null>;
     /** What this organization would run on if nobody chose — the catalog's
      *  own default, so "inherit" can say what it inherits. */
     defaultRuntime(orgId: string): Promise<Choice | null>;
@@ -822,8 +902,11 @@ export interface PodSource {
      *  profile header counts. This carries what fires each one, what it runs,
      *  and whether the last fire worked — the fields the profile threw away. */
     listSchedules(podId: string): Promise<StandingJob[]>;
-    /** Recent firings of one schedule, newest first. */
-    listScheduleRuns(podId: string, scheduleId: string): Promise<ScheduleRun[]>;
+    /** Recent firings of one schedule, newest first. `skipped: false` (the
+     *  default) leaves out the events the schedule's filter skipped, which on a
+     *  busy webhook would otherwise crowd out every real firing; `true` lists
+     *  only those. */
+    listScheduleRuns(podId: string, scheduleId: string, options?: { skipped?: boolean }): Promise<ScheduleRun[]>;
     /** Pause or resume. One PATCH, and resuming clears the failure count the
      *  breaker was holding — see `is_explicit_reactivation` in the schedule
      *  service — so the row is re-read from what comes back. */
@@ -833,6 +916,9 @@ export interface PodSource {
     createSchedule(podId: string, draft: ScheduleDraft): Promise<StandingJob>;
     /** What a new schedule could wake: this pod's agents and its workflows. */
     scheduleTargets(podId: string): Promise<TargetChoice[]>;
+    /** Events on the MCP servers the caller connected, from the pod's event
+     *  catalog — what else a new schedule could start on. */
+    serverEvents(podId: string): Promise<ServerEvent[]>;
     /** `into` is a conversation id, `null` for the one already open, or
      *  NEW_CONVERSATION to start a fresh one with this first message. */
     send(podId: string, text: string, teammate?: Persona, into?: string | null): Promise<Conversation>;

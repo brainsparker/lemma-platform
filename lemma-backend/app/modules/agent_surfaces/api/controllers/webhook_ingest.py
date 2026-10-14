@@ -10,8 +10,12 @@ ever reach it.
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
+
+from fastapi import HTTPException
 
 from app.modules.agent_surfaces.contracts.whatsapp import (
     deployment_owns_whatsapp_number,
@@ -28,6 +32,8 @@ from app.modules.agent_surfaces.api.dependencies import (
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.errors import SurfaceWebhookAuthenticationError
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
 from app.modules.identity.contracts.whatsapp_verification import (
@@ -48,6 +54,43 @@ from app.modules.agent_surfaces.api.controllers.slack_webhook_verification impor
     slack_candidates_for_workspace,
     slack_team_id,
 )
+
+# Slack's challenge is a short opaque token. Anything else is not Slack's, and
+# echoing it would make this unauthenticated branch a reflector.
+_SLACK_CHALLENGE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def parse_webhook_platform(platform: str) -> SurfacePlatform:
+    """The platform a shared webhook path names, read once, case-insensitively.
+
+    The routes branched on the raw string, case-sensitively, while the
+    allow-list upper-cased it -- so ``/webhooks/WHATSAPP`` was allowed in but
+    skipped the WhatsApp verification-code branch, and ``/webhooks/Slack``
+    skipped per-workspace signature candidates.
+    """
+    try:
+        return SurfacePlatform(str(platform or "").strip().upper())
+    except ValueError:
+        raise SurfaceWebhookAuthenticationError(
+            "This platform does not support direct webhook ingress",
+            status_code=404,
+        ) from None
+
+
+def slack_url_verification(
+    payload: Mapping[str, object],
+    headers: dict[str, str],
+    security_service: SurfaceWebhookSecurityServiceDep,
+) -> dict[str, str]:
+    """Answer Slack's ``url_verification`` with its challenge and nothing else."""
+    security_service.verify_slack_handshake(headers=headers)
+    challenge = payload.get("challenge")
+    if not isinstance(challenge, str) or not _SLACK_CHALLENGE.fullmatch(challenge):
+        raise SurfaceWebhookAuthenticationError(
+            "Malformed Slack url_verification challenge", status_code=400
+        )
+    return {"challenge": challenge}
+
 
 _MODAL_OPENING_ACTION_IDS = {
     "lemma_channel_setup",
@@ -91,12 +134,17 @@ def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
-    """Decode a webhook body to JSON.
+    """Decode a webhook body to JSON, or refuse it with a 400.
 
     Most platforms send JSON. Slack interactivity (block_actions /
     view_submission) is ``application/x-www-form-urlencoded`` with a single
     ``payload=<json>`` field. Signature verification still runs over the raw
     bytes, so decoding here does not weaken auth.
+
+    A body that does not decode is refused rather than read as ``{}``. As an
+    empty object it was published as an event with nothing in it, and on Slack
+    it lost its ``team_id`` and was refused as a 401 -- which Slack counts
+    towards disabling the subscription, for what was a malformed request.
     """
     if not raw_body:
         return {}
@@ -107,10 +155,14 @@ def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
 
             fields = parse_qs(raw_body.decode("utf-8"))
             payload_values = fields.get("payload")
-            return json.loads(payload_values[0]) if payload_values else {}
-        return json.loads(raw_body.decode("utf-8"))
-    except Exception:
-        return {}
+            decoded = json.loads(payload_values[0]) if payload_values else {}
+        else:
+            decoded = json.loads(raw_body.decode("utf-8"))
+    except UnicodeDecodeError, ValueError:
+        decoded = None
+    if not isinstance(decoded, dict):
+        raise HTTPException(status_code=400, detail="Webhook body is not a JSON object")
+    return decoded
 
 
 async def _slack_candidates(uow_factory: UnitOfWorkFactory, payload: dict):

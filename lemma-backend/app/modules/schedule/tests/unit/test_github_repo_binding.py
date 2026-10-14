@@ -14,7 +14,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.connectors.infrastructure.webhook_sources.github import _repo_context
-from app.modules.agent.services.workspace_location import parse_project_repo
+from app.modules.agent.domain.workspace_location import parse_project_repo
 from app.modules.workflow.services.schedule_start_service import (
     _conversation_metadata,
 )
@@ -31,7 +31,7 @@ class TestWhatTheDeliverySays:
         context = _repo_context(
             {
                 "repository": REPOSITORY,
-                "pull_request": {"head": {"ref": "feature/commas"}},
+                "pull_request": {"head": {"ref": "feature/commas", "repo": REPOSITORY}},
             },
             "pull_request",
         )
@@ -125,7 +125,7 @@ class TestTheTwoHalvesAgree:
         context = _repo_context(
             {
                 "repository": REPOSITORY,
-                "pull_request": {"head": {"ref": "feature/commas"}},
+                "pull_request": {"head": {"ref": "feature/commas", "repo": REPOSITORY}},
             },
             "pull_request",
         )

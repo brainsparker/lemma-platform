@@ -144,6 +144,22 @@ def _egress_double() -> SurfaceEgress:
 #: Where `agent` publishes the conversation operations delivery calls.
 _OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
 
+#: Where a pod's own name is read, for the email ``From`` header.
+_POD_NAMES = "app.modules.agent_surfaces.services.group_names.pod_name_for"
+
+
+@pytest.fixture(autouse=True)
+def pod_name(monkeypatch):
+    """The pod's display name, doubled where the sender name reads it.
+
+    The real lookup is a query on the pod table. Patched at that seam rather
+    than on the callers, so a test can assert what a member sees in the ``From``
+    line without a database.
+    """
+    name = AsyncMock(return_value="Acme")
+    monkeypatch.setattr(_POD_NAMES, name)
+    return name
+
 
 @pytest.fixture(autouse=True)
 def conversations(monkeypatch):
@@ -158,6 +174,7 @@ def conversations(monkeypatch):
         surface_conversation=AsyncMock(return_value=None),
         open_surface_conversation=AsyncMock(return_value=_Conversation(uuid4())),
         append_notification_message=AsyncMock(),
+        pending_interaction=AsyncMock(return_value=None),
     )
     for name, double in vars(operations).items():
         monkeypatch.setattr(f"{_OPERATIONS}.{name}", double)
@@ -686,6 +703,9 @@ def _surface_for(agent_id, platform=SurfacePlatform.TELEGRAM, *, pod_id=None):
         surface_type=platform,
         config=SurfaceConfig(),
         agent_id=agent_id,
+        # Tenant-scoped platforms match only their own tenant's identities.
+        external_workspace_id="T123" if platform is SurfacePlatform.SLACK else None,
+        external_tenant_id="tenant-1" if platform is SurfacePlatform.TEAMS else None,
     )
 
 
@@ -820,7 +840,7 @@ async def test_a_chat_channel_does_not_spend_the_email_budget(
     chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
     service = _notification_service(
         surfaces=(chat_surface,),
-        external_user=SimpleNamespace(external_user_id="U123", tenant_id=None),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
     )
     link = _link_for(chat_surface)
     service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
@@ -913,7 +933,7 @@ async def test_the_connection_is_released_before_the_platform_send(
     chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
     service = _notification_service(
         surfaces=(chat_surface,),
-        external_user=SimpleNamespace(external_user_id="U123", tenant_id=None),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
     )
     link = _link_for(chat_surface)
     service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
@@ -944,14 +964,18 @@ async def test_the_connection_is_released_before_the_platform_send(
     )
 
 
-async def test_a_cold_open_carries_both_names_to_the_platform():
-    """Email puts the attribution in the From line, so it has to travel.
+async def test_a_cold_open_carries_the_senders_name_to_the_platform():
+    """Email puts the sender in the From line, so it has to travel.
 
     ``attribute()`` writes "On behalf of Deepak" into the body, which is
     invisible until the message is opened — and it never names the agent, so the
     From line is the only place "Priya" appears at all. The sender column is
     what a person scans in a list, and it named the deployment rather than the
     agent.
+
+    ``email_sender_name`` is the one that reaches the header, and for this
+    surface — the pod's own mailbox — it is the pod. The chat name stays "Priya"
+    beside it, because a chat platform puts that on the bot.
     """
     surface = _email_surface()
     notification = _notification()
@@ -975,12 +999,48 @@ async def test_a_cold_open_carries_both_names_to_the_platform():
         notification=notification,
         message="What did you ship?",
         agent_name="Priya",
-        actor_display_name="Deepak Jha",
     )
 
     metadata = egress_port.open_cold_email_thread.await_args.kwargs["metadata"]
     assert metadata["agent_display_name"] == "Priya"
-    assert metadata["actor_display_name"] == "Deepak Jha"
+    assert metadata["email_sender_name"] == "Acme"
+    # Not the actor: "On behalf of Ada Member" is in the body, where a full name
+    # fits. Sending it here as well is the header the report was about.
+    assert "actor_display_name" not in metadata
+
+
+async def test_a_named_agents_cold_mail_wears_its_name_when_the_caller_gave_none():
+    """A caller may leave ``agent_name`` out; the surface still names the agent.
+
+    Channel resolution picks the named agent's mailbox whether or not the caller
+    said who was writing, and without this the From line fell back to the
+    deployment's name on exactly the mail that had an agent to name.
+    """
+    surface = _email_surface().model_copy(update={"agent_id": uuid4()})
+    notification = _notification()
+    seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
+
+    egress_port = _egress_double()
+    egress_port.open_cold_email_thread.return_value = _thread_for(
+        surface, seed, "bob@example.com"
+    )
+    egress = NotificationEgress(
+        egress=egress_port,
+        uow=AsyncMock(),
+        conversation_link_repository=_links(),
+    )
+
+    await egress.send(
+        DeliveryChannel(surface=surface, email_address="bob@example.com"),
+        conversation_id=uuid4(),
+        notification=notification,
+        message="What did you ship?",
+        agent_name=None,
+    )
+
+    metadata = egress_port.open_cold_email_thread.await_args.kwargs["metadata"]
+    assert metadata["email_sender_name"] == "Ops"
+    egress_port.agent_name_for_surface.assert_awaited_once_with(surface)
 
 
 async def test_an_unknown_agent_name_is_absent_rather_than_None():
@@ -1008,12 +1068,10 @@ async def test_an_unknown_agent_name_is_absent_rather_than_None():
         notification=_notification(),
         message="What did you ship?",
         agent_name=None,
-        actor_display_name=None,
     )
 
     kwargs = egress_port.send_agent_message_for_conversation.await_args.kwargs
     assert "agent_display_name" not in kwargs["metadata"]
-    assert "actor_display_name" not in kwargs["metadata"]
 
 
 # ------------------------------------------- the channel the agent chose
@@ -1022,7 +1080,7 @@ async def test_an_unknown_agent_name_is_absent_rather_than_None():
 def _identity(external_user_id: str, *, user_id=None):
     """One cached platform identity. ``tenant_id`` is what scopes it."""
     return SimpleNamespace(
-        external_user_id=external_user_id, tenant_id=None, resolved_user_id=user_id
+        external_user_id=external_user_id, tenant_id="T123", resolved_user_id=user_id
     )
 
 
@@ -1226,7 +1284,7 @@ async def _deliver_and_read_header(monkeypatch, *, actor_user_id, recipient_user
     )
 
     await service.deliver(
-        notification, agent_name="Priya", actor_display_name="Deepak Jha"
+        notification, agent_name="Priya", actor_display_name="Ada Member"
     )
     return service.egress.egress.open_cold_email_thread.await_args.kwargs
 
@@ -1245,7 +1303,9 @@ async def test_a_message_to_its_own_asker_carries_no_header(monkeypatch):
     )
 
     assert kwargs["message"] == "What did you ship yesterday?"
-    assert kwargs["metadata"]["actor_display_name"] == "Deepak Jha"
+    # Not in the metadata either: the From line is the pod's name, and the
+    # person's own name on a message they asked for is what the body omits.
+    assert "actor_display_name" not in kwargs["metadata"]
 
 
 async def test_a_colleagues_authority_is_still_named(monkeypatch):
@@ -1258,6 +1318,105 @@ async def test_a_colleagues_authority_is_still_named(monkeypatch):
         monkeypatch, actor_user_id=uuid4(), recipient_user_id=uuid4()
     )
 
-    assert kwargs["message"].startswith("On behalf of Deepak Jha:")
+    assert kwargs["message"].startswith("On behalf of Ada Member:")
     # Never the agent: the bot it arrives from is already the answer to that.
     assert "Priya" not in kwargs["message"]
+    # And the body is the only place the person is named. The From line says the
+    # pod, which is the whole of the header's job.
+    assert "actor_display_name" not in kwargs["metadata"]
+    assert kwargs["metadata"]["email_sender_name"] == "Acme"
+
+
+# ------------------------------------------- sent once, and only where it landed
+
+
+def _chat_service_with_link(conversations, *, touched: datetime):
+    agent_id = uuid4()
+    surface = _surface_for(agent_id, SurfacePlatform.SLACK)
+    service = _notification_service(
+        surfaces=(surface,),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
+    )
+    link = _link_for(surface)
+    links = service.channels.links
+    links.get_latest_by_surface_and_external_user = AsyncMock(return_value=link)
+    links.conversation_holds_notification = AsyncMock(return_value=False)
+    links.repoint_conversation_for_outbound = AsyncMock(return_value=link)
+    previous = _Conversation(link.conversation_id)
+    previous.updated_at = touched
+    conversations.surface_conversation.return_value = previous
+    return service, surface, agent_id, link
+
+
+async def test_a_send_whose_outcome_was_never_recorded_is_not_sent_again(
+    monkeypatch, conversations
+):
+    """The platform took it; writing that down failed. The retry must not post.
+
+    The row is SENDING when the send starts, in the commit before it, so a retry
+    with the same key finds a send that may have landed rather than none at all.
+    """
+    _email_configured(monkeypatch)
+    service, surface, agent_id, _link = _chat_service_with_link(
+        conversations, touched=datetime.now(timezone.utc)
+    )
+    committed: dict[str, NotificationEntity] = {}
+
+    async def create(entity: NotificationEntity) -> NotificationEntity:
+        return committed.get("row", entity)
+
+    async def update(entity: NotificationEntity) -> NotificationEntity:
+        if entity.delivery_status is NotificationDeliveryStatus.DELIVERED:
+            # The connection drops as the delivery is recorded; asyncpg says so
+            # with an OSError, which the channel loop also catches.
+            raise OSError("connection lost recording the delivery")
+        committed["row"] = entity.model_copy()
+        return entity
+
+    service.notifications.create = AsyncMock(side_effect=create)
+    service.notifications.update = AsyncMock(side_effect=update)
+    service.membership.get_pod_member_id.return_value = uuid4()
+
+    for _ in range(2):
+        try:
+            await service.notify(
+                pod_id=surface.pod_id,
+                recipient_user_id=uuid4(),
+                title="Standup",
+                body="What did you ship?",
+                origin_kind=NotificationOriginKind.AGENT_RUN,
+                actor_agent_id=agent_id,
+                idempotency_key="run:1:tool:1",
+            )
+        except OSError:
+            pass
+
+    service.egress.egress.send_agent_message_for_conversation.assert_awaited_once()
+    assert committed["row"].delivery_status is NotificationDeliveryStatus.SENDING
+
+
+async def test_a_send_that_did_not_land_gives_the_thread_back(conversations):
+    """A cold thread is moved to a fresh conversation for the notification.
+
+    When nothing arrived there, the person's next message belongs where their
+    thread was; leaving the link moved cut it off from what they were doing.
+    """
+    service, surface, agent_id, link = _chat_service_with_link(
+        conversations, touched=datetime(2020, 1, 1, tzinfo=timezone.utc)
+    )
+    opened = conversations.open_surface_conversation.return_value.id
+    service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
+    service.egress.egress.send_agent_message_for_conversation.return_value = False
+
+    await service.deliver(_notification(pod_id=surface.pod_id, actor_agent_id=agent_id))
+
+    moved, restored = (
+        service.channels.links.repoint_conversation_for_outbound.await_args_list
+    )
+    assert moved.kwargs["conversation_id"] == opened
+    assert restored.kwargs == {
+        "link_id": link.id,
+        "conversation_id": link.conversation_id,
+        "expected_conversation_id": opened,
+        "routed_agent_id": link.routed_agent_id,
+    }

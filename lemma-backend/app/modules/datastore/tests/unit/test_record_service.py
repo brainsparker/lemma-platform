@@ -14,9 +14,11 @@ from app.modules.datastore.domain.datastore_entities import (
     DatastoreTableEntity,
 )
 from app.modules.datastore.domain.errors import DatastoreValidationError
+from app.core.authorization.function_run import NOBODY_USER_ID
 from app.modules.datastore.domain.events import (
     DatastoreRecordEvent,
     DatastoreRecordOperation,
+    RecordOrigin,
 )
 from app.modules.datastore.services.record_events import RecordEventCoordinator
 from app.modules.datastore.services.record_service import (
@@ -397,6 +399,85 @@ async def test_bulk_create_passes_no_event_factory_when_events_disabled():
     assert kwargs["event_factory"] is None
 
 
+async def _every_write_event(
+    ctx: TableContext, user_id: UUID
+) -> list[DatastoreRecordEvent]:
+    """Insert, update, delete and bulk-insert one row each; their events."""
+    record_id = str(uuid4())
+    stored = type(
+        "StoredRecord",
+        (),
+        {"user_id": None, "id": record_id, "data": {"merchant": "Hotel"}},
+    )()
+    staged_events = []
+
+    async def write(*args, event_factory, **kwargs):
+        staged_events.append(event_factory(stored))
+        return stored
+
+    record_repository = AsyncMock()
+    for method in ("create_record", "update_record", "delete_record"):
+        getattr(record_repository, method).side_effect = write
+    record_repository.bulk_create_records.side_effect = write
+    service = RecordService(record_repository=record_repository)
+
+    await service.create_record(ctx, {"merchant": "Hotel"}, user_id)
+    await service.update_record(ctx, record_id, {"merchant": "Inn"}, user_id)
+    await service.delete_record(ctx, record_id, user_id)
+    await service.bulk_create_records(ctx, [{"merchant": "Cafe"}], user_id)
+    return staged_events
+
+
+def _working_for_contact(contact_id: UUID) -> AsyncMock:
+    """A function run a contact started: the function's workload, their id."""
+    ctx = AsyncMock()
+    ctx.contact_id = contact_id
+    return ctx
+
+
+async def test_a_contacts_function_writes_rows_as_from_outside():
+    """A function a contact called writes as its own workload, for nobody in
+    the pod, and what it writes came from the contact's chat through a model.
+    Every event it raises says so, as a visitor's form row does, so a DATASTORE
+    schedule does not take it for a member's."""
+    contact_id = uuid4()
+    token = set_current_context(_working_for_contact(contact_id))
+    try:
+        events = await _every_write_event(_events_enabled_context(), NOBODY_USER_ID)
+    finally:
+        reset_current_context(token)
+
+    assert [e.operation for e in events] == [
+        DatastoreRecordOperation.INSERT,
+        DatastoreRecordOperation.UPDATE,
+        DatastoreRecordOperation.DELETE,
+        DatastoreRecordOperation.INSERT,
+    ]
+    for event in events:
+        assert event.origin is RecordOrigin.OUTSIDE
+        assert event.outside_actor == f"contact:{contact_id}"
+        assert event.actor_id is None
+
+
+async def test_a_members_write_and_a_visitors_row_keep_their_own_names():
+    user_id = uuid4()
+    token = set_current_context(_member_ctx())
+    try:
+        member = await _every_write_event(_events_enabled_context(), user_id)
+        opened = _events_enabled_context()
+        opened.outside_actor = "visitor:session-1"
+        visitor = await _every_write_event(opened, user_id)
+    finally:
+        reset_current_context(token)
+
+    assert {(e.origin, e.actor_id, e.outside_actor) for e in member} == {
+        (RecordOrigin.MEMBER, user_id, None)
+    }
+    assert {(e.origin, e.actor_id, e.outside_actor) for e in visitor} == {
+        (RecordOrigin.OUTSIDE, None, "visitor:session-1")
+    }
+
+
 async def test_record_event_carries_row_owner_for_rls_table():
     """RLS tables tag events with the row owner so change subscribers can scope
     delivery to that user without a database read."""
@@ -506,7 +587,7 @@ async def test_transactional_admin_delete_stages_original_rls_row_owner():
 
     record_repository.delete_record.side_effect = delete_record
     dispatcher = AsyncMock()
-    auth_context = AsyncMock()
+    auth_context = _member_ctx()
     auth_context.can.return_value = True
     service = RecordService(
         record_repository=record_repository,
@@ -1044,10 +1125,18 @@ def _rls_table_entity() -> DatastoreTableEntity:
     )
 
 
+def _member_ctx() -> AsyncMock:
+    """A member's context: no contact on it, and not an outsider."""
+    ctx = AsyncMock()
+    ctx.contact_id = None
+    ctx.is_outsider = False
+    return ctx
+
+
 async def test_execute_readonly_query_scopes_to_user_by_default_even_for_admin():
     # Without admin mode, an RLS query is row-scoped to the caller even when they
     # administer the table — the admin signal is never consulted.
-    ctx = AsyncMock()
+    ctx = _member_ctx()
     ctx.can.return_value = True  # caller administers the table
     table_service = AsyncMock()
     table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
@@ -1069,13 +1158,15 @@ async def test_execute_readonly_query_scopes_to_user_by_default_even_for_admin()
     table_service.get_tables.assert_awaited_once()  # per-table read authorization
     ctx.can.assert_not_awaited()
     assert (
-        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        record_repository.execute_readonly_query.await_args.kwargs[
+            "principal"
+        ].is_pod_admin
         is False
     )
 
 
 async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on_all_rls_tables():
-    ctx = AsyncMock()
+    ctx = _member_ctx()
     ctx.can.return_value = True  # caller administers the table
     table_service = AsyncMock()
     table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
@@ -1102,7 +1193,9 @@ async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on
     assert (rows, total) == ([{"merchant": "x"}], 1)
     table_service.get_tables.assert_awaited_once()  # per-table read authorization
     assert (
-        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        record_repository.execute_readonly_query.await_args.kwargs[
+            "principal"
+        ].is_pod_admin
         is True
     )
 
@@ -1110,7 +1203,7 @@ async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on
 async def test_execute_readonly_query_admin_mode_rejected_when_not_table_admin():
     from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
 
-    ctx = AsyncMock()
+    ctx = _member_ctx()
     ctx.can.return_value = False  # caller does not administer the table
     table_service = AsyncMock()
     table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
@@ -1134,7 +1227,7 @@ async def test_execute_readonly_query_admin_mode_rejected_when_not_table_admin()
 
 
 async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced():
-    ctx = AsyncMock()
+    ctx = _member_ctx()
     table_service = AsyncMock()
     record_repository = AsyncMock()
     record_repository.execute_readonly_query.return_value = ([{"n": 1}], 1, False)
@@ -1155,7 +1248,9 @@ async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced
     ctx.require.assert_awaited()
     table_service.get_table.assert_not_awaited()
     assert (
-        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        record_repository.execute_readonly_query.await_args.kwargs[
+            "principal"
+        ].is_pod_admin
         is False
     )
 

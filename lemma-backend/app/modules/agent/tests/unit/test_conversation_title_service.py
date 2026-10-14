@@ -23,10 +23,17 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+
+from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+from app.modules.agent.domain.runtime_profiles import (
+    RuntimeModelCapability,
+    RuntimeProfileProtocol,
+)
 import structlog
 
 from app.core.log.log import setup_logging
 from app.modules.agent.domain.entities import Conversation, Message
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.infrastructure.repositories.conversation_opening_texts import (
     ConversationOpeningTexts,
@@ -40,6 +47,8 @@ from app.modules.agent.services.conversation_title_service import (
     title_matches_user_script,
 )
 from app.modules.agent.services.realtime import title_updated_payload
+from app.modules.usage.contracts.execution import current_usage_context
+from app.modules.usage.domain.accounting import CONTACT_RUN
 
 
 # --- collaborators -------------------------------------------------------
@@ -129,15 +138,8 @@ class _FakeRepo:
         self.uow = uow
 
     async def get_conversation(
-        self, conversation_id, *, include_messages=False, include_runs=False
+        self, conversation_id, *, include_runs=False
     ) -> Conversation | None:
-        if include_messages:
-            # Titling needs two rows. Loading the transcript to find them cost
-            # seconds of materialisation inside an open transaction.
-            raise AssertionError(
-                "titling must not load the transcript; "
-                "use get_conversation_opening_texts"
-            )
         return self.uow.conversation
 
     async def get_conversation_opening_texts(self, conversation_id):
@@ -175,7 +177,7 @@ class _FakeGenerator:
         self.calls: list[dict] = []
 
     async def generate(
-        self, *, user_id, organization_id, pod_id, user_text, reply_text
+        self, *, user_id, organization_id, pod_id, user_text, reply_text, audience=None
     ) -> str | None:
         self.calls.append(
             {
@@ -184,6 +186,7 @@ class _FakeGenerator:
                 "pod_id": pod_id,
                 "user_text": user_text,
                 "reply_text": reply_text,
+                "audience": audience,
             }
         )
         if self._fails:
@@ -478,21 +481,29 @@ async def test_counter_says_which_title_path_ran(
 class _FakeResolved:
     credentials: dict[str, object] = {}
     model_name_for_harness = "deepseek-v4-flash"
+    profile = SimpleNamespace(protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE)
 
-    def public_snapshot(self) -> dict[str, object | None]:
-        return {
-            "profile_id": "system:lemma",
-            "scope": "SYSTEM",
-            "protocol": "OPENAI_COMPATIBLE",
-            "model_name": "deepseek-v4-flash",
-            "provider_model_name": "accounts/fireworks/models/deepseek-v4-flash",
-            "config": {"base_url": "http://fireworks.test/v1"},
-        }
+    def __init__(self, *, reasons: bool = True) -> None:
+        self.capabilities = [RuntimeModelCapability.TEXT] + (
+            [RuntimeModelCapability.REASONING] if reasons else []
+        )
+
+    def runtime_snapshot(self) -> RuntimeSnapshot:
+        return RuntimeSnapshot(
+            profile_id="system:lemma",
+            profile_name="Lemma",
+            scope="SYSTEM",
+            protocol="OPENAI_COMPATIBLE",
+            model_name="deepseek-v4-flash",
+            provider_model_name="accounts/fireworks/models/deepseek-v4-flash",
+            config={"base_url": "http://fireworks.test/v1"},
+        )
 
 
 class _FakeProfileService:
-    def __init__(self) -> None:
+    def __init__(self, *, reasons: bool = True) -> None:
         self.resolved: list[dict] = []
+        self.reasons = reasons
 
     async def resolve(self, *, runtime, organization_id, user_id):
         self.resolved.append(
@@ -503,11 +514,14 @@ class _FakeProfileService:
                 "user_id": user_id,
             }
         )
-        return _FakeResolved()
+        return _FakeResolved(reasons=self.reasons)
 
 
 def _generator(
-    *, output: str = "A nice title", raise_on_run: bool = False
+    *,
+    output: str = "A nice title",
+    raise_on_run: bool = False,
+    reasons: bool = True,
 ) -> tuple[ConversationTitleGenerator, dict]:
     """The real generator with only the model boundary faked."""
     capture: dict[str, object] = {"run_calls": 0, "usage": []}
@@ -526,7 +540,7 @@ def _generator(
                 raise RuntimeError("llm boom")
             return SimpleNamespace(output=output)
 
-    profiles = _FakeProfileService()
+    profiles = _FakeProfileService(reasons=reasons)
     capture["profiles"] = profiles
     return (
         ConversationTitleGenerator(
@@ -562,7 +576,7 @@ async def test_generator_sanitizes_what_the_model_returned() -> None:
 @pytest.mark.asyncio
 async def test_generator_does_not_pay_for_a_hidden_reasoning_trace() -> None:
     """A reasoning model must not spend the token budget on a chain-of-thought
-    trace for a 3-6 word title (see the module docstring / _TITLE_MODEL_SETTINGS)."""
+    trace for a 3-6 word title (see `title_model_settings`)."""
     generator, capture = _generator()
 
     await _ask(generator, user_text="Plan a trip to Japan")
@@ -570,6 +584,21 @@ async def test_generator_does_not_pay_for_a_hidden_reasoning_trace() -> None:
     assert capture["model_settings"] == {"openai_reasoning_effort": "none"}
     assert capture["usage_limits"].request_limit == 1
     assert capture["system_prompt"] == cts._TITLE_SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_a_title_on_a_model_that_does_not_reason_asks_for_no_effort() -> None:
+    """A non-reasoning OpenAI-compatible model rejects `reasoning_effort`.
+
+    The title used to send `none` to whatever resolved -- the workspace
+    fallback included -- and a strict endpoint's 400 fell back, silently, to
+    the first message as the title.
+    """
+    generator, capture = _generator(reasons=False)
+
+    await _ask(generator, user_text="Plan a trip to Japan")
+
+    assert "openai_reasoning_effort" not in (capture["model_settings"] or {})
 
 
 @pytest.mark.asyncio
@@ -582,6 +611,53 @@ async def test_generator_propagates_provider_failure() -> None:
         await _ask(generator, user_text="Plan a trip to Japan")
 
     assert capture["run_calls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_title_for_a_contacts_conversation_is_the_contacts_spend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Counted towards the contacts cap, never the owner's own allowance."""
+    _enable_llm_titling(monkeypatch)
+    contact_id = uuid4()
+    conv = _conversation()
+    conv.metadata = Audience.contact(contact_id).to_metadata()
+    generator = _FakeGenerator()
+
+    await _service(_FakeUow(conv, []), generator=generator).generate_title_if_absent(
+        conv.id
+    )
+
+    assert generator.calls[0]["audience"] == Audience.contact(contact_id)
+
+    seen: dict[str, object] = {}
+    real, _ = _generator()
+    original = real._llm_agent
+
+    def _watching_agent(model, system_prompt=None):
+        agent = original(model, system_prompt=system_prompt)
+        run = agent.run
+
+        async def _run(*args, **kwargs):
+            seen["context"] = current_usage_context()
+            return await run(*args, **kwargs)
+
+        agent.run = _run
+        return agent
+
+    real._llm_agent = _watching_agent
+    await real.generate(
+        user_id=uuid4(),
+        organization_id=None,
+        pod_id=uuid4(),
+        user_text="hi",
+        reply_text=None,
+        audience=Audience.contact(contact_id),
+    )
+
+    context = seen["context"]
+    assert context.source_type == "conversation_title"
+    assert context.outside_audience == CONTACT_RUN
 
 
 @pytest.mark.asyncio

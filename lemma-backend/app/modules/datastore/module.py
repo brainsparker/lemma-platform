@@ -183,6 +183,9 @@ def _routers():
     from app.modules.datastore.api.controllers.record_controller import router as record
     from app.modules.datastore.api.controllers.query_controller import router as query
     from app.modules.datastore.api.controllers.table_controller import router as table
+    from app.modules.datastore.api.controllers.public_rows_controller import (
+        router as public_rows,
+    )
     from app.modules.datastore.api.controllers.file_controller import router as file
     from app.modules.datastore.api.controllers.signed_link_controller import (
         router as signed_link,
@@ -207,6 +210,7 @@ def _routers():
         record,
         query,
         table,
+        public_rows,
         signed_link,
         processing,
         file,
@@ -227,6 +231,7 @@ def _event_routers():
 
 def _register_streaq() -> None:
     import app.modules.datastore.events.orphan_schema_tasks  # noqa: F401
+    import app.modules.datastore.events.outbox_retention_tasks  # noqa: F401
 
 
 @asynccontextmanager

@@ -27,12 +27,21 @@ export interface ApprovalDetails {
 export const HOST_PERMISSION_WINDOW_MS = 30 * 60_000;
 
 /** Whether a coding agent's request can no longer be answered: its window
- *  has passed, or the run it paused has ended. */
+ *  has passed, or the run it paused has ended.
+ *
+ *  Neither applies while the conversation is waiting on it. Lemma ends a turn
+ *  left parked on a request (the parked window, well inside the computer's
+ *  own), keeps the request open, and resumes a new run with the decision. */
 export function hostPermissionExpired(
     details: Pick<ApprovalDetails, "hostPermission">,
-    { askedAtMs, nowMs, runEnded }: { askedAtMs?: number; nowMs: number; runEnded: boolean },
+    {
+        askedAtMs,
+        nowMs,
+        runEnded,
+        resumesOnAnswer = false,
+    }: { askedAtMs?: number; nowMs: number; runEnded: boolean; resumesOnAnswer?: boolean },
 ): boolean {
-    if (!details.hostPermission) return false;
+    if (!details.hostPermission || resumesOnAnswer) return false;
     if (runEnded) return true;
     return askedAtMs !== undefined && nowMs >= askedAtMs + HOST_PERMISSION_WINDOW_MS;
 }

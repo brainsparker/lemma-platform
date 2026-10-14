@@ -46,12 +46,29 @@ class RuntimeNeverReached(InvocationOutcomeUnconfirmed):
     """
 
 
+#: The runtime's name for a run that waited for a free worker until its deadline.
+RUNTIME_NEVER_STARTED_ERROR = "RuntimeOverloaded"
+
+
 def runtime_failure_message(request: RuntimeTerminalRequest) -> str:
     """The message for a run the runtime itself reported as failed."""
     assert request.error is not None
-    if request.error.name == "TimeoutError":
+    return runtime_error_message(request.error.name, request.error.message)
+
+
+def runtime_error_message(name: str, message: str) -> str:
+    # asyncio.wait_for raises the built-in TimeoutError without a message, so
+    # the type is the whole signal.
+    if name == "TimeoutError":
         return "Function execution timed out (deadline exceeded)"
-    return redact_text(f"{request.error.name}: {request.error.message}")[:16_384]
+    if name == RUNTIME_NEVER_STARTED_ERROR:
+        # Distinct from a timeout on purpose: nothing ran, so the reader may
+        # retry, and the remedy is capacity rather than a faster function.
+        return (
+            "Function never started: no function worker was free before the "
+            "deadline. Nothing ran, so it is safe to retry."
+        )
+    return redact_text(f"{name}: {message}")[:16_384]
 
 
 def execution_error(exc: BaseException) -> str:

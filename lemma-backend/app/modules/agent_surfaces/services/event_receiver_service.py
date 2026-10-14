@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+
 import asyncio
 import socket
 import uuid
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import UUID
 
 from redis.asyncio import Redis
 
-from app.core.config import reveal_secret
 from app.core.infrastructure.redis.client import get_redis
 
 from app.core.config import settings
@@ -23,33 +23,34 @@ from app.modules.agent_surfaces.services.telegram_polling_runner import (
 from app.core.log.log import get_logger
 from app.core.request_context import create_background_task
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceEntity,
-    SurfaceCredentialMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.infrastructure.adapters.account_adapter import (
     SqlAlchemySurfaceAccountAdapter,
 )
-from app.modules.agent_surfaces.platforms.slack.client import slack_access_token
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
+from app.modules.agent_surfaces.domain.credentials import CredentialPayload
 from app.modules.agent_surfaces.services.native_receiver_base import (
     _publish_native_receiver_event,
     NativeReceiverCandidate,
     ReceiverRunnerFactory,
     receiver_key as _receiver_key,
     NativeReceiverConflict,
+    NativeReceiverCredentialsRejected,
 )
 from app.modules.agent_surfaces.services.resend_polling_receiver import (
     ResendPollingReceiverRunner,
-    resend_candidate_from_surface,
-    resend_receiver_credentials,
 )
-
-if TYPE_CHECKING:
-    from slack_sdk.socket_mode.aiohttp import SocketModeClient
-    from slack_sdk.socket_mode.request import SocketModeRequest
+from app.modules.agent_surfaces.services.native_receiver_candidates import (
+    candidate_from_surface as _candidate_from_surface,
+    receiver_credentials as _receiver_credentials,
+    system_telegram_candidate,
+)
+from app.modules.agent_surfaces.services.slack_socket_runner import (
+    SlackSocketReceiverRunner,
+)
 
 logger = get_logger(__name__)
 
@@ -80,8 +81,10 @@ async def notify_surface_receiver_config_changed(
             {"surface_id": str(surface_id) if surface_id else None},
         )
     except Exception:
-        logger.debug(
-            "agent_surfaces.event_receiver_service.could_not_publish_surface_receiver.observed",
+        # The coordinators still find the change on their next scan; this is
+        # the difference between a receiver starting now and in a minute.
+        logger.warning(
+            "agent_surfaces.event_receiver_service.receiver_wakeup_publish_failed.degraded",
             exc_info=True,
         )
 
@@ -225,21 +228,15 @@ class NativeSurfaceReceiverCoordinator:
             repository = SurfaceRepository(uow)
             account_port = SqlAlchemySurfaceAccountAdapter(uow)
             surfaces = await repository.list_active_native_receiver_surfaces(platforms)
-            account_cache: dict[UUID, dict[str, Any]] = {}
+            account_cache: dict[UUID, CredentialPayload] = {}
             candidates: dict[str, NativeReceiverCandidate] = {}
-            system_telegram_token = (
-                reveal_secret(surface_settings.telegram_bot_token) or ""
-            ).strip()
-            if SurfacePlatform.TELEGRAM in platforms and system_telegram_token:
-                token = system_telegram_token
-                key = _receiver_key("telegram", "system", token)
-                candidates[key] = NativeReceiverCandidate(
-                    key=key,
-                    platform=SurfacePlatform.TELEGRAM,
-                    surface_ids=(),
-                    credential_label="system",
-                    credentials={"bot_token": token},
-                )
+            system_telegram = (
+                system_telegram_candidate()
+                if SurfacePlatform.TELEGRAM in platforms
+                else None
+            )
+            if system_telegram is not None:
+                candidates[system_telegram.key] = system_telegram
 
             for surface in surfaces:
                 credentials = await _receiver_credentials(
@@ -273,8 +270,10 @@ class NativeSurfaceReceiverCoordinator:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.debug(
-                "agent_surfaces.event_receiver_service.native_surface_receiver_wakeup_listener.diagnostic",
+            # Without the listener a surface change waits for the next scan
+            # instead of starting its receiver at once.
+            logger.warning(
+                "agent_surfaces.event_receiver_service.wakeup_listener_failed.degraded",
                 exc_info=True,
             )
             self._wakeup.set()
@@ -289,14 +288,14 @@ class NativeSurfaceReceiverCoordinator:
         # with a traceback, so letting the conflict escape would report a
         # misconfiguration this function handles as an unhandled crash, once
         # per stand-down.
-        refused = False
+        refused: NativeReceiverConflict | None = None
 
         async def run_receiver() -> None:
             nonlocal refused
             try:
                 await runner.run()
-            except NativeReceiverConflict:
-                refused = True
+            except NativeReceiverConflict as exc:
+                refused = exc
 
         runner_task = create_background_task(
             run_receiver(), name=f"surface-runner-{candidate.key}"
@@ -313,7 +312,16 @@ class NativeSurfaceReceiverCoordinator:
             )
             for task in done:
                 task.result()
-            if refused:
+            if isinstance(refused, NativeReceiverCredentialsRejected):
+                logger.warning(
+                    "agent_surfaces.event_receiver_service.native_receiver_credentials_rejected.degraded",
+                    platform=candidate.platform.value,
+                    credential_label=candidate.credential_label,
+                    cooldown_seconds=_CONFLICT_COOLDOWN_SECONDS,
+                    reason=str(refused),
+                )
+                await self._mark_conflicted(candidate.key)
+            elif refused is not None:
                 # Loud, and at a level that survives LOG_LEVEL=INFO. Silence
                 # here is what made a bot shared between two installations
                 # look like an unreliable bot rather than a configuration to
@@ -332,8 +340,13 @@ class NativeSurfaceReceiverCoordinator:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.debug(
-                "agent_surfaces.event_receiver_service.native_surface_receiver_stopped_platform.diagnostic",
+            # A receiver that crashed is a bot nobody hears until the next
+            # scan restarts it -- and at debug, a bot that went quiet with no
+            # record of why.
+            logger.warning(
+                "agent_surfaces.event_receiver_service.native_receiver_stopped.failed",
+                platform=candidate.platform.value,
+                credential_label=candidate.credential_label,
                 exc_info=True,
             )
         finally:
@@ -384,188 +397,25 @@ class NativeSurfaceReceiverCoordinator:
         await self._redis.eval(_RELEASE_LOCK_SCRIPT, 1, _lease_key(key), self._owner)
 
 
-# The Socket Mode envelope types whose payload is the same JSON Slack POSTs to
-# the HTTP webhook: an Events API event, and an interaction (a button press, a
-# modal submission -- the HTTP route unwraps its form-encoded `payload=` field to
-# exactly this). Slash commands are the third envelope type and are not here on
-# purpose: the HTTP route has no reading of one either, so publishing it would
-# only queue a payload nothing can parse.
-_PUBLISHED_ENVELOPE_TYPES = frozenset({"events_api", "interactive"})
-
-
-class SlackSocketReceiverRunner:
-    def __init__(self, candidate: NativeReceiverCandidate) -> None:
-        self._candidate = candidate
-
-    async def _handle_envelope(
-        self, socket_client: SocketModeClient, req: SocketModeRequest
-    ) -> None:
-        """Publish what this envelope carries, and only then acknowledge it.
-
-        Two things were wrong with the listener this replaces. It answered Slack
-        first and published second, so a Redis failure between the two lost the
-        event for good -- Slack had been told it arrived. And it dropped every
-        envelope that was not an Events API event, so on Socket Mode a button or
-        a modal never did anything at all.
-
-        Unacknowledged is the right state for an envelope that could not be
-        published: Slack redelivers it, which is the only retry there is.
-        """
-        from slack_sdk.socket_mode.response import SocketModeResponse
-
-        if req.type in _PUBLISHED_ENVELOPE_TYPES:
-            published = False
-            try:
-                await _publish_native_receiver_event(
-                    source="slack",
-                    payload=req.payload,
-                    receiver_key=self._candidate.key,
-                    surface_ids=self._candidate.surface_ids,
-                )
-                published = True
-            finally:
-                # The failure propagates -- Slack's client logs it and leaves
-                # the envelope unacknowledged -- and this is the record that
-                # carries the reason and says which envelope it was.
-                if not published:
-                    logger.warning(
-                        "agent_surfaces.event_receiver_service.slack_socket_publish_failed.failed",
-                        envelope_type=req.type,
-                        # LOG014 reads "not inside an `except`" as "no exception
-                        # to attach"; this runs while one unwinds through a
-                        # `finally`, where it is still the current one.
-                        exc_info=True,  # noqa: LOG014
-                    )
-        else:
-            logger.debug(
-                "agent_surfaces.event_receiver_service.slack_socket_envelope_ignored.observed",
-                envelope_type=req.type,
-            )
-        await socket_client.send_socket_mode_response(
-            SocketModeResponse(envelope_id=req.envelope_id)
-        )
-
-    async def run(self) -> None:
-        app_token = str(self._candidate.credentials.get("app_token") or "").strip()
-        if not app_token:
-            logger.debug(
-                "agent_surfaces.event_receiver_service.slack_native_receiver_missing_app.diagnostic"
-            )
-            return
-
-        from slack_sdk.socket_mode.aiohttp import SocketModeClient
-        from slack_sdk.web.async_client import AsyncWebClient
-
-        client = SocketModeClient(
-            app_token=app_token,
-            web_client=AsyncWebClient(
-                token=self._candidate.credentials.get("bot_token") or None
-            ),
-        )
-
-        client.socket_mode_request_listeners.append(self._handle_envelope)
-        try:
-            await client.connect()
-            while True:
-                await asyncio.sleep(3600)
-        finally:
-            await client.close()
-
-
-async def _receiver_credentials(
-    surface: AgentSurfaceEntity,
-    account_port: SqlAlchemySurfaceAccountAdapter,
-    account_cache: dict[UUID, dict[str, Any]],
-) -> dict[str, Any] | None:
-    if surface.account_id is None:
-        if surface.surface_type is SurfacePlatform.TELEGRAM:
-            if not reveal_secret(surface_settings.telegram_bot_token):
-                logger.debug(
-                    "agent_surfaces.event_receiver_service.telegram_system_surface_exists_but.diagnostic"
-                )
-                return None
-            return {"bot_token": reveal_secret(surface_settings.telegram_bot_token)}
-        if surface.surface_type is SurfacePlatform.RESEND:
-            return resend_receiver_credentials()
-        return None
-
-    if surface.account_id not in account_cache:
-        account = await account_port.get_account(surface.account_id)
-        if account is None:
-            logger.debug(
-                "agent_surfaces.event_receiver_service.native_receiver_skipped_surface_s.diagnostic",
-                account_id=surface.account_id,
-            )
-            return None
-        account_cache[surface.account_id] = dict(account.credentials or {})
-    credentials = dict(account_cache[surface.account_id])
-
-    if surface.surface_type is SurfacePlatform.SLACK:
-        if surface.credential_mode is SurfaceCredentialMode.SYSTEM:
-            credentials["app_token"] = reveal_secret(surface_settings.slack_app_token)
-        else:
-            credentials["app_token"] = _nested_credential(credentials, "app_token")
-        credentials["bot_token"] = slack_access_token(credentials)
-    return credentials
-
-
-def _candidate_from_surface(
-    surface: AgentSurfaceEntity,
-    credentials: dict[str, Any],
-) -> NativeReceiverCandidate | None:
-    if surface.surface_type is SurfacePlatform.TELEGRAM:
-        bot_token = str(credentials.get("bot_token") or "").strip()
-        if not bot_token:
-            logger.debug(
-                "agent_surfaces.event_receiver_service.telegram_native_receiver_skipped_surface.diagnostic"
-            )
-            return None
-        credential_label = str(surface.account_id) if surface.account_id else "system"
-        return NativeReceiverCandidate(
-            key=_receiver_key("telegram", credential_label, bot_token),
-            platform=SurfacePlatform.TELEGRAM,
-            surface_ids=(surface.id,),
-            credential_label=credential_label,
-            credentials=credentials,
-        )
-
-    if surface.surface_type is SurfacePlatform.SLACK:
-        app_token = str(credentials.get("app_token") or "").strip()
-        if not app_token:
-            logger.debug(
-                "agent_surfaces.event_receiver_service.slack_native_receiver_skipped_surface.diagnostic"
-            )
-            return None
-        credential_label = (
-            "system"
-            if surface.credential_mode is SurfaceCredentialMode.SYSTEM
-            else str(surface.account_id)
-        )
-        return NativeReceiverCandidate(
-            key=_receiver_key("slack", credential_label, app_token),
-            platform=SurfacePlatform.SLACK,
-            surface_ids=(surface.id,),
-            credential_label=credential_label,
-            credentials=credentials,
-        )
-
-    if surface.surface_type is SurfacePlatform.RESEND:
-        return resend_candidate_from_surface(surface, credentials)
-    return None
-
-
-def _nested_credential(credentials: dict[str, Any], key: str) -> str | None:
-    if credentials.get(key):
-        return str(credentials[key])
-    raw_response = credentials.get("raw_response") or {}
-    if isinstance(raw_response, dict) and raw_response.get(key):
-        return str(raw_response[key])
-    return None
-
-
 def _lease_key(key: str) -> str:
     return f"agent_surfaces:native_receiver:{key}"
 
 
 def _conflict_key(key: str) -> str:
     return f"agent_surfaces:native_receiver_conflict:{key}"
+
+
+# Re-exported for the receiver tests, which drive these through this module.
+__all__ = [
+    "NativeReceiverCandidate",
+    "NativeSurfaceReceiverCoordinator",
+    "ResendPollingReceiverRunner",
+    "SlackSocketReceiverRunner",
+    "SurfaceEventReceiverService",
+    "_candidate_from_surface",
+    "_conflict_key",
+    "_lease_key",
+    "_publish_native_receiver_event",
+    "_receiver_key",
+    "notify_surface_receiver_config_changed",
+]

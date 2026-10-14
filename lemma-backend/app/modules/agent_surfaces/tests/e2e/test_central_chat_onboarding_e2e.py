@@ -362,11 +362,12 @@ async def test_removing_the_number_hands_it_back_as_a_stranger(
         assert bound[0].user_id == user_id
 
     # The number is taken off the account, which is the explicit removal the
-    # product makes the un-binding depend on.
-    async with sessions.begin() as session:
-        user = await session.get(User, user_id)
-        user.mobile_number = None
-        user.mobile_verified_at = None
+    # product makes the un-binding depend on -- through the profile API, so
+    # identity is what announces it.
+    removed = await authenticated_client.post(
+        "/users/me/profile", json={"mobile_number": None}
+    )
+    assert removed.status_code == 201, removed.text
     await mobile_changed(user_id)
 
     async with sessions() as session:

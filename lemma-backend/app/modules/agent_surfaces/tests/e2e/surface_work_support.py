@@ -130,18 +130,20 @@ async def a_telegram_bot(
 
 
 async def mobile_changed(user_id: UUID) -> None:
-    """What identity's ``UserMobileChanged`` sets off here, run to completion."""
-    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.core.infrastructure.work import facts
+    """Run what identity's ``UserMobileChanged`` fact set off, to completion.
+
+    Emits nothing itself: identity writes the fact in the transaction that
+    changes the number, so the effects a caller asserts afterwards are proof
+    that it did. (A helper that emitted the fact made these tests pass while
+    identity announced nothing, which is how the unbinding went missing once.)
+    ``user_id`` names whose change is being settled; a session worker may
+    already have run the item, which is equally fine.
+    """
     from app.modules.agent_surfaces.events.notification_work import (
         register_notification_work,
     )
-    from app.modules.identity.contracts.profile_facts import UserMobileChanged
 
-    async with async_session_maker() as session:
-        uow = SqlAlchemyUnitOfWork(session)
-        await facts.emit(uow, UserMobileChanged(user_id=user_id))
-        await uow.commit()
+    del user_id
     registry = WorkRegistry()
     register_notification_work(registry)
     await run_until_idle(

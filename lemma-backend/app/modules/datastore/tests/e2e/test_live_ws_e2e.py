@@ -28,7 +28,7 @@ from app.modules.datastore.services.live.connection import LiveConnection
 from app.modules.datastore.services.live.registry import LiveHubRegistry
 from app.modules.datastore.services.live.access import TableLiveAccess
 from app.modules.datastore.services.live.feed import ChangeLogFeed
-from app.modules.datastore.tests.e2e.harness import DatastoreApi
+from app.modules.datastore.tests.e2e.harness import DatastoreApi, signup_user
 from app.modules.test_support.e2e.runtime import backend_server as _backend_server
 from app.core.authorization.authz_epoch import pod_authz_epoch
 from app.core.infrastructure.channels.channel_service import get_channel_service
@@ -345,6 +345,82 @@ async def test_unauthenticated_and_forbidden_close_after_accept(
     assert closed.value.rcvd is not None and closed.value.rcvd.code in (4403, 4404)
 
 
+async def _refused(
+    server: dict[str, str], pod_id: str, token: str | None
+) -> tuple[int, list[str]]:
+    """Open a socket that must be refused: its close code and any frames sent."""
+    headers = {"Authorization": f"Bearer {token}"} if token is not None else {}
+    frames: list[str] = []
+    async with connect(
+        _ws_url(server, f"/pods/{pod_id}/live"), additional_headers=headers
+    ) as ws:
+        with pytest.raises(ConnectionClosed) as closed:
+            while True:
+                frames.append(str(await asyncio.wait_for(ws.recv(), 10)))
+    assert closed.value.rcvd is not None, "closed without a close frame"
+    return closed.value.rcvd.code, frames
+
+
+async def test_invalid_token_is_closed_4401_without_ready(
+    live_pod: DatastoreApi, backend_server
+) -> None:
+    for token in (None, "not-a-session-token"):
+        code, frames = await _refused(backend_server, live_pod.pod_id, token)
+        assert (code, frames) == (4401, []), token
+
+
+async def test_non_member_is_refused_and_hears_no_change(
+    live_pod: DatastoreApi, async_client, backend_server
+) -> None:
+    """A signed-in user outside a real pod gets no ``ready`` and no row."""
+    outsider = await signup_user(async_client, "live-outsider")
+    headers = {"Authorization": f"Bearer {outsider['token']}"}
+    async with connect(
+        _ws_url(backend_server, f"/pods/{live_pod.pod_id}/live"),
+        additional_headers=headers,
+    ) as ws:
+        # Write before reading anything: a frame for it must never be queued.
+        await live_pod.create_record("tickets", {"body": "members only"})
+        frames: list[str] = []
+        with pytest.raises(ConnectionClosed) as closed:
+            while True:
+                frames.append(str(await asyncio.wait_for(ws.recv(), 10)))
+    assert frames == []
+    assert closed.value.rcvd is not None and closed.value.rcvd.code in (4403, 4404)
+
+
+async def _restricted_table(pod: DatastoreApi, name: str) -> None:
+    await pod.create_table(
+        {
+            "name": name,
+            "enable_rls": False,
+            "visibility": "RESTRICTED",
+            "columns": [{"name": "body", "type": "TEXT", "required": False}],
+        }
+    )
+
+
+async def test_restricted_table_is_refused_and_never_streamed(
+    live_pod: DatastoreApi, member_users, backend_server, sockets
+) -> None:
+    """A member with no grant on a RESTRICTED table hears none of its rows."""
+    await _restricted_table(live_pod, "vault")
+    live = await _open(backend_server, live_pod.pod_id, member_users["viewer"]["token"])
+    sockets.append(live)
+    await live.send(op="subscribe", id="v", topic="records", table="vault")
+    assert (await live.until("error", "v"))["code"] in ("forbidden", "not_found")
+    # Every table the viewer can read: the restricted one is not among them.
+    await live.subscribe("all")
+
+    await live_pod.create_record("vault", {"body": "restricted secret"})
+    visible = await live_pod.create_record("tickets", {"body": "open row"})
+    await live.until("changes", "all")
+    await live.quiet(1.5)
+    assert live.record_ids("v") == []
+    assert live.record_ids("all") == [visible["id"]]
+    assert "restricted secret" not in json.dumps(live.frames)
+
+
 async def test_socket_limit_per_user_per_pod(
     live_pod: DatastoreApi, fixed_test_user, backend_server, sockets, monkeypatch
 ) -> None:
@@ -544,3 +620,50 @@ async def test_two_hubs_on_one_pod_both_deliver(
         hub.detach(connection)
         sender.cancel()
         await other_process.close()
+
+
+async def test_table_read_without_record_read_streams_no_rows(
+    live_pod: DatastoreApi,
+    member_users,
+    authenticated_client,
+    async_client,
+    backend_server,
+    sockets,
+) -> None:
+    """Seeing a table's schema is not reading its rows.
+
+    The record API refuses a role holding ``datastore.table.read`` alone on a
+    RESTRICTED table; the live socket must not hand it those rows either.
+    """
+    await _restricted_table(live_pod, "vault")
+    granted = await authenticated_client.put(
+        f"/pods/{live_pod.pod_id}/roles/POD_VIEWER/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "datastore_table",
+                    "resource_name": "vault",
+                    "permission_ids": ["datastore.table.read"],
+                }
+            ]
+        },
+    )
+    assert granted.status_code == 200, granted.text
+    viewer = member_users["viewer"]
+    rows = await DatastoreApi(async_client, live_pod.pod_id, user=viewer).request(
+        "GET", f"/pods/{live_pod.pod_id}/datastore/tables/vault/records"
+    )
+    assert rows.status_code == 403, rows.text
+
+    live = await _open(backend_server, live_pod.pod_id, viewer["token"])
+    sockets.append(live)
+    await live.send(op="subscribe", id="v", topic="records", table="vault")
+    await live.subscribe("all")
+    await live_pod.create_record("vault", {"body": "restricted secret"})
+    visible = await live_pod.create_record("tickets", {"body": "open row"})
+    while visible["id"] not in live.record_ids("all"):
+        await live.until("changes", "all")
+    await live.quiet(1.5)
+    assert live.record_ids("v") == []
+    assert live.record_ids("all") == [visible["id"]]
+    assert "restricted secret" not in json.dumps(live.frames)

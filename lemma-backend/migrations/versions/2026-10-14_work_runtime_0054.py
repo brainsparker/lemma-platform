@@ -4,8 +4,11 @@
 deleted in the transaction that completes it -- plus ``dead`` items kept for
 inspection and retry. Every claim is an index probe on one of the partial
 indexes below, so the table's cost tracks pending work, not history.
-``lease_epoch`` goes up by one on every claim and fenced statements match it,
-so a run whose lease was taken over cannot write as the new claim.
+``lease_epoch`` is created here, with the table, so the claim fence never
+needs a column added to a hot table later; nothing in this release reads it.
+The agent turns that move onto the runtime later (#981) bump it on every claim
+and match it in their fenced statements, so a run whose lease was taken over
+cannot write as the new claim.
 
 ``work_queues`` has one row per (class, namespace) that has had work: its cap,
 its named rates and its place in the round robin. It stores no readiness flag;
@@ -37,8 +40,11 @@ in this transaction, so nothing in flight is lost between the two runtimes.
 a backoff, and ``FAILED_PERMANENT`` is the one terminal failure. (The old
 recovery cron already re-queued every ``FAILED`` row, so seeding them adds no
 work the previous release would not have done.) A row that an old worker is
-still processing during a rolling deploy is fenced by its claim token, so the
-overlap is harmless.
+still processing during a rolling deploy is fenced by its claim token
+(``processing_attempts``): the seed moves that counter on by one rather than
+resetting it, so the new runtime's first claim can never reissue the token the
+old worker holds, and the overlap is harmless. (Attempt budgets live on the
+work item now; the row's counter is only the token.)
 
 Every step is idempotent: the concurrent index builds commit on their own, so
 a failure after them leaves the revision half applied, and a rerun must finish
@@ -110,7 +116,8 @@ def seed_statements() -> list[str]:
         "DO NOTHING"
     )
     rows = (
-        "UPDATE datastore_files SET status = 'PENDING', processing_attempts = 0 "
+        "UPDATE datastore_files SET status = 'PENDING', "
+        "processing_attempts = processing_attempts + 1 "
         f"WHERE {_IN_FLIGHT} AND status <> 'PENDING'"
     )
     return [queues, items, rows]

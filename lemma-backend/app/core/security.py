@@ -358,7 +358,14 @@ async def verify_auth(connection: HTTPConnection):
 
         if session:
             user_id = session.get_user_id()
-            parsed_user_id = UUID(user_id)
+            try:
+                parsed_user_id = UUID(user_id)
+            except ValueError as exc:
+                # The session checked out but names no user this service has:
+                # that is the token's content, not this deployment failing, so
+                # it is a 401 the caller can clear by signing in again -- never
+                # the 503 below, which would never clear.
+                raise HTTPException(status_code=401, detail="Unauthorized") from exc
             payload = session.get_access_token_payload() or {}
 
             try:
@@ -405,9 +412,12 @@ async def verify_auth(connection: HTTPConnection):
         # bury the arm below, which is the one worth reading.
         raise HTTPException(status_code=401, detail="Unauthorized") from e
     except Exception as e:
-        # Everything else is this deployment failing, not the caller: the
-        # SuperTokens core unreachable or failing (its database down), a JWKS
-        # fetch that did not come back, a key that does not match. The request
+        # Everything else is this deployment failing to *check* the session,
+        # not the caller: the SuperTokens core unreachable or failing (its
+        # database down), a JWKS fetch that did not come back, a key that does
+        # not match, or the database behind the post-verification lookups
+        # (``resolve_delegated_principal``) unavailable. Failures about the
+        # token's own content are classified as 401/403 above. The request
         # must not proceed -- its identity could not be established -- but it
         # must not answer 401 either: a client's reaction to a 401 is to throw
         # away a working session and ask for a new one, so a database blip

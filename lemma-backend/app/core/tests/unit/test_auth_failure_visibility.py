@@ -23,11 +23,13 @@ import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from supertokens_python.recipe.session.exceptions import UnauthorisedError
 
 from app.core import security
+from app.core.api.exception_handlers import register_exception_handlers
 
 
 def _connection():
@@ -96,13 +98,23 @@ async def test_the_cause_survives_so_the_traceback_points_at_the_fault(monkeypat
     assert raised.value.__cause__ is cause
 
 
-async def test_an_ordinary_invalid_token_is_not_an_incident(caplog, monkeypatch):
+#: A session SuperTokens verified whose user id does not parse is the token's
+#: own content, not the deployment failing: it must answer the 401 that sends
+#: the person to sign in, never a 503 that no retry would ever clear.
+_ORDINARY_REJECTIONS = [
+    AsyncMock(side_effect=UnauthorisedError("no session")),
+    AsyncMock(return_value=SimpleNamespace(get_user_id=lambda: "not-a-uuid")),
+]
+
+
+@pytest.mark.parametrize(
+    "get_session", _ORDINARY_REJECTIONS, ids=["invalid-token", "unparseable-user-id"]
+)
+async def test_an_ordinary_invalid_token_is_not_an_incident(
+    caplog, monkeypatch, get_session
+):
     """The routine answer stays routine; otherwise the log is all 401s."""
-    monkeypatch.setattr(
-        security,
-        "get_session",
-        AsyncMock(side_effect=UnauthorisedError("no session")),
-    )
+    monkeypatch.setattr(security, "get_session", get_session)
 
     with caplog.at_level(logging.DEBUG):
         with pytest.raises(HTTPException) as raised:
@@ -110,3 +122,22 @@ async def test_an_ordinary_invalid_token_is_not_an_incident(caplog, monkeypatch)
 
     assert raised.value.status_code == 401
     assert _errors(caplog) == []
+
+
+async def test_a_caller_receives_the_503_with_retry_after_and_its_code():
+    """The answer as it leaves the service, through the real error handlers:
+    the status, the ``Retry-After`` a client waits on, and the code it matches."""
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.get("/probe")
+    async def probe():
+        raise security.auth_unavailable()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/probe")
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "2"
+    assert response.json()["code"] == "AUTH_UNAVAILABLE"

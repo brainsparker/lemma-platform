@@ -268,7 +268,10 @@ class FileAuthorizer:
         post-filtering, which is bounded by the candidate pool.
         """
         ceiling = datastore_settings.datastore_search_readable_id_pushdown_limit
-        partition = await self._searchable_partition(pod_id=pod_id, ctx=ctx)
+        # One past the ceiling is enough to know a side is over it.
+        partition = await self._searchable_partition(
+            pod_id=pod_id, ctx=ctx, limit=ceiling + 1
+        )
         if partition is None:
             return SearchFileScope.post_filtered()
         if len(partition.readable) <= len(partition.hidden):
@@ -297,13 +300,20 @@ class FileAuthorizer:
         Under the same timeout as the split. If it runs out, the scope stays
         unnarrowed and the searcher keeps the page it already has.
         """
-        partition = await self._searchable_partition(pod_id=pod_id, ctx=ctx)
+        partition = await self._searchable_partition(
+            pod_id=pod_id, ctx=ctx, limit=None, readable_only=True
+        )
         if partition is None:
             return SearchFileScope.post_filtered()
         return SearchFileScope.only(partition.readable)
 
     async def _searchable_partition(
-        self, *, pod_id: UUID, ctx: Context
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        limit: int | None,
+        readable_only: bool = False,
     ) -> SearchablePartition | None:
         """The split, from Redis while the pod's permissions have not moved."""
         walk = not _is_workload(ctx)
@@ -312,19 +322,35 @@ class FileAuthorizer:
             if datastore_settings.datastore_search_scope_cache_ttl_seconds > 0
             else None
         )
+        shape = {"limit": limit, "readable_only": readable_only}
         if epoch is None:
-            return await self._compute_partition(pod_id=pod_id, ctx=ctx, walk=walk)
-        key = caller_key(ctx, walk_ancestors=walk)
+            return await self._compute_partition(
+                pod_id=pod_id, ctx=ctx, walk=walk, **shape
+            )
+        # The read's shape is part of the key: a split cut off at the ceiling
+        # must never stand in for the complete readable set, or the reverse.
+        key = (
+            f"{caller_key(ctx, walk_ancestors=walk)}:"
+            f"{limit if limit is not None else 'all'}:{int(readable_only)}"
+        )
         cached = await cached_partition(pod_id, epoch, key)
         if cached is not None:
             return cached
-        partition = await self._compute_partition(pod_id=pod_id, ctx=ctx, walk=walk)
+        partition = await self._compute_partition(
+            pod_id=pod_id, ctx=ctx, walk=walk, **shape
+        )
         if partition is not None:
             await store_partition(pod_id, epoch, key, partition)
         return partition
 
     async def _compute_partition(
-        self, *, pod_id: UUID, ctx: Context, walk: bool
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk: bool,
+        limit: int | None,
+        readable_only: bool,
     ) -> SearchablePartition | None:
         timeout_ms = datastore_settings.datastore_search_scope_timeout_ms
         try:
@@ -333,6 +359,8 @@ class FileAuthorizer:
                 ctx=ctx,
                 walk_ancestors=walk,
                 timeout_ms=timeout_ms,
+                limit=limit,
+                readable_only=readable_only,
             )
         except SearchScopeTimedOut:
             actor_type = getattr(ctx, "actor_type", None)

@@ -155,10 +155,12 @@ class DatastoreFileRepository(
                 resource_id=entity.id,
             )
 
-        # Who may read what changes with where a file is and who it is shown
-        # to; anything cached from the old answer is retired after commit.
+        # Who may read what, and what search can reach, change with these;
+        # anything cached from the old answer is retired after commit.
         reach_changed = (
-            instance.visibility != entity.visibility or instance.path != entity.path
+            instance.visibility != entity.visibility
+            or instance.path != entity.path
+            or instance.search_enabled != entity.search_enabled
         )
         for key, value in _file_payload_unset(entity).items():
             if key in {"id", "created_at", "updated_at"}:

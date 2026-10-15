@@ -122,6 +122,7 @@ async def test_retry_resumes_at_the_failed_function_without_rerunning_the_agent(
     await _retry(client, pod_id, run["id"], 409)
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_a_run_that_failed_at_its_agent_is_not_retried(
     authenticated_client: AsyncClient,

@@ -708,3 +708,25 @@ async def test_our_own_deadline_is_not_retried() -> None:
         )
 
     assert len(attempts) == 1
+
+
+def test_lemmas_database_unreachable_before_the_start_is_not_a_failed_run() -> None:
+    """Nothing was sent to a sandbox: the run is retried, not failed. Once it
+    started, the outcome is the function's and failing records it."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.modules.function.application.dispatch_failures import not_a_failure
+    from app.modules.function.events.run_work import dead_message
+
+    class _TooMany(Exception):
+        sqlstate = "53300"
+
+    down = OperationalError("SELECT", {}, _TooMany("too many clients"))
+    assert not_a_failure(down, queued=True, started=False)
+    assert not_a_failure(ConnectionRefusedError(), queued=False, started=False)
+    assert not not_a_failure(down, queued=True, started=True)
+    assert not not_a_failure(RuntimeError("boom"), queued=True, started=False)
+    assert "database" in dead_message(
+        "unavailable_exhausted", "Unavailable: database unavailable: OperationalError"
+    )
+    assert "sandbox" in dead_message("unavailable_exhausted", "Unavailable: sandbox")

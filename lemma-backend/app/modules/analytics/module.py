@@ -3,29 +3,19 @@
 from app.core.registry import LemmaModule
 
 
-def _event_routers():
-    from app.modules.analytics import events
+def _register_analytics() -> None:
+    # Registers every projection on the after-commit analytics sink. Every
+    # process: the API commits most domain events, the worker the rest.
+    import app.modules.analytics.events  # noqa: F401
 
-    return [events.router]
+
+def _register_periodic_work() -> None:
+    # Worker only: what the old event transport still owed, converted (cutover).
+    import app.modules.analytics.events.legacy_cutover  # noqa: F401
 
 
 module = LemmaModule(
+    register_periodic_work=_register_periodic_work,
     name="analytics",
-    event_routers=_event_routers,
-    # One consumer group per stream, named for this module so its cursor is
-    # independent: analytics falling behind must never slow a consumer that
-    # the product depends on.
-    stream_groups=(
-        ("identity_events", "analytics-identity"),
-        ("pod_events", "analytics-pod"),
-        ("datastore.events", "analytics-datastore"),
-        ("function.events", "analytics-function"),
-        ("agent_events", "analytics-agent"),
-        ("schedule_events", "analytics-schedule"),
-        ("workflow_run_events", "analytics-workflow"),
-        ("surface_events", "analytics-surface"),
-        ("app_events", "analytics-app"),
-        ("pod_bundle_events", "analytics-pod-bundle"),
-        ("connector_events", "analytics-connector"),
-    ),
+    register_analytics=_register_analytics,
 )

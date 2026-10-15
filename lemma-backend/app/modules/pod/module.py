@@ -53,7 +53,13 @@ def _namespace_directory():
     return PodNamespaceDirectory()
 
 
+def _register_periodic_work() -> None:
+    # Worker only: what the old event transport still owed, converted (cutover).
+    import app.modules.pod.events.legacy_cutover  # noqa: F401
+
+
 module = LemmaModule(
+    register_periodic_work=_register_periodic_work,
     name="pod",
     pod_liveness=_pod_liveness,
     namespace_directory=_namespace_directory,

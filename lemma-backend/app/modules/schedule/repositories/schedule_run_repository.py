@@ -30,10 +30,17 @@ _BREAKER_SCAN_LIMIT = BREAKER_STREAK_SCAN_LIMIT
 FILTER_UNAVAILABLE = "ScheduleFilterUnavailable"
 #: ... and when the deployment has no decision provider to ask at all.
 FILTER_NOT_CONFIGURED = "ScheduleFilterNotConfigured"
+#: ... and when its question was interrupted (a crash, a lost lease, the
+#: database unreachable) every time it was asked.
+FILTER_INTERRUPTED = "ScheduleFilterInterrupted"
 #: Filter failures that belong to the deployment rather than to any schedule:
 #: the breaker passes over them. A spent budget, an event too large to judge
 #: and an invalid filter are the pod's or the schedule's, and are counted.
-DEPLOYMENT_FILTER_FAILURES = (FILTER_UNAVAILABLE, FILTER_NOT_CONFIGURED)
+DEPLOYMENT_FILTER_FAILURES = (
+    FILTER_UNAVAILABLE,
+    FILTER_NOT_CONFIGURED,
+    FILTER_INTERRUPTED,
+)
 
 
 class ScheduleRunRepository:

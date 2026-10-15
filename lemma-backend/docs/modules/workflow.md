@@ -16,8 +16,9 @@ work, and resumes from function, agent, schedule, or user-form events.
 | Work kinds (JOB) | `workflow.decide` (ask a decision node's question), `workflow.notify_form` (tell a form's assignee) |
 | Fact subscription | `FunctionRunFinished` -> `workflow.resume` |
 | Facts emitted | `WorkflowRunFinished` in every terminal transaction; `WorkflowStartRefused` when a start item gives up |
-| Redis consumers | Agent completion (`workflow-agent-events`) and schedule-fired events, until those modules emit facts |
-| cron | Reconcile stale AGENT waits every five minutes, for the same reason |
+| Fact subscription | `AgentRunFinished` -> `workflow.resume_for_agent`, for a run started by an AGENT step |
+| Periodic work | `workflow.waits_prune` (hourly) |
+| Cutover converter | `events/legacy_cutover.py`, run by `cutover.legacy_event`: starts what an owed `schedule.fired` or a queued `check_and_start_flows_for_schedule` job would have started, through `ScheduleStartService.start_for_fire`; a legacy timer fire is dropped. See [the cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13) |
 
 ## Main data model
 

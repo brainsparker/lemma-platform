@@ -68,7 +68,21 @@ class DatastoreSettings(DocumentWorkSettings):
         description=(
             "How long a pod's change log keeps a change every durable "
             "subscriber has read: the live catch-up window. A change some "
-            "durable subscriber has not read is never deleted."
+            "durable subscriber has not read is never deleted -- until it is "
+            "``datastore_change_max_lag_seconds`` old."
+        ),
+    )
+    datastore_change_max_lag_seconds: int = Field(
+        default=86400,
+        ge=60,
+        description=(
+            "The furthest a durable subscriber may fall behind its pod's change "
+            "log. One whose oldest unread change is older than this is lapsed: "
+            "its cursor moves to the horizon and what it skipped is recorded "
+            "(a trigger's history shows it as ``lag_exceeded``), so one stuck "
+            "subscriber cannot keep a pod's log forever. A subscriber row no "
+            "running process recognises is dropped once it has gone this long "
+            "without moving. Env: ``DATASTORE_CHANGE_MAX_LAG_SECONDS``."
         ),
     )
     datastore_change_handoff_poll_seconds: float = Field(

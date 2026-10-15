@@ -227,7 +227,10 @@ async def _delete_batches(
             if changes is not None:
                 sql, params = changes.wrap(sql, params, op="D")
             result = await session.execute(text(sql), params)
-            deleted = [dict(row._mapping) for row in result.fetchall()]
+            deleted = [
+                changes.row(row) if changes is not None else dict(row._mapping)
+                for row in result.fetchall()
+            ]
             matched = {str(row.get(ctx.primary_key_column)) for row in deleted}
             # Collected rather than raised on the spot: the whole batch is
             # rolled back either way, and one refusal naming every bad id is

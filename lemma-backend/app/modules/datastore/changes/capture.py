@@ -16,9 +16,12 @@ update statements already capture), never from an extra read. Whether anything w
 the pod's tiny subscriber table per write call.
 
 A watched write also leaves a ``lemma_change_pending`` row and notifies the
-handoff in the same transaction. After commit, every write publishes a
-best-effort wake on Redis for the live socket's pod hub; losing it costs
-latency, never a change, because the hub reads the log from its own cursor.
+handoff in the same transaction. The statement returns its transaction's id
+beside its rows (or count), so a write nothing watches makes no round trip of
+its own. After commit, every write starts a best-effort wake on Redis for the
+live socket's pod hub, in the background: the request does not wait for it,
+and losing it costs latency, never a change, because the hub reads the log
+from its own cursor.
 """
 
 from __future__ import annotations
@@ -26,17 +29,19 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
+from opentelemetry import metrics
 from redis.exceptions import RedisError
-from sqlalchemy import text
+from sqlalchemy import Result, Row, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
+from app.core.request_context import create_background_task
 from app.modules.datastore.changes.schema import (
     PENDING_CHANNEL,
     PENDING_TABLE,
@@ -55,8 +60,21 @@ logger = get_logger(__name__)
 
 #: Redis Pub/Sub channel a pod's live hub listens on; the payload is empty.
 LIVE_CHANNEL_FORMAT = "pod:{pod_id}:changes"
-#: A wake is a hint; a write never waits longer than this for Redis.
+#: A wake is a hint; a publish never waits longer than this for Redis.
 _PUBLISH_TIMEOUT_SECONDS = 0.25
+#: Live wakes in flight per process. At the publish timeout this is ~4000
+#: wakes a second of a Redis that answers nothing before any is dropped.
+MAX_PENDING_WAKES = 1000
+
+meter = metrics.get_meter(__name__)
+wakes_dropped = meter.create_counter(
+    "lemma.changes.live_wake_dropped",
+    description=(
+        "Live-hub wakes not published because too many were already in "
+        "flight; hubs read those changes on their fallback poll."
+    ),
+)
+_pending_wakes: set[asyncio.Task[None]] = set()  # memory: bounded by MAX_PENDING_WAKES
 
 type Op = Literal["I", "U", "D"]
 #: How the written rows come back: every column (the caller converts them), or
@@ -109,7 +127,10 @@ class ChangeCapture:
     #: is logged slim and still wakes them, so they can record the skip.
     snapshot: frozenset[str] = field(default_factory=frozenset)
     _statements: int = 0
-    #: The writing transaction's id (xid8, as text), once ``wake_handoff`` ran.
+    #: The output column a ``rows`` statement returns its transaction id in.
+    _xid_alias: str = "__lemma_xid"
+    #: The writing transaction's id (xid8, as text), once a statement
+    #: returned it (``row`` / ``count``).
     xid: str | None = None
 
     async def prepare(self) -> None:
@@ -195,9 +216,14 @@ class ChangeCapture:
                 "SELECT CAST(:__chg_pod AS uuid) "
                 "WHERE EXISTS (SELECT 1 FROM c WHERE c.watched))"
             )
-        statement += (
-            " SELECT * FROM w" if returning == "rows" else " SELECT count(*) FROM w"
-        )
+        # The writing transaction's id comes back with the write, so the live
+        # wake can name it without a round trip of its own.
+        xid = "pg_current_xact_id()::text"
+        if returning == "rows":
+            self._xid_alias = _free_alias(taken, "__lemma_xid")
+            statement += f' SELECT *, {xid} AS "{self._xid_alias}" FROM w'
+        else:
+            statement += f" SELECT count(*), {xid} FROM w"
         bound: dict[str, object] = {
             **params,
             "__chg_table": str(ctx.table_id),
@@ -215,37 +241,67 @@ class ChangeCapture:
         self._statements += 1
         return statement, bound
 
+    def row(self, row: Row[Any]) -> dict[str, object]:
+        """A ``rows`` statement's row, as the write returned it: the
+        transaction id that came back beside it is taken off and kept."""
+        mapping = dict(row._mapping)
+        xid = mapping.pop(self._xid_alias, None)
+        if xid is not None:
+            self.xid = str(xid)
+        return mapping
+
+    def count(self, result: Result[Any]) -> int:
+        """A ``count`` statement's count; its transaction id is kept."""
+        written, xid = result.one()
+        if xid is not None:
+            self.xid = str(xid)
+        return int(written)
+
     async def wake_handoff(self, session: AsyncSession) -> None:
-        """Before commit: note this transaction's id, and wake the handoff if
-        anything here was watched -- one round trip either way."""
-        if not self._statements:
+        """Before commit: wake the handoff if anything here was watched. A
+        write nothing watches costs no round trip here."""
+        if not self._statements or not self.watched:
             return
-        notify = "pg_notify(:channel, '')" if self.watched else "NULL"
-        self.xid = await session.scalar(
-            text(f"SELECT pg_current_xact_id()::text, {notify}"),
-            {"channel": PENDING_CHANNEL},
+        await session.execute(
+            text("SELECT pg_notify(:channel, '')"), {"channel": PENDING_CHANNEL}
         )
 
-    async def publish_wake(self) -> None:
-        """After commit: tell this pod's live hubs to read. Best effort."""
+    def publish_wake(self) -> None:
+        """After commit: tell this pod's live hubs to read. Best effort, and
+        never on the write's path: the publish runs as a background task, at
+        most ``MAX_PENDING_WAKES`` at once. One that finds that many still in
+        flight -- Redis slow or gone -- is dropped and counted; the hubs'
+        fallback poll reads the change anyway."""
         if not self._statements:
             return
-        try:
-            client = get_redis(url=settings.redis_url)
-            await asyncio.wait_for(
-                client.publish(live_channel(self.ctx.pod_id), wake_payload(self.xid)),
-                timeout=_PUBLISH_TIMEOUT_SECONDS,
-            )
-        except (RedisError, OSError, TimeoutError) as exc:
-            # The log already holds the change; a hub that misses this wake
-            # reads it on its next one, or on its fallback poll.
-            _publish_incident.record_failure(error_type=type(exc).__name__)
-        else:
-            _publish_incident.record_success()
+        if len(_pending_wakes) >= MAX_PENDING_WAKES:
+            wakes_dropped.add(1)
+            return
+        task = create_background_task(
+            _publish(self.ctx.pod_id, self.xid), name="change-live-wake"
+        )
+        _pending_wakes.add(task)
+        task.add_done_callback(_pending_wakes.discard)
+
+
+async def _publish(pod_id: UUID, xid: str | None) -> None:
+    try:
+        client = get_redis(url=settings.redis_url)
+        await asyncio.wait_for(
+            client.publish(live_channel(pod_id), wake_payload(xid)),
+            timeout=_PUBLISH_TIMEOUT_SECONDS,
+        )
+    except (RedisError, OSError, TimeoutError) as exc:
+        # The log already holds the change; a hub that misses this wake
+        # reads it on its next one, or on its fallback poll.
+        _publish_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _publish_incident.record_success()
 
 
 __all__ = [
     "LIVE_CHANNEL_FORMAT",
+    "MAX_PENDING_WAKES",
     "ChangeCapture",
     "live_channel",
     "parse_wake",

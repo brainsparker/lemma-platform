@@ -29,6 +29,15 @@ SCHEDULE_WORKFLOW_FINISHED = "schedule.workflow_finished"
 SCHEDULE_WORKFLOW_REFUSED = "schedule.workflow_refused"
 #: Tell a schedule's owner the platform paused it.
 SCHEDULE_PAUSED_NOTICE = "schedule.paused_notice"
+#: Periodic: re-arm any active TIME schedule left without a fire item.
+SCHEDULE_ARM_AUDIT = "schedule.arm_audit"
+
+#: ``paused_reason`` of a TIME schedule whose fire item ran out of tries.
+FIRE_FAILED = "fire_failed"
+
+
+class ArmAudit(BaseModel):
+    pass
 
 
 class ScheduleRef(BaseModel):

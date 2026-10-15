@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import BaseModel
 from redis.exceptions import ResponseError
 from sqlalchemy import text
 
@@ -14,13 +15,21 @@ from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.infrastructure.redis.client import get_redis
-from app.core.infrastructure.work import SYSTEM_NAMESPACE, WorkClass, WorkWriter
+from app.core.infrastructure.work import (
+    SYSTEM_NAMESPACE,
+    JobContext,
+    WorkClass,
+    WorkMode,
+    WorkRegistry,
+    WorkWriter,
+)
 from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.datastore.changes.converter import DRAIN, LEGACY_GROUPS
-from app.modules.datastore.changes.reader import read_after
-from app.modules.datastore.changes.retention import retain
-from app.modules.datastore.changes.schema import changes_table
+from app.modules.datastore.changes.reader import ChangeOp, read_after
+from app.modules.datastore.changes.retention import retain, retain_pod
+from app.modules.datastore.changes.schema import changes_table, subscribers_table
 from app.modules.datastore.changes.subscribers import SubscriberTable
+from app.modules.datastore.changes.work import register_change_work
 from app.modules.datastore.domain.events import (
     DATASTORE_EVENTS_STREAM,
     DatastoreRecordEvent,
@@ -105,6 +114,131 @@ async def test_retention_keeps_the_window_for_a_pod_nobody_subscribes_to(
     assert await retain(pod_id, []) == 3
     [kept] = await log(pod_id)
     assert kept.at > datetime.now(timezone.utc) - timedelta(minutes=5)
+
+
+_TEND = "test.changes.retain_pod"
+
+
+class _Pod(BaseModel):
+    pod_id: UUID
+
+
+async def _retain_pod(pod_id: UUID) -> int:
+    """One pod's retention pass, run as a real job: the periodic job walks
+    every pod schema in the database, which a shared test database has many
+    of."""
+    deleted: list[int] = []
+
+    async def run(ctx: JobContext, payload: _Pod) -> None:
+        deleted.append(await retain_pod(ctx, payload.pod_id))
+
+    registry = WorkRegistry()
+    register_change_work(registry)
+    registry.handler(kind=_TEND, cls=WorkClass.ADMIN, mode=WorkMode.JOB, payload=_Pod)(
+        run
+    )
+    async with async_session_maker() as session:
+        await WorkWriter(session, registry=registry).add(
+            _TEND, SYSTEM_NAMESPACE, _Pod(pod_id=pod_id)
+        )
+        await session.commit()
+    await run_until_idle(
+        async_session_maker, registry=registry, classes=[WorkClass.ADMIN]
+    )
+    [count] = deleted
+    return count
+
+
+async def test_a_trigger_on_a_quiet_table_does_not_keep_a_busy_tables_log(
+    pod_api: DatastoreApi, fixed_test_user
+):
+    """Retention keeps what a subscriber has not read; a trigger on a table
+    nobody writes has read everything it watches, so it moves to the horizon
+    and the busy table's changes go once the window passes."""
+    pod_id = UUID(pod_api.pod_id)
+    await orders_table(pod_api, name="quiet")
+    await orders_table(pod_api)
+    schedule = await datastore_schedule(
+        pod_id, UUID(fixed_test_user["id"]), table="quiet", operations=["INSERT"]
+    )
+    await deliver_including_late()
+    for n in range(20):
+        await pod_api.create_record("orders", {"status": "busy", "total": n})
+    busy = await log(pod_id)
+    await _age(pod_id, hours=2)
+
+    assert await _retain_pod(pod_id) == 20
+    assert await log(pod_id) == []
+    [row] = await SubscriberTable(pod_id).all()
+    assert row.subscriber == f"schedule:{schedule.id}"
+    assert row.cursor > busy[-1].position
+
+
+async def test_a_trigger_too_far_behind_is_lapsed_and_says_what_it_skipped(
+    pod_api: DatastoreApi, fixed_test_user
+):
+    pod_id = UUID(pod_api.pod_id)
+    await orders_table(pod_api)
+    schedule = await datastore_schedule(
+        pod_id, UUID(fixed_test_user["id"]), operations=["INSERT"]
+    )
+    await deliver_including_late()
+    for n in range(3):
+        await pod_api.create_record("orders", {"status": "stuck", "total": n})
+    changes = await log(pod_id)
+    # Older than the lag ceiling, and never delivered.
+    await _age(pod_id, hours=25)
+
+    await _retain_pod(pod_id)
+    skips = await _skips(schedule.id)
+    assert skips == [
+        ("lag_exceeded", str(changes[0].position), str(changes[-1].position), 3)
+    ]
+    assert await log(pod_id) == [], "past the window and no longer owed"
+    await deliver_all()
+    assert await runs(schedule.id) == [], "the lapsed changes never fire"
+    # A later write is delivered as usual: the trigger lapsed, it did not stop.
+    await pod_api.create_record("orders", {"status": "fresh", "total": 9})
+    await deliver_all()
+    assert len(await runs(schedule.id)) == 1
+
+
+async def test_an_unknown_subscriber_is_dropped_only_once_it_stops_moving(
+    pod_api: DatastoreApi,
+):
+    pod_id = UUID(pod_api.pod_id)
+    table_id = await orders_table(pod_api)
+    subscribers = SubscriberTable(pod_id)
+    for key in ("ghost:idle", "ghost:moving"):
+        await subscribers.upsert(
+            key,
+            table_id=table_id,
+            ops=frozenset({ChangeOp.INSERT}),
+            delay=timedelta(0),
+        )
+    async with get_datastore_engine().begin() as conn:
+        await conn.execute(
+            text(
+                f"UPDATE {subscribers_table(schema_name_for_pod(pod_id))} "
+                "SET updated_at = now() - interval '25 hours' "
+                "WHERE subscriber = 'ghost:idle'"
+            )
+        )
+
+    await _retain_pod(pod_id)
+    assert [row.subscriber for row in await subscribers.all()] == ["ghost:moving"]
+
+
+async def _skips(schedule_id: UUID) -> list[tuple[str, str, str, int]]:
+    async with async_session_maker() as session:
+        rows = await session.execute(
+            text(
+                "SELECT reason, first, last, count FROM trigger_skips "
+                "WHERE schedule_id = :id ORDER BY at"
+            ),
+            {"id": str(schedule_id)},
+        )
+        return [(str(r[0]), str(r[1]), str(r[2]), int(r[3])) for r in rows]
 
 
 async def test_a_renamed_table_keeps_its_subscriber(

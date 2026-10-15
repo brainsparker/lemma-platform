@@ -12,7 +12,6 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 
-from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.datastore.changes.capture import ChangeCapture
 from app.modules.datastore.domain.write_intent import WriteIntent
 from app.modules.datastore.services.authorization import outside_writer
@@ -45,11 +44,10 @@ class RecordChangeLog:
         return {} if changes is None else {"changes": changes}
 
     async def after_commit(self, changes: ChangeCapture) -> None:
-        """After commit, the live wake. The platform connection is released
-        across it, as for the outbox dispatch it replaces: the write went to
-        the datastore database, so the platform session has only read."""
-        async with connection_released(self._platform_session):
-            await changes.publish_wake()
+        """After commit, the live wake: started in the background, so the
+        request holds neither its platform connection nor its caller for
+        Redis."""
+        changes.publish_wake()
 
 
 __all__ = ["ChangeLogGate", "RecordChangeLog"]

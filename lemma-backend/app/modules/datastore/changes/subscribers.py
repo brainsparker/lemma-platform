@@ -45,6 +45,15 @@ class DeliverOutcome(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class LapsedSpan:
+    """What a lapsed subscriber skipped: its unread changes up to the horizon."""
+
+    first: ChangePosition
+    last: ChangePosition
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
 class SubscriberSpec:
     """What a subscriber watches, as its module states it."""
 
@@ -78,6 +87,22 @@ class DurableSubscriber(Protocol):
         Each effect must be keyed on the change (``chg:<xid>:<seq>``, or the
         converted event's id) so a page delivered twice -- after a crash
         between the commit and the cursor move -- changes nothing.
+        """
+        ...
+
+    async def lapsed(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        pod_id: UUID,
+        subscriber_id: str,
+        skipped: LapsedSpan,
+    ) -> None:
+        """Record, on ``uow`` without committing, that ``skipped`` was let go.
+
+        Called by retention when the subscriber fell further behind than the
+        lag ceiling: its cursor is about to move past these changes unread.
+        Keyed on ``skipped.first`` so a repeat after a crash writes nothing
+        twice.
         """
         ...
 
@@ -208,6 +233,20 @@ class SubscriberTable:
                 text(f"DELETE FROM {self._table} WHERE subscriber = :key"), {"key": key}
             )
 
+    async def delete_if_idle(self, key: str, idle: timedelta) -> bool:
+        """Drop the row if its cursor has not moved for ``idle``, by the
+        database's clock; whether it went."""
+        async with self._engine.begin() as conn:
+            gone = await conn.execute(
+                text(
+                    f"DELETE FROM {self._table} WHERE subscriber = :key "
+                    "AND updated_at < now() - make_interval(secs => :idle) "
+                    "RETURNING subscriber"
+                ),
+                {"key": key, "idle": idle.total_seconds()},
+            )
+            return gone.first() is not None
+
     async def _exists(self, conn: AsyncConnection) -> bool:
         return bool(
             await conn.scalar(
@@ -222,8 +261,34 @@ class SubscriberTable:
     async def all(self) -> list[SubscriberRow]:
         return await self._select("", {})
 
-    async def advance(self, key: str, position: ChangePosition) -> None:
-        """Move the cursor forward to ``position``; never backward."""
+    async def advance(
+        self,
+        key: str,
+        position: ChangePosition,
+        *,
+        watching: SubscriberRow | None = None,
+    ) -> None:
+        """Move the cursor forward to ``position``; never backward.
+
+        With ``watching``, only while the row still watches what that row
+        did: a position worked out for one table and set of operations says
+        nothing about another, which a sync may have switched it to since.
+        """
+        guard = ""
+        params: dict[str, object] = {
+            "key": key,
+            "xid": str(position.xid),
+            "seq": position.seq,
+        }
+        if watching is not None:
+            guard = (
+                " AND table_id = CAST(:table_id AS uuid) "
+                "AND ops @> CAST(:ops AS text[]) AND ops <@ CAST(:ops AS text[])"
+            )
+            params.update(
+                table_id=str(watching.table_id),
+                ops=sorted(op.value for op in watching.ops),
+            )
         async with self._engine.begin() as conn:
             await conn.execute(
                 text(
@@ -231,8 +296,9 @@ class SubscriberTable:
                     "cursor_xid = CAST(CAST(:xid AS text) AS xid8), cursor_seq = :seq, "
                     "updated_at = now() WHERE subscriber = :key AND "
                     "(cursor_xid, cursor_seq) < (CAST(CAST(:xid AS text) AS xid8), :seq)"
+                    f"{guard}"
                 ),
-                {"key": key, "xid": str(position.xid), "seq": position.seq},
+                params,
             )
 
     async def _select(
@@ -268,6 +334,7 @@ class SubscriberTable:
 __all__ = [
     "DeliverOutcome",
     "DurableSubscriber",
+    "LapsedSpan",
     "SubscriberRow",
     "SubscriberSpec",
     "SubscriberTable",

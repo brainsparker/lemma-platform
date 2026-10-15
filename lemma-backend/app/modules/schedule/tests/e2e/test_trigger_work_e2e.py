@@ -8,6 +8,7 @@ a start did. No worker subprocess.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -469,3 +470,86 @@ async def test_an_unusable_time_config_is_retired_by_its_arm_saying_why(
     [notice] = await items("schedule.paused_notice")
     assert notice.payload["reason"] == "SCHEDULE_VALIDATION_ERROR"
     assert await items("schedule.fire") == []
+
+
+async def test_a_fire_out_of_tries_pauses_its_schedule_and_tells_the_owner(
+    authenticated_client: AsyncClient, fixed_test_org, monkeypatch
+):
+    """A dead fire item is the schedule's only chain: without it nothing runs
+    the schedule again. It is paused, saying why, instead of going quiet."""
+    from app.core.infrastructure.work import WorkRegistry
+    from app.core.infrastructure.work.testing import make_due, run_until_idle
+    from app.modules.schedule.tests.e2e.broken_fire import broken_time_fire
+    from app.modules.schedule.work import fire
+    from app.modules.schedule.work.registration import register_schedule_work
+
+    pod_id = await create_pod(authenticated_client, fixed_test_org["id"])
+    schedule = await create_time_schedule(authenticated_client, pod_id)
+
+    monkeypatch.setattr(fire, "run_time_fire", broken_time_fire)
+    registry = WorkRegistry()
+    register_schedule_work(registry)
+    for _ in range(3):
+        await make_due(async_session_maker, kind="schedule.fire")
+        await run_until_idle(
+            async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
+        )
+
+    [dead] = await items("schedule.fire", state="dead")
+    assert dead.payload["schedule_id"] == schedule["id"]
+    row = await schedule_row(schedule["id"])
+    assert (row["is_active"], row["paused_reason"]) == (False, "fire_failed")
+    [notice] = await items("schedule.paused_notice")
+    assert notice.payload["reason"] == "fire_failed"
+
+    resumed = await authenticated_client.patch(
+        f"/pods/{pod_id}/schedules/{schedule['id']}", json={"is_active": True}
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["paused_reason"] is None
+    assert len(await items("schedule.fire", state="queued")) == 1
+
+
+async def test_the_arm_audit_rearms_a_time_schedule_that_lost_its_fire_item(
+    authenticated_client: AsyncClient, fixed_test_org, monkeypatch
+):
+    from app.core.infrastructure.work import SYSTEM_NAMESPACE, WorkWriter
+    from app.modules.schedule.work import audit
+    from app.modules.schedule.work.kinds import SCHEDULE_ARM_AUDIT, ArmAudit
+
+    pod_id = await create_pod(authenticated_client, fixed_test_org["id"])
+    kept = await create_time_schedule(authenticated_client, pod_id)
+    lost = await create_time_schedule(authenticated_client, pod_id)
+    await execute(
+        "DELETE FROM work_items WHERE kind = 'schedule.fire' "
+        "AND payload->>'schedule_id' = :id",
+        id=lost["id"],
+    )
+    counted: list[int] = []
+    monkeypatch.setattr(
+        audit, "rearmed", SimpleNamespace(add=lambda n, *a: counted.append(n))
+    )
+
+    async with async_session_maker() as session:
+        await WorkWriter(session).add(SCHEDULE_ARM_AUDIT, SYSTEM_NAMESPACE, ArmAudit())
+        await session.commit()
+    await run(WorkClass.ADMIN)
+    await run(WorkClass.EVENTS)
+
+    assert sum(counted) >= 1
+    fires = {
+        item.payload["schedule_id"]: item
+        for item in await items("schedule.fire", state="queued")
+    }
+    assert fires[lost["id"]].run_at == (await schedule_row(lost["id"]))["next_fire_at"]
+    assert kept["id"] in fires
+    # Audited again with nothing missing: nothing more is armed.
+    counted.clear()
+    async with async_session_maker() as session:
+        await WorkWriter(session).add(SCHEDULE_ARM_AUDIT, SYSTEM_NAMESPACE, ArmAudit())
+        await session.commit()
+    await run(WorkClass.ADMIN)
+    assert not any(
+        item.payload["schedule_id"] in (kept["id"], lost["id"])
+        for item in await items("schedule.arm")
+    )

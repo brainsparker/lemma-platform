@@ -12,8 +12,12 @@ and its connection can still receive, reads the row as the person, and sends
 one signed POST. The per-subscription rate (``mcp_delivery``) is drawn when the
 item is claimed, so a bulk import reaches a receiver at that pace and waits,
 rather than being dropped. A receiver that keeps failing pauses its
-subscription (as before); a paused subscription's changes stay in the log,
-behind its cursor, until a refresh resumes it or it lapses.
+subscription (as before). A paused subscription has no subscriber row, so it
+holds none of the pod's log: the changes made while it is paused are never
+sent, and the refresh that resumes it watches from then on. The draft's
+delivery has no way to tell a receiver it missed some, so the resume logs
+``mcp_access.event_subscription.resumed_after_pause`` with when the pause began
+instead.
 """
 
 from __future__ import annotations
@@ -48,6 +52,7 @@ from app.modules.datastore.contracts.changes import (
     Change,
     ChangeOp,
     DeliverOutcome,
+    LapsedSpan,
     SubscriberSpec,
     register_durable_subscriber,
 )
@@ -95,6 +100,10 @@ class McpChangeSubscriber:
         if not _listening(subscription, pod_id):
             return None
         assert subscription is not None
+        if subscription.paused_at is not None:
+            # Paused, it watches nothing: a row kept behind its cursor would
+            # hold the pod's whole log for a receiver that may never return.
+            return None
         return SubscriberSpec(
             table_name=str(subscription.arguments.get("table") or ""),
             ops=frozenset({ChangeOp.INSERT}),
@@ -112,7 +121,7 @@ class McpChangeSubscriber:
             return DeliverOutcome.GONE
         assert subscription is not None
         if subscription.paused_at is not None:
-            return DeliverOutcome.HOLD
+            return DeliverOutcome.GONE
         row_id = await uow.session.scalar(
             select(McpEventSubscription.id).where(
                 McpEventSubscription.public_id == subscriber_id
@@ -148,6 +157,23 @@ class McpChangeSubscriber:
                 rate_key=f"mcp:{subscriber_id}",
             )
         return DeliverOutcome.ADVANCE
+
+    async def lapsed(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        pod_id: UUID,
+        subscriber_id: str,
+        skipped: LapsedSpan,
+    ) -> None:
+        """Logged, not sent: the draft's delivery carries one occurrence and
+        has no gap notice for a receiver, so the skip is the operator's to see."""
+        del uow
+        logger.warning(
+            "mcp_access.event_subscription.lapsed",
+            subscription_id=subscriber_id,
+            pod_id=str(pod_id),
+            skipped=skipped.count,
+        )
 
 
 def _event_id(change_key: str) -> str:

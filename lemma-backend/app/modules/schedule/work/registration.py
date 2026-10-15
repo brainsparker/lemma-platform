@@ -25,6 +25,7 @@ from app.core.infrastructure.work import (
     registry as default_registry,
 )
 from app.modules.schedule.work import (
+    audit,
     fire,
     filter as filter_work,
     notify,
@@ -33,6 +34,7 @@ from app.modules.schedule.work import (
 )
 from app.modules.schedule.work.kinds import (
     SCHEDULE_ARM,
+    SCHEDULE_ARM_AUDIT,
     SCHEDULE_FILTER,
     SCHEDULE_FIRE,
     SCHEDULE_OUTCOME,
@@ -40,6 +42,7 @@ from app.modules.schedule.work.kinds import (
     SCHEDULE_START,
     SCHEDULE_WORKFLOW_FINISHED,
     SCHEDULE_WORKFLOW_REFUSED,
+    ArmAudit,
     FilterEvent,
     PausedNotice,
     ScheduleRef,
@@ -78,11 +81,22 @@ def register_schedule_work(
     registry: WorkRegistry, facts: FactBus | None = None
 ) -> None:
     registry.handler(
-        kind=SCHEDULE_FIRE, cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=TimeFire
+        kind=SCHEDULE_FIRE,
+        cls=WorkClass.EVENTS,
+        mode=WorkMode.FAST,
+        payload=TimeFire,
+        on_dead=fire.on_fire_dead,
     )(fire.run_time_fire)
     registry.handler(
         kind=SCHEDULE_ARM, cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=ScheduleRef
     )(fire.run_arm)
+    registry.handler(
+        kind=SCHEDULE_ARM_AUDIT,
+        cls=WorkClass.ADMIN,
+        mode=WorkMode.JOB,
+        payload=ArmAudit,
+    )(audit.run_arm_audit)
+    registry.periodic(SCHEDULE_ARM_AUDIT, audit.ARM_AUDIT_EVERY, SCHEDULE_ARM_AUDIT)
     registry.handler(
         kind=SCHEDULE_OUTCOME,
         cls=WorkClass.EVENTS,

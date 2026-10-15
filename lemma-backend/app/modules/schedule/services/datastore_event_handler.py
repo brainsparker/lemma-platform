@@ -29,6 +29,7 @@ from app.modules.datastore.contracts.changes import (
     Change,
     ChangeOp,
     DeliverOutcome,
+    LapsedSpan,
     SubscriberSpec,
     register_durable_subscriber,
 )
@@ -42,7 +43,9 @@ from app.modules.schedule.domain.schedule import (
 )
 from app.modules.schedule.domain.value_objects import DatastoreOperation
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
+from app.modules.schedule.repositories.trigger_records import TriggerRecords
 from app.modules.schedule.services.trigger_delivery import (
+    LAG_EXCEEDED,
     ChangePosition,
     TriggerChange,
     WriteIntent,
@@ -135,6 +138,27 @@ class ScheduleChangeSubscriber:
                 schedule_id=str(schedule.id),
             )
         return DeliverOutcome.ADVANCE
+
+    async def lapsed(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        pod_id: UUID,
+        subscriber_id: str,
+        skipped: LapsedSpan,
+    ) -> None:
+        """The changes it fell too far behind on show in its history as one
+        ``lag_exceeded`` skip, so a quiet trigger says why it was quiet."""
+        try:
+            schedule_id = UUID(subscriber_id)
+        except ValueError:
+            return
+        await TriggerRecords(uow.session).record_skips(
+            schedule_id,
+            reason=LAG_EXCEEDED,
+            first=skipped.first.key,
+            last=skipped.last.key,
+            count=skipped.count,
+        )
 
 
 def trigger_change(change: Change, *, table_name: str) -> TriggerChange:

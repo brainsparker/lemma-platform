@@ -55,6 +55,9 @@ from app.modules.schedule.services.trigger_fire import (
 
 BULK_WRITE = "bulk_write"
 IMPORT_WRITE = "import_write"
+#: The trigger fell further behind its table than the change log keeps a
+#: subscriber waiting, and was moved past what it had not read.
+LAG_EXCEEDED = "lag_exceeded"
 
 
 class WriteIntent(StrEnum):
@@ -344,6 +347,7 @@ def _event(change: TriggerChange) -> TriggerEvent:
 __all__ = [
     "BULK_WRITE",
     "IMPORT_WRITE",
+    "LAG_EXCEEDED",
     "ChangePosition",
     "PageResult",
     "TriggerChange",

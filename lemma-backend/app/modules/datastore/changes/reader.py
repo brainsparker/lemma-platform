@@ -215,21 +215,23 @@ async def read_after(
     )
 
 
-async def has_unfinal_after(
+async def oldest_unfinal_after(
     pod_id: UUID,
     cursor: str,
     *,
     table_ids: Sequence[UUID] | None = None,
     ops: Sequence[ChangeOp] | None = None,
     engine: AsyncEngine | None = None,
-) -> bool:
-    """Whether a committed change after ``cursor`` is not final yet.
+) -> datetime | None:
+    """When the first committed change after ``cursor`` that is not final yet
+    was written (its ``at``), or ``None`` when there is none.
 
     A change becomes readable only once every older transaction on the
     database has ended. One that committed while such a transaction was still
     open is already in the log but above the horizon, and no further write is
     owed to announce it: a reader that came up empty must look again.
     Uncommitted changes are invisible here; their own commit wakes a reader.
+    The time says how long such a change has waited.
     """
     after = decode_cursor(cursor)
     schema = schema_name_for_pod(pod_id)
@@ -243,16 +245,60 @@ async def has_unfinal_after(
         params["ops"] = [op.value for op in ops]
     async with (engine or get_datastore_engine()).connect() as conn:
         if not await _has_log(conn, schema):
-            return False
-        return bool(
-            await conn.scalar(
-                text(
-                    f"SELECT EXISTS (SELECT 1 FROM {changes_table(schema)} "
-                    f"WHERE {' AND '.join(where)})"
-                ),
-                params,
-            )
+            return None
+        return await conn.scalar(
+            text(
+                f"SELECT at FROM {changes_table(schema)} "
+                f"WHERE {' AND '.join(where)} ORDER BY xid, seq LIMIT 1"
+            ),
+            params,
         )
+
+
+async def count_between(
+    pod_id: UUID,
+    after: ChangePosition,
+    until: ChangePosition,
+    *,
+    table_ids: Sequence[UUID],
+    ops: Sequence[ChangeOp],
+    engine: AsyncEngine | None = None,
+) -> tuple[int, ChangePosition | None]:
+    """How many changes lie in ``(after, until)``, and the last of them.
+
+    For a subscriber being moved past what it never read, so what it skipped
+    can be said: run once per lapse, never on a delivery path.
+    """
+    schema = schema_name_for_pod(pod_id)
+    async with (engine or get_datastore_engine()).connect() as conn:
+        if not await _has_log(conn, schema):
+            return 0, None
+        row = (
+            await conn.execute(
+                text(
+                    "WITH span AS (SELECT xid, seq FROM "
+                    f"{changes_table(schema)} WHERE "
+                    "(xid, seq) > (CAST(CAST(:after_xid AS text) AS xid8), :after_seq) "
+                    "AND (xid, seq) < (CAST(CAST(:until_xid AS text) AS xid8), :until_seq) "
+                    "AND table_id = ANY(CAST(:table_ids AS uuid[])) "
+                    "AND op = ANY(CAST(:ops AS text[]))) "
+                    "SELECT (SELECT count(*) FROM span), "
+                    "(SELECT xid::text FROM span ORDER BY xid DESC, seq DESC LIMIT 1), "
+                    "(SELECT seq FROM span ORDER BY xid DESC, seq DESC LIMIT 1)"
+                ),
+                {
+                    "after_xid": str(after.xid),
+                    "after_seq": after.seq,
+                    "until_xid": str(until.xid),
+                    "until_seq": until.seq,
+                    "table_ids": [str(table_id) for table_id in table_ids],
+                    "ops": [op.value for op in ops],
+                },
+            )
+        ).one()
+    if row[1] is None:
+        return int(row[0]), None
+    return int(row[0]), ChangePosition(int(row[1]), int(row[2]))
 
 
 async def fetch_rows(
@@ -375,9 +421,10 @@ __all__ = [
     "ChangeOp",
     "JsonRow",
     "Page",
+    "count_between",
     "current_horizon",
     "fetch_rows",
     "fetch_rows_statement",
-    "has_unfinal_after",
+    "oldest_unfinal_after",
     "read_after",
 ]

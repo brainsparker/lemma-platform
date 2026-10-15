@@ -56,3 +56,18 @@ def test_a_schedule_turned_off_for_its_mcp_subscription_says_why():
     )
     assert "stopped telling us about events" in lapsed
     assert "Reconnect the account" in rendered.text
+
+
+def test_a_schedule_paused_for_a_dead_fire_says_why():
+    subject, rendered = render_schedule_paused_email(
+        schedule_name="nightly",
+        schedule_id=SCHEDULE_ID,
+        consecutive_failures=0,
+        review_url="https://lemma.work",
+        reason="fire_failed",
+    )
+    assert (
+        subject == "Nightly was paused because Lemma could not start its scheduled run"
+    )
+    assert "Turning it back on schedules its next run." in rendered.text
+    assert "Consecutive failures" not in rendered.text

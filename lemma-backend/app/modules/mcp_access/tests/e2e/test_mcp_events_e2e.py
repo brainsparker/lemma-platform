@@ -720,3 +720,68 @@ async def test_the_sweep_removes_a_revoked_connections_subscriptions(
         await uow.commit()
     async with _session_factory()() as uow:
         assert await EventSubscriptionRepository(uow).get(sub_id) is None
+
+
+async def test_a_paused_subscription_holds_none_of_the_pods_log(
+    mcp_client, authenticated_client, test_pod, receiver
+):
+    """Paused by failures, a subscription gives up its place in the change
+    log: retention trims what is written meanwhile, and the refresh that
+    resumes it watches from then on -- the rows written while it was paused
+    are never sent."""
+    from sqlalchemy import text
+
+    from app.core.infrastructure.work import WorkClass
+    from app.modules.datastore.changes.retention import retain
+    from app.modules.datastore.changes.schema import changes_table
+    from app.modules.datastore.changes.subscribers import SubscriberTable
+    from app.modules.datastore.infrastructure.pod_schema_migrations import (
+        schema_name_for_pod,
+    )
+    from app.modules.datastore.infrastructure.session import get_datastore_engine
+    from app.modules.datastore.tests.e2e.change_log_support import log_final
+    from app.modules.mcp_access.infrastructure.subscription_repository import (
+        PAUSE_AFTER_FAILURES,
+        EventSubscriptionRepository,
+    )
+
+    with _change_log_on():
+        pod_id = test_pod["id"]
+        token, params, sub_id, table, _ = await _subscribed(
+            mcp_client, authenticated_client, pod_id, receiver
+        )
+        await _run(WorkClass.EVENTS)
+        subscribers = SubscriberTable(UUID(pod_id))
+        assert await subscribers.get(f"mcp:{sub_id}") is not None
+
+        now = datetime.now(timezone.utc)
+        async with _session_factory()() as uow:
+            repository = EventSubscriptionRepository(uow)
+            for _ in range(PAUSE_AFTER_FAILURES):
+                await repository.record_delivery(sub_id, now=now, error="http_500")
+            await uow.commit()
+        await _run(WorkClass.EVENTS)  # the sync the pause asked for
+        assert await subscribers.get(f"mcp:{sub_id}") is None
+
+        missed = await _add_rows(authenticated_client, pod_id, table, 3)
+        await _run(WorkClass.EVENTS)
+        assert not {record for record, _ in await _owed(sub_id)} & set(missed)
+        # Old enough to go, and nobody holds it: retention takes it.
+        await log_final()
+        async with get_datastore_engine().begin() as conn:
+            await conn.execute(
+                text(
+                    f"UPDATE {changes_table(schema_name_for_pod(UUID(pod_id)))} "
+                    "SET at = now() - interval '2 hours'"
+                )
+            )
+        assert await retain(UUID(pod_id), await subscribers.all()) >= 3
+
+        refreshed = await _rpc(mcp_client, pod_id, token, "events/subscribe", params)
+        assert "result" in refreshed, refreshed
+        await _run(WorkClass.EVENTS)
+        assert await subscribers.get(f"mcp:{sub_id}") is not None
+        [after] = await _add_rows(authenticated_client, pod_id, table, 1)
+        await _run(WorkClass.EVENTS)
+        owed = [record for record, _ in await _owed(sub_id)]
+        assert after in owed and not set(owed) & set(missed)

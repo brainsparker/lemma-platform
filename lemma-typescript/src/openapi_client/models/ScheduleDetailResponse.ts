@@ -38,7 +38,7 @@ export type ScheduleDetailResponse = {
      */
     readonly paused_by_failures: boolean;
     /**
-     * Why the platform paused this schedule: `fire_cap` (it fired more than its daily ceiling), `consecutive_failures`, or another system reason. Absent while it runs, or when a person paused it. Reactivating clears it.
+     * Why the platform paused this schedule: `fire_cap` (it fired more than its daily ceiling), `consecutive_failures`, `fire_failed` (a scheduled run could not be started), or another system reason. Absent while it runs, or when a person paused it. Reactivating clears it.
      */
     paused_reason?: (string | null);
     pod_id: (string | null);

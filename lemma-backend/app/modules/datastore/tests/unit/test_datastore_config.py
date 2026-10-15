@@ -163,6 +163,7 @@ EXPECTED = [
 EXTRA_FIELDS = [
     ("datastore_change_log_mode", "DATASTORE_CHANGE_LOG_MODE", "auto"),
     ("datastore_change_retention_seconds", "DATASTORE_CHANGE_RETENTION_SECONDS", 3600),
+    ("datastore_change_max_lag_seconds", "DATASTORE_CHANGE_MAX_LAG_SECONDS", 86400),
     (
         "datastore_change_handoff_poll_seconds",
         "DATASTORE_CHANGE_HANDOFF_POLL_SECONDS",

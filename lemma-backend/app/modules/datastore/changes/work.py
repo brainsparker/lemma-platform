@@ -41,11 +41,12 @@ from app.core.infrastructure.work import (
 )
 from app.core.log.log import get_logger
 from app.modules.datastore.changes.cursor import decode_cursor, encode_cursor
+from app.modules.datastore.changes.horizon import note_delivery_lag
 from app.modules.datastore.changes.reader import (
     Change,
     ChangeOp,
     fetch_rows,
-    has_unfinal_after,
+    oldest_unfinal_after,
     read_after,
 )
 from app.modules.datastore.changes.subscribers import (
@@ -72,13 +73,30 @@ DELIVER = "changes.deliver"
 #: subscriber row appeared has committed or aborted by then.
 CATCH_UP_AFTER = timedelta(minutes=2)
 #: How soon a delivery looks again when a committed change was still behind
-#: an older open transaction (above the read horizon) when it read.
-NOT_FINAL_RETRY = timedelta(seconds=1)
+#: an older open transaction (above the read horizon) when it read: 1 s, then
+#: doubling to a 15 s ceiling while it keeps finding nothing final. One long
+#: transaction holds every subscriber of every pod back, so a fixed second
+#: would turn it into an item a second per behind subscriber.
+NOT_FINAL_BACKOFF = (
+    timedelta(seconds=1),
+    timedelta(seconds=2),
+    timedelta(seconds=4),
+    timedelta(seconds=8),
+    timedelta(seconds=15),
+)
+
+
+def not_final_retry(step: int) -> timedelta:
+    """The wait before the ``step``-th consecutive look (from 0)."""
+    return NOT_FINAL_BACKOFF[min(max(step, 0), len(NOT_FINAL_BACKOFF) - 1)]
 
 
 class SubscriberRef(BaseModel):
     pod_id: UUID
     subscriber: str
+    #: Consecutive looks that found a committed change not yet final and
+    #: nothing to deliver; picks the next look's wait. A wake starts at 0.
+    not_final: int = 0
 
 
 class SyncRequest(SubscriberRef):
@@ -91,13 +109,20 @@ def concurrency_key(pod_id: UUID, subscriber: str) -> str:
     return f"changes:{pod_id}:{subscriber}"
 
 
-async def request_sync(work: WorkWriter, pod_id: UUID, subscriber: str) -> UUID | None:
+async def request_sync(
+    work: WorkWriter, pod_id: UUID, subscriber: str, *, since: datetime
+) -> UUID | None:
+    """Ask for ``subscriber``'s row to be brought in line.
+
+    ``since`` is a database's clock, never this process's: it is compared with
+    the ``at`` the datastore database stamps on each change, and an app
+    server's clock running ahead would start a new subscriber after writes it
+    should see.
+    """
     return await work.add(
         SYNC_SUBSCRIBERS,
         pod_namespace(pod_id),
-        SyncRequest(
-            pod_id=pod_id, subscriber=subscriber, since=datetime.now(timezone.utc)
-        ),
+        SyncRequest(pod_id=pod_id, subscriber=subscriber, since=since),
         dedup_key=f"changes.sync:{pod_id}:{subscriber}",
         concurrency_key=concurrency_key(pod_id, subscriber),
     )
@@ -110,12 +135,13 @@ async def request_delivery(
     *,
     delay: timedelta | None = None,
     late: bool = False,
+    not_final: int = 0,
 ) -> UUID | None:
     suffix = ":late" if late else ""
     return await work.add(
         DELIVER,
         pod_namespace(pod_id),
-        SubscriberRef(pod_id=pod_id, subscriber=subscriber),
+        SubscriberRef(pod_id=pod_id, subscriber=subscriber, not_final=not_final),
         dedup_key=f"changes.deliver:{pod_id}:{subscriber}{suffix}",
         concurrency_key=concurrency_key(pod_id, subscriber),
         delay=delay,
@@ -183,6 +209,7 @@ async def run_deliver(ctx: JobContext, payload: SubscriberRef) -> None:
         ops=sorted(row.ops),
     )
     if page.changes:
+        note_delivery_lag(_age(page.changes[0].at))
         async with ctx.checkpoint() as uow:
             changes = await _with_current_rows(
                 uow, payload.pod_id, page.changes, row.snapshot_intents
@@ -203,18 +230,32 @@ async def run_deliver(ctx: JobContext, payload: SubscriberRef) -> None:
             "datastore.changes.deliver.page_full.observed",
             subscriber=payload.subscriber,
         )
-    elif await has_unfinal_after(
+        return
+    waiting_since = await oldest_unfinal_after(
         payload.pod_id, page.cursor, table_ids=[row.table_id], ops=sorted(row.ops)
-    ):
-        # Committed, but an older transaction was still open: its wake has
-        # been spent on this read, so nothing else would deliver it.
-        async with ctx.complete_work() as uow:
-            await request_delivery(
-                ctx.writer(uow),
-                payload.pod_id,
-                payload.subscriber,
-                delay=NOT_FINAL_RETRY,
-            )
+    )
+    if waiting_since is None:
+        if not page.changes:
+            note_delivery_lag(0.0)
+        return
+    if not page.changes:
+        note_delivery_lag(_age(waiting_since))
+    # Committed, but an older transaction was still open: its wake has been
+    # spent on this read, so nothing else would deliver it. Progress made on
+    # this read starts the backoff again; another empty look lengthens it.
+    step = 0 if page.changes else payload.not_final
+    async with ctx.complete_work() as uow:
+        await request_delivery(
+            ctx.writer(uow),
+            payload.pod_id,
+            payload.subscriber,
+            delay=not_final_retry(step),
+            not_final=step + 1,
+        )
+
+
+def _age(at: datetime) -> float:
+    return (datetime.now(timezone.utc) - at).total_seconds()
 
 
 async def _with_current_rows(
@@ -275,8 +316,10 @@ register_change_work(default_registry)
 __all__ = [
     "CATCH_UP_AFTER",
     "DELIVER",
+    "NOT_FINAL_BACKOFF",
     "SYNC_SUBSCRIBERS",
     "SubscriberRef",
+    "not_final_retry",
     "register_change_work",
     "request_delivery",
     "request_sync",

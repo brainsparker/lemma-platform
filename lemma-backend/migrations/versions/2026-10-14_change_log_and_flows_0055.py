@@ -61,6 +61,15 @@ an old worker is still starting during the rolling deploy is fenced by its
 PENDING -> RUNNING transition. Two indexes served the deleted sweeps; one is
 added for the per-pod gate, which counts a pod's RUNNING runs at every start.
 
+**Existing triggers keep firing on bulk and import writes.** Before the change
+log every record write -- bulk and import included -- fired every matching
+trigger. A trigger now says what a bulk or import write does to it
+(``bulk_writes`` / ``import_writes`` in its config), and leaving both unset
+means ``skip``. A trigger that predates the setting was written expecting the
+old behaviour, so each one that sets neither is given ``each``. New triggers
+keep the ``skip`` default. The downgrade leaves the configs as they are:
+``each`` is what these triggers did before the setting existed.
+
 Every step is idempotent: the concurrent index builds commit on their own, so
 a failure after them leaves the revision half applied, and a rerun must finish
 it rather than trip over what is already there.
@@ -71,6 +80,7 @@ Revises: 0054_work_runtime
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.engine import Connection
 
 revision = "0055_change_log_and_flows"
 down_revision = "0054_work_runtime"
@@ -327,6 +337,43 @@ def change_log_seed_statements() -> list[str]:
     ]
 
 
+def _backfill_trigger_write_modes(conn: Connection) -> None:
+    """Every DATASTORE trigger setting neither write mode fires on each row.
+
+    Kept apart from the rest of the migration so it can be folded into another
+    revision unchanged. The schedules it touches are the ones it re-syncs: the
+    update runs first, in a CTE, and its ``RETURNING`` is the sync's input.
+    """
+    conn.execute(
+        sa.text(
+            "WITH changed AS ("
+            "UPDATE schedules SET config = COALESCE(config, '{}'::jsonb) "
+            "|| jsonb_build_object('bulk_writes', 'each', 'import_writes', 'each') "
+            "WHERE schedule_type = 'DATASTORE' "
+            "AND NOT (COALESCE(config, '{}'::jsonb) "
+            "?| ARRAY['bulk_writes', 'import_writes']) "
+            "RETURNING id, pod_id, is_active), "
+            "watching AS ("
+            "SELECT pod_id, 'schedule:' || id::text AS subscriber FROM changed "
+            "WHERE is_active AND pod_id IS NOT NULL), "
+            "queues AS ("
+            "INSERT INTO work_queues (class, ns, max_running) "
+            "SELECT DISTINCT 'events', 'pod:' || pod_id::text, 16 FROM watching "
+            "ON CONFLICT (class, ns) DO NOTHING) "
+            "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, "
+            "concurrency_key, concurrency_limit, run_at) "
+            "SELECT gen_random_uuid(), 'pod:' || pod_id::text, 'events', "
+            "'changes.sync_subscribers', "
+            "jsonb_build_object('pod_id', pod_id::text, 'subscriber', subscriber), "
+            "'changes.sync:' || pod_id::text || ':' || subscriber, "
+            "'changes:' || pod_id::text || ':' || subscriber, 1, now() "
+            "FROM watching "
+            "ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL "
+            "AND state = 'queued' DO NOTHING"
+        )
+    )
+
+
 def _create_trigger_tables() -> None:
     op.add_column(
         "schedules",
@@ -420,6 +467,7 @@ def _create_mcp_deliveries() -> None:
 def upgrade() -> None:
     _create_trigger_tables()
     _create_mcp_deliveries()
+    _backfill_trigger_write_modes(op.get_bind())
     for statement in (
         *trigger_seed_statements(),
         *flow_seed_statements(),

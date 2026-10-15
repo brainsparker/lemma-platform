@@ -215,8 +215,9 @@ class ScheduleResponse(BaseModel):
         default=None,
         description=(
             "Why the platform paused this schedule: `fire_cap` (it fired more "
-            "than its daily ceiling), `consecutive_failures`, or another "
-            "system reason. Absent while it runs, or when a person paused it. "
+            "than its daily ceiling), `consecutive_failures`, `fire_failed` "
+            "(a scheduled run could not be started), or another system "
+            "reason. Absent while it runs, or when a person paused it. "
             "Reactivating clears it."
         ),
     )
@@ -302,6 +303,7 @@ class TriggerSkipReason(StrEnum):
     BULK_WRITE = "bulk_write"
     IMPORT_WRITE = "import_write"
     FIRE_CAP = "fire_cap"
+    LAG_EXCEEDED = "lag_exceeded"
 
 
 class TriggerSkipResponse(BaseModel):
@@ -316,7 +318,9 @@ class TriggerSkipResponse(BaseModel):
         description=(
             "`bulk_write` / `import_write`: the trigger's write mode for that "
             "intent is `skip`. `fire_cap`: the trigger reached its daily fire "
-            "ceiling and paused."
+            "ceiling and paused. `lag_exceeded`: the trigger fell further "
+            "behind its table than the change log waits for a subscriber "
+            "(24 hours by default), and these changes were passed over."
         )
     )
     first: str = Field(description="Position of the first skipped change or fire.")

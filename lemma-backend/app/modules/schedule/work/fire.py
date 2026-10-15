@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.core.infrastructure.work import FastContext
-from app.modules.schedule.work.kinds import ScheduleRef, TimeFire
+from app.core.infrastructure.work import DeadContext, FastContext
+from app.modules.schedule.work.kinds import FIRE_FAILED, ScheduleRef, TimeFire
 
 
 async def run_time_fire(ctx: FastContext, payload: TimeFire) -> None:
@@ -146,5 +146,48 @@ async def run_arm(ctx: FastContext, payload: ScheduleRef) -> None:
         schedule_id=row.id,
         pod_id=row.pod_id,
         fire_at=row.next_fire_at,
+        work=ctx.work,
+    )
+
+
+async def on_fire_dead(ctx: DeadContext) -> None:
+    """A fire out of tries leaves its schedule with no fire item: nothing
+    would ever run it again, and nothing would say so. It is paused instead,
+    as ``fire_failed``, and its owner is told -- reactivating re-arms it."""
+    from sqlalchemy import select
+
+    from app.modules.schedule.domain.schedule import ScheduleType
+    from app.modules.schedule.infrastructure.models.schedule import Schedule
+    from app.modules.schedule.repositories.schedule_repository import (
+        ScheduleRepository,
+    )
+    from app.modules.schedule.services.paused_notice import stage_paused_notice
+
+    try:
+        payload = TimeFire.model_validate(ctx.item.payload)
+    except ValueError:
+        return
+    row = await ctx.uow.session.scalar(
+        select(Schedule)
+        .where(
+            Schedule.id == payload.schedule_id,
+            # Only the chain this item was: an edit since armed another.
+            Schedule.next_fire_at == payload.fire_at,
+            Schedule.is_active.is_(True),
+            Schedule.schedule_type == ScheduleType.TIME,
+        )
+        .with_for_update()
+    )
+    if row is None:
+        return
+    if not await ScheduleRepository(uow=ctx.uow).pause(row.id, reason=FIRE_FAILED):
+        return
+    await stage_paused_notice(
+        ctx.uow,
+        schedule_id=row.id,
+        user_id=row.user_id,
+        pod_id=row.pod_id,
+        schedule_type=row.schedule_type,
+        reason=FIRE_FAILED,
         work=ctx.work,
     )

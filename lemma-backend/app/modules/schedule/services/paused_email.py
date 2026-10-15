@@ -64,6 +64,15 @@ def render_schedule_paused_email(
                 "fired since is listed as skipped on the schedule."
             ),
         ),
+        "fire_failed": (
+            "was paused because Lemma could not start its scheduled run",
+            (
+                "Lemma paused this scheduled automation because starting one of "
+                "its scheduled runs kept failing, and it would otherwise have "
+                "stopped without a word. Turning it back on schedules its next "
+                "run."
+            ),
+        ),
         "SCHEDULE_VALIDATION_ERROR": (
             "was paused because its configuration is invalid",
             "Lemma paused this scheduled automation because its time configuration is invalid.",

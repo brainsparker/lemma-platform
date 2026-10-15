@@ -25,7 +25,7 @@ export type TriggerSkipResponse = {
      */
     last: string;
     /**
-     * `bulk_write` / `import_write`: the trigger's write mode for that intent is `skip`. `fire_cap`: the trigger reached its daily fire ceiling and paused.
+     * `bulk_write` / `import_write`: the trigger's write mode for that intent is `skip`. `fire_cap`: the trigger reached its daily fire ceiling and paused. `lag_exceeded`: the trigger fell further behind its table than the change log waits for a subscriber (24 hours by default), and these changes were passed over.
      */
     reason: TriggerSkipReason;
 };

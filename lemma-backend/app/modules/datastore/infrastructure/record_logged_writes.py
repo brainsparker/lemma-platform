@@ -82,7 +82,7 @@ async def create_logged(
             row = (await session.execute(text(statement), params)).fetchone()
             if row is None:
                 raise DatastoreInfrastructureError("Failed to create record")
-            entity = repo._row_to_entity(dict(row._mapping), ctx)
+            entity = repo._row_to_entity(changes.row(row), ctx)
             await changes.wake_handoff(session)
             await session.commit()
             return entity
@@ -147,7 +147,7 @@ async def update_logged(
                         session, ctx, where_clauses=scope, params=scope_params
                     )
                 raise DatastoreRecordNotFoundError("Record not found or update failed")
-            mapping = dict(row._mapping)
+            mapping = changes.row(row)
             split_previous_image(mapping, alias, changed)
             entity = repo._row_to_entity(mapping, ctx)
             await changes.wake_handoff(session)
@@ -189,7 +189,7 @@ async def delete_logged(
             row = (await session.execute(text(statement), bound)).fetchone()
             if row is None:
                 raise DatastoreRecordNotFoundError()
-            entity = repo._row_to_entity(dict(row._mapping), ctx)
+            entity = repo._row_to_entity(changes.row(row), ctx)
             await changes.wake_handoff(session)
             await session.commit()
         except IntegrityError as exc:
@@ -241,9 +241,7 @@ async def bulk_write_logged(
                 statement, bound = changes.wrap(
                     sql, params, op=None if upsert else "I", returning="count"
                 )
-                written += int(
-                    (await session.execute(text(statement), bound)).scalar_one()
-                )
+                written += changes.count(await session.execute(text(statement), bound))
             await changes.wake_handoff(session)
             await session.commit()
     except DBAPIError as exc:

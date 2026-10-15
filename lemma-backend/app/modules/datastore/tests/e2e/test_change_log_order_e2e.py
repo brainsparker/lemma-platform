@@ -21,11 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.work import WorkClass
-from app.core.infrastructure.work.testing import run_until_idle
+from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.datastore.changes.capture import ChangeCapture
+from app.modules.datastore.changes.horizon import delivery_lag
 from app.modules.datastore.changes.reader import read_after
 from app.modules.datastore.changes.schema import changes_table
-from app.modules.datastore.changes.work import NOT_FINAL_RETRY
+from app.modules.datastore.changes.work import DELIVER
 from app.modules.datastore.infrastructure.pod_schema_migrations import (
     schema_name_for_pod,
 )
@@ -35,6 +36,7 @@ from app.modules.datastore.tests.e2e.change_log_support import (
     change_log_mode,
     datastore_schedule,
     deliver_all,
+    deliver_including_late,
     handoff,
     log_final,
     orders_table,
@@ -242,9 +244,62 @@ async def test_a_change_behind_an_older_open_transaction_is_delivered_once_it_en
         assert await runs(schedule.id) == [], "not final while the older one is open"
         await older_txn.rollback()
 
-    await asyncio.sleep(NOT_FINAL_RETRY.total_seconds() + 0.5)
+    # The delivery asked to look again after a backoff; pull it forward.
+    await make_due(async_session_maker, kind=DELIVER)
     await run_until_idle(async_session_maker, classes=[WorkClass.EVENTS])
     assert len(await runs(schedule.id)) == 1
+
+
+async def test_a_long_open_transaction_backs_deliveries_off(
+    pod_api: DatastoreApi, fixed_test_user
+):
+    """While an older transaction holds the horizon, each empty look waits
+    longer than the last (1, 2, 4, 8, then 15 s): one long transaction must
+    not become an item a second for every subscriber behind it. Each look
+    notes how long the waiting change has waited, for the lag gauge."""
+    pod_id = UUID(pod_api.pod_id)
+    await orders_table(pod_api)
+    schedule = await datastore_schedule(
+        pod_id, UUID(fixed_test_user["id"]), operations=["INSERT"]
+    )
+    await deliver_including_late()
+    subscriber = f"schedule:{schedule.id}"
+
+    async with get_datastore_engine().connect() as older:
+        older_txn = await older.begin()
+        await older.execute(text("SELECT pg_current_xact_id()"))  # holds xmin
+        await pod_api.create_record("orders", {"status": "behind", "total": 1})
+        await handoff()
+        waits: list[float] = []
+        for _ in range(6):
+            await run_until_idle(async_session_maker, classes=[WorkClass.EVENTS])
+            [(not_final, wait)] = await _queued_delivery(subscriber)
+            waits.append(round(wait))
+            await make_due(async_session_maker, kind=DELIVER)
+        assert waits == [1, 2, 4, 8, 15, 15]
+        assert not_final == 6
+        assert delivery_lag() > 0
+        await older_txn.rollback()
+
+    await make_due(async_session_maker, kind=DELIVER)
+    await run_until_idle(async_session_maker, classes=[WorkClass.EVENTS])
+    assert len(await runs(schedule.id)) == 1
+    assert await _queued_delivery(subscriber) == []
+
+
+async def _queued_delivery(subscriber: str) -> list[tuple[int, float]]:
+    async with async_session_maker() as session:
+        rows = await session.execute(
+            text(
+                "SELECT (payload->>'not_final')::int, "
+                "EXTRACT(EPOCH FROM run_at - now()) FROM work_items "
+                "WHERE kind = :kind AND state = 'queued' "
+                "AND payload->>'subscriber' = :subscriber "
+                "AND dedup_key NOT LIKE :late"
+            ),
+            {"kind": DELIVER, "subscriber": subscriber, "late": "%:late"},
+        )
+        return [(int(row[0]), float(row[1])) for row in rows]
 
 
 async def test_positions_order_by_number_not_by_their_text(pod_api: DatastoreApi):

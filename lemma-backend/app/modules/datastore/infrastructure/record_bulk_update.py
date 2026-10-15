@@ -246,9 +246,7 @@ async def _bulk_update_logged(
                     changed=changed_columns,
                     returning="count",
                 )
-                count = int(
-                    (await session.execute(text(statement), bound)).scalar_one()
-                )
+                count = changes.count(await session.execute(text(statement), bound))
                 if count != expected:
                     raise DatastoreRecordNotFoundError(
                         "Record not found or update failed"

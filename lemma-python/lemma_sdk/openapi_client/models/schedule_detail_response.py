@@ -60,8 +60,8 @@ class ScheduleDetailResponse:
         listening (ListeningResponse | None | Unset): For a schedule on an MCP server's event: whether it is still
             hearing from the server. Absent for every other schedule.
         paused_reason (None | str | Unset): Why the platform paused this schedule: `fire_cap` (it fired more than its
-            daily ceiling), `consecutive_failures`, or another system reason. Absent while it runs, or when a person paused
-            it. Reactivating clears it.
+            daily ceiling), `consecutive_failures`, `fire_failed` (a scheduled run could not be started), or another system
+            reason. Absent while it runs, or when a person paused it. Reactivating clears it.
         workflow_name (None | str | Unset):
     """
 

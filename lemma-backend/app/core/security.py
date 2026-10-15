@@ -406,11 +406,13 @@ async def verify_auth(connection: HTTPConnection):
         raise HTTPException(status_code=401, detail="Unauthorized") from e
     except Exception as e:
         # Everything else is this deployment failing, not the caller: the
-        # SuperTokens core unreachable, a JWKS fetch that did not come back, a
-        # key that does not match. It still answers 401, because a request
-        # whose identity could not be established must not proceed -- but the
-        # client's reaction to a 401 is to discard a working session and ask
-        # for a new one, so the server has to be the one that knows better.
+        # SuperTokens core unreachable or failing (its database down), a JWKS
+        # fetch that did not come back, a key that does not match. The request
+        # must not proceed -- its identity could not be established -- but it
+        # must not answer 401 either: a client's reaction to a 401 is to throw
+        # away a working session and ask for a new one, so a database blip
+        # signed people out of the web app and the CLI. It answers 503 with a
+        # Retry-After instead, which every client treats as "try again".
         #
         # This was `logger.debug` with no exception, on the hottest path in the
         # service. At LOG_LEVEL=INFO the record was dropped before formatting,
@@ -422,7 +424,24 @@ async def verify_auth(connection: HTTPConnection):
             exc_info=True,
         )
         # `from e` so the traceback keeps the frame that actually failed.
-        raise HTTPException(status_code=401, detail="Unauthorized") from e
+        raise auth_unavailable() from e
+
+
+#: Seconds a client should wait before retrying a request whose session could
+#: not be checked. Short: the cause is usually a core or database restart.
+AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS = 2
+
+
+def auth_unavailable() -> HTTPException:
+    """The answer when a session could not be *checked*, as opposed to rejected."""
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "AUTH_UNAVAILABLE",
+            "message": "Sign-in could not be checked right now. Try again shortly.",
+        },
+        headers={"Retry-After": str(AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS)},
+    )
 
 
 async def supertokens_core_reachable() -> bool:

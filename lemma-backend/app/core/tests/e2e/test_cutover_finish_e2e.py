@@ -3,6 +3,9 @@
 * ``finish`` never stalls behind an old process: while another session holds a
   row lock on ``domain_event_outbox`` it gives up within its lock timeout,
   leaves both tables, and says so; once the lock is released it drops them.
+* A separate database's outbox holding a delivery past the sweep's cursor is
+  taken over against the main inbox before that inbox is dropped: ``finish``
+  completes, converts the delivery once and drops both.
 * ``python -m app.cutover_finish`` refuses while a delivery is owed, and
   drops both tables once nothing is.
 * The cutover sweep finishes on its own with ``WORK_CUTOVER_AUTO_FINISH`` on,
@@ -14,10 +17,15 @@ from __future__ import annotations
 
 import time
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
+
+from app.core.infrastructure.cutover import other_outboxes
+from app.core.infrastructure.cutover.other_outboxes import LegacyOutbox
 
 from app.core.infrastructure.cutover.takeover import LEGACY_EVENT, LEGACY_SWEEP
 from app.core.infrastructure.cutover.work import (
@@ -129,6 +137,75 @@ async def test_finish_gives_up_on_a_held_lock_and_drops_once_it_is_released(
     assert await _scalar(db_manager, _GONE)
     # Again, with nothing left: a no-op.
     assert (await finish(db_manager.session_factory, since=None)).done
+
+
+@pytest.fixture
+async def other_database(e2e_settings):
+    """A second database on the same server, as a separately configured
+    datastore database: an outbox, no inbox."""
+    name = f"cutover_other_{uuid4().hex[:12]}"
+    url = make_url(e2e_settings.database_url)
+    admin = create_async_engine(url, isolation_level="AUTOCOMMIT")
+    async with admin.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{name}"'))
+    engine = create_async_engine(url.set(database=name))
+    try:
+        async with engine.begin() as conn:
+            await create_legacy_tables(conn, inbox=False)
+        yield engine
+    finally:
+        await engine.dispose()
+        async with admin.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        await admin.dispose()
+
+
+async def _items_keyed(db_manager, key: str) -> object:
+    return await _scalar(
+        db_manager, "SELECT count(*) FROM work_items WHERE dedup_key = :k", k=key
+    )
+
+
+async def test_finish_takes_over_another_outbox_before_dropping_the_main_inbox(
+    legacy, other_database, db_manager, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        other_outboxes,
+        "_other_outboxes",
+        {
+            "other": LegacyOutbox(
+                name="other",
+                engine=lambda: other_database,
+                routes=("pod.join-request-email",),
+                like="pod.join_request.%",
+            )
+        },
+    )
+    async with other_database.begin() as conn:
+        seen = await outbox_row(
+            conn, event("pod.join_request.requested"), published=True, occurred_at=_OLD
+        )
+        # Past the sweep's cursor: only ``finish`` can take this one over.
+        owed = await outbox_row(
+            conn, event("pod.join_request.requested"), published=True
+        )
+    cursors = {"other": [_OLD.isoformat(), str(seen)]}
+
+    result = await finish(db_manager.session_factory, since=None, cursors=cursors)
+
+    assert result.done, result
+    assert result.taken == 1
+    assert await _scalar(db_manager, _GONE)
+    async with other_database.connect() as conn:
+        assert await conn.scalar(
+            text("SELECT to_regclass('domain_event_outbox') IS NULL")
+        ), "the other outbox is dropped"
+    key = f"legacy:pod.join-request-email:{owed}"
+    assert await _items_keyed(db_manager, key) == 1, "converted exactly once"
+    assert not await _items_keyed(db_manager, f"legacy:pod.join-request-email:{seen}")
+    # Again, with nothing left: a no-op that converts nothing twice.
+    assert (await finish(db_manager.session_factory, since=None)).done
+    assert await _items_keyed(db_manager, key) == 1
 
 
 async def test_cutover_finish_refuses_while_a_delivery_is_owed(

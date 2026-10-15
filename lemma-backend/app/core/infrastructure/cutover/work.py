@@ -29,10 +29,12 @@ as the old transport's tables exist:
 outside any lock until a pass takes fewer than ``SETTLE_BELOW``; then, in one
 transaction with a ``lock_timeout``, locks both tables, takes over the last
 rows and drops them, so nothing is written between the last take-over and the
-drop. A lock it cannot get in time (an old process mid-transaction) is retried
-with backoff a bounded number of times and reported, never waited on. Then it
-drops a separate datastore database's outbox and retires the legacy Redis
-groups and streams.
+drop. Before that lock it takes over the rest of a separate datastore
+database's outbox under that outbox's own lock and drops it: its rows are
+checked against the main inbox, which must still exist. A lock it cannot get in
+time (an old process mid-transaction) is retried with backoff a bounded number
+of times and reported, never waited on; while another outbox stays, so do the
+main tables. Then it retires the legacy Redis groups and streams.
 
 ``cutover.legacy_event`` runs one owed delivery through the converter its
 route registered (``routes.legacy_converter``). Each converter writes what the
@@ -274,30 +276,22 @@ async def finish(
     all, and the result says so. Safe to run again at any point.
     """
     taken, since = await _settle(sessions, since)
+    # Other databases' outboxes first: their rows are taken over against the
+    # main inbox, so each is taken over to the end and dropped while that
+    # inbox still exists. One whose lock is not granted keeps the main tables
+    # too, for the next attempt to take it over against.
+    other_taken, left = await drop_other_outboxes(
+        sessions, dict(cursors or {}), lock_timeout_ms
+    )
+    taken += other_taken
     lock_timeouts, dropped = 0, False
-    for attempt in range(1, attempts + 1):
-        try:
-            taken += await _drop_locked(sessions, since, lock_timeout_ms)
-        except DBAPIError as exc:
-            if not lock_not_available(exc):
-                raise
-            lock_timeouts += 1
-            logger.warning(
-                "cutover.finish.lock_timeout", attempt=attempt, attempts=attempts
-            )
-            if attempt < attempts:
-                await asyncio.sleep(backoff_seconds * 2 ** (attempt - 1))
-            continue
-        dropped = True
-        break
-    left: tuple[str, ...] = ()
-    if dropped:
-        other_taken, left = await drop_other_outboxes(
-            sessions, dict(cursors or {}), lock_timeout_ms
+    if not left:
+        main_taken, dropped, lock_timeouts = await _drop_main(
+            sessions, since, lock_timeout_ms, attempts, backoff_seconds
         )
-        taken += other_taken
-        if not left:
-            await retire_legacy_streams()
+        taken += main_taken
+    if dropped:
+        await retire_legacy_streams()
     result = FinishResult(
         dropped=dropped, lock_timeouts=lock_timeouts, taken=taken, outboxes_left=left
     )
@@ -309,6 +303,31 @@ async def finish(
         outboxes_left=",".join(left),
     )
     return result
+
+
+async def _drop_main(
+    sessions: Sessions,
+    since: datetime | None,
+    lock_timeout_ms: int,
+    attempts: int,
+    backoff_seconds: float,
+) -> tuple[int, bool, int]:
+    """``_drop_locked``, retried with backoff: (taken, dropped, lock timeouts)."""
+    taken = 0
+    for attempt in range(1, attempts + 1):
+        try:
+            taken += await _drop_locked(sessions, since, lock_timeout_ms)
+        except DBAPIError as exc:
+            if not lock_not_available(exc):
+                raise
+            logger.warning(
+                "cutover.finish.lock_timeout", attempt=attempt, attempts=attempts
+            )
+            if attempt < attempts:
+                await asyncio.sleep(backoff_seconds * 2 ** (attempt - 1))
+            continue
+        return taken, True, attempt - 1
+    return taken, False, attempts
 
 
 async def _settle(

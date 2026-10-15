@@ -12,11 +12,12 @@ cutover sweep do this itself). It refuses -- exit 1, saying why -- unless what
 
 Then it runs ``finish`` (``app/core/infrastructure/cutover/work.py``): takes
 over from the sweep's watermark outside any lock until a pass takes fewer than
-1,000 deliveries; locks ``domain_event_outbox`` and ``domain_event_inbox``
-with a 5 s ``lock_timeout``, takes over the last rows and drops both in one
-transaction, retrying a lock it cannot get with backoff a bounded number of
-times; then drops a separately configured datastore database's outbox and
-retires the legacy Redis groups and streams. Exit 0 once all of that is done,
+1,000 deliveries; takes over the rest of a separately configured datastore
+database's outbox under that outbox's lock and drops it (its rows are checked
+against the main inbox, so it goes first); locks ``domain_event_outbox`` and
+``domain_event_inbox`` with a 5 s ``lock_timeout``, takes over the last rows
+and drops both in one transaction, retrying a lock it cannot get with backoff
+a bounded number of times; then retires the legacy Redis groups and streams. Exit 0 once all of that is done,
 2 when a lock was never granted (nothing is lost; run it again). Safe to run
 again at any point; once finished it does nothing.
 

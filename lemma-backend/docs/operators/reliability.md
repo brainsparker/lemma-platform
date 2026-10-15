@@ -150,8 +150,12 @@ groups and streams are then dropped by `finish`, run one of two ways:
   delivery is owed, or a streaq job is left in Redis.
 
 `finish` takes over from the sweep's watermark outside any lock until a pass
-takes fewer than 1,000 deliveries, then in one transaction with a 5 s
-`lock_timeout` locks both tables, takes over the last rows and drops them. A
+takes fewer than 1,000 deliveries. It then takes over the rest of a separate
+datastore database's outbox under that outbox's lock and drops it -- first,
+because its rows are checked against the main inbox -- and in one transaction
+with a 5 s `lock_timeout` locks both main tables, takes over the last rows and
+drops them. While the datastore outbox's lock is not granted, the main tables
+stay too. A
 lock it cannot get in time (something still mid-transaction on the old tables)
 is retried with backoff a bounded number of times, never waited on; the
 command then exits 2 and changes nothing, and running it again is safe.

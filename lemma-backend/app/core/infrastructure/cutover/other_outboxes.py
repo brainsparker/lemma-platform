@@ -1,5 +1,8 @@
 """Other databases' ``domain_event_outbox``: taken over by the sweep, dropped by ``finish``.
 
+``finish`` drops each of these before the main tables: its rows are checked
+against the main database's inbox, so that inbox must outlive it.
+
 A module whose events had an outbox of their own (the datastore database, when
 it is configured separately) registers it here. Its rows are read from that
 database by a cursor and taken over against the main database's inbox
@@ -108,6 +111,10 @@ async def drop_other_outboxes(
                 await conn.execute(
                     text("LOCK TABLE domain_event_outbox IN ACCESS EXCLUSIVE MODE")
                 )
+                if await _is_main_outbox(sessions):
+                    # A URL that names the main database another way: the
+                    # main drop takes this outbox over and drops it.
+                    continue
                 # Under the lock, read through this connection: nothing is
                 # written between the last take-over and the drop.
                 while rows := await _outbox_rows_after(
@@ -124,6 +131,27 @@ async def drop_other_outboxes(
             continue
         logger.info("cutover.finish.dropped_outbox", database=outbox.name)
     return taken, tuple(left)
+
+
+async def _is_main_outbox(sessions: Sessions) -> bool:
+    """Called holding another outbox's lock: is it the main database's outbox?
+    Then the main database cannot take even a shared lock on its own."""
+    async with sessions() as session:
+        if not await session.scalar(
+            text("SELECT to_regclass('domain_event_outbox') IS NOT NULL")
+        ):
+            return False
+        try:
+            await session.execute(
+                text("LOCK TABLE domain_event_outbox IN ACCESS SHARE MODE NOWAIT")
+            )
+        except DBAPIError as exc:
+            if not lock_not_available(exc):
+                raise
+            await session.rollback()
+            return True
+        await session.rollback()
+        return False
 
 
 async def _take_over_other(

@@ -359,6 +359,39 @@ id, the promise moves to `gap`, and the scenario is marked
 
 ---
 
+## Iterating on module e2e tests locally
+
+A module e2e run starts Postgres, Redis and SuperTokens before its first test,
+and removes them after its last. When you are rerunning one test or one module
+while you work, keep them running between runs instead:
+
+```bash
+cd lemma-backend
+LEMMA_E2E_REUSE=1 uv run pytest app/core/tests/e2e/test_work_claim_e2e.py
+make e2e-reuse-down   # stop and remove them when you are done
+```
+
+What stays and what does not:
+
+- **The containers stay**, named per checkout, so two worktrees never share
+  them. They are labelled so the end-of-session sweep leaves them alone.
+- **The databases do not.** Each session gets new ones: the app database is
+  cloned from a schema template (rebuilt whenever the models change), the
+  datastore database is created empty, and the session's Redis index is
+  flushed. Tests see what a cold run gives them. The previous session's
+  databases are dropped in the background.
+- **One session at a time per checkout.** A second session started while one
+  is running in the same checkout notices, and runs cold on its own
+  containers rather than recreating the first one's databases.
+- **SuperTokens keeps its users** between sessions. Tests sign up with unique
+  addresses, so nothing depends on it starting empty.
+
+CI never sets `LEMMA_E2E_REUSE`, so what gates a merge is unchanged. To see
+what it saves on your machine, time one test with and without it — `pytest
+--durations=5` splits setup from the test body.
+
+---
+
 ## Known limits
 
 Written down because a limit nobody has recorded gets rediscovered as a bug.

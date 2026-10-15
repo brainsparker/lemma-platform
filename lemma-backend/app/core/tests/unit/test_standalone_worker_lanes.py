@@ -26,9 +26,7 @@ from fastapi import FastAPI
 
 from app.core.infrastructure.jobs import streaq_runtime
 from app.core.infrastructure.jobs.streaq_runtime import (
-    LANE_WORKERS,
     Lane,
-    lane_for_task,
     lane_queue_name,
 )
 from app.core.infrastructure.jobs.task_dump import install_task_dump_handler
@@ -101,18 +99,21 @@ async def test_the_embedded_app_consumes_every_lane_queue(monkeypatch):
     assert lane_queue_name(Lane.BULK) in _CONSUMED
 
 
-def test_document_processing_lands_on_a_lane_the_embedded_app_runs():
-    """Closes the loop from the queue back to the work that goes on it.
+def test_document_processing_lands_on_a_work_class_the_embedded_app_runs():
+    """Closes the loop from the work item back to the process that claims it.
 
-    The test above would still pass if document processing were moved to a lane
-    nobody embeds. This one names the task, so that move fails here instead of
-    in a user's pod six weeks later.
+    Document processing is a ``file.process`` work item now, claimed by the
+    work runtime that ``run_worker_lanes`` starts -- in the embedded app too.
+    If it moved to a class the embedded app does not run, uploads in a user's
+    pod would wait forever; this names the kind so that move fails here.
     """
-    import app.events  # noqa: F401 — registers every task on its lane
+    import app.events  # noqa: F401 — imports every module's work kinds
+    from app.core.infrastructure.work import WorkClass, registry
+    from app.core.infrastructure.work.config import enabled_classes
 
-    lane = lane_for_task("process_datastore_file_task")
-    assert lane in list(Lane)
-    assert "process_datastore_file_task" in LANE_WORKERS[lane].registry
+    spec = registry.get("file.process")
+    assert spec.cls is WorkClass.INGESTION
+    assert spec.cls in enabled_classes()
 
 
 def test_the_embedded_app_silences_signals_on_every_lane(monkeypatch):

@@ -74,12 +74,31 @@ def configure_plan_limits(modules: Sequence[LemmaModule]) -> None:
     declare_plan_limits(provider() if provider is not None else None)
 
 
+def configure_namespace_directory(modules: Sequence[LemmaModule]) -> None:
+    """Register the one module that can say which organization owns a pod.
+
+    Two would disagree about whose limits a pod's work runs under, so it stops
+    the process rather than letting list order decide.
+    """
+    from app.core.infrastructure.work.limits import declare_namespace_directory
+
+    declared = [m for m in modules if m.namespace_directory is not None]
+    if len(declared) > 1:
+        names = ", ".join(module.name for module in declared)
+        raise RuntimeError(
+            f"more than one module declares namespace_directory: {names}"
+        )
+    provider = declared[0].namespace_directory if declared else None
+    declare_namespace_directory(provider() if provider is not None else None)
+
+
 def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:
     """Include every module's API routers, in module-list then thunk order."""
     configure_stream_topology(modules)
     configure_resource_names(modules)
     configure_pod_liveness(modules)
     configure_plan_limits(modules)
+    configure_namespace_directory(modules)
     for module in modules:
         if module.routers is None:
             continue
@@ -122,6 +141,7 @@ def wire_module_events(modules: Sequence[LemmaModule], broker: "RedisBroker") ->
     configure_resource_names(modules)
     configure_pod_liveness(modules)
     configure_plan_limits(modules)
+    configure_namespace_directory(modules)
     register_streaq_tasks(modules)
     for module in modules:
         if module.event_routers is None:

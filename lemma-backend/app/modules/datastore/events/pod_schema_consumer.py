@@ -36,6 +36,12 @@ async def on_pod_created(
         parsed = PodCreatedEvent.model_validate(event)
         # The process singleton, not a fresh manager: it remembers that the
         # query role is already ensured, so each pod costs no catalog probe.
-        await get_schema_manager().create_datastore_schema(parsed.pod_id)
+        manager = get_schema_manager()
+        await manager.create_datastore_schema(parsed.pod_id)
+        # Born at the latest search version: the tables are empty, so this is
+        # a few catalog writes, and the backfill never has to visit the pod --
+        # which is what lets "every schema is at version N" ever become true
+        # while pods keep being created.
+        await manager.migrate_search_tables(parsed.pod_id)
 
     await inbox.process("datastore.pod-schema-bootstrap", event, process)

@@ -9,6 +9,7 @@ from app.modules.function.config import function_settings
 from app.modules.workspace.config import workspace_settings
 
 import os
+import threading
 import json
 import socket
 from concurrent.futures import ThreadPoolExecutor
@@ -36,6 +37,13 @@ from app.core.test_utils import (
     get_redis_url,
     get_supertokens_container,
     get_supertokens_url,
+)
+from app.core.test_shared_containers import (
+    E2E_REUSE_ENV,
+    drop_set_aside_databases,
+    e2e_reuse_requested,
+    recreate_postgres_database,
+    reused_container_name,
     shared_postgres,
     shared_redis,
 )
@@ -492,29 +500,137 @@ def _postgres_worker_supertokens_db_name(worker_id: str) -> str:
     return f"supertokens_{_sanitize_worker_id(worker_id)}"
 
 
-def _start_postgres(worker_id: str, basetemp_parent) -> None:
+def _start_postgres(worker_id: str, basetemp_parent, *, schema: bool = True) -> None:
     """Connect to the ONE Postgres server shared across all xdist workers.
 
     Each worker gets its own logical database inside it (created via
     ``create_postgres_database``), rather than its own full container -- one
     `docker run postgres` and one idle Postgres server process for the whole
-    run instead of N. See ``shared_postgres`` in test_utils for the
+    run instead of N. See ``shared_postgres`` in test_shared_containers for the
     coordination mechanism (mirrors ``shared_kreuzberg``).
     """
 
     def _factory():
         return shared_postgres(basetemp_parent, worker_id)
 
+    _claim_reuse(worker_id)
     postgres = _shared_context_resource("postgres", _factory)
     if not getattr(postgres, "_lemma_worker_databases_created", False):
-        create_postgres_database(postgres, _postgres_worker_db_name(worker_id))
-        create_postgres_database(
-            postgres, _postgres_worker_datastore_db_name(worker_id)
-        )
+        if e2e_reuse_requested():
+            _fresh_reused_databases(postgres, worker_id, schema=schema)
+        else:
+            create_postgres_database(postgres, _postgres_worker_db_name(worker_id))
+            create_postgres_database(
+                postgres, _postgres_worker_datastore_db_name(worker_id)
+            )
         create_postgres_database(
             postgres, _postgres_worker_supertokens_db_name(worker_id)
         )
         setattr(postgres, "_lemma_worker_databases_created", True)
+
+
+#: Held for the life of this process when it reuses containers, so a second
+#: session in the same checkout cannot recreate the databases under it.
+_REUSE_LOCKS: list[Any] = []
+_REUSE_CLAIM = threading.Lock()
+
+
+def _claim_reuse(worker_id: str) -> None:
+    """Take this worker's reuse lock, or fall back to fresh containers.
+
+    Reused containers are shared by every session in a checkout, but each
+    xdist worker's databases and Redis index are its own -- so two sessions
+    at once would wipe each other's. The second one simply runs cold.
+    """
+    with _REUSE_CLAIM:
+        if not e2e_reuse_requested() or _REUSE_LOCKS:
+            return
+        from filelock import FileLock, Timeout
+
+        # Not thread-local: containers are warmed from several threads of
+        # this one process, and all of them hold the same claim.
+        lock = FileLock(
+            f"/tmp/{reused_container_name(_sanitize_worker_id(worker_id))}.lock",
+            thread_local=False,
+        )
+        try:
+            lock.acquire(timeout=0)
+        except Timeout:
+            os.environ[E2E_REUSE_ENV] = "0"
+            return
+        _REUSE_LOCKS.append(lock)
+
+
+def _fresh_reused_databases(postgres: Any, worker_id: str, *, schema: bool) -> None:
+    """This session's databases, new; for the full stack, cloned from a schema template.
+
+    Cloning a template is cheaper than creating every table again; tables
+    registered after the template was built are still created lazily by
+    ``_ensure_schema_once``. A Postgres-only session (``postgres_only_*``)
+    creates its own tables, so it skips the template and the model imports
+    that building one needs. The previous session's databases are dropped on a
+    background thread, off the path to the first test.
+    """
+    name = _postgres_worker_db_name(worker_id)
+    if schema:
+        template, tables = _schema_template(postgres)
+        recreate_postgres_database(postgres, name, template=template)
+        _CREATED_TABLES[get_postgres_url(postgres, name)] = set(tables)
+    else:
+        recreate_postgres_database(postgres, name)
+    recreate_postgres_database(postgres, _postgres_worker_datastore_db_name(worker_id))
+    threading.Thread(
+        target=drop_set_aside_databases, args=(postgres,), daemon=True
+    ).start()
+
+
+def _schema_template(postgres: Any) -> tuple[str, list[str]]:
+    """A database holding the e2e schema, named by a digest of that schema."""
+    import hashlib
+
+    import psycopg
+    from sqlalchemy import create_engine
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.schema import CreateIndex, CreateTable
+
+    _import_e2e_models()
+    dialect = postgresql.dialect()
+    tables = sorted(Base.metadata.tables.values(), key=lambda t: t.name)
+    ddl = "".join(
+        str(CreateTable(t).compile(dialect=dialect))
+        + "".join(str(CreateIndex(i).compile(dialect=dialect)) for i in t.indexes)
+        for t in tables
+    )
+    name = f"lemma_e2e_tpl_{hashlib.sha256(ddl.encode()).hexdigest()[:12]}"
+    admin = get_postgres_url(postgres).replace("+asyncpg", "+psycopg")
+    with psycopg.connect(
+        admin.replace("postgresql+psycopg", "postgresql"), autocommit=True
+    ) as conn:
+        # One builder at a time across xdist workers; the rest find it built.
+        conn.execute("SELECT pg_advisory_lock(%s)", (0x6C656D7470,))
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM pg_database WHERE datname = %s", (name,)
+            ).fetchone()
+            if exists is None:
+                for (stale,) in conn.execute(
+                    "SELECT datname FROM pg_database WHERE datname LIKE 'lemma\\_e2e\\_tpl\\_%'"
+                ).fetchall():
+                    conn.execute(f'DROP DATABASE IF EXISTS "{stale}"')
+                building = f"{name}_building"
+                conn.execute(f'DROP DATABASE IF EXISTS "{building}"')
+                conn.execute(f'CREATE DATABASE "{building}"')
+                engine = create_engine(admin.rsplit("/", 1)[0] + f"/{building}")
+                try:
+                    with engine.begin() as schema:
+                        schema.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                        Base.metadata.create_all(schema, tables=tables)
+                finally:
+                    engine.dispose()
+                conn.execute(f'ALTER DATABASE "{building}" RENAME TO "{name}"')
+        finally:
+            conn.execute("SELECT pg_advisory_unlock(%s)", (0x6C656D7470,))
+    return name, [t.name for t in tables]
 
 
 def _start_supertokens(worker_id: str, basetemp_parent) -> None:
@@ -531,8 +647,16 @@ def _start_supertokens(worker_id: str, basetemp_parent) -> None:
         postgres, _postgres_worker_supertokens_db_name(worker_id)
     )
 
+    reuse_name = (
+        reused_container_name(f"supertokens-{_sanitize_worker_id(worker_id)}")
+        if e2e_reuse_requested()
+        else None
+    )
+
     def _factory():
-        return get_supertokens_container(postgres_uri, network=SHARED_E2E_NETWORK_NAME)
+        return get_supertokens_container(
+            postgres_uri, network=SHARED_E2E_NETWORK_NAME, reuse_name=reuse_name
+        )
 
     _shared_context_resource("supertokens", _factory)
 
@@ -543,7 +667,7 @@ def _start_redis(worker_id: str, basetemp_parent) -> None:
     Each worker gets its own logical DB index inside it (selected via the
     connection URL, see ``_redis_worker_db_index``), rather than its own full
     container -- one `docker run redis` for the whole run instead of N. See
-    ``shared_redis`` in test_utils for the coordination mechanism (mirrors
+    ``shared_redis`` in test_shared_containers for the coordination mechanism (mirrors
     ``shared_postgres``/``shared_kreuzberg``). Unlike Postgres, no
     per-worker provisioning step is needed here -- Redis DBs exist by index
     already, nothing to create.
@@ -552,7 +676,17 @@ def _start_redis(worker_id: str, basetemp_parent) -> None:
     def _factory():
         return shared_redis(basetemp_parent, worker_id)
 
-    _shared_context_resource("redis", _factory)
+    _claim_reuse(worker_id)
+    first = "redis" not in _SHARED_RESOURCES
+    redis_container = _shared_context_resource("redis", _factory)
+    if first and e2e_reuse_requested():
+        # A reused server keeps the last session's keys; this worker's index
+        # starts empty, as it would on a fresh container.
+        import redis as redis_sync
+
+        url = get_redis_url(redis_container, _redis_worker_db_index(worker_id))
+        with redis_sync.Redis.from_url(url) as client:
+            client.flushdb()
 
 
 def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
@@ -581,6 +715,7 @@ def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
     # concurrently raced two `mkdir`s for the same path, one losing with
     # ``FileExistsError``.
     basetemp_parent = tmp_path_factory.getbasetemp().parent
+    _claim_reuse(worker_id)
 
     jobs: list[Callable[[], Any]] = []
     if "postgres" not in _SHARED_RESOURCES or "supertokens" not in _SHARED_RESOURCES:
@@ -597,6 +732,27 @@ def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
 def postgres_container(worker_id, tmp_path_factory):
     _warm_shared_containers(worker_id, tmp_path_factory)
     yield _SHARED_RESOURCES["postgres"]
+
+
+@pytest.fixture(scope="session")
+def postgres_only_container(worker_id, tmp_path_factory):
+    """The shared Postgres server alone, for tests of the database layer.
+
+    ``postgres_container`` warms SuperTokens and Redis alongside it, which is
+    right for a test that boots the app and pure cost -- most of the setup
+    time -- for one that only needs a database. Same shared server and
+    per-worker database, so a later test asking for the full stack reuses it
+    and starts only what is missing.
+    """
+    _start_postgres(worker_id, tmp_path_factory.getbasetemp().parent, schema=False)
+    yield _SHARED_RESOURCES["postgres"]
+
+
+@pytest.fixture(scope="session")
+def postgres_only_database_url(postgres_only_container, worker_id) -> str:
+    return get_postgres_url(
+        postgres_only_container, _postgres_worker_db_name(worker_id)
+    )
 
 
 @pytest.fixture(scope="session")
@@ -867,6 +1023,7 @@ def _import_e2e_models() -> None:
     through a package ``__init__``, so importing the package is enough.
     """
     from app.core.infrastructure.events import models as event_models
+    from app.core.infrastructure.work import models as work_models
     from app.modules.agent.infrastructure import models as agent_models
     from app.modules.agent.infrastructure import runtime_models as agent_runtime_models
     from app.modules.agent_surfaces.infrastructure import models as agent_surface_models
@@ -896,6 +1053,7 @@ def _import_e2e_models() -> None:
         workspace_models,
         agent_runtime_models,
         event_models,
+        work_models,
         user_models,
         organization_models,
         pod_models,

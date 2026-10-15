@@ -75,6 +75,11 @@ from app.core.observability.telemetry import (
 )
 from app.core.origin import Origin, OriginKind, origin_from_payload, origin_scope
 from app.core.request_context import bind_job_context, create_background_task
+from app.core.infrastructure.work.streaq_bridge import (
+    drain_work_on_signal,
+    enter_work_runtime,
+    forget_work_runtime,
+)
 
 if TYPE_CHECKING:
     from app.core.registry.contract import LemmaModule
@@ -438,6 +443,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 )
             )
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
+            await enter_work_runtime(module_stack)
             ms, frozen = finish_startup(boot_started)
             logger.info("service.started", startup_ms=ms, gc_frozen_objects=frozen)
             started = True
@@ -454,6 +460,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         # nothing has told to stop. Stopping the other lanes first is the
         # ordering that makes the rest of this block finite.
         await _stop_secondary_lanes()
+        forget_work_runtime()
         _primary_lane_ready.clear()
         _primary_lane_context = None
         for background_task in (
@@ -595,6 +602,8 @@ LANE_WORKERS: dict[Lane, Worker[AppWorkerContext]] = {
 for _lane, _worker in LANE_WORKERS.items():
     if _lane is not _PRIMARY_LANE:
         _silence_lane_signal_handler(_worker)
+    else:
+        drain_work_on_signal(_worker)
 
 
 def enabled_lanes() -> list[Lane]:

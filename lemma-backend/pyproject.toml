@@ -276,9 +276,10 @@ exclude = ["app/core/log/event_catalog.py"]
 "scripts/**" = ["T20"]
 "app/**/scripts/**" = ["T20"]
 "migrations/**" = ["T20"]
-# Both files end in an `if __name__ == "__main__":` block — an outbox admin CLI
-# and a parser demo. Their prints are that program's output.
+# These end in an `if __name__ == "__main__":` block — the outbox and work
+# admin CLIs and a parser demo. Their prints are that program's output.
 "app/core/infrastructure/events/admin.py" = ["T20"]
+"app/core/infrastructure/work/admin.py" = ["T20"]
 "app/core/file_editor/file_editor.py" = ["T20"]
 # A test pins a fixed instant on purpose; which zone it carries is usually not
 # what the test is about, and naive literals keep the arithmetic readable.

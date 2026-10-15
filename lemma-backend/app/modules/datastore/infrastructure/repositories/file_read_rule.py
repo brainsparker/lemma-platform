@@ -422,19 +422,32 @@ def blocked_folders_statement(pod_id: UUID, rule: FileReadRule):
     return union_all(folders, with_descendants)
 
 
+#: Statuses a file that was indexed before can be in while it still has chunks.
+_REINDEXING = (
+    FileStatus.PENDING.value,
+    FileStatus.PROCESSING.value,
+    FileStatus.FAILED_PERMANENT.value,
+)
+
+
 def searchable_files_statement(pod_id: UUID, readable: ColumnElement[bool]):
     """``(id, readable)`` for every file in the pod a chunk search can match.
 
     Indexed and enabled: nothing else has chunks to find, so neither side of
     the split spends its length on folders or on documents that were never
-    indexed. A file mid-reprocess may still have chunks from before; it is on
-    neither side, so an excluding scope lets its chunks through and the
-    searcher's authorization pass decides them. Served by
-    ``ix_datastore_file_status``.
+    indexed. A file being reprocessed -- or whose newest bytes failed -- keeps
+    the revision it was last indexed at (``indexed_sha256``), and that stays
+    findable until a new one replaces it. Served by ``ix_datastore_file_status``.
     """
     return select(DatastoreFile.id, readable).where(
         DatastoreFile.pod_id == pod_id,
-        DatastoreFile.status == FileStatus.COMPLETED.value,
+        or_(
+            DatastoreFile.status == FileStatus.COMPLETED.value,
+            and_(
+                DatastoreFile.status.in_(_REINDEXING),
+                DatastoreFile.indexed_sha256.is_not(None),
+            ),
+        ),
         DatastoreFile.kind == FileKind.FILE.value,
         DatastoreFile.search_enabled,
     )

@@ -1,0 +1,288 @@
+"""Every transition of a claimed item, each fenced by its lease.
+
+An item a process no longer owns -- its lease expired and someone else claimed
+it, or it is gone -- matches zero rows here, so a zombie can never complete,
+fail or release work that is not its own. Every path back to ``queued`` goes
+through ``requeue``, which is also where a dedup key is reconciled with a twin
+queued meanwhile.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from opentelemetry import metrics
+from sqlalchemy import Row, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work.context import DeadContext
+from app.core.infrastructure.work.registry import HandlerSpec, WorkRegistry
+from app.core.infrastructure.work.retry import AttemptState, Dead, Decision, Requeue
+from app.core.infrastructure.work.types import ClaimedItem, WorkClass
+from app.core.infrastructure.work.writer import WorkWriter, wake_channel
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
+meter = metrics.get_meter(__name__)
+dead_counter = meter.create_counter(
+    "lemma.work.dead", description="Work items that reached the dead state."
+)
+
+_LOCK_OWNED = text(
+    """
+    SELECT attempts, lease_losses, first_unavailable_at FROM work_items
+     WHERE id = :id AND lease_owner = :owner AND state = 'running'
+       FOR UPDATE
+    """
+)
+_DELETE = text("DELETE FROM work_items WHERE id = :id")
+_REQUEUE = text(
+    """
+    UPDATE work_items
+       SET state = 'queued', lease_owner = NULL, lease_until = NULL,
+           run_at = :run_at, attempts = :attempts, lease_losses = :lease_losses,
+           first_unavailable_at = :first_unavailable_at,
+           error_class = COALESCE(:error_class, error_class),
+           last_error = COALESCE(:last_error, last_error)
+     WHERE id = :id
+    """
+)
+# A dead item's run_at becomes the moment it died, which is what retention
+# measures and what an operator listing dead work sorts by.
+_MARK_DEAD = text(
+    """
+    UPDATE work_items
+       SET state = 'dead', lease_owner = NULL, lease_until = NULL, run_at = now(),
+           attempts = :attempts, lease_losses = :lease_losses,
+           error_class = :reason, last_error = :last_error
+     WHERE id = :id
+    """
+)
+_EXTEND = text(
+    """
+    UPDATE work_items SET lease_until = now() + make_interval(secs => :seconds)
+     WHERE id = :id AND lease_owner = :owner AND state = 'running'
+    RETURNING id
+    """
+)
+_OWNED_BY = text(
+    """
+    SELECT id FROM work_items WHERE lease_owner = :owner AND state = 'running'
+    """
+)
+_RELEASE_ONE = text(
+    """
+    SELECT id, ns, class, kind, payload, dedup_key, attempts, lease_losses,
+           first_unavailable_at, run_at, created_at
+      FROM work_items
+     WHERE id = :id AND lease_owner = :owner AND state = 'running'
+       FOR UPDATE
+    """
+)
+_EXPIRED = text(
+    """
+    SELECT id FROM work_items
+     WHERE state = 'running' AND lease_until < now() AND class = :cls
+     ORDER BY lease_until
+     LIMIT :limit
+    """
+)
+_LOCK_EXPIRED = text(
+    """
+    SELECT id, ns, class, kind, payload, dedup_key, attempts, lease_losses,
+           first_unavailable_at, run_at, created_at
+      FROM work_items
+     WHERE id = :id AND state = 'running' AND lease_until < now()
+       FOR UPDATE SKIP LOCKED
+    """
+)
+
+
+async def lock_owned(
+    session: AsyncSession, item_id: object, owner: str
+) -> AttemptState | None:
+    """Lock the item if this owner still holds it; ``None`` means the lease is lost."""
+    row = (await session.execute(_LOCK_OWNED, {"id": item_id, "owner": owner})).first()
+    if row is None:
+        return None
+    return AttemptState(row.attempts, row.lease_losses, row.first_unavailable_at)
+
+
+async def finish_item(
+    session: AsyncSession, item: ClaimedItem, registry: WorkRegistry
+) -> None:
+    """Delete the finished item, re-arming it first if it is a periodic."""
+    periodic = registry.periodic_for(item.dedup_key)
+    if periodic is not None:
+        await WorkWriter(session, registry=registry).add(
+            periodic.kind,
+            item.ns,
+            periodic.payload,
+            dedup_key=periodic.dedup_key,
+            delay=periodic.every,
+        )
+    await session.execute(_DELETE, {"id": item.id})
+
+
+async def requeue(session: AsyncSession, item: ClaimedItem, decision: Requeue) -> bool:
+    """Put the item back to ``queued``; ``False`` if it was coalesced away instead.
+
+    When a twin with the same dedup key was queued while this one ran, the twin
+    already stands for the work, and two queued items with one key cannot
+    exist. So this one is deleted rather than requeued.
+    """
+    params = {
+        "id": item.id,
+        "run_at": decision.run_at,
+        "attempts": decision.attempts,
+        "lease_losses": decision.lease_losses,
+        "first_unavailable_at": decision.first_unavailable_at,
+        "error_class": decision.error_class,
+        "last_error": decision.last_error,
+    }
+    if item.dedup_key is None:
+        await session.execute(_REQUEUE, params)
+        return True
+    try:
+        async with session.begin_nested():
+            await session.execute(_REQUEUE, params)
+    except IntegrityError:
+        await session.execute(_DELETE, {"id": item.id})
+        logger.info(
+            "work.item.coalesced",
+            item_id=str(item.id),
+            kind=item.kind,
+            dedup_key=item.dedup_key,
+        )
+        return False
+    return True
+
+
+async def mark_dead(
+    uow: SqlAlchemyUnitOfWork,
+    item: ClaimedItem,
+    decision: Dead,
+    spec: HandlerSpec | None,
+    registry: WorkRegistry,
+) -> None:
+    """Move to ``dead`` and let the kind write its terminal domain state, together."""
+    await uow.session.execute(
+        _MARK_DEAD,
+        {
+            "id": item.id,
+            "attempts": decision.attempts,
+            "lease_losses": decision.lease_losses,
+            "reason": decision.reason,
+            "last_error": decision.last_error,
+        },
+    )
+    if spec is not None and spec.on_dead is not None:
+        await spec.on_dead(
+            DeadContext(
+                uow=uow,
+                item=item,
+                reason=decision.reason,
+                last_error=decision.last_error,
+                work=WorkWriter(uow.session, registry=registry),
+            )
+        )
+    dead_counter.add(
+        1,
+        {
+            "work_class": item.cls.value,
+            "work_kind": item.kind,
+            "error_class": decision.reason,
+        },
+    )
+    logger.warning(
+        "work.item.dead",
+        item_id=str(item.id),
+        kind=item.kind,
+        ns=item.ns,
+        error_class=decision.reason,
+        attempts=decision.attempts,
+        lease_losses=decision.lease_losses,
+    )
+
+
+async def apply_decision(
+    uow: SqlAlchemyUnitOfWork,
+    item: ClaimedItem,
+    decision: Decision,
+    spec: HandlerSpec | None,
+    registry: WorkRegistry,
+) -> None:
+    if isinstance(decision, Dead):
+        await mark_dead(uow, item, decision, spec, registry)
+    else:
+        await requeue(uow.session, item, decision)
+
+
+async def extend_lease(
+    session: AsyncSession, item_id: object, owner: str, lease: timedelta
+) -> bool:
+    row = await session.scalar(
+        _EXTEND, {"id": item_id, "owner": owner, "seconds": lease.total_seconds()}
+    )
+    return row is not None
+
+
+async def release(
+    session: AsyncSession, item_id: object, owner: str, *, now: datetime
+) -> bool:
+    """Hand an owned item back with nothing charged; ``False`` if it was not ours."""
+    row = (await session.execute(_RELEASE_ONE, {"id": item_id, "owner": owner})).first()
+    if row is None:
+        return False
+    item = item_from_row(row)
+    await requeue(
+        session,
+        item,
+        Requeue(
+            run_at=now,
+            attempts=item.attempts,
+            lease_losses=item.lease_losses,
+            first_unavailable_at=item.first_unavailable_at,
+            error_class=None,
+            last_error=None,
+        ),
+    )
+    # Another process may be idle and able to take it straight away.
+    await session.execute(
+        text("SELECT pg_notify(:channel, '')"), {"channel": wake_channel(item.cls)}
+    )
+    return True
+
+
+async def owned_ids(session: AsyncSession, owner: str) -> list[object]:
+    return [row.id for row in await session.execute(_OWNED_BY, {"owner": owner})]
+
+
+async def expired_ids(session: AsyncSession, cls: str, limit: int) -> list[object]:
+    rows = await session.execute(_EXPIRED, {"cls": cls, "limit": limit})
+    return [row.id for row in rows]
+
+
+async def lock_expired(session: AsyncSession, item_id: object) -> ClaimedItem | None:
+    row = (await session.execute(_LOCK_EXPIRED, {"id": item_id})).first()
+    return None if row is None else item_from_row(row)
+
+
+def item_from_row(row: Row[tuple[object, ...]]) -> ClaimedItem:
+    """Map a ``work_items`` row selected with the claimed-item columns."""
+    mapping = row._mapping
+    return ClaimedItem(
+        id=mapping["id"],
+        ns=mapping["ns"],
+        cls=WorkClass(mapping["class"]),
+        kind=mapping["kind"],
+        payload=mapping["payload"],
+        dedup_key=mapping["dedup_key"],
+        attempts=mapping["attempts"],
+        lease_losses=mapping["lease_losses"],
+        first_unavailable_at=mapping["first_unavailable_at"],
+        run_at=mapping["run_at"],
+        created_at=mapping["created_at"],
+    )

@@ -35,7 +35,9 @@ async def test_pod_created_wrapper_ignores_other_events() -> None:
 @pytest.mark.asyncio
 async def test_pod_created_wrapper_claims_inbox_before_processing(monkeypatch) -> None:
     event = _created_event().model_dump(mode="json")
-    manager = SimpleNamespace(create_datastore_schema=AsyncMock())
+    manager = SimpleNamespace(
+        create_datastore_schema=AsyncMock(), migrate_search_tables=AsyncMock()
+    )
     monkeypatch.setattr(pod_schema_consumer, "get_schema_manager", lambda: manager)
     logger = Mock()
 
@@ -50,7 +52,9 @@ async def test_pod_created_wrapper_claims_inbox_before_processing(monkeypatch) -
 @pytest.mark.asyncio
 async def test_pod_schema_creation_is_idempotently_delegated(monkeypatch) -> None:
     event = _created_event()
-    manager = SimpleNamespace(create_datastore_schema=AsyncMock())
+    manager = SimpleNamespace(
+        create_datastore_schema=AsyncMock(), migrate_search_tables=AsyncMock()
+    )
     monkeypatch.setattr(pod_schema_consumer, "get_schema_manager", lambda: manager)
 
     await pod_schema_consumer.on_pod_created(
@@ -60,6 +64,7 @@ async def test_pod_schema_creation_is_idempotently_delegated(monkeypatch) -> Non
     )
 
     manager.create_datastore_schema.assert_awaited_once_with(event.pod_id)
+    manager.migrate_search_tables.assert_awaited_once_with(event.pod_id)
 
 
 @pytest.mark.asyncio

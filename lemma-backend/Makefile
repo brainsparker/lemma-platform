@@ -80,7 +80,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate  test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-unbounded-reads lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-memory-hazards lint-public-prose lint-test-doubles lint-migration-order lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate  test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-unbounded-reads lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-memory-hazards lint-public-prose lint-test-doubles lint-migration-order lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap e2e-reuse-down
 
 help:
 	@echo "Lemma backend:"
@@ -747,6 +747,10 @@ load-test: load-test-build load-test-up load-test-migrate load-test-setup load-t
 # machine that's accumulated cruft across many worktrees).
 docker-reap:
 	uv run python -m app.core.test_utils
+
+# Remove the containers LEMMA_E2E_REUSE=1 keeps running between e2e sessions.
+e2e-reuse-down:
+	uv run python -c "from app.core.test_shared_containers import remove_reused_containers as r; print(*r(), sep='\n')"
 
 # ── Sandbox images ────────────────────────────────────────────────────────────
 # The two images the workspace module provisions. They live here because the

@@ -15,6 +15,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from app.core.config import settings
 from app.core.infrastructure.db.base import Base
 from app.core.infrastructure.events import models as event_models  # noqa: F401
+from app.core.infrastructure.work import models as work_models  # noqa: F401
 
 # Import all models to ensure they are attached to Base.metadata
 # Datastore
@@ -74,6 +75,7 @@ from app.modules.agent_surfaces.infrastructure import (  # noqa: F401
 # "remove unused imports" would silently delete along with those tables.
 REGISTERED_MODEL_MODULES = (
     event_models,
+    work_models,
     datastore_models,
     identity_models,
     pod_models,

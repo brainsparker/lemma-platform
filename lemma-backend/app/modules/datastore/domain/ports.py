@@ -27,7 +27,6 @@ from app.modules.datastore.domain.document_processing import (
     DocumentExtraction,
     IndexingMetrics,
 )
-from app.modules.datastore.domain.file_projections import DispatchableFileRef
 from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.domain.search_scope import (
     SearchablePartition,
@@ -36,7 +35,6 @@ from app.modules.datastore.domain.search_scope import (
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileSearchResult,
-    FileStatus,
     SearchMethod,
 )
 
@@ -190,48 +188,6 @@ class DatastoreFileRepositoryPort(Protocol):
         ctx: Context,
         file_ids: Sequence[UUID],
     ) -> set[UUID]: ...
-
-    async def list_pending_dispatch_candidates(
-        self,
-        *,
-        per_pod_limit: int,
-        global_limit: int,
-    ) -> Sequence[DispatchableFileRef]: ...
-
-    async def list_stale_recovery_candidates(
-        self,
-        *,
-        pending_cutoff: datetime,
-        processing_cutoff: datetime,
-        failed_cutoff: datetime | None = None,
-        max_attempts: int = 3,
-        limit: int = 500,
-    ) -> Sequence[DispatchableFileRef]: ...
-
-    async def list_exhausted_recovery_candidates(
-        self,
-        *,
-        processing_cutoff: datetime,
-        failed_cutoff: datetime | None = None,
-        max_attempts: int = 3,
-        limit: int = 500,
-    ) -> Sequence[DispatchableFileRef]: ...
-
-    async def bulk_update_status(
-        self,
-        *,
-        file_ids: Sequence[UUID],
-        status: FileStatus,
-    ) -> int: ...
-
-    async def bulk_mark_failed_permanent(
-        self,
-        *,
-        file_ids: Sequence[UUID],
-        error: str,
-    ) -> int: ...
-
-    async def mark_failed_permanent(self, file_id: UUID, *, error: str) -> bool: ...
 
     async def searchable_partition(
         self,
@@ -481,6 +437,8 @@ class DatastoreSearchPort(Protocol):
         file_id: UUID,
         chunks: list[dict],
         metadata: dict | None = None,
+        *,
+        sha256: str | None = None,
     ) -> IndexingMetrics: ...
 
     async def remove_file(self, file_id: UUID) -> None: ...
@@ -493,6 +451,8 @@ class DatastoreSearchPort(Protocol):
         path: str,
         parent_path: str | None,
     ) -> None: ...
+
+    async def rename_folder(self, previous_path: str, new_path: str) -> bool: ...
 
     async def search(
         self,

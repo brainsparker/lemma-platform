@@ -51,7 +51,13 @@ async def test_hash_and_attempt_fence_rejects_stale_worker(
         processing_attempt=attempt_a,
         file_metadata={"generation": "A"},
     )
-    assert not await repository.mark_failed(
+    assert not await repository.release_to_pending(
+        file_id,
+        content_sha256=hash_a,
+        processing_attempt=attempt_a,
+        note="stale failure",
+    )
+    assert not await repository.mark_failed_permanent_for(
         file_id,
         content_sha256=hash_a,
         processing_attempt=attempt_a,

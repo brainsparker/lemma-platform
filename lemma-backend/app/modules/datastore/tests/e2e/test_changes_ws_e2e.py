@@ -19,7 +19,7 @@ from asgiref.testing import ApplicationCommunicator
 
 from app.modules.datastore.changes.gate import reset_change_log_gate
 from app.modules.datastore.config import datastore_settings
-from app.modules.datastore.tests.e2e.harness import DatastoreApi
+from app.modules.datastore.tests.e2e.harness import DatastoreApi, signup_user
 
 pytestmark = [pytest.mark.e2e]
 
@@ -491,3 +491,74 @@ async def test_changes_ws_on_a_pod_without_access_closes_forbidden(
     assert closed["type"] == "websocket.close", closed
     assert closed["code"] in (4403, 4404), closed
     await communicator.wait(timeout=3)
+
+
+async def _expect_refused(communicator: ApplicationCommunicator) -> int:
+    """Accepted, then closed with nothing in between: no ``ready``, no row."""
+    await communicator.send_input({"type": "websocket.connect"})
+    accepted = await communicator.receive_output(timeout=5)
+    assert accepted["type"] == "websocket.accept", accepted
+    closed = await communicator.receive_output(timeout=5)
+    assert closed["type"] == "websocket.close", closed
+    return closed["code"]
+
+
+async def test_changes_ws_rejects_an_invalid_token(
+    notes_pod: DatastoreApi,
+    test_app,
+):
+    communicator = _ws_communicator(
+        test_app, notes_pod.pod_id, token="not-a-session-token"
+    )
+    assert await _expect_refused(communicator) == 4401
+    await communicator.wait(timeout=3)
+
+
+async def test_changes_ws_non_member_is_refused_and_hears_no_change(
+    notes_pod: DatastoreApi,
+    async_client,
+    test_app,
+):
+    """A signed-in user outside a real pod gets no ``ready`` and no row."""
+    outsider = await signup_user(async_client, "changes-outsider")
+    communicator = _ws_communicator(test_app, notes_pod.pod_id, outsider["token"])
+    assert await _expect_refused(communicator) in (4403, 4404)
+    await notes_pod.create_record("notes", {"body": "members only"})
+    await _assert_no_frame(communicator, timeout=2)
+    await communicator.wait(timeout=3)
+
+
+async def _restricted_vault(pod: DatastoreApi) -> None:
+    await pod.create_table(
+        {
+            "name": "vault",
+            "enable_rls": False,
+            "visibility": "RESTRICTED",
+            "columns": [{"name": "body", "type": "TEXT", "required": False}],
+        }
+    )
+
+
+async def test_changes_ws_restricted_table_is_refused_and_never_streamed(
+    notes_pod: DatastoreApi,
+    member_users,
+    test_app,
+):
+    """A member with no grant on a RESTRICTED table hears none of its rows."""
+    await _restricted_vault(notes_pod)
+    token = member_users["viewer"]["token"]
+    filtered = _ws_communicator(test_app, notes_pod.pod_id, token, table="vault")
+    assert await _expect_refused(filtered) in (4403, 4404)
+    await filtered.wait(timeout=3)
+
+    # Every table the viewer can read: the restricted one is not among them.
+    unfiltered = _ws_communicator(test_app, notes_pod.pod_id, token)
+    await unfiltered.send_input({"type": "websocket.connect"})
+    await _expect_accept_and_ready(unfiltered)
+    await notes_pod.create_record("vault", {"body": "restricted secret"})
+    visible = await notes_pod.create_record("notes", {"body": "open row"})
+    frame = await _recv_json(unfiltered)
+    assert (frame["table_name"], frame["record_id"]) == ("notes", visible["id"])
+    await _assert_no_frame(unfiltered, timeout=2)
+    await unfiltered.send_input({"type": "websocket.disconnect", "code": 1000})
+    await unfiltered.wait(timeout=3)

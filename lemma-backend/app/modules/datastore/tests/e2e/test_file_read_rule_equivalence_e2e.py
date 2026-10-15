@@ -407,6 +407,8 @@ async def test_resolved_rule_matches_the_per_row_case(
     rng, world, rows = await _build_world(db_session, pod_api, seed)
     repository = DatastoreFileRepository(SqlAlchemyUnitOfWork(db_session))
     all_ids = {row["id"] for row in rows}
+    # Indexed files: the world's rows are COMPLETED or never indexed, so
+    # ``indexed_sha256`` (the reprocessing half of the rule) does not arise.
     searchable = {
         row["id"]
         for row in rows
@@ -455,6 +457,22 @@ async def test_resolved_rule_matches_the_per_row_case(
             assert partition.hidden == searchable - oracle, (
                 f"{label}: the searchable split's hidden side is wrong"
             )
+            # Read with a limit, each side is the right rows, just fewer.
+            limit = max(1, len(searchable) // 3)
+            capped = await repository.searchable_partition(
+                pod_id=world.pod_id,
+                ctx=ctx,
+                walk_ancestors=walk,
+                timeout_ms=10_000,
+                limit=limit,
+            )
+            for side, full in (
+                (capped.readable, partition.readable),
+                (capped.hidden, partition.hidden),
+            ):
+                assert side <= full and len(side) == min(limit, len(full)), (
+                    f"{label}: a limited split read the wrong rows"
+                )
 
         listed = await repository.list_readable_anywhere(
             world.pod_id, ctx, limit=10_000

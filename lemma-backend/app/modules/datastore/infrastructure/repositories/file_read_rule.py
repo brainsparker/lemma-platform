@@ -430,16 +430,17 @@ _REINDEXING = (
 )
 
 
-def searchable_files_statement(pod_id: UUID, readable: ColumnElement[bool]):
-    """``(id, readable)`` for every file in the pod a chunk search can match.
+def _searchable(pod_id: UUID) -> list[ColumnElement[bool]]:
+    """The files in the pod a chunk search can match.
 
     Indexed and enabled: nothing else has chunks to find, so neither side of
     the split spends its length on folders or on documents that were never
     indexed. A file being reprocessed -- or whose newest bytes failed -- keeps
     the revision it was last indexed at (``indexed_sha256``), and that stays
-    findable until a new one replaces it. Served by ``ix_datastore_file_status``.
+    findable until a new one replaces it, on whichever side the caller's
+    access puts it. Served by ``ix_datastore_file_status``.
     """
-    return select(DatastoreFile.id, readable).where(
+    return [
         DatastoreFile.pod_id == pod_id,
         or_(
             DatastoreFile.status == FileStatus.COMPLETED.value,
@@ -450,4 +451,29 @@ def searchable_files_statement(pod_id: UUID, readable: ColumnElement[bool]):
         ),
         DatastoreFile.kind == FileKind.FILE.value,
         DatastoreFile.search_enabled,
-    )
+    ]
+
+
+def searchable_files_statement(pod_id: UUID, readable: ColumnElement[bool]):
+    """``(id, readable)`` for every file in the pod a chunk search can match."""
+    return select(DatastoreFile.id, readable).where(*_searchable(pod_id))
+
+
+def searchable_side_statement(
+    pod_id: UUID,
+    readable: ColumnElement[bool],
+    *,
+    readable_side: bool,
+    limit: int | None,
+):
+    """The ids on one side of the split, at most *limit* of them.
+
+    The split only has to say which side is shorter and whether that side is
+    under the pushdown ceiling, so neither side needs reading past
+    ``ceiling + 1``: a side cut off there is "more than the ceiling", which is
+    all the decision uses. A predicate that is NULL for a row counts it hidden,
+    as reading ``(id, readable)`` did.
+    """
+    side = readable if readable_side else ~func.coalesce(readable, False)
+    statement = select(DatastoreFile.id).where(*_searchable(pod_id), side)
+    return statement if limit is None else statement.limit(limit)

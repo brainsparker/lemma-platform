@@ -2,8 +2,9 @@
 
 Additive only: nothing here drops a table or a column the previous release
 reads, so an older image still finds everything it uses
-(``0057_drop_old_transport`` drops them, once an operator -- or, on a single
-process install, the sweep -- has seen the old transport owe nothing).
+(``0057_drop_old_transport`` drops the columns; ``finish`` drops the old
+transport's tables, once an operator -- or, on a single process install, the
+sweep -- has seen it owe nothing).
 
 **Agent turns.** A turn was started by an ``AgentRunStartedEvent`` in the
 outbox, relayed onto a stream, consumed by a group and enqueued as a streaq job

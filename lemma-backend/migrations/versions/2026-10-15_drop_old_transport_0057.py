@@ -9,19 +9,20 @@ expand-only. Running it ends the rollback window to an image older than 0056.
   (dropped concurrently, so the table is never locked for writes): an agent or
   workflow outcome reaches its schedule run as a fact written in the run's
   finishing transaction, and the recovery sweep that read them is gone.
-* ``domain_event_outbox`` and ``domain_event_inbox`` -- **only if both are
-  empty or absent** (a fresh install, or one ``app.cutover_finish`` already
-  finished). Otherwise they stay and the upgrade still completes: a migration
-  runs before the rollout, while the previous release may still be writing
-  them, and the last take-over and the drop belong under a lock with a
-  timeout -- ``python -m app.cutover_finish``, or the cutover sweep itself
-  where ``WORK_CUTOVER_AUTO_FINISH`` is on.
+* Not ``domain_event_outbox`` or ``domain_event_inbox``, ever, empty or not.
+  A migration runs before the rollout, while the previous release may still
+  be running (a rolling deploy, or a direct upgrade from an older image) and
+  committing to the outbox: "empty" now says nothing about the next commit,
+  and a dropped table fails every one of them. Dropping them, after the last
+  take-over and under a lock with a timeout, is ``finish``'s job --
+  ``python -m app.cutover_finish``, or the cutover sweep itself where
+  ``WORK_CUTOVER_AUTO_FINISH`` is on.
 
 Every step is idempotent: the concurrent index drop commits on its own, so a
 failure after it leaves the revision half applied, and a rerun must finish it.
 
 The downgrade restores the columns and the index, and recreates whichever of
-the two tables is missing, empty, as 0003 created them.
+the two tables ``finish`` already dropped, empty, as 0003 created them.
 
 Revision ID: 0057_drop_old_transport
 Revises: 0056_agent_surface_bundle_work
@@ -51,14 +52,6 @@ def _exists(name: str) -> bool:
     )
 
 
-def _empty(table: str) -> bool:
-    return not _exists(table) or not (
-        op.get_bind()
-        .execute(sa.text(f"SELECT EXISTS (SELECT 1 FROM {table})"))
-        .scalar()
-    )
-
-
 def upgrade() -> None:
     with op.get_context().autocommit_block():
         op.drop_index(
@@ -77,15 +70,13 @@ def upgrade() -> None:
             "DROP COLUMN IF EXISTS wake_attempts"
         )
     )
-    if all(_empty(table) for table in _TABLES):
-        for table in _TABLES:
-            op.execute(sa.text(f"DROP TABLE IF EXISTS {table}"))
-        return
-    logger.warning(
-        "domain_event_outbox / domain_event_inbox still hold rows, so they are "
-        "kept; `python -m app.cutover_finish` drops them once the old transport "
-        "owes nothing (or the cutover sweep does, with WORK_CUTOVER_AUTO_FINISH)."
-    )
+    if any(_exists(table) for table in _TABLES):
+        logger.info(
+            "domain_event_outbox / domain_event_inbox are kept: "
+            "`python -m app.cutover_finish` drops them once the old transport "
+            "owes nothing (or the cutover sweep does, with "
+            "WORK_CUTOVER_AUTO_FINISH)."
+        )
 
 
 def downgrade() -> None:

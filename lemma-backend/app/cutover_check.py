@@ -6,8 +6,8 @@ event transport still owes and, once the previous release has stopped,
 converts what only Redis held. The old tables, streams and groups are dropped
 by ``finish`` -- the sweep's own with ``WORK_CUTOVER_AUTO_FINISH``, otherwise
 ``python -m app.cutover_finish``, which refuses while this check shows
-anything owed -- and, when both tables are empty, by migration
-``0057_drop_old_transport``. It says where the cutover is:
+anything owed; migration ``0057_drop_old_transport`` never drops them. It
+says where the cutover is:
 
 * whether ``domain_event_outbox`` / ``domain_event_inbox`` still exist, and how
   many deliveries each route is still owed in them;

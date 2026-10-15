@@ -1,13 +1,13 @@
-"""Migration 0057 drops the old transport only when that loses nothing.
+"""Migration 0057 drops the old columns and never the old transport's tables.
 
-* A fresh install (both tables empty) upgrades with both tables dropped, along
-  with the agent waits' ``fire_lease_until`` / ``wake_attempts`` and
-  ``schedule_runs.last_inspected_at`` with its index; the downgrade recreates
-  the tables empty and restores the columns and the index, and upgrading again
-  works.
-* An install whose outbox still holds rows upgrades too, dropping the columns
-  but keeping both tables for ``app.cutover_finish``; rerunning it changes
-  nothing.
+* A fresh install (both tables empty) upgrades with both tables kept -- a
+  previous release still running could write them, so dropping them is
+  ``finish``'s job -- and the agent waits' ``fire_lease_until`` /
+  ``wake_attempts`` and ``schedule_runs.last_inspected_at`` with its index
+  dropped; the downgrade restores the columns and the index, recreates the
+  tables empty where ``finish`` had dropped them, and upgrading again works.
+* An install whose outbox still holds rows upgrades the same way, keeping both
+  tables for ``app.cutover_finish``; rerunning it changes nothing.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ _OLD_COLUMNS = (
     "agent_conversation_waits.wake_attempts,"
     "schedule_runs.last_inspected_at"
 )
-_DROPPED = {"tables": (), "index": None, "columns": None}
+_UPGRADED = {"tables": _TABLES, "index": None, "columns": None}
 _KEPT_BY_0056 = {
     "tables": _TABLES,
     "index": "ix_schedule_runs_recoverable",
@@ -79,7 +79,7 @@ _KEPT_BY_0056 = {
 }
 
 
-def test_a_fresh_install_drops_the_tables_and_the_downgrade_recreates_them() -> None:
+def test_a_fresh_install_keeps_the_tables_and_downgrades_after_finish() -> None:
     with get_postgres_container() as postgres:
         database_url = get_postgres_url(postgres)
         sync_url = database_url.replace("postgresql+asyncpg", "postgresql")
@@ -87,8 +87,11 @@ def test_a_fresh_install_drops_the_tables_and_the_downgrade_recreates_them() -> 
         assert _state(sync_url) == _KEPT_BY_0056, "0056 is expand-only"
 
         _migrate(database_url, "upgrade", REVISION)
-        assert _state(sync_url) == _DROPPED
+        assert _state(sync_url) == _UPGRADED, "empty is no reason to drop them"
 
+        # ``finish`` has run: the downgrade recreates what it dropped.
+        with psycopg.connect(sync_url) as connection:
+            connection.execute("DROP TABLE domain_event_inbox, domain_event_outbox")
         _migrate(database_url, "downgrade", BEFORE)
         assert _state(sync_url) == _KEPT_BY_0056
         with psycopg.connect(sync_url) as connection:
@@ -100,7 +103,7 @@ def test_a_fresh_install_drops_the_tables_and_the_downgrade_recreates_them() -> 
         assert row == (0, 0, True), "recreated empty, as the sweep reads them"
 
         _migrate(database_url, "upgrade", REVISION)
-        assert _state(sync_url) == _DROPPED
+        assert _state(sync_url) == _UPGRADED
 
 
 @pytest.mark.asyncio
@@ -118,10 +121,10 @@ async def test_an_install_still_holding_rows_keeps_the_tables() -> None:
 
         output = _migrate(database_url, "upgrade", REVISION)
         assert "app.cutover_finish" in output, output[-2000:]
-        assert _state(sync_url) == {"tables": _TABLES, "index": None, "columns": None}
+        assert _state(sync_url) == _UPGRADED
 
         # Idempotent both ways: the half that ran is not tripped over.
         _migrate(database_url, "downgrade", BEFORE)
         assert _state(sync_url) == _KEPT_BY_0056
         _migrate(database_url, "upgrade", REVISION)
-        assert _state(sync_url) == {"tables": _TABLES, "index": None, "columns": None}
+        assert _state(sync_url) == _UPGRADED

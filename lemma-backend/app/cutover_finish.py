@@ -21,8 +21,9 @@ a bounded number of times; then retires the legacy Redis groups and streams. Exi
 2 when a lock was never granted (nothing is lost; run it again). Safe to run
 again at any point; once finished it does nothing.
 
-Migration ``0057_drop_old_transport`` drops both tables itself only when they
-are empty; this is what drops them when they are not.
+Migration ``0057_drop_old_transport`` never drops either table, even empty (a
+previous release still running may write them); this, or the sweep with
+``WORK_CUTOVER_AUTO_FINISH``, is what drops them.
 """
 
 from __future__ import annotations

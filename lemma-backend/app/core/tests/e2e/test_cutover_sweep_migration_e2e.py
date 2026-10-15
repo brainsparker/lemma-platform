@@ -10,8 +10,8 @@
   settled, dead-lettered or live-claimed delivery, or one the release before
   this marked as already done. It settles each consumer's inbox row, so a
   second pass (or an old worker) finds nothing.
-* A fresh database upgrades with both tables kept (0056 is expand-only; 0057
-  drops them), its sweep queued and the earlier design's converter gone; the
+* A fresh database upgrades with both tables kept (0056 is expand-only;
+  ``finish`` drops them), its sweep queued and the earlier design's converter gone; the
   downgrade removes the sweep and leaves the tables, and upgrading again works.
 """
 

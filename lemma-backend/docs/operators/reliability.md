@@ -129,11 +129,11 @@ nothing, so its image can still be rolled back:
 5. **Then it keeps looking every five minutes** while the tables exist, so a
    rollback to the previous image that writes them again loses nothing.
 
-The next release, which carries migration `0057_drop_old_transport`, drops
-them. The migration drops the agent waits' and schedule runs' columns only the
-old release read, and drops `domain_event_outbox` and `domain_event_inbox` only
-if both are empty (a fresh install); otherwise it leaves them and completes.
-The tables, a separate datastore database's outbox and the legacy consumer
+The next release carries migration `0057_drop_old_transport`, which drops the
+agent waits' and schedule runs' columns only the old release read. It never
+drops `domain_event_outbox` or `domain_event_inbox`, even empty: it runs before
+the rollout, while the previous release (a rolling deploy, or a direct upgrade
+from an older image) may still commit to the outbox. The tables, a separate datastore database's outbox and the legacy consumer
 groups and streams are then dropped by `finish`, run one of two ways:
 
 - **`WORK_CUTOVER_AUTO_FINISH=true`** (the default; standalone and desktop

@@ -196,12 +196,12 @@ def main() -> int:
             """
         )
         assert all(row[0] for row in cursor.fetchall())
-        # 0057 retires the old event transport. Nothing here wrote either
-        # table, so this is the fresh-install case: both empty, dropped at once.
+        # 0057 never drops the old event transport's tables, even empty: a
+        # previous release still running may write them. ``finish`` does.
         cursor.execute(
             """
-            SELECT to_regclass('domain_event_outbox') IS NULL,
-                   to_regclass('domain_event_inbox') IS NULL
+            SELECT to_regclass('domain_event_outbox') IS NOT NULL,
+                   to_regclass('domain_event_inbox') IS NOT NULL
             """
         )
         assert cursor.fetchone() == (True, True)

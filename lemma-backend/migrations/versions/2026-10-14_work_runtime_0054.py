@@ -66,6 +66,30 @@ _IN_FLIGHT = (
 )
 
 
+def _repair_invalid(name: str) -> None:
+    """Drop a half-built index so `IF NOT EXISTS` stops mistaking it for done.
+
+    An interrupted `CREATE INDEX CONCURRENTLY` leaves the index behind with
+    `indisvalid = false`. The name exists, so on the rerun `IF NOT EXISTS`
+    skips the build, the revision is stamped, and the planner never uses the
+    index -- or, for a unique one, never enforces it. Checking first is what
+    makes a rerun recover (the same guard as 0038 and 0053).
+    """
+    half_built = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                "WHERE c.relname = :name AND NOT i.indisvalid"
+            ),
+            {"name": name},
+        )
+        .scalar()
+    )
+    if half_built:
+        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+
+
 def seed_statements() -> list[str]:
     """The cutover, as statements -- importable so a test can run them."""
     queues = (
@@ -288,6 +312,7 @@ def upgrade() -> None:
     # Concurrently, outside the transaction: the file table is written on
     # every upload, and a plain build blocks those writers for the scan.
     with op.get_context().autocommit_block():
+        _repair_invalid("ix_datastore_file_parent")
         op.create_index(
             "ix_datastore_file_parent",
             "datastore_files",
@@ -295,6 +320,7 @@ def upgrade() -> None:
             postgresql_concurrently=True,
             if_not_exists=True,
         )
+        _repair_invalid("ix_datastore_file_parent_missing")
         op.create_index(
             "ix_datastore_file_parent_missing",
             "datastore_files",
@@ -305,6 +331,7 @@ def upgrade() -> None:
             postgresql_concurrently=True,
             if_not_exists=True,
         )
+        _repair_invalid("ix_datastore_file_path_layout")
         op.create_index(
             "ix_datastore_file_path_layout",
             "datastore_files",

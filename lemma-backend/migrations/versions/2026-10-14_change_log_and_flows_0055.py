@@ -105,6 +105,30 @@ _RESERVABLE = (
 )
 
 
+def _repair_invalid(name: str) -> None:
+    """Drop a half-built index so `IF NOT EXISTS` stops mistaking it for done.
+
+    An interrupted `CREATE INDEX CONCURRENTLY` leaves the index behind with
+    `indisvalid = false`. The name exists, so on the rerun `IF NOT EXISTS`
+    skips the build, the revision is stamped, and the planner never uses the
+    index -- or, for a unique one, never enforces it. Checking first is what
+    makes a rerun recover (the same guard as 0038 and 0053).
+    """
+    half_built = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                "WHERE c.relname = :name AND NOT i.indisvalid"
+            ),
+            {"name": name},
+        )
+        .scalar()
+    )
+    if half_built:
+        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+
+
 def trigger_seed_statements() -> list[str]:
     """The cutover, as statements -- importable so a test can run them."""
     queues = [
@@ -477,6 +501,7 @@ def upgrade() -> None:
     # Concurrently, outside the transaction: function_runs is written on
     # every run, and a plain build blocks those writers for the scan.
     with op.get_context().autocommit_block():
+        _repair_invalid("ix_function_runs_running")
         op.create_index(
             "ix_function_runs_running",
             "function_runs",
@@ -496,6 +521,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     with op.get_context().autocommit_block():
+        _repair_invalid("ix_function_runs_expiring")
         op.create_index(
             "ix_function_runs_expiring",
             "function_runs",
@@ -506,6 +532,7 @@ def downgrade() -> None:
             postgresql_concurrently=True,
             if_not_exists=True,
         )
+        _repair_invalid("ix_function_runs_pending_async")
         op.create_index(
             "ix_function_runs_pending_async",
             "function_runs",

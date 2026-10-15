@@ -148,6 +148,8 @@ class AgentRunnerService:
         profile_services: ProfileServices = runtime_profile_service_for,
         terminal_units: UnitOfWorkFactory | None = None,
         step_units: UnitOfWorkFactory | None = None,
+        tool_units: UnitOfWorkFactory | None = None,
+        lease_alive: Callable[[], bool] | None = None,
     ) -> None:
         self.uow_factory = uow_factory
         self.harness_registry = harness_registry
@@ -156,7 +158,8 @@ class AgentRunnerService:
         self.profile_services = profile_services
         self.fallback_model_name = fallback_model_name
         self.fixed_usage_limits = fixed_usage_limits or harness_usage_limits()
-        self.tool_assembler = RunToolAssembler(uow_factory)
+        self.lease_alive = lease_alive  # see `events/turn_work.TurnFences`
+        self.tool_assembler = RunToolAssembler(tool_units or uow_factory)
         self.usage_recorder = RunUsageRecorder(uow_factory)
         # `step_units`: where each step row commits (a turn's lease-fenced
         # transaction), so a worker that lost its turn cannot add to it.
@@ -166,7 +169,7 @@ class AgentRunnerService:
             uow_factory, self.usage_recorder, terminal_units=terminal_units
         )
         self.event_pump = RunEventPump(self.message_writer, self.finalizer)
-        self.turn_resume = TurnResume(uow_factory, self.message_writer)
+        self.turn_resume = TurnResume(tool_units or uow_factory, self.message_writer)
 
     async def execute(
         self,
@@ -329,6 +332,7 @@ class AgentRunnerService:
                 history_hard_token_ceiling=context_budget.hard_token_ceiling,
                 context_window=context_budget.window,
                 runtime_profile=snapshot,
+                lease_alive=self.lease_alive,
                 extra={
                     "runtime_credentials": runtime_credentials,
                 },

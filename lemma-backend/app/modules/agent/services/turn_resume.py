@@ -13,8 +13,9 @@ by the tool's replay class (``domain/replay.py``):
 * SAFE / KEYED -- run again through ``AgentToolDispatcher`` with that id, so a
   keyed effect returns the first attempt's outcome; the return is persisted.
 * UNSAFE -- never run again. The "outcome unknown" return is persisted as a real
-  row (so it is not resynthesised on every reload) and the model gets a notice
-  to check the state before repeating anything.
+  row (so it is not resynthesised on every reload), the model gets a notice
+  to check the state before repeating anything, and the person reading the
+  conversation gets one line saying which tool may or may not have completed.
 
 A turn whose previous attempt committed its answer and then lost the lease
 before its finalize committed is not run again: ``committed_answer`` hands the
@@ -52,8 +53,13 @@ from app.modules.agent.domain.value_objects import (
     to_json_value,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.services.realtime import (
+    message_payload,
+    publish_conversation_event,
+)
 from app.modules.agent.services.run_finalizer import RunFinalizer
 from app.modules.agent.services.run_identity import RunIdentity
+from app.modules.agent.services.serialization import message_to_payload
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.tool_errors import (
     format_tool_error,
@@ -62,12 +68,18 @@ from app.modules.agent.tools.tool_errors import (
 
 logger = get_logger(__name__)
 
-#: The return an UNSAFE call gets: the same words the history builder used to
-#: synthesise, now a stored row.
+#: The return an UNSAFE call gets, stored as a row so a reload does not
+#: resynthesise it. Blunt, because the cost of a model reading it as "failed,
+#: try again" is the duplicate email or record this class exists to prevent.
 OUTCOME_UNKNOWN = (
-    "This tool call was interrupted before a result was recorded, so its "
-    "outcome is unknown: it may have completed. Check the current state before "
-    "repeating it, and only repeat it if it clearly did not take effect."
+    "This tool call was interrupted before its result was recorded. It may or "
+    "may not have taken effect. Do not repeat it without first checking "
+    "whether it already happened -- read the record, file, message or other "
+    "state it would have changed -- and repeat it only if it clearly did not."
+)
+#: What the person reading the conversation is told, once per resumed turn.
+INTERRUPTED_NOTICE = (
+    "I was interrupted while running {tools}; it may or may not have completed."
 )
 #: What the model is told once, at the top of the resumed turn.
 RESUME_NOTICE = (
@@ -224,6 +236,8 @@ class TurnResume:
             result = await self._run_again(run_id, conversation, agent, ctx, call, args)
             await self._persist(conversation.id, run_id, call, result, klass)
             report.replayed += 1
+        if report.unknown:
+            await self._tell_the_reader(conversation.id, run_id, report)
         if report.unpaired:
             logger.warning(
                 "agent.turn.resumed",
@@ -233,6 +247,28 @@ class TurnResume:
                 unknown=report.unknown,
             )
         return report
+
+    async def _tell_the_reader(
+        self, conversation_id: UUID, run_id: UUID, report: ReplayReport
+    ) -> None:
+        """Say in the conversation that something may or may not have happened.
+
+        The model is told in its notice; this is for the person, who otherwise
+        sees a turn carry on as though nothing had been cut short.
+        """
+        tools = sorted(set(report.unknown_tools))
+        saved = await self.message_writer.notice(
+            conversation_id=conversation_id,
+            text=INTERRUPTED_NOTICE.format(tools=", ".join(tools)),
+            metadata={
+                "source": "turn_resume",
+                "interrupted_run_id": str(run_id),
+                "tool_names": list(tools),
+            },
+        )
+        await publish_conversation_event(
+            conversation_id, message_payload(None, message_to_payload(saved))
+        )
 
     async def _run_again(
         self,
@@ -289,4 +325,10 @@ class TurnResume:
         )
 
 
-__all__ = ["OUTCOME_UNKNOWN", "ReplayReport", "TurnResume", "recorded_args"]
+__all__ = [
+    "INTERRUPTED_NOTICE",
+    "OUTCOME_UNKNOWN",
+    "ReplayReport",
+    "TurnResume",
+    "recorded_args",
+]

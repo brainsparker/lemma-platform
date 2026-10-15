@@ -5,8 +5,8 @@ own committed row. A worker that dies between the two leaves a call with no
 return, and the turn resumed on another worker has to decide what that call
 did. Three answers, declared per tool:
 
-* ``SAFE`` -- reading, or writing the same thing twice is writing it once (a
-  file with the same content). Run it again under the recorded call id.
+* ``SAFE`` -- reading, or bookkeeping private to the run (its todo list).
+  Run it again under the recorded call id.
 * ``KEYED`` -- the effect is deduplicated downstream on the recorded call id
   (a notification's idempotency key, a sub-agent spawn unique on the parent
   run and call, a record create keyed on the call). Run it again: the second
@@ -15,6 +15,17 @@ did. Three answers, declared per tool:
   action, a connector write, anything on an Agent Host or an external MCP
   server. Never run again; the model is told the outcome is unknown and to
   check the state before repeating it.
+
+A write that sets a value -- a record update, a whole-file write -- is not
+SAFE even though applying it twice gives the same row or file. Between the
+first attempt and the replay a person, a workflow or another agent may have
+changed that row or file, and the replay would put the old value back over
+theirs. It would be safe only if the target were unchanged since the step
+started, and nothing records the target's state at that point (the call row
+holds the arguments alone), so these are UNSAFE: the model is told the outcome
+is unknown and reads the row or file before deciding. A delete is UNSAFE for
+the same reason: a table whose key is chosen by its writers may hold a new row
+under that key by the time the replay runs.
 
 **Anything not listed is UNSAFE.** An undeclared tool gets an honest "outcome
 unknown" instead of a silent duplicate, which is the failure that matters. The
@@ -62,8 +73,8 @@ REPLAY_CLASS: Mapping[str, ReplayClass] = {
     "list_voices": _SAFE,
     "listen": _SAFE,
     "say": _UNSAFE,
-    # The pod: reads, a whole-file write of the same content, and record writes
-    # refined by operation below. An in-place edit applied twice is not.
+    # The pod: reads, and record writes refined by operation below. Writing a
+    # file or editing one in place may overwrite a change made since.
     "pod_tables": _SAFE,
     "pod_get_records": _SAFE,
     "pod_query": _SAFE,
@@ -72,7 +83,7 @@ REPLAY_CLASS: Mapping[str, ReplayClass] = {
     "pod_search_files": _SAFE,
     "pod_view_document_pages": _SAFE,
     "pod_get_file_url": _SAFE,
-    "pod_write_file": _SAFE,
+    "pod_write_file": _UNSAFE,
     "pod_write_record": _KEYED,
     "pod_edit_file": _UNSAFE,
     # Sub-agents: a spawn is unique on (parent run, call); interacting is
@@ -119,13 +130,9 @@ def _request(args: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _record_write(args: Mapping[str, object]) -> ReplayClass:
-    """A create is keyed on the call; an update or delete lands the same twice."""
+    """A create is keyed on the call; anything else may undo a later change."""
     action = str(_request(args).get("action") or "").lower()
-    if action == "create":
-        return _KEYED
-    if action in {"update", "delete"}:
-        return _SAFE
-    return _UNSAFE
+    return _KEYED if action == "create" else _UNSAFE
 
 
 def _subagent_interaction(args: Mapping[str, object]) -> ReplayClass:

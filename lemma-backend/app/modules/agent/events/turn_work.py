@@ -16,8 +16,24 @@ of that lost -- is this one item:
   commits in a transaction holding the item's row lock under this claim's
   epoch (``ctx.hold_lease``), so a worker whose lease was taken over -- by
   another process, or by its own after its heartbeat could not reach the
-  database -- writes nothing more. The reaper and the next claim wait for a
-  step in flight to commit, so the resumed turn reloads it;
+  database -- adds no step to the run. The reaper and the next claim wait for
+  a step in flight to commit, so the resumed turn reloads it;
+* **tools stopped, not fenced**: a tool's own effects are not in a step's
+  transaction, and most cannot be. Before each tool call it runs in-process
+  (an Agent Host runs its own) the turn asks the
+  local clock whether its last committed lease extension still covers it
+  (``ctx.lease_alive``) and stops if not, so a worker that cannot renew starts
+  no tool past about four fifths of a lease. A tool already running is not
+  interrupted by that check (the heartbeat cancels the job a beat later). The
+  main-database units a tool opens through the runner's factory read the
+  item at each commit (``ctx.check_lease_at_commit``) and refuse to commit
+  once another claim holds it -- a read, not a lock, so a takeover landing in
+  the instant between the read and the commit is not caught. Nothing fences
+  the rest, by construction: the lease row is in the main database, so a pod
+  record or file written in the datastore database, an HTTP call, a message
+  sent to Slack, a sandbox command or anything on an Agent Host can still
+  happen once on a worker that has just lost the turn, and again on the
+  worker that resumes it if its replay class says to run it again;
 * **finalize fenced**: the run's terminal write, every follow-up it owes and the
   item's deletion commit in ``ctx.complete_work()``. A worker whose lease was
   taken over rolls its finalize back instead of finishing the run twice;
@@ -118,10 +134,16 @@ class TurnFences:
 
     ``terminal``: the run's end, its follow-ups and the item's deletion.
     ``steps``: every step row, each its own short transaction.
+    ``tools``: the main-database units the turn's tools (and its replays of
+    open calls) open, checked against the claim at each commit (None: the
+    runner's own factory).
+    ``lease_alive``: asked before each tool call (None: never stop for it).
     """
 
     terminal: UnitOfWorkFactory
     steps: UnitOfWorkFactory
+    tools: UnitOfWorkFactory | None = None
+    lease_alive: Callable[[], bool] | None = None
 
 
 #: Builds the runner one turn drives, given the fenced transactions its effects
@@ -143,6 +165,8 @@ def _deployment_runner(fences: TurnFences) -> TurnRunner:
         harness_registry=build_harness_registry(),
         terminal_units=fences.terminal,
         step_units=fences.steps,
+        tool_units=fences.tools,
+        lease_alive=fences.lease_alive,
     )
 
 
@@ -194,6 +218,25 @@ class FencedSteps:
             yield uow
 
 
+class LeaseCheckedTools:
+    """A tool's unit of work, refused at commit once this claim lost the lease.
+
+    Not ``FencedSteps``: a tool holds its unit across I/O and nests units inside
+    it, and a row lock taken there would hold the turn's steps and heartbeat
+    behind the tool, or wait forever on the unit enclosing it.
+    """
+
+    def __init__(self, ctx: JobContext, units: UnitOfWorkFactory) -> None:
+        self._ctx = ctx
+        self._units = units
+
+    @asynccontextmanager
+    async def __call__(self) -> AsyncIterator[SqlAlchemyUnitOfWork]:
+        async with self._units() as uow:
+            self._ctx.check_lease_at_commit(uow.session)
+            yield uow
+
+
 def pod_of(ns: str) -> UUID:
     return UUID(ns.removeprefix("pod:"))
 
@@ -217,6 +260,8 @@ def _turn_handler(build_runner: RunnerFactory, build_observer: ObserverFactory):
             TurnFences(
                 terminal=FencedTerminal(ctx, uow_factory),
                 steps=FencedSteps(ctx, uow_factory),
+                tools=LeaseCheckedTools(ctx, uow_factory),
+                lease_alive=ctx.lease_alive,
             )
         )
         try:
@@ -365,6 +410,7 @@ __all__ = [
     "TURN_RETRY",
     "FencedSteps",
     "FencedTerminal",
+    "LeaseCheckedTools",
     "TurnFences",
     "dead_error",
     "on_turn_dead",

@@ -51,7 +51,8 @@ def test_pauses_are_never_settled_by_a_resumed_turn() -> None:
         ("pod_query", SAFE),
         ("web_fetch", SAFE),
         ("view_image", SAFE),
-        ("pod_write_file", SAFE),
+        # Writes the same bytes twice, but over whatever was written between.
+        ("pod_write_file", UNSAFE),
         ("message_user", KEYED),
         ("contact_function", KEYED),
         ("spawn_subagent", KEYED),
@@ -73,8 +74,11 @@ def test_the_defaults_follow_the_design(
     ("args", "expected"),
     [
         ({"request": {"action": "create", "table_name": "t"}}, KEYED),
-        ({"action": "update", "record_id": "1"}, SAFE),
-        ({"request": {"action": "delete"}}, SAFE),
+        # Neither records the row's state when the step began, so a replay
+        # could put back a value someone changed since: outcome unknown.
+        ({"action": "update", "record_id": "1"}, UNSAFE),
+        ({"request": {"action": "delete"}}, UNSAFE),
+        ({"request": {"action": "UPDATE"}}, UNSAFE),
         ({}, UNSAFE),
         ("not a mapping", UNSAFE),
     ],

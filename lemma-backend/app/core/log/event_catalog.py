@@ -206,6 +206,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.turn.resumed': EventSpec('warning', frozenset({'agent_run_id', 'replayed', 'unknown', 'unpaired_calls'})),
     'agent.turn.resumed_answered': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.turn.resuming': EventSpec('warning', frozenset({'agent_run_id', 'attempt', 'lease_losses'})),
+    'agent.turn.tool_skipped_lease_lost': EventSpec('warning', frozenset({'tool_call_id', 'tool_name'})),
     'agent.turn.yielded': EventSpec('info', frozenset({'agent_run_id'})),
     'agent.usage.implausible_provider_count.degraded': EventSpec('warning', frozenset({'reported_value', 'usage_field'})),
     'agent.usage.missing_provider_count.degraded': EventSpec('warning', frozenset({'request_count', 'usage_field'})),

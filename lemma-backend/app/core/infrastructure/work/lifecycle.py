@@ -15,6 +15,7 @@ from opentelemetry import metrics
 from sqlalchemy import Row, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 
@@ -51,6 +52,15 @@ _LOCK_OWNED_WITH_TIMEOUT = text(
      WHERE id = :id AND lease_owner = :owner AND lease_epoch = :epoch
        AND state = 'running'
        FOR UPDATE
+    """
+)
+# The same question without the lock, for a commit that must not wait on the
+# item's row or make anything wait on it (``JobContext.check_lease_at_commit``).
+_STILL_OWNED = text(
+    """
+    SELECT 1 FROM work_items
+     WHERE id = :id AND lease_owner = :owner AND lease_epoch = :epoch
+       AND state = 'running'
     """
 )
 _DELETE = text("DELETE FROM work_items WHERE id = :id")
@@ -160,6 +170,16 @@ async def lock_owned(
         return None
     mark_transaction_scoped_lock(session)
     return AttemptState(row.attempts, row.lease_losses, row.first_unavailable_at)
+
+
+def still_owned(session: Session, item: ClaimedItem, owner: str) -> bool:
+    """Whether this claim holds the item at this moment; reads, locks nothing.
+
+    Synchronous, for a session event (``before_commit``): under the asyncio
+    extension those run inside the greenlet, where a sync ``execute`` does I/O.
+    """
+    params = {"id": item.id, "owner": owner, "epoch": item.lease_epoch}
+    return session.execute(_STILL_OWNED, params).first() is not None
 
 
 async def _rearm_periodic(

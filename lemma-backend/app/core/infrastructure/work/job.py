@@ -21,8 +21,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
+from sqlalchemy import event
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work.execute import (
@@ -32,7 +34,12 @@ from app.core.infrastructure.work.execute import (
     settle,
     validated_payload,
 )
-from app.core.infrastructure.work.lifecycle import extend_lease, finish_item, lock_owned
+from app.core.infrastructure.work.lifecycle import (
+    extend_lease,
+    finish_item,
+    lock_owned,
+    still_owned,
+)
 from app.core.infrastructure.work.registry import HandlerSpec
 from app.core.infrastructure.work.types import (
     ClaimedItem,
@@ -74,6 +81,9 @@ class JobContext:
     * ``lease_alive()`` -- whether the last committed extension still covers
       this run, asked of the local clock alone. For a job about to cause an
       effect the database cannot fence (an HTTP call, a message sent).
+    * ``hold_lease(session)`` / ``check_lease_at_commit(session)`` -- fence a
+      transaction of the job's own by this claim: under the item's row lock,
+      or by a read of it at each commit.
     """
 
     def __init__(self, env: ExecEnv, spec: HandlerSpec, item: ClaimedItem) -> None:
@@ -129,6 +139,26 @@ class JobContext:
         if await lock_owned(session, self.item, self._env.owner) is None:
             self.lease_lost = True
             raise LeaseLost(str(self.item.id))
+
+    def check_lease_at_commit(self, session: AsyncSession) -> None:
+        """Refuse each later commit of ``session`` once this claim has lost the lease.
+
+        Weaker than ``hold_lease``, on purpose: the item is read, not locked,
+        just before each commit, so a takeover that lands between that read and
+        the commit is not seen. What it buys is that nothing waits: an agent's
+        tool opens units of its own, nests them and holds them across I/O while
+        the turn's fenced steps commit beside it, and a row lock taken there
+        would queue the steps and the heartbeat behind the tool, or deadlock a
+        unit nested inside another.
+        """
+        item, owner = self.item, self._env.owner
+
+        def check(sync_session: Session) -> None:
+            if not still_owned(sync_session, item, owner):
+                self.lease_lost = True
+                raise LeaseLost(str(item.id))
+
+        event.listen(session.sync_session, "before_commit", check)
 
     @asynccontextmanager
     async def complete_work(self) -> AsyncIterator[SqlAlchemyUnitOfWork]:

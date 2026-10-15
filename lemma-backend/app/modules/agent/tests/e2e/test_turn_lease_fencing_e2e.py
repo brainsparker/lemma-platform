@@ -25,7 +25,7 @@ import asyncio
 import pytest
 
 from app.core.config import settings
-from app.core.infrastructure.work import WorkClass
+from app.core.infrastructure.work import JobContext, WorkClass
 from app.core.infrastructure.work.testing import dispatcher_for
 from app.modules.agent.tests.e2e.turn_work_support import (
     TurnPod,
@@ -126,3 +126,80 @@ async def test_a_turn_that_lost_its_lease_mid_answer_writes_no_second_answer(
     assert (
         await scalar("SELECT count(*) FROM work_items WHERE dedup_key = :k", k=key) == 0
     )
+
+
+async def test_a_turn_whose_lease_lapsed_mid_tool_starts_no_further_tool(
+    pod: TurnPod, monkeypatch
+) -> None:
+    """A worker that can no longer vouch for its lease runs no next tool.
+
+    The steps are fenced, but a tool's effects mostly are not (a pod record, a
+    Slack message), so the turn asks its lease before every tool call. Here
+    the local clock says the lease lapsed while the first tool ran -- what a
+    heartbeat that cannot reach the database leads to -- and the second call
+    must not start. The turn stops as a lost lease, uncharged and RUNNING, and
+    the worker that next claims it runs the second tool once.
+    """
+    conversation = await pod.conversation(
+        [
+            script_tool_call("pod_tables", {}, tool_call_id="first-1"),
+            script_tool_call("pod_tables", {}, tool_call_id="second-1"),
+            script_text("the answer"),
+        ]
+    )
+    run_id = (await pod.append(conversation))["agent_run_id"]
+    key = f"agent-run:{run_id}"
+    asked: list[bool] = []
+    lapsed = True
+
+    def lease_alive(ctx: JobContext) -> bool:
+        # The first ask is the first tool's; every later one is after it.
+        alive = not (lapsed and asked)
+        asked.append(alive)
+        return alive
+
+    monkeypatch.setattr(JobContext, "lease_alive", lease_alive)
+    registry = turn_registry()
+    first = dispatcher_for(
+        runtime_sessions(), WorkClass.INTERACTIVE, registry=registry, owner="a"
+    )
+    [item] = await first.claim_once()
+
+    assert await asyncio.wait_for(first.execute(item), 60) == "lease_lost"
+    assert asked == [True, False]
+    returns = await rows(
+        "SELECT tool_call_id FROM agent_messages WHERE agent_run_id = "
+        "CAST(:run AS uuid) AND kind = 'TOOL_RETURN'",
+        run=run_id,
+    )
+    assert [call for (call,) in returns] == ["first-1"], "the second tool never ran"
+    assert await pod.run_status(run_id) == "RUNNING"
+    assert (
+        await scalar("SELECT attempts FROM work_items WHERE dedup_key = :k", k=key) == 0
+    )
+
+    # The lease runs out in the database, and the next claim finishes the turn.
+    lapsed = False
+    await write(
+        "UPDATE work_items SET lease_until = now() - interval '1 second' "
+        "WHERE dedup_key = :k",
+        k=key,
+    )
+    second = dispatcher_for(
+        runtime_sessions(), WorkClass.INTERACTIVE, registry=registry, owner="b"
+    )
+    assert await second.reap() == 1
+    await write("UPDATE work_items SET run_at = now() WHERE dedup_key = :k", k=key)
+    [again] = await second.claim_once()
+    assert await asyncio.wait_for(second.execute(again), 60) == "done"
+
+    assert await pod.run_status(run_id) == "COMPLETED"
+    assert await _answers(run_id) == ["the answer"]
+    counts = dict(
+        await rows(
+            "SELECT tool_call_id, count(*) FROM agent_messages WHERE agent_run_id = "
+            "CAST(:run AS uuid) AND kind = 'TOOL_RETURN' GROUP BY 1",
+            run=run_id,
+        )
+    )
+    assert counts == {"first-1": 1, "second-1": 1}

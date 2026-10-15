@@ -9,8 +9,9 @@ Postgres, with the deterministic model. What must hold:
 * SAFE (``pod_tables``) runs again under the recorded id: one return;
 * KEYED record create returns the record the first attempt wrote: one row;
 * KEYED spawn returns the child the first attempt spawned: one child;
-* UNSAFE (``exec_command``) and an unknown tool are never run: an "outcome
-  unknown" return each, stored, so a reload does not resynthesise it;
+* UNSAFE (``exec_command``, a record update) and an unknown tool are never
+  run: an "outcome unknown" return each, stored, so a reload does not
+  resynthesise it, and one line in the conversation for the person;
 * an open pause (``ask_user``) is not touched;
 * the turn then carries on from there and completes.
 """
@@ -30,7 +31,10 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.services.turn_resume import OUTCOME_UNKNOWN
+from app.modules.agent.services.turn_resume import (
+    INTERRUPTED_NOTICE,
+    OUTCOME_UNKNOWN,
+)
 from app.modules.agent.tests.e2e.turn_work_support import (
     drain,
     rows,
@@ -156,6 +160,18 @@ async def test_a_resumed_turn_settles_each_open_call_by_its_class(
         ),
         ("spawn_subagent", "keyed-spawn-1", {"request": {"input": "look into it"}}),
         ("exec_command", "unsafe-1", {"cmd": "rm -rf /tmp/never", "comment": "no"}),
+        (
+            "pod_write_record",
+            "unsafe-update-1",
+            {
+                "request": {
+                    "action": "update",
+                    "table_name": table,
+                    "record_id": str(uuid4()),
+                    "data": {"title": "stale"},
+                }
+            },
+        ),
         ("mystery_mcp_tool", "unknown-1", {"x": 1}),
         ("ask_user", "pause-1", {"questions": [{"question": "Which?"}]}),
     ]
@@ -189,6 +205,9 @@ async def test_a_resumed_turn_settles_each_open_call_by_its_class(
     assert returns["keyed-record-1"][0]["record"]["id"] == keyed_id(record_key)
     listed = await datastore.list_records(table)
     assert len(listed["items"]) == 1
+    # UNSAFE update: never replayed over whatever the row holds now.
+    assert listed["items"][0]["title"] == "once"
+    assert returns["unsafe-update-1"][1]["replay_class"] == "UNSAFE"
     # KEYED spawn: the child the first attempt spawned.
     assert returns["keyed-spawn-1"][1]["replay_class"] == "KEYED"
     assert returns["keyed-spawn-1"][0]["conversation_id"] == str(child_id)
@@ -200,10 +219,25 @@ async def test_a_resumed_turn_settles_each_open_call_by_its_class(
         == 1
     )
     # UNSAFE and unknown: never run, outcome unknown, stored.
-    for call_id in ("unsafe-1", "unknown-1"):
+    for call_id in ("unsafe-1", "unknown-1", "unsafe-update-1"):
         result, metadata = returns[call_id]
         assert metadata["replay_class"] == "UNSAFE"
         assert result == {"success": False, "error": OUTCOME_UNKNOWN}
+    # The person reading the conversation is told, once, outside the run (so
+    # the resumed model is not handed it as their words).
+    notices = await rows(
+        "SELECT text, agent_run_id FROM agent_messages WHERE conversation_id = :c "
+        "AND kind = 'NOTIFICATION'",
+        c=conversation,
+    )
+    assert notices == [
+        (
+            INTERRUPTED_NOTICE.format(
+                tools="exec_command, mystery_mcp_tool, pod_write_record"
+            ),
+            None,
+        )
+    ]
     # The open pause is the person's, not the replay's.
     assert "pause-1" not in returns
     # Exactly one return per settled call, and the turn carried on.

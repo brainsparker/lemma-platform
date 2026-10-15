@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -960,37 +962,19 @@ async def test_a_single_update_still_checks_permission_and_wakes():
     )
 
 
-class _PlatformSession:
-    """The platform session a record write does *not* need while it runs."""
-
-    def __init__(self) -> None:
-        self.released = 0
-        self.new: list = []
-        self.dirty: list = []
-        self.deleted: list = []
-        self.info: dict = {}
-
-    def in_transaction(self) -> bool:
-        return True
-
-    async def commit(self) -> None:
-        self.released += 1
-
-
 @pytest.mark.asyncio
-async def test_the_wake_after_a_write_hands_back_the_platform_connection():
+async def test_the_wake_after_a_write_never_holds_the_platform_connection():
     """Records live in a different database from the request's unit of work.
 
-    The wake after a write is a Redis round trip, reached with the *platform*
-    connection checked out by the authorization reads -- the record write itself
-    went to the datastore pool. So the platform connection is handed back for
-    it.
+    The wake after a write is a Redis round trip, and the request still holds
+    the *platform* connection its authorization reads checked out. The wake is
+    started in the background, so ``after_commit`` returns without waiting on
+    Redis and without touching that connection at all.
     """
     from app.modules.datastore.domain.write_intent import WriteIntent
     from app.modules.datastore.services.record_change_log import RecordChangeLog
 
-    session = _PlatformSession()
-    change_log = RecordChangeLog(platform_session=session)
+    change_log = RecordChangeLog()
     changes = await change_log.capture(_events_enabled_context(), WriteIntent.NORMAL)
-    await change_log.after_commit(changes)
-    assert session.released == 1
+    # Bounded well below the publish's own timeout: nothing here waits on Redis.
+    await asyncio.wait_for(change_log.after_commit(changes), timeout=0.05)

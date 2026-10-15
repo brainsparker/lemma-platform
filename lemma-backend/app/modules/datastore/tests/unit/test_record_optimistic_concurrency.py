@@ -97,6 +97,9 @@ class _Changes:
         del kwargs
         return sql, params
 
+    def row(self, row) -> dict[str, object]:
+        return dict(row._mapping)
+
     async def wake_handoff(self, session) -> None:
         del session
 

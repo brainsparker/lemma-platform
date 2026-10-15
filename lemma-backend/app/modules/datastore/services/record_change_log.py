@@ -16,9 +16,6 @@ from app.modules.datastore.services.table_context import TableContext
 
 
 class RecordChangeLog:
-    def __init__(self, *, platform_session: object | None) -> None:
-        self._platform_session = platform_session
-
     async def capture(self, ctx: TableContext, intent: WriteIntent) -> ChangeCapture:
         """This write's appends, naming whoever outside the pod it is for."""
         writer = outside_writer(ctx)

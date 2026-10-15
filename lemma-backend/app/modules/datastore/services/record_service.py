@@ -52,12 +52,7 @@ class RecordService:
             else None
         )
         self.user_repository = user_repository
-        # The *platform* session, taken from the authorization service that
-        # already reads through it. Not the datastore session: those are two
-        # different databases, and it is the platform connection an API request
-        # holds open while the record write runs against the other pool.
-        self._platform_session = getattr(authorization_service, "session", None)
-        self.change_log = RecordChangeLog(platform_session=self._platform_session)
+        self.change_log = RecordChangeLog()
 
     async def _require_datastore_read(
         self,

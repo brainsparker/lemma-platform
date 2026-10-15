@@ -20,8 +20,9 @@ Design notes
   a browser as a close frame — it sees the failed upgrade as 1006 and cannot
   tell an expired session from a network drop. Auth failures close with
   ``CLOSE_UNAUTHENTICATED`` (4401) so the client knows to refresh its token.
-* **Visibility.** At connect we snapshot the set of tables the user can read
-  (``list_tables`` already filters to visible tables). RLS row scoping needs no
+* **Visibility.** At connect we snapshot the set of tables whose rows the user
+  may read: visible (``list_tables``) *and* granted record read, the record
+  API's own rule -- seeing a table does not let a member read its rows. RLS row scoping needs no
   database read on the hot path: each event carries ``owner_user_id`` (the row
   owner for RLS tables, ``None`` for shared/non-RLS tables), so a set owner is
   delivered only to that user while a ``None`` owner fans out to every reader.
@@ -96,14 +97,23 @@ async def _resolve_session(websocket: WebSocket):
 
 
 async def _visible_table_names(table_service, pod_id: UUID, ctx: Context) -> set[str]:
-    """Snapshot every table name the caller can currently read in the pod."""
+    """Snapshot every table whose rows the caller can currently read in the pod.
+
+    ``list_tables`` filters to tables the caller can *see*; seeing a table is
+    not reading its rows, so each is also checked for record read -- the same
+    rule the record API applies.
+    """
     names: set[str] = set()
     cursor: str | None = None
     while True:
         tables, cursor = await table_service.list_tables(
             pod_id, ctx, limit=200, cursor=cursor
         )
-        names.update(table.table_name for table in tables)
+        for table in tables:
+            if await ctx.can(
+                Permissions.DATASTORE_RECORD_READ, ResourceRef.table(pod_id, table.id)
+            ):
+                names.add(table.table_name)
         if not cursor:
             break
     return names
@@ -245,8 +255,13 @@ async def datastore_changes_ws(
             )
             table_service = build_table_service(uow)
             if table is not None:
-                # get_table enforces table read and existence in one step.
+                # get_table enforces table read and existence in one step; the
+                # rows themselves need record read, as on the record API.
                 entity = await table_service.get_table(pod_id, table, ctx)
+                await ctx.require(
+                    Permissions.DATASTORE_RECORD_READ,
+                    ResourceRef.table(pod_id, entity.id),
+                )
                 allowed_tables = {entity.table_name}
             else:
                 await ctx.require(

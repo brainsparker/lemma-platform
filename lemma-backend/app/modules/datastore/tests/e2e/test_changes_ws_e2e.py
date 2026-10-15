@@ -481,3 +481,99 @@ async def test_changes_ws_on_a_pod_without_access_closes_forbidden(
     assert closed["type"] == "websocket.close", closed
     assert closed["code"] in (4403, 4404), closed
     await communicator.wait(timeout=3)
+
+
+async def _grant_viewer_table_read_only(
+    notes_pod: DatastoreApi, member_users, async_client
+) -> None:
+    """Grant POD_VIEWER table read, and nothing else, on a RESTRICTED ``vault``.
+
+    The viewer can see the table but not its rows: the record API refuses them.
+    """
+    await notes_pod.create_table(
+        {
+            "name": "vault",
+            "visibility": "RESTRICTED",
+            "enable_rls": False,
+            "columns": [{"name": "body", "type": "TEXT", "required": True}],
+        }
+    )
+    grant = await notes_pod.request(
+        "PUT",
+        f"/pods/{notes_pod.pod_id}/roles/POD_VIEWER/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "datastore_table",
+                    "resource_name": "vault",
+                    "permission_ids": ["datastore.table.read"],
+                }
+            ]
+        },
+    )
+    assert grant.status_code == 200, grant.text
+    viewer_api = DatastoreApi(
+        async_client, notes_pod.pod_id, user=member_users["viewer"]
+    )
+    await viewer_api.get_table("vault")
+    records = await viewer_api.request(
+        "GET", f"/pods/{notes_pod.pod_id}/datastore/tables/vault/records"
+    )
+    assert records.status_code == 403, records.text
+
+
+async def test_changes_ws_table_filter_requires_record_read(
+    notes_pod: DatastoreApi,
+    member_users,
+    async_client,
+    test_app,
+):
+    """Seeing a table is not reading its rows: ``?table=`` needs record read.
+
+    A member the record API refuses must not receive the same rows over the
+    socket, so the subscription closes 4403 instead of streaming them.
+    """
+    await _grant_viewer_table_read_only(notes_pod, member_users, async_client)
+
+    communicator = _ws_communicator(
+        test_app, notes_pod.pod_id, member_users["viewer"]["token"], table="vault"
+    )
+    await communicator.send_input({"type": "websocket.connect"})
+    accepted = await communicator.receive_output(timeout=5)
+    assert accepted["type"] == "websocket.accept", accepted
+
+    await notes_pod.create_record("vault", {"body": "vault secret"})
+    closed = await communicator.receive_output(timeout=5)
+    assert "vault secret" not in json.dumps(closed)
+    assert closed["type"] == "websocket.close", closed
+    assert closed["code"] == 4403, closed
+    await communicator.wait(timeout=3)
+
+
+async def test_changes_ws_all_tables_skips_tables_without_record_read(
+    notes_pod: DatastoreApi,
+    member_users,
+    async_client,
+    test_app,
+):
+    """The all-tables stream carries only tables whose rows the caller may read."""
+    await _grant_viewer_table_read_only(notes_pod, member_users, async_client)
+
+    communicator = _ws_communicator(
+        test_app, notes_pod.pod_id, member_users["viewer"]["token"]
+    )
+    await communicator.send_input({"type": "websocket.connect"})
+    await _expect_accept_and_ready(communicator)
+
+    await notes_pod.create_record("vault", {"body": "vault secret"})
+    await notes_pod.create_record("notes", {"body": "readable"})
+
+    # The readable table's write arrives; the vault write before it never does.
+    frame = await _recv_json(communicator)
+    assert "vault secret" not in json.dumps(frame)
+    assert frame["table_name"] == "notes", frame
+    assert frame["payload"]["body"] == "readable"
+    await _assert_no_frame(communicator)
+
+    await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
+    await communicator.wait(timeout=3)

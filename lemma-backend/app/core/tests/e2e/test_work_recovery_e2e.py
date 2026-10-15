@@ -8,13 +8,18 @@ and every budget must be charged only by its own cause.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from app.core.infrastructure.work.admin import retry_dead
 from app.core.infrastructure.work.context import DeadContext, FastContext
+from app.core.infrastructure.work.db import WorkDb as RuntimeWorkDb
+from app.core.infrastructure.work.dispatcher import Dispatcher
 from app.core.infrastructure.work.job import JobContext
 from app.core.infrastructure.work.registry import WorkRegistry
 from app.core.infrastructure.work.retry import Exponential, RetryPolicy
@@ -323,8 +328,21 @@ async def test_a_heartbeat_keeps_a_job_twice_its_lease_alive(
     assert await work_db.effects() == ["finished"]
 
 
+class _ControlUnreachable(RuntimeWorkDb):
+    """The worker's view of a database it can no longer reach for heartbeats."""
+
+    def control(self):  # type: ignore[override]
+        return _refused()
+
+
+@asynccontextmanager
+async def _refused():
+    raise OperationalError("SELECT 1", {}, ConnectionRefusedError())
+    yield  # pragma: no cover - unreachable, keeps this a generator
+
+
 async def test_a_job_cut_off_from_the_database_stops_before_its_lease_runs_out(
-    work_db: WorkDb, registry: WorkRegistry, monkeypatch: pytest.MonkeyPatch
+    work_db: WorkDb, registry: WorkRegistry
 ) -> None:
     """A heartbeat that gets no answer must not keep the job running past its lease.
 
@@ -332,10 +350,6 @@ async def test_a_job_cut_off_from_the_database_stops_before_its_lease_runs_out(
     reach it, and another worker may claim the item then. So the job is
     cancelled while the last committed extension still covers it.
     """
-    from sqlalchemy.exc import OperationalError
-
-    from app.core.infrastructure.work import job as job_module
-
     lease = timedelta(seconds=1)
     finished = asyncio.Event()
 
@@ -350,18 +364,22 @@ async def test_a_job_cut_off_from_the_database_stops_before_its_lease_runs_out(
         await asyncio.sleep(5)  # a long, silent tool call
         finished.set()
 
-    async def unreachable(*_args: object, **_kwargs: object) -> bool:
-        raise OperationalError("SELECT 1", {}, ConnectionRefusedError())
-
     item_id = await work_db.enqueue(registry, "demo.partitioned")
     runner = dispatcher_for(
         work_db.sessions, WorkClass.AUTOMATION, registry=registry, owner="a"
     )
     [item] = await runner.claim_once()
-    monkeypatch.setattr(job_module, "extend_lease", unreachable)
+    # The same process, from the moment its heartbeats stop getting through.
+    partitioned = Dispatcher(
+        WorkClass.AUTOMATION,
+        replace(runner.env, db=_ControlUnreachable(work_db.sessions, None)),
+        slots=1,
+        quantum=1,
+        poll_interval=0.05,
+    )
     loop = asyncio.get_running_loop()
     started = loop.time()
-    outcome = await runner.execute(item)
+    outcome = await partitioned.execute(item)
     stopped_after = loop.time() - started
 
     assert outcome == "lease_lost"

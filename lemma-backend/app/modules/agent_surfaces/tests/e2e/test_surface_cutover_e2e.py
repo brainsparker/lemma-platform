@@ -9,7 +9,8 @@ conversation's metadata (the old owed-reply job's record).
 The cutover sweep must turn exactly the unfinished webhooks into inbound rows
 (each once), the settled notification into the agent's item, and -- once the
 previous release is gone -- the owed reply into a PENDING delivery (clearing
-the record), then drop the old tables. Running it again converts nothing.
+the record). It keeps the old tables (this release is expand-only) and re-arms
+itself. Running it again converts nothing.
 """
 
 from __future__ import annotations
@@ -197,9 +198,15 @@ async def test_the_cutover_converts_what_was_owed_once(
     await _sweep()
 
     assert await scalar(
-        "SELECT to_regclass('domain_event_outbox') IS NULL "
-        "AND to_regclass('domain_event_inbox') IS NULL"
-    ), "the previous release is gone, so the tables are"
+        "SELECT to_regclass('domain_event_outbox') IS NOT NULL "
+        "AND to_regclass('domain_event_inbox') IS NOT NULL"
+    ), "expand-only: the tables stay for a rollback until the next release"
+    assert await scalar(
+        "SELECT bool_and((payload->>'converted')::boolean "
+        "AND run_at > now() + interval '200 seconds') "
+        "FROM work_items WHERE kind = :k AND state = 'queued'",
+        k=LEGACY_SWEEP,
+    ), "converted once, and re-armed on the slow cadence while the tables exist"
     stored = await scalar(
         "SELECT string_agg(payload->'message'->>'text', '|' "
         "ORDER BY payload->'message'->>'text') "
@@ -247,3 +254,9 @@ async def test_the_cutover_converts_what_was_owed_once(
         )
         == 1
     )
+    async with get_engine().begin() as conn:
+        await conn.execute(
+            text("DELETE FROM work_items WHERE kind = :k"), {"k": LEGACY_SWEEP}
+        )
+        await conn.execute(text("DROP TABLE IF EXISTS domain_event_inbox"))
+        await conn.execute(text("DROP TABLE IF EXISTS domain_event_outbox"))

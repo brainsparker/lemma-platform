@@ -31,9 +31,10 @@
       out their leases (60 s for a turn) instead. Say in the notes whether a
       release is expected to interrupt runs, not whether it drains.
 - [ ] After the first deploy of a release that carries migration
-      `0063_drop_event_outbox`, `python -m app.cutover_check` reports
-      `finished` once the previous release has stopped (about ten minutes after
-      the rollout); a dead `cutover.legacy_sweep` is retried, not ignored (see
+      `0056_agent_surface_bundle_work`, `python -m app.cutover_check` reports
+      the sweep converted once the previous release has stopped (about ten
+      minutes after the rollout), and `finished` only after the next release's
+      `python -m app.cutover_finish`; a dead `cutover.legacy_sweep` is retried, not ignored (see
       [reliability operations](../../lemma-backend/docs/operators/reliability.md#cutover-from-the-old-transport-design-13)).
 - [ ] Every resolved issue entry contains implementation and exact test evidence.
 - [ ] Rollback, replay, DLQ, partial cancellation, and support guidance are ready.

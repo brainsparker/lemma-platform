@@ -1,30 +1,32 @@
 """The cutover from the old event transport, as two work kinds. Worker only.
 
 ``cutover.legacy_sweep`` (admin, one item, queued once by migration
-``0063_drop_event_outbox``) runs from the first worker boot until the old
-transport is gone:
+``0056_agent_surface_bundle_work``) runs from the first worker boot for as long
+as the old transport's tables exist:
 
 1. Every pass takes over what the old outbox owes (``takeover.py``): each owed
    delivery becomes one ``cutover.legacy_event`` item, and the old consumer's
    inbox row is settled so an old worker still running during the rolling
-   deploy does not do it as well. It does the same for the outbox of a
-   separately configured datastore database (``register_legacy_outbox``).
+   deploy does not do it as well. After a full pass, later passes read only
+   rows that occurred from a watermark on (``SweepState.since``). It does the
+   same for the outbox of a separately configured datastore database
+   (``register_legacy_outbox``).
 2. It waits until neither table has been written for ``quiet_seconds`` --
    every process of the previous release has stopped: those processes wrote
    the outbox and the inbox continuously.
-3. Then, once: it converts the streaq jobs still in Redis whose work existed
-   nowhere else, queues the state routes (owed replies, open notifications,
-   dispatched schedule runs), takes over the last rows and drops
-   ``domain_event_outbox`` and ``domain_event_inbox`` in one transaction --
-   locked, so nothing is written between the last take-over and the drop --
-   drops the datastore database's outbox, and retires the legacy Redis groups
-   and streams.
+3. Then, once (``SweepState.converted``): it takes over everything still owed,
+   watermark or not (a delivery whose old worker died holding its claim),
+   converts the streaq jobs still in Redis whose work existed nowhere else, and
+   queues the state routes (owed replies, open notifications, dispatched
+   schedule runs).
+4. After that it re-arms itself every ``rearm_seconds`` while the old tables
+   exist, still taking over whatever becomes owed: an older image rolled back
+   to writes them again, and nothing it writes is lost.
 
-The tables are dropped here and not by the migration because the migration
-runs before the new release rolls out: the previous release's processes keep
-writing both tables until they stop, and dropping a table under them would
-fail every transaction they commit. A fresh install, which has nothing to wait
-for, is dropped by the migration itself.
+It drops nothing and retires nothing. This release is expand-only, so rolling
+the image back still finds every table, stream and group the previous release
+reads. The next release's ``0057_drop_old_transport`` and
+``python -m app.cutover_finish`` drop them once the old transport owes nothing.
 
 ``cutover.legacy_event`` runs one owed delivery through the converter its
 route registered (``routes.legacy_converter``). Each converter writes what the
@@ -46,7 +48,6 @@ from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from app.core.infrastructure.cutover.legacy_streams import LEGACY_GROUPS, destroy_group
 from app.core.infrastructure.cutover.routes import (
     ROUTES,
     STATE_ROUTES,
@@ -87,8 +88,9 @@ BATCH = 5_000
 #: taken to be gone: longer than a rolling deploy's slowest step.
 QUIET_SECONDS = 600
 POLL_SECONDS = 30
+#: Once converted, how often the sweep looks again while the tables remain.
+REARM_SECONDS = 300
 SINCE_SLACK = timedelta(minutes=5)
-_TABLES = ("domain_event_outbox", "domain_event_inbox")
 
 
 class LegacyEvent(BaseModel):
@@ -99,10 +101,13 @@ class LegacyEvent(BaseModel):
 class SweepState(BaseModel):
     quiet_seconds: int = QUIET_SECONDS
     poll_seconds: int = POLL_SECONDS
+    rearm_seconds: int = REARM_SECONDS
     #: After a full pass, later passes read only rows that occurred from here.
     since: datetime | None = None
     #: Per other outbox: how far its rows have been read ([occurred_at, id]).
     cursors: dict[str, list[str]] = Field(default_factory=dict)
+    #: The one-time conversion (streaq jobs, state routes) has run.
+    converted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +159,7 @@ async def run_sweep(ctx: JobContext, state: SweepState) -> None:
                 # over (no route filled its batch); a few minutes of slack for
                 # rows committed after others that occurred later.
                 state.since = newest_row - SINCE_SLACK
-    other_taken, other_last = await _sweep_other_outboxes(ctx, state, final=False)
+    other_taken, other_last, others_present = await _sweep_other_outboxes(ctx, state)
     busy = sum(taken.values()) + other_taken
     if busy:
         logger.info(
@@ -164,20 +169,29 @@ async def run_sweep(ctx: JobContext, state: SweepState) -> None:
     quiet = newest is None or datetime.now(UTC) - newest >= timedelta(
         seconds=state.quiet_seconds
     )
-    # A full batch means more is waiting now; otherwise, once quiet, the last
-    # take-over happens under the lock in ``finish``.
+    # A full batch means more is waiting now.
     full = _full(taken) or other_taken >= BATCH
     if full or not quiet:
-        async with ctx.complete_work() as uow:
-            await WorkWriter.of(uow).add(
-                LEGACY_SWEEP,
-                SYSTEM_NAMESPACE,
-                state,
-                dedup_key=LEGACY_SWEEP,
-                delay=timedelta(seconds=0 if full else state.poll_seconds),
-            )
+        await _rearm(ctx, state, 0 if full else state.poll_seconds)
         return
-    await finish(ctx, state)
+    if not state.converted:
+        await convert(ctx)
+        state.converted = True
+    if present or others_present:
+        # Expand-only: the tables stay until the next release drops them, and
+        # an image rolled back to may write them again meanwhile.
+        await _rearm(ctx, state, state.rearm_seconds)
+
+
+async def _rearm(ctx: JobContext, state: SweepState, delay_seconds: int) -> None:
+    async with ctx.complete_work() as uow:
+        await WorkWriter.of(uow).add(
+            LEGACY_SWEEP,
+            SYSTEM_NAMESPACE,
+            state,
+            dedup_key=LEGACY_SWEEP,
+            delay=timedelta(seconds=delay_seconds),
+        )
 
 
 def _full(taken: dict[str, int]) -> bool:
@@ -185,8 +199,15 @@ def _full(taken: dict[str, int]) -> bool:
     return any(count >= BATCH for count in taken.values())
 
 
-async def finish(ctx: JobContext, state: SweepState) -> None:
-    """The previous release is gone: convert what only Redis held, drop the rest."""
+async def convert(ctx: JobContext) -> int:
+    """The previous release is gone: take over what is still owed, watermark or
+    not, convert what only Redis held and queue the state routes. Once."""
+    while True:
+        async with ctx.checkpoint() as uow:
+            if not await legacy_tables_present(uow.session):
+                break
+            if not _full(await take_over(uow.session, limit=BATCH)):
+                break
     converted = await convert_streaq_jobs(ctx)
     async with ctx.checkpoint() as uow:
         work = WorkWriter.of(uow)
@@ -197,27 +218,8 @@ async def finish(ctx: JobContext, state: SweepState) -> None:
                 LegacyEvent(route=route),
                 dedup_key=f"legacy:{route}",
             )
-    dropped = False
-    async with ctx.checkpoint() as uow:
-        if await legacy_tables_present(uow.session):
-            await uow.session.execute(
-                text(
-                    "LOCK TABLE domain_event_outbox, domain_event_inbox "
-                    "IN ACCESS EXCLUSIVE MODE"
-                )
-            )
-            while sum((await take_over(uow.session, limit=50_000)).values()):
-                pass
-            await uow.session.execute(text("DROP TABLE domain_event_inbox"))
-            await uow.session.execute(text("DROP TABLE domain_event_outbox"))
-            dropped = True
-    await _sweep_other_outboxes(ctx, state, final=True)
-    await retire_legacy_streams()
-    logger.info(
-        "cutover.legacy_sweep.finished",
-        streaq_converted=converted,
-        dropped_tables=dropped,
-    )
+    logger.info("cutover.legacy_sweep.converted", streaq_converted=converted)
+    return converted
 
 
 def _counts(by_name: dict[str, int]) -> str:
@@ -256,9 +258,11 @@ async def last_activity(session: AsyncSession) -> datetime | None:
 
 
 async def _sweep_other_outboxes(
-    ctx: JobContext, state: SweepState, *, final: bool
-) -> tuple[int, datetime | None]:
-    taken, newest = 0, None
+    ctx: JobContext, state: SweepState
+) -> tuple[int, datetime | None, bool]:
+    """Take over another database's outbox from its cursor on: (taken, its
+    newest row, whether any such outbox still exists)."""
+    taken, newest, present = 0, None, False
     routes = {route.consumer: route for route in ROUTES}
     for outbox in _other_outboxes.values():
         engine = outbox.engine()
@@ -272,8 +276,9 @@ async def _sweep_other_outboxes(
             last = await conn.scalar(
                 text("SELECT max(occurred_at) FROM domain_event_outbox")
             )
+        present = True
         newest = last if newest is None or (last and last > newest) else newest
-        while True:
+        while taken < BATCH:
             rows = await _read_after(engine, outbox, state.cursors.get(outbox.name))
             if not rows:
                 break
@@ -285,13 +290,7 @@ async def _sweep_other_outboxes(
                 last_row["occurred_at"].isoformat(),
                 str(last_row["id"]),
             ]
-            if not final and taken >= BATCH:
-                break
-        if final:
-            async with engine.begin() as conn:
-                await conn.execute(text("DROP TABLE IF EXISTS domain_event_outbox"))
-            logger.info("cutover.legacy_sweep.dropped_outbox", database=outbox.name)
-    return taken, newest
+    return taken, newest, present
 
 
 async def _read_after(
@@ -357,20 +356,6 @@ async def convert_streaq_jobs(ctx: JobContext) -> int:
     return converted
 
 
-async def retire_legacy_streams() -> None:
-    """Destroy the old consumer groups and their streams. Best effort: nothing
-    reads them, and a Redis that cannot be reached keeps them harmlessly."""
-    from app.core.infrastructure.redis.client import get_redis
-
-    redis = get_redis(decode_responses=False)
-    try:
-        for stream, group in LEGACY_GROUPS:
-            await destroy_group(redis, stream, group)
-        await redis.delete(*sorted({stream for stream, _ in LEGACY_GROUPS}))
-    except RedisError, OSError:
-        logger.warning("cutover.legacy_sweep.streams_not_retired", exc_info=True)
-
-
 def register_cutover_work(registry: WorkRegistry) -> None:
     registry.handler(
         kind=LEGACY_EVENT,
@@ -411,7 +396,7 @@ __all__ = [
     "LegacyOutbox",
     "SweepState",
     "TAKEN_OVER_MARK",
-    "finish",
+    "convert",
     "last_activity",
     "legacy_tables_present",
     "register_cutover_work",

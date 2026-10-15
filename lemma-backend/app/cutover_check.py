@@ -1,22 +1,25 @@
 """``python -m app.cutover_check``: how far is the cutover from the old transport?
 
-Migration ``0063_drop_event_outbox`` queues the cutover sweep
+Migration ``0056_agent_surface_bundle_work`` queues the cutover sweep
 (``app/core/infrastructure/cutover``), which takes over everything the old
-event transport still owes and drops its tables once the previous release has
-stopped. Nothing waits on this check -- the sweep needs no operator -- but it
-says where the sweep is:
+event transport still owes and, once the previous release has stopped,
+converts what only Redis held. It drops nothing: the old tables, streams and
+groups stay until the next release's ``python -m app.cutover_finish`` (and
+migration ``0057_drop_old_transport``) drop them, so this release can still be
+rolled back. Nothing waits on this check, but it says where the cutover is:
 
 * whether ``domain_event_outbox`` / ``domain_event_inbox`` still exist, and how
   many deliveries each route is still owed in them;
-* the sweep item (queued, running, dead, or absent once it finished) and the
-  ``cutover.legacy_event`` items still queued, running or dead, per route;
+* the sweep item (queued, running, dead, or absent once it finished), whether
+  it has run its one-time conversion, and the ``cutover.legacy_event`` items
+  still queued, running or dead, per route;
 * streaq jobs still in Redis, by function, and each legacy group's backlog
   (informational: what they owed is read from the outbox);
 * a separately configured datastore database's leftover outbox, and the pod
   schemas the change-log backfill has not reached yet.
 
 ``finished`` is true once the tables are gone, the sweep has completed and no
-converted delivery is left. Exits 0 unless the check itself fails;
+converted delivery is left -- after ``app.cutover_finish``, not before. Exits 0 unless the check itself fails;
 ``--json`` prints the report as JSON.
 """
 
@@ -38,6 +41,8 @@ class Report:
     legacy_tables: bool = False
     owed: dict[str, int] = field(default_factory=dict)
     sweep: str = "absent"
+    #: The sweep has run its one-time conversion (streaq jobs, state routes).
+    sweep_converted: bool = False
     converted_left: dict[str, dict[str, int]] = field(default_factory=dict)
     streaq_jobs: dict[str, int] = field(default_factory=dict)
     legacy_groups: dict[str, int | None] = field(default_factory=dict)
@@ -110,11 +115,17 @@ async def _check_main_database(
                 owed = await count_owed(session, route)
                 if owed:
                     report.owed[route.consumer] = owed
-        sweep = await session.scalar(
-            text("SELECT state FROM work_items WHERE kind = :kind LIMIT 1"),
-            {"kind": LEGACY_SWEEP},
-        )
-        report.sweep = str(sweep) if sweep else "absent"
+        sweep = (
+            await session.execute(
+                text(
+                    "SELECT state, coalesce((payload->>'converted')::boolean, false) "
+                    "FROM work_items WHERE kind = :kind LIMIT 1"
+                ),
+                {"kind": LEGACY_SWEEP},
+            )
+        ).first()
+        report.sweep = str(sweep[0]) if sweep else "absent"
+        report.sweep_converted = bool(sweep and sweep[1])
         rows = await session.execute(
             text(
                 "SELECT payload->>'route', state, count(*) FROM work_items "
@@ -165,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     _out("finished" if report.finished else "in progress")
     _out(f"  legacy tables present: {report.legacy_tables}")
     _out(f"  still owed in the outbox, per route: {report.owed}")
-    _out(f"  sweep: {report.sweep}")
+    _out(f"  sweep: {report.sweep} (converted: {report.sweep_converted})")
     _out(f"  converted deliveries left: {report.converted_left}")
     _out(f"  streaq jobs in Redis: {report.streaq_jobs}")
     _out(f"  legacy groups' backlog: {backlog}")

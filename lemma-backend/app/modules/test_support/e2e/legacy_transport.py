@@ -1,7 +1,7 @@
 """The old event transport's tables, as a database left them, for cutover tests.
 
 ``domain_event_outbox`` and ``domain_event_inbox`` exactly as migration 0003
-created them (and 0063's downgrade recreates them), plus helpers that write
+created them (and 0057's downgrade recreates them), plus helpers that write
 rows the way the old unit of work, publisher and inbox did.
 """
 

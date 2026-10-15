@@ -13,8 +13,10 @@ only there. Then the release's cutover runs, as the worker runs it:
   item (or fact) that replaced its consumer, once;
 * delivering the same events again changes nothing;
 * once the previous release is gone (quiet), the sweep converts the streaq
-  jobs only Redis held, runs the state routes and drops the old tables --
-  the main ones and the datastore database's outbox -- and finishes.
+  jobs only Redis held and runs the state routes -- once -- and keeps the old
+  tables (the main ones and the datastore database's outbox): it re-arms on a
+  slow cadence, still taking over what becomes owed, until the next release
+  drops them.
 """
 
 from __future__ import annotations
@@ -551,7 +553,7 @@ async def test_every_owed_delivery_takes_effect_once(
         == 1
     )
 
-    # The previous release is gone: streaq leftovers, then the drop.
+    # The previous release is gone: the one-time conversion.
     redis = get_redis(decode_responses=False)
     jobs = {
         b"streaq:default:task:data:e2e-title": streaq_job(
@@ -579,6 +581,7 @@ async def test_every_owed_delivery_takes_effect_once(
         # A deployment's own retired job (lemma-cloud's), registered by name.
         b"streaq:default:task:data:e2e-retired": streaq_job("e2e_retired_cron"),
     }
+    late_job = b"streaq:default:task:data:e2e-late-title"
     for key, value in jobs.items():
         await redis.set(key, value)
     retire_streaq_jobs("e2e_retired_cron")
@@ -597,20 +600,21 @@ async def test_every_owed_delivery_takes_effect_once(
 
         assert (
             await scalar(
-                "SELECT count(*) FROM work_items WHERE kind IN (:a, :b)",
-                a=LEGACY_SWEEP,
-                b=LEGACY_EVENT,
+                "SELECT count(*) FROM work_items WHERE kind = :k", k=LEGACY_EVENT
             )
             == 0
-        ), "the sweep finished and every converted delivery ran"
-        assert await scalar(
-            "SELECT to_regclass('domain_event_outbox') IS NULL "
-            "AND to_regclass('domain_event_inbox') IS NULL"
+        ), "every converted delivery ran"
+        assert await _sweep_rearmed(), (
+            "converted, and re-armed on the slow cadence while the tables exist"
         )
+        assert await scalar(
+            "SELECT to_regclass('domain_event_outbox') IS NOT NULL "
+            "AND to_regclass('domain_event_inbox') IS NOT NULL"
+        ), "expand-only: the old tables stay for a rollback"
         if separate:
             async with get_datastore_engine().connect() as conn:
                 assert await conn.scalar(
-                    text("SELECT to_regclass('domain_event_outbox') IS NULL")
+                    text("SELECT to_regclass('domain_event_outbox') IS NOT NULL")
                 )
         assert [k for k in jobs if await redis.exists(k)] == [
             b"streaq:default:task:data:e2e-unknown"
@@ -631,6 +635,59 @@ async def test_every_owed_delivery_takes_effect_once(
             )
             == 1
         )
+
+        # Converted once: a later pass leaves a streaq job written since alone
+        # (an image rolled back to owns it again), but still takes over what
+        # the old transport newly owes.
+        await redis.set(
+            late_job,
+            streaq_job(
+                "generate_conversation_title",
+                context={"conversation_id": str(conversation_id)},
+            ),
+        )
+        late_join = uuid4()
+        async with engine.begin() as conn:
+            await outbox_row(
+                conn,
+                event(
+                    "pod.join_request.requested",
+                    pod_id=other_pod,
+                    organization_id=org_id,
+                    requester_user_id=user_id,
+                    join_request_id=late_join,
+                ),
+            )
+        await make_due(async_session_maker, kind=LEGACY_SWEEP)
+        await _run_cutover()
+        assert await redis.exists(late_job), "the conversion does not run twice"
+        assert await _items("agent.title", conversation_id=str(conversation_id)) == 1
+        assert (
+            await _dedup("pod.join_request.email", f"pod-join-request:{late_join}") == 1
+        )
+        assert await _sweep_rearmed()
     finally:
-        await redis.delete(*jobs)
+        await redis.delete(*jobs, late_job)
         cutover_routes._retired_streaq.discard("e2e_retired_cron")  # noqa: SLF001
+        async with async_session_maker() as session:
+            await session.execute(
+                text("DELETE FROM work_items WHERE kind IN (:a, :b)"),
+                {"a": LEGACY_SWEEP, "b": LEGACY_EVENT},
+            )
+            await session.commit()
+        for db in {engine, get_datastore_engine()}:
+            async with db.begin() as conn:
+                await conn.execute(text("DROP TABLE IF EXISTS domain_event_inbox"))
+                await conn.execute(text("DROP TABLE IF EXISTS domain_event_outbox"))
+
+
+async def _sweep_rearmed() -> bool:
+    """One sweep item, converted, queued on the slow cadence."""
+    return bool(
+        await scalar(
+            "SELECT count(*) = 1 AND bool_and((payload->>'converted')::boolean) "
+            "AND bool_and(state = 'queued' AND run_at > now() + interval '200 seconds') "
+            "FROM work_items WHERE kind = :k",
+            k=LEGACY_SWEEP,
+        )
+    )

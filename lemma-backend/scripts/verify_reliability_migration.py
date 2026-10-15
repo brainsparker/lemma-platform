@@ -196,12 +196,12 @@ def main() -> int:
             """
         )
         assert all(row[0] for row in cursor.fetchall())
-        # 0063 retires the old event transport. Nothing here wrote either
-        # table, so this is the fresh-install case: both empty, dropped at once.
+        # 0056 queues the cutover sweep and drops nothing: an older image can
+        # still be rolled back to, so both tables of the old transport stay.
         cursor.execute(
             """
-            SELECT to_regclass('domain_event_outbox') IS NULL,
-                   to_regclass('domain_event_inbox') IS NULL
+            SELECT to_regclass('domain_event_outbox') IS NOT NULL,
+                   to_regclass('domain_event_inbox') IS NOT NULL
             """
         )
         assert cursor.fetchone() == (True, True)
@@ -279,14 +279,15 @@ def main() -> int:
         )
         # This runs at head, so it asserts the schema as it finally stands.
         # 0003 created ix_schedule_runs_retryable_recovery for the recovery
-        # sweep and 0018 renamed it ix_schedule_runs_recoverable; 0065 drops it
-        # with the sweep, since a run's outcome now reaches its schedule run in
-        # the run's finishing transaction and nothing reads that order.
+        # sweep and 0018 renamed it ix_schedule_runs_recoverable. Nothing reads
+        # that order any more (a run's outcome reaches its schedule run in the
+        # run's finishing transaction), but the previous release still does,
+        # so it stays until 0057_drop_old_transport.
         cursor.execute(
             """
             SELECT
                 to_regclass('uq_schedule_runs_target') IS NOT NULL,
-                to_regclass('ix_schedule_runs_recoverable') IS NULL,
+                to_regclass('ix_schedule_runs_recoverable') IS NOT NULL,
                 is_nullable
             FROM information_schema.columns
             WHERE table_name = 'schedule_runs'

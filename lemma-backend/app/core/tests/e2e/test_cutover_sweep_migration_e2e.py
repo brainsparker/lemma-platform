@@ -1,17 +1,18 @@
-"""Migration 0063 is safe in one upgrade from any earlier release.
+"""Migration 0056 queues the cutover safely, in one upgrade from any earlier release.
 
 * A database the old transport left with owed deliveries upgrades from the
-  last release before this stack (0052) to head without refusing and without
-  dropping anything: both tables stay, the cutover sweep is queued once, and
-  the converter items of the earlier design are gone.
+  last release before this stack (0052) through 0056 without refusing and
+  without dropping anything: both tables stay, the cutover sweep is queued
+  once, and the converter items of the earlier design are gone.
 * Taking over (what the sweep does every pass) writes exactly one
   ``cutover.legacy_event`` per owed (consumer, event) -- unpublished rows and
   published rows whose consumer never settled them -- and nothing for a
   settled, dead-lettered or live-claimed delivery, or one the release before
   this marked as already done. It settles each consumer's inbox row, so a
   second pass (or an old worker) finds nothing.
-* A fresh database upgrades with both tables dropped; the downgrade recreates
-  them empty and removes the sweep, and upgrading again works.
+* A fresh database upgrades with both tables kept (0056 is expand-only; 0057
+  drops them), its sweep queued and the earlier design's converter gone; the
+  downgrade removes the sweep and leaves the tables, and upgrading again works.
 """
 
 from __future__ import annotations
@@ -41,8 +42,8 @@ pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[4]
 BEFORE_STACK = "0052_workflow_run_times_utc"
-BEFORE = "0062_pod_bundle_work"
-REVISION = "0063_drop_event_outbox"
+BEFORE = "0055_change_log_and_flows"
+REVISION = "0056_agent_surface_bundle_work"
 
 #: Routes whose ``where`` reads domain rows (record events): exercised in the
 #: datastore cutover e2e, against real pods and triggers.
@@ -153,7 +154,7 @@ async def test_an_install_with_owed_deliveries_upgrades_in_one_step() -> None:
                 if not dead and status in (None, "RETRYING"):
                     expected[route.consumer] += 1
 
-        _migrate(database_url, "upgrade", "head")
+        _migrate(database_url, "upgrade", REVISION)
         assert _state(sync_url) == ("domain_event_outbox", "domain_event_inbox", 1, 0)
 
         engine = create_async_engine(database_url)
@@ -208,23 +209,39 @@ async def test_an_install_with_owed_deliveries_upgrades_in_one_step() -> None:
             assert live is not None and live[0] == live_claims
 
 
-def test_a_fresh_install_drops_the_tables_and_the_downgrade_recreates_them() -> None:
+def test_a_fresh_install_keeps_the_tables_and_the_downgrade_works() -> None:
     with get_postgres_container() as postgres:
         database_url = get_postgres_url(postgres)
         sync_url = database_url.replace("postgresql+asyncpg", "postgresql")
         _migrate(database_url, "upgrade", BEFORE)
         with psycopg.connect(sync_url) as connection:
-            # 0058 queued the earlier design's converter; 0061/0062 no longer do.
+            # 0055 queued the earlier design's converter; 0056 retires it.
             row = connection.execute(
                 "SELECT count(*) FROM work_items WHERE kind = 'changes.drain'"
             ).fetchone()
             assert row is not None and row[0] == 1
 
+        tables = ("domain_event_outbox", "domain_event_inbox")
         _migrate(database_url, "upgrade", REVISION)
-        assert _state(sync_url) == (None, None, 1, 0)
+        assert _state(sync_url) == (*tables, 1, 0)
+        assert _index(sync_url) == "ix_domain_event_outbox_cutover"
 
         _migrate(database_url, "downgrade", BEFORE)
-        assert _state(sync_url)[:3] == ("domain_event_outbox", "domain_event_inbox", 0)
+        assert _state(sync_url)[:3] == (*tables, 0)
+        assert _index(sync_url) is None
 
-        _migrate(database_url, "upgrade", "head")
-        assert _state(sync_url) == (None, None, 1, 0)
+        _migrate(database_url, "upgrade", REVISION)
+        assert _state(sync_url) == (*tables, 1, 0)
+        # Idempotent: a rerun over what is there trips over nothing.
+        _migrate(database_url, "downgrade", BEFORE)
+        _migrate(database_url, "upgrade", REVISION)
+        assert _state(sync_url) == (*tables, 1, 0)
+
+
+def _index(sync_url: str) -> object:
+    with psycopg.connect(sync_url) as connection:
+        row = connection.execute(
+            "SELECT to_regclass('ix_domain_event_outbox_cutover')::text"
+        ).fetchone()
+    assert row is not None
+    return row[0]

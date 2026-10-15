@@ -102,16 +102,16 @@ uv run python -m app.core.infrastructure.work.admin retry [--ns NS] [--kind K] [
 
 Earlier releases moved background work through Redis Streams (FastStream
 consumer groups), streaq queues and a transactional outbox
-(`domain_event_outbox`, `domain_event_inbox`). One deploy retires them, from
-any earlier release, with no operator step:
+(`domain_event_outbox`, `domain_event_inbox`). The release that carries
+migrations `0054` to `0056` stops using them with no operator step, and drops
+nothing, so its image can still be rolled back:
 
-1. **Migrations `0055` to `0062`** seed work items from domain state for
+1. **Migrations `0054` to `0056`** seed work items from domain state for
    everything that has state behind it: files to process, TIME schedules,
    flow waits and function runs, running agent turns, active waits, decided
    approvals and in-flight bundle jobs.
-2. **Migration `0063_drop_event_outbox`** queues the cutover sweep
-   (`cutover.legacy_sweep`, `app/core/infrastructure/cutover`). On a fresh
-   install, where both tables are empty, it drops them itself.
+2. **Migration `0056_agent_surface_bundle_work`** queues the cutover sweep
+   (`cutover.legacy_sweep`, `app/core/infrastructure/cutover`).
 3. **The sweep runs from the first worker boot.** Every 30 s it takes over
    what the old transport still owes. A delivery is owed to an old consumer
    while its outbox row is not dead and that consumer's inbox has no settled
@@ -123,15 +123,15 @@ any earlier release, with no operator step:
    statement so an old worker still running does not do it as well.
    A separately configured datastore database's outbox is read the same way.
 4. **Once neither table has been written for ten minutes** (the previous
-   release has stopped), the sweep converts the streaq jobs whose work existed
-   only in Redis, gives owed replies, open notifications and still-dispatched
-   schedule runs their work, takes over the last rows and drops both tables in
-   one locked transaction, drops the datastore database's outbox, and
-   destroys the legacy consumer groups and streams.
+   release has stopped), the sweep, once, takes over everything still owed,
+   converts the streaq jobs whose work existed only in Redis, and gives owed
+   replies, open notifications and still-dispatched schedule runs their work.
+5. **Then it keeps looking every five minutes** while the tables exist, so a
+   rollback to the previous image that writes them again loses nothing.
 
-The tables are dropped by the sweep, not the migration, because the migration
-runs before the rollout: the previous release keeps writing them until its
-last process stops.
+The tables, the datastore database's outbox and the legacy consumer groups and
+streams are dropped by the next release (`python -m app.cutover_finish` and
+migration `0057_drop_old_transport`), not by this one.
 
 To see where it is:
 

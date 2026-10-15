@@ -1,9 +1,10 @@
 """``python -m app.cutover_check`` against real Redis and Postgres.
 
 It reports where the cutover is and gates nothing: finished once the old
-tables are gone and no sweep or converted delivery is left; in progress, with
-what each route is still owed, the streaq leftovers and the legacy groups'
-backlog, while the old transport's tables remain.
+tables are gone (the next release's ``app.cutover_finish`` drops them) and no
+sweep or converted delivery is left; in progress, with what each route is
+still owed, whether the sweep has converted, the streaq leftovers and the
+legacy groups' backlog, while the old transport's tables remain.
 """
 
 from __future__ import annotations
@@ -55,8 +56,8 @@ async def test_the_check_reports_the_cutover_without_gating(
 
     await redis.delete(_GROUP[0], _JOB)
     try:
-        # A fresh install: the migration dropped the tables; once its sweep
-        # has run there is nothing left.
+        # No old tables (the e2e schema has none; an install has none once
+        # ``app.cutover_finish`` ran): once its sweep has run nothing is left.
         await sql("DELETE FROM work_items WHERE kind LIKE 'cutover.%'")
         report = await check()
         assert report.finished, report
@@ -81,8 +82,18 @@ async def test_the_check_reports_the_cutover_without_gating(
         assert report.legacy_tables
         assert report.owed == {"pod.join-request-email": 1}
         assert report.sweep == "queued"
+        assert not report.sweep_converted
         assert report.streaq_jobs == {"process_surface_message": 1}
         assert report.legacy_groups["surface_events/analytics-surface"] == 1
+
+        # Converted, and still in progress: the tables stay until the drop.
+        await sql(
+            "UPDATE work_items SET payload = '{\"converted\": true}' "
+            "WHERE kind = 'cutover.legacy_sweep'"
+        )
+        report = await check()
+        assert report.sweep_converted
+        assert not report.finished
     finally:
         await redis.delete(_GROUP[0], _JOB)
         await sql("DELETE FROM work_items WHERE kind LIKE 'cutover.%'")

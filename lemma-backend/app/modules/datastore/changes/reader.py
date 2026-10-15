@@ -215,6 +215,46 @@ async def read_after(
     )
 
 
+async def has_unfinal_after(
+    pod_id: UUID,
+    cursor: str,
+    *,
+    table_ids: Sequence[UUID] | None = None,
+    ops: Sequence[ChangeOp] | None = None,
+    engine: AsyncEngine | None = None,
+) -> bool:
+    """Whether a committed change after ``cursor`` is not final yet.
+
+    A change becomes readable only once every older transaction on the
+    database has ended. One that committed while such a transaction was still
+    open is already in the log but above the horizon, and no further write is
+    owed to announce it: a reader that came up empty must look again.
+    Uncommitted changes are invisible here; their own commit wakes a reader.
+    """
+    after = decode_cursor(cursor)
+    schema = schema_name_for_pod(pod_id)
+    where = ["(xid, seq) > (CAST(CAST(:xid AS text) AS xid8), :seq)"]
+    params: dict[str, object] = {"xid": str(after.xid), "seq": after.seq}
+    if table_ids is not None:
+        where.append("table_id = ANY(CAST(:table_ids AS uuid[]))")
+        params["table_ids"] = [str(table_id) for table_id in table_ids]
+    if ops is not None:
+        where.append("op = ANY(CAST(:ops AS text[]))")
+        params["ops"] = [op.value for op in ops]
+    async with (engine or get_datastore_engine()).connect() as conn:
+        if not await _has_log(conn, schema):
+            return False
+        return bool(
+            await conn.scalar(
+                text(
+                    f"SELECT EXISTS (SELECT 1 FROM {changes_table(schema)} "
+                    f"WHERE {' AND '.join(where)})"
+                ),
+                params,
+            )
+        )
+
+
 async def fetch_rows(
     pod_id: UUID,
     table: TableContext,
@@ -338,5 +378,6 @@ __all__ = [
     "current_horizon",
     "fetch_rows",
     "fetch_rows_statement",
+    "has_unfinal_after",
     "read_after",
 ]

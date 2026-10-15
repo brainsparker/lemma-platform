@@ -25,6 +25,7 @@ from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.datastore.changes.capture import ChangeCapture
 from app.modules.datastore.changes.reader import read_after
 from app.modules.datastore.changes.schema import changes_table
+from app.modules.datastore.changes.work import NOT_FINAL_RETRY
 from app.modules.datastore.infrastructure.pod_schema_migrations import (
     schema_name_for_pod,
 )
@@ -215,6 +216,35 @@ async def test_a_write_during_a_handoff_or_a_delivery_is_still_delivered(
     fired = await runs(schedule.id)
     assert len(fired) == 3
     assert len({run["source_event_id"] for run in fired}) == 3
+
+
+async def test_a_change_behind_an_older_open_transaction_is_delivered_once_it_ends(
+    pod_api: DatastoreApi, fixed_test_user
+):
+    """A delivery that runs while an older transaction is open reads nothing:
+    the committed change is above the horizon. Its wake was spent on that
+    read and no other write is owed, so the delivery must look again itself
+    -- else the change waits for the pod's next write, or the subscriber's
+    two-minute catch-up."""
+    pod_id = UUID(pod_api.pod_id)
+    await orders_table(pod_api)
+    schedule = await datastore_schedule(
+        pod_id, UUID(fixed_test_user["id"]), operations=["INSERT"]
+    )
+    await deliver_all()
+
+    async with get_datastore_engine().connect() as older:
+        older_txn = await older.begin()
+        await older.execute(text("SELECT pg_current_xact_id()"))  # holds xmin
+        await pod_api.create_record("orders", {"status": "behind", "total": 1})
+        await handoff()
+        await run_until_idle(async_session_maker, classes=[WorkClass.EVENTS])
+        assert await runs(schedule.id) == [], "not final while the older one is open"
+        await older_txn.rollback()
+
+    await asyncio.sleep(NOT_FINAL_RETRY.total_seconds() + 0.5)
+    await run_until_idle(async_session_maker, classes=[WorkClass.EVENTS])
+    assert len(await runs(schedule.id)) == 1
 
 
 async def test_positions_order_by_number_not_by_their_text(pod_api: DatastoreApi):

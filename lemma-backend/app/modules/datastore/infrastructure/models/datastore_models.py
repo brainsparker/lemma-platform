@@ -144,6 +144,14 @@ class DatastoreFile(UUIDAuditBase):
             "path",
             postgresql_ops={"path": "text_pattern_ops"},
         ),
+        # The folders that may hide what is under them, found without reading
+        # the pod's files (`file_read_rule.resolve_blocked_folders`).
+        Index(
+            "ix_datastore_file_pod_folder_visibility",
+            "pod_id",
+            "visibility",
+            postgresql_where=text("kind = 'FOLDER'"),
+        ),
     )
 
     def to_entity(self) -> "DatastoreFileEntity":

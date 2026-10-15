@@ -342,6 +342,13 @@ async def test_files_in_flight_before_the_cutover_get_work_items(
         (item,) = await file_work.items(rows[state]["id"])
         assert item["state"] == "queued"
         assert (await file_work.row(rows[state]["id"]))["status"] == "PENDING"
+    # The row's counter is the claim token. An old worker holding token 2 on a
+    # PROCESSING row must not see it reissued: the seed moves it on, once,
+    # however often it runs. A PENDING row holds no live claim and is left be.
+    for state, token in (("PENDING", 2), ("PROCESSING", 3), ("FAILED", 3)):
+        assert (await file_work.row(rows[state]["id"]))[
+            "processing_attempts"
+        ] == token, state
     for state in ("COMPLETED", "FAILED_PERMANENT"):
         assert await file_work.items(rows[state]["id"]) == []
         assert (await file_work.row(rows[state]["id"]))["status"] == state

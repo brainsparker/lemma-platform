@@ -140,12 +140,18 @@ class FileSearcher:
         # enumerated, which is the loop's own exit condition -- or, when it
         # could not be enumerated in time, the loop stops with what it has.
         while True:
-            # A narrowed scope needs no headroom: every row the chunk query
-            # returns is one the caller may read (or, excluding the hidden set,
-            # nearly always is), so asking for `limit` gets `limit`. An
-            # unnarrowed one does -- rows are dropped after the fact, and
-            # without slack to drop them a page comes back short.
-            candidate_limit = limit if file_scope.narrowed else _candidate_limit(limit)
+            # Only an exact scope needs no headroom: every row the chunk query
+            # returns is one the caller may read, so asking for `limit` gets
+            # `limit`. Every other scope has rows dropped after the fact -- an
+            # unnarrowed one, and an excluding one too, since the hidden list
+            # names only searchable files and an orphan chunk or a file mid-
+            # reprocess passes it. Without slack to drop them a page comes back
+            # short with the pool full, and the loop below widens to the
+            # caller's whole readable set: the unbounded pushdown the ceiling
+            # is there to avoid.
+            candidate_limit = (
+                limit if file_scope.enumerated else _candidate_limit(limit)
+            )
             # The search itself touches only the datastore database, so the
             # platform connection is handed back for the duration of it.
             #

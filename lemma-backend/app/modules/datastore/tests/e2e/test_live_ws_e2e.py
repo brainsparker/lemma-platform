@@ -9,7 +9,10 @@ Redis wake, never by a test shortcut.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import os
+import re
 import socket
 from collections.abc import AsyncIterator
 from uuid import UUID
@@ -362,55 +365,110 @@ async def test_socket_limit_per_user_per_pod(
     sockets.append(await _open(backend_server, live_pod.pod_id, token))
 
 
+class _StalledClient:
+    """A live socket that subscribes and then stops reading, for real.
+
+    A ``websockets`` client is no use here: it keeps reading the transport into
+    its own buffers whatever ``max_queue`` says, so the server's sends never
+    block and whether its queue overflows comes down to timing. This one speaks
+    just enough of the protocol by hand (RFC 6455: an upgrade, then masked
+    client frames) and then leaves the kernel's small buffers to fill.
+    """
+
+    def __init__(self, sock: socket.socket) -> None:
+        self.sock = sock
+        self.received = bytearray()
+
+    @classmethod
+    async def open(
+        cls, server: dict[str, str], pod_id: str, token: str
+    ) -> _StalledClient:
+        host, port = server["host_base_url"].removeprefix("http://").split(":")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        sock.setblocking(False)
+        await asyncio.get_running_loop().sock_connect(sock, (host, int(port)))
+        client = cls(sock)
+        key = base64.b64encode(os.urandom(16)).decode()
+        await client._send(
+            (
+                f"GET /pods/{pod_id}/live HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
+                f"Authorization: Bearer {token}\r\n\r\n"
+            ).encode()
+        )
+        await client.read_until(b"\r\n\r\n")
+        assert client.received.startswith(b"HTTP/1.1 101"), bytes(client.received)
+        await client.read_until(b'"type":"ready"')
+        return client
+
+    async def _send(self, data: bytes) -> None:
+        await asyncio.get_running_loop().sock_sendall(self.sock, data)
+
+    async def send_json(self, frame: dict[str, object]) -> None:
+        payload = json.dumps(frame).encode()
+        assert len(payload) < 126
+        mask = os.urandom(4)
+        masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
+        await self._send(bytes([0x81, 0x80 | len(payload)]) + mask + masked)
+
+    async def read_until(self, marker: bytes, timeout: float = 15) -> None:
+        await self.read_match(re.escape(marker), timeout=timeout)
+
+    async def read_match(self, pattern: bytes, timeout: float = 15) -> re.Match[bytes]:
+        loop = asyncio.get_running_loop()
+        async with asyncio.timeout(timeout):
+            while (found := re.search(pattern, self.received)) is None:
+                chunk = await loop.sock_recv(self.sock, 1 << 20)
+                if not chunk:
+                    raise ConnectionError(f"closed before {pattern!r}")
+                self.received += chunk
+        return found
+
+    def close(self) -> None:
+        self.sock.close()
+
+
 async def test_slow_consumer_is_resynced_without_slowing_the_hub(
     live_pod: DatastoreApi, fixed_test_user, backend_server, sockets, monkeypatch
 ) -> None:
     monkeypatch.setattr(live_settings, "live_socket_queue_bytes", 64 * 1024)
     token = fixed_test_user["token"]
-    # A client that stops reading: a small receive window fills, TCP pushes
-    # back, and the server's sends to it block.
-    host, port = backend_server["host_base_url"].removeprefix("http://").split(":")
-    narrow = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    narrow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
-    narrow.connect((host, int(port)))
-    narrow.setblocking(False)
-    slow = await _open(
-        backend_server, live_pod.pod_id, token, max_queue=1, max_size=None, sock=narrow
-    )
-    fast = await _open(backend_server, live_pod.pod_id, token)
-    sockets.extend([slow, fast])
-    await slow.subscribe("t", "tickets")
-    await fast.subscribe("t", "tickets")
-
-    written: list[str] = []
-    # More than the kernel's socket buffers hold between the two ends, so the
-    # server's sends to the slow client do block.
-    padding = "x" * 8000
-    for batch in range(12):
-        await live_pod.bulk_create("tickets", [{"body": padding} for _ in range(400)])
-        # A batch this size arrives in several frames.
-        while len(written) < (batch + 1) * 400:
-            frame = await fast.until("changes", "t", timeout=20)
-            written.extend(c["record_id"] for c in frame["changes"])
-
-    # The fast client kept receiving every batch while the slow one stalled.
-    assert len(written) == 12 * 400
-    # Draining the slow client now: its queue was cut back to a resync.
-    # The narrow window did its job; widen it before reading. Client and server
-    # share this event loop, and on Linux a 4 KiB window moves about one
-    # window per loop turn: the megabytes the kernel buffered ahead of the
-    # resync took longer than any timeout here on a busy CI loop.
-    narrow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
-    drained: list[dict] = []
+    slow = await _StalledClient.open(backend_server, live_pod.pod_id, token)
     try:
-        async with asyncio.timeout(30):
-            while True:
-                drained.append(json.loads(await slow.ws.recv()))
-                if drained[-1]["type"] == "resync":
-                    break
-    except TimeoutError:
-        pass
-    assert any(f["type"] == "resync" and f["reason"] == "overflow" for f in drained)
+        await slow.send_json(
+            {"op": "subscribe", "id": "t", "topic": "records", "table": "tickets"}
+        )
+        await slow.read_until(b'"type":"subscribed"')
+        fast = await _open(backend_server, live_pod.pod_id, token)
+        sockets.append(fast)
+        await fast.subscribe("t", "tickets")
+
+        written: list[str] = []
+        # Far more than the kernel buffers between the two ends hold (a few
+        # MB), so the server's sends to the slow client block and its queue,
+        # capped at 64 KiB above, overflows.
+        padding = "x" * 8000
+        for batch in range(12):
+            await live_pod.bulk_create(
+                "tickets", [{"body": padding} for _ in range(400)]
+            )
+            # A batch this size arrives in several frames.
+            while len(written) < (batch + 1) * 400:
+                frame = await fast.until("changes", "t", timeout=20)
+                written.extend(c["record_id"] for c in frame["changes"])
+
+        # The fast client kept receiving every batch while the slow one stalled.
+        assert len(written) == 12 * 400
+        # Reading the slow client now: behind what the kernel buffered, its
+        # queue was cut back to a resync.
+        slow.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+        resync = await slow.read_match(rb'\{"type":"resync",[^}]*\}', timeout=30)
+        frame = json.loads(resync.group())
+        assert frame["id"] == "t" and frame["reason"] == "overflow", frame
+    finally:
+        slow.close()
 
 
 async def test_old_endpoint_still_streams_through_the_hub(

@@ -61,7 +61,11 @@ async def _authorize(pod_id: UUID, user_id: UUID, table: str | None) -> None:
             user_id=user_id, pod_id=pod_id
         )
         if table is not None:
-            await build_table_service(uow).get_table(pod_id, table, ctx)
+            entity = await build_table_service(uow).get_table(pod_id, table, ctx)
+            # Seeing the table is not reading its rows; the frames carry rows.
+            await ctx.require(
+                Permissions.DATASTORE_RECORD_READ, ResourceRef.table(pod_id, entity.id)
+            )
         else:
             await ctx.require(Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id))
 

@@ -628,3 +628,50 @@ async def test_two_hubs_on_one_pod_both_deliver(
         hub.detach(connection)
         sender.cancel()
         await other_process.close()
+
+
+async def test_table_read_without_record_read_streams_no_rows(
+    live_pod: DatastoreApi,
+    member_users,
+    authenticated_client,
+    async_client,
+    backend_server,
+    sockets,
+) -> None:
+    """Seeing a table's schema is not reading its rows.
+
+    The record API refuses a role holding ``datastore.table.read`` alone on a
+    RESTRICTED table; the live socket must not hand it those rows either.
+    """
+    await _restricted_table(live_pod, "vault")
+    granted = await authenticated_client.put(
+        f"/pods/{live_pod.pod_id}/roles/POD_VIEWER/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "datastore_table",
+                    "resource_name": "vault",
+                    "permission_ids": ["datastore.table.read"],
+                }
+            ]
+        },
+    )
+    assert granted.status_code == 200, granted.text
+    viewer = member_users["viewer"]
+    rows = await DatastoreApi(async_client, live_pod.pod_id, user=viewer).request(
+        "GET", f"/pods/{live_pod.pod_id}/datastore/tables/vault/records"
+    )
+    assert rows.status_code == 403, rows.text
+
+    live = await _open(backend_server, live_pod.pod_id, viewer["token"])
+    sockets.append(live)
+    await live.send(op="subscribe", id="v", topic="records", table="vault")
+    await live.subscribe("all")
+    await live_pod.create_record("vault", {"body": "restricted secret"})
+    visible = await live_pod.create_record("tickets", {"body": "open row"})
+    while visible["id"] not in live.record_ids("all"):
+        await live.until("changes", "all")
+    await live.quiet(1.5)
+    assert live.record_ids("v") == []
+    assert live.record_ids("all") == [visible["id"]]
+    assert "restricted secret" not in json.dumps(live.frames)

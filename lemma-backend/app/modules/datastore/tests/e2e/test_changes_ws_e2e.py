@@ -562,3 +562,53 @@ async def test_changes_ws_restricted_table_is_refused_and_never_streamed(
     await _assert_no_frame(unfiltered, timeout=2)
     await unfiltered.send_input({"type": "websocket.disconnect", "code": 1000})
     await unfiltered.wait(timeout=3)
+
+
+async def test_changes_ws_table_read_without_record_read_streams_no_rows(
+    notes_pod: DatastoreApi,
+    member_users,
+    authenticated_client,
+    async_client,
+    test_app,
+):
+    """Seeing a table's schema is not reading its rows.
+
+    The record API refuses a role holding ``datastore.table.read`` alone on a
+    RESTRICTED table; the shim must not hand it those rows either.
+    """
+    await _restricted_vault(notes_pod)
+    granted = await authenticated_client.put(
+        f"/pods/{notes_pod.pod_id}/roles/POD_VIEWER/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "datastore_table",
+                    "resource_name": "vault",
+                    "permission_ids": ["datastore.table.read"],
+                }
+            ]
+        },
+    )
+    assert granted.status_code == 200, granted.text
+    viewer = member_users["viewer"]
+    rows = await DatastoreApi(async_client, notes_pod.pod_id, user=viewer).request(
+        "GET", f"/pods/{notes_pod.pod_id}/datastore/tables/vault/records"
+    )
+    assert rows.status_code == 403, rows.text
+
+    communicator = _ws_communicator(
+        test_app, notes_pod.pod_id, viewer["token"], table="vault"
+    )
+    await communicator.send_input({"type": "websocket.connect"})
+    accepted = await communicator.receive_output(timeout=5)
+    assert accepted["type"] == "websocket.accept", accepted
+    first = await communicator.receive_output(timeout=5)
+    if first["type"] == "websocket.close":
+        assert first["code"] in (4403, 4404), first
+        await communicator.wait(timeout=3)
+        return
+    # Accepted with a ready: a write to the table must still deliver nothing.
+    await notes_pod.create_record("vault", {"body": "restricted secret"})
+    await _assert_no_frame(communicator, timeout=3)
+    await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
+    await communicator.wait(timeout=3)

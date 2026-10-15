@@ -19,8 +19,9 @@ as the old transport's tables exist:
    converts the streaq jobs still in Redis whose work existed nowhere else, and
    queues the state routes (owed replies, open notifications, dispatched
    schedule runs).
-4. With ``WORK_CUTOVER_AUTO_FINISH`` on (the default: a single-process install
-   has no rolling deploy), it then runs ``finish`` itself. Otherwise -- or
+4. With ``WORK_CUTOVER_AUTO_FINISH`` on (off by default; the single-process
+   app, which has no rolling deploy, turns it on), it then runs ``finish``
+   itself. Otherwise -- or
    while ``finish`` cannot take its lock -- it re-arms every ``rearm_seconds``
    while the old tables exist, still taking over whatever becomes owed, until
    an operator runs ``python -m app.cutover_finish``.

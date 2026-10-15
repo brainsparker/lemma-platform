@@ -36,10 +36,12 @@
       minutes after the rollout), and `finished` only after the next release's
       `python -m app.cutover_finish`; a dead `cutover.legacy_sweep` is retried, not ignored (see
       [reliability operations](../../lemma-backend/docs/operators/reliability.md#cutover-from-the-old-transport-design-13)).
-- [ ] Before deploying a release that carries migration
-      `0057_drop_old_transport` with `WORK_CUTOVER_AUTO_FINISH=false`, run
-      `python -m app.cutover_finish` once `app.cutover_check` shows nothing
-      owed, and confirm it exits 0; deploying it ends the rollback window to
-      images older than `0056`.
+- [ ] Every multi-process deployment leaves `WORK_CUTOVER_AUTO_FINISH` at
+      its default (`false`); only the single-process app and the self-hosted
+      Compose worker turn it on. With it off, once `app.cutover_check` shows
+      the sweep converted and nothing owed, run `python -m app.cutover_finish`
+      and confirm it exits 0. Migration `0057_drop_old_transport` never drops
+      the old tables, but deploying it (or finishing) ends the rollback window
+      to images older than `0056`.
 - [ ] Every resolved issue entry contains implementation and exact test evidence.
 - [ ] Rollback, replay, DLQ, partial cancellation, and support guidance are ready.

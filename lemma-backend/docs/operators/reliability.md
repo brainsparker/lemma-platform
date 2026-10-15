@@ -133,13 +133,15 @@ The next release carries migration `0057_drop_old_transport`, which drops the
 agent waits' and schedule runs' columns only the old release read. It never
 drops `domain_event_outbox` or `domain_event_inbox`, even empty: it runs before
 the rollout, while the previous release (a rolling deploy, or a direct upgrade
-from an older image) may still commit to the outbox. The tables, a separate datastore database's outbox and the legacy consumer
-groups and streams are then dropped by `finish`, run one of two ways:
+from an older image) may still commit to the outbox. The tables, a separate
+datastore database's outbox and the legacy consumer groups and streams are then dropped by `finish`, run one of two ways:
 
-- **`WORK_CUTOVER_AUTO_FINISH=true`** (the default; standalone and desktop
-  are one process with no rolling deploy): the sweep runs it itself once it
-  has converted.
-- **`false`** (cloud): the sweep keeps re-arming every five minutes and an
+- **`WORK_CUTOVER_AUTO_FINISH=true`** (set by the single-process app --
+  standalone, desktop, the Docker local stack -- and by the self-hosted
+  Compose worker, none of which rolls a deploy; an explicit value wins): the
+  sweep runs it itself once it has converted.
+- **`false`** (the default; any deployment that runs several processes or
+  rolls its deploys, e.g. cloud): the sweep keeps re-arming every five minutes and an
   operator runs it once `app.cutover_check` shows nothing owed:
 
   ```bash

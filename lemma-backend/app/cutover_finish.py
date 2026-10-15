@@ -1,7 +1,8 @@
 """``python -m app.cutover_finish``: drop the old event transport, once it owes nothing.
 
 The operator's half of the cutover where ``WORK_CUTOVER_AUTO_FINISH`` is off
-(a cloud deployment with rolling deploys; a single-process install lets the
+(the default: a multi-process deployment with rolling deploys; the
+single-process app and the self-hosted Compose worker turn it on and let the
 cutover sweep do this itself). It refuses -- exit 1, saying why -- unless what
 ``python -m app.cutover_check`` reports says the old transport is done with:
 

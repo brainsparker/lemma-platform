@@ -993,6 +993,20 @@ in; every other class gets `WORK_SHUTDOWN_GRACE_SECONDS` (default 20);
 grace above the longest class grace plus teardown (120 seconds for the
 defaults). See [reliability operations](../lemma-backend/docs/operators/reliability.md).
 
+### Retiring the old event transport
+
+```dotenv
+WORK_CUTOVER_AUTO_FINISH=true   # false where an operator runs app.cutover_finish
+```
+
+Once the previous release has stopped and the cutover sweep has converted what
+the old transport owed, the old tables (`domain_event_outbox`,
+`domain_event_inbox`) and Redis streams are dropped. With the default, the
+sweep drops them itself, which suits a single-process install (standalone,
+desktop). A cloud deployment with a rolling deploy sets it to `false` and runs
+`python -m app.cutover_finish` when `python -m app.cutover_check` shows nothing
+owed. See [reliability operations](../lemma-backend/docs/operators/reliability.md#cutover-from-the-old-transport-design-13).
+
 ## Observability
 
 Off by default. [Observability](observability.md) documents the full OTel

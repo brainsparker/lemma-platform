@@ -1,4 +1,4 @@
-"""The cutover from the old event transport, as two work kinds. Worker only.
+"""The cutover from the old event transport, as two work kinds, and its finish.
 
 ``cutover.legacy_sweep`` (admin, one item, queued once by migration
 ``0056_agent_surface_bundle_work``) runs from the first worker boot for as long
@@ -19,14 +19,20 @@ as the old transport's tables exist:
    converts the streaq jobs still in Redis whose work existed nowhere else, and
    queues the state routes (owed replies, open notifications, dispatched
    schedule runs).
-4. After that it re-arms itself every ``rearm_seconds`` while the old tables
-   exist, still taking over whatever becomes owed: an older image rolled back
-   to writes them again, and nothing it writes is lost.
+4. With ``WORK_CUTOVER_AUTO_FINISH`` on (the default: a single-process install
+   has no rolling deploy), it then runs ``finish`` itself. Otherwise -- or
+   while ``finish`` cannot take its lock -- it re-arms every ``rearm_seconds``
+   while the old tables exist, still taking over whatever becomes owed, until
+   an operator runs ``python -m app.cutover_finish``.
 
-It drops nothing and retires nothing. This release is expand-only, so rolling
-the image back still finds every table, stream and group the previous release
-reads. The next release's ``0057_drop_old_transport`` and
-``python -m app.cutover_finish`` drop them once the old transport owes nothing.
+``finish`` drops the old transport, bounded: it takes over from the watermark
+outside any lock until a pass takes fewer than ``SETTLE_BELOW``; then, in one
+transaction with a ``lock_timeout``, locks both tables, takes over the last
+rows and drops them, so nothing is written between the last take-over and the
+drop. A lock it cannot get in time (an old process mid-transaction) is retried
+with backoff a bounded number of times and reported, never waited on. Then it
+drops a separate datastore database's outbox and retires the legacy Redis
+groups and streams.
 
 ``cutover.legacy_event`` runs one owed delivery through the converter its
 route registered (``routes.legacy_converter``). Each converter writes what the
@@ -36,33 +42,43 @@ paths reached still takes effect once.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 from pydantic_core import to_jsonable_python
 from redis.exceptions import RedisError
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.cutover.legacy_streams import LEGACY_GROUPS, destroy_group
 from app.core.infrastructure.cutover.routes import (
-    ROUTES,
     STATE_ROUTES,
     STREAQ_ROUTES,
     retired_streaq_jobs,
     TAKEN_OVER_MARK,
     converter_for,
 )
+from app.core.infrastructure.cutover.other_outboxes import (
+    LegacyOutbox,
+    Sessions,
+    drop_other_outboxes,
+    lock_not_available,
+    register_legacy_outbox,
+    sweep_other_outboxes,
+)
 from app.core.infrastructure.cutover.streaq_jobs import forget_job, queued_jobs
 from app.core.infrastructure.cutover.takeover import (
+    BATCH,
     LEGACY_EVENT,
     LEGACY_NS,
     LEGACY_SWEEP,
     take_over,
-    take_over_rows,
 )
 from app.core.infrastructure.work import (
     SYSTEM_NAMESPACE,
@@ -78,12 +94,11 @@ from app.core.infrastructure.work import (
     WorkWriter,
     registry as default_registry,
 )
+from app.core.infrastructure.work.config import work_settings
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-#: Rows per route per pass.
-BATCH = 5_000
 #: How long both tables must go unwritten before the previous release is
 #: taken to be gone: longer than a rolling deploy's slowest step.
 QUIET_SECONDS = 600
@@ -91,6 +106,10 @@ POLL_SECONDS = 30
 #: Once converted, how often the sweep looks again while the tables remain.
 REARM_SECONDS = 300
 SINCE_SLACK = timedelta(minutes=5)
+#: ``finish`` takes the table lock only once a pass outside it takes fewer.
+SETTLE_BELOW = 1_000
+#: How long ``finish`` waits for the table lock before giving up the attempt.
+LOCK_TIMEOUT_MS = 5_000
 
 
 class LegacyEvent(BaseModel):
@@ -108,26 +127,6 @@ class SweepState(BaseModel):
     cursors: dict[str, list[str]] = Field(default_factory=dict)
     #: The one-time conversion (streaq jobs, state routes) has run.
     converted: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class LegacyOutbox:
-    """Another database's ``domain_event_outbox``, and the routes it feeds."""
-
-    name: str
-    #: The database's engine, or ``None`` when it is the main database (whose
-    #: outbox the main take-over already reads).
-    engine: Callable[[], AsyncEngine | None]
-    routes: tuple[str, ...]
-    like: str
-
-
-_other_outboxes: dict[str, LegacyOutbox] = {}  # memory: bounded one per database
-
-
-def register_legacy_outbox(outbox: LegacyOutbox) -> None:
-    """A module whose events had an outbox of their own (the datastore database)."""
-    _other_outboxes[outbox.name] = outbox
 
 
 # --- cutover.legacy_event ---------------------------------------------------
@@ -159,7 +158,9 @@ async def run_sweep(ctx: JobContext, state: SweepState) -> None:
                 # over (no route filled its batch); a few minutes of slack for
                 # rows committed after others that occurred later.
                 state.since = newest_row - SINCE_SLACK
-    other_taken, other_last, others_present = await _sweep_other_outboxes(ctx, state)
+    other_taken, other_last, others_present = await sweep_other_outboxes(
+        _job_sessions(ctx), state.cursors
+    )
     busy = sum(taken.values()) + other_taken
     if busy:
         logger.info(
@@ -177,10 +178,26 @@ async def run_sweep(ctx: JobContext, state: SweepState) -> None:
     if not state.converted:
         await convert(ctx)
         state.converted = True
-    if present or others_present:
-        # Expand-only: the tables stay until the next release drops them, and
-        # an image rolled back to may write them again meanwhile.
-        await _rearm(ctx, state, state.rearm_seconds)
+    if not (present or others_present):
+        return
+    if work_settings.work_cutover_auto_finish:
+        result = await finish(
+            _job_sessions(ctx), since=state.since, cursors=state.cursors, attempts=3
+        )
+        if result.done:
+            return
+    # The tables stay until an operator's ``app.cutover_finish`` (or a later
+    # pass that gets the lock) drops them.
+    await _rearm(ctx, state, state.rearm_seconds)
+
+
+def _job_sessions(ctx: JobContext) -> Sessions:
+    @asynccontextmanager
+    async def session() -> AsyncIterator[AsyncSession]:
+        async with ctx.checkpoint() as uow:
+            yield uow.session
+
+    return session
 
 
 async def _rearm(ctx: JobContext, state: SweepState, delay_seconds: int) -> None:
@@ -222,6 +239,128 @@ async def convert(ctx: JobContext) -> int:
     return converted
 
 
+# --- finish: drop the old transport -------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class FinishResult:
+    #: ``domain_event_outbox`` and ``domain_event_inbox`` are gone.
+    dropped: bool
+    #: Attempts that gave up on the table lock.
+    lock_timeouts: int
+    #: Deliveries taken over on the way.
+    taken: int
+    #: Other databases' outboxes still there (their lock was not granted).
+    outboxes_left: tuple[str, ...] = ()
+
+    @property
+    def done(self) -> bool:
+        return self.dropped and not self.outboxes_left
+
+
+async def finish(
+    sessions: Sessions,
+    *,
+    since: datetime | None,
+    cursors: dict[str, list[str]] | None = None,
+    lock_timeout_ms: int = LOCK_TIMEOUT_MS,
+    attempts: int = 5,
+    backoff_seconds: float = 2.0,
+) -> FinishResult:
+    """Take over the last of what is owed and drop the old transport, bounded.
+
+    Never waits on a lock longer than ``lock_timeout_ms``: an attempt that
+    cannot get it rolls back, backs off and tries again, ``attempts`` times in
+    all, and the result says so. Safe to run again at any point.
+    """
+    taken, since = await _settle(sessions, since)
+    lock_timeouts, dropped = 0, False
+    for attempt in range(1, attempts + 1):
+        try:
+            taken += await _drop_locked(sessions, since, lock_timeout_ms)
+        except DBAPIError as exc:
+            if not lock_not_available(exc):
+                raise
+            lock_timeouts += 1
+            logger.warning(
+                "cutover.finish.lock_timeout", attempt=attempt, attempts=attempts
+            )
+            if attempt < attempts:
+                await asyncio.sleep(backoff_seconds * 2 ** (attempt - 1))
+            continue
+        dropped = True
+        break
+    left: tuple[str, ...] = ()
+    if dropped:
+        other_taken, left = await drop_other_outboxes(
+            sessions, dict(cursors or {}), lock_timeout_ms
+        )
+        taken += other_taken
+        if not left:
+            await retire_legacy_streams()
+    result = FinishResult(
+        dropped=dropped, lock_timeouts=lock_timeouts, taken=taken, outboxes_left=left
+    )
+    logger.info(
+        "cutover.finish.finished",
+        dropped_tables=dropped,
+        lock_timeouts=lock_timeouts,
+        taken=taken,
+        outboxes_left=",".join(left),
+    )
+    return result
+
+
+async def _settle(
+    sessions: Sessions, since: datetime | None
+) -> tuple[int, datetime | None]:
+    """Take over outside any lock until a pass takes fewer than ``SETTLE_BELOW``,
+    advancing the watermark as the sweep does; (taken, watermark)."""
+    total = 0
+    while True:
+        async with sessions() as session:
+            if not await legacy_tables_present(session):
+                return total, since
+            newest_row = await session.scalar(
+                text("SELECT max(occurred_at) FROM domain_event_outbox")
+            )
+            taken = await take_over(session, limit=BATCH, since=since)
+            await session.commit()
+        total += sum(taken.values())
+        if newest_row is not None and not _full(taken):
+            since = newest_row - SINCE_SLACK
+        if sum(taken.values()) < SETTLE_BELOW:
+            return total, since
+
+
+async def _drop_locked(
+    sessions: Sessions, since: datetime | None, lock_timeout_ms: int
+) -> int:
+    """One transaction: lock both tables, take over the last rows, drop them."""
+    taken = 0
+    async with sessions() as session:
+        if not await legacy_tables_present(session):
+            return 0
+        await session.execute(
+            text(f"SET LOCAL lock_timeout = '{int(lock_timeout_ms)}ms'")
+        )
+        await session.execute(
+            text(
+                "LOCK TABLE domain_event_outbox, domain_event_inbox "
+                "IN ACCESS EXCLUSIVE MODE"
+            )
+        )
+        while True:
+            batch = await take_over(session, limit=BATCH, since=since)
+            taken += sum(batch.values())
+            if not _full(batch):
+                break
+        await session.execute(text("DROP TABLE domain_event_inbox"))
+        await session.execute(text("DROP TABLE domain_event_outbox"))
+        await session.commit()
+    return taken
+
+
 def _counts(by_name: dict[str, int]) -> str:
     """``name=count`` pairs as one string: a dict field below error is dropped."""
     return ",".join(f"{name}={n}" for name, n in sorted(by_name.items()) if n)
@@ -255,68 +394,6 @@ async def last_activity(session: AsyncSession) -> datetime | None:
             "AS s) per_status))"
         )
     )
-
-
-async def _sweep_other_outboxes(
-    ctx: JobContext, state: SweepState
-) -> tuple[int, datetime | None, bool]:
-    """Take over another database's outbox from its cursor on: (taken, its
-    newest row, whether any such outbox still exists)."""
-    taken, newest, present = 0, None, False
-    routes = {route.consumer: route for route in ROUTES}
-    for outbox in _other_outboxes.values():
-        engine = outbox.engine()
-        if engine is None:
-            continue
-        async with engine.connect() as conn:
-            if not await conn.scalar(
-                text("SELECT to_regclass('domain_event_outbox') IS NOT NULL")
-            ):
-                continue
-            last = await conn.scalar(
-                text("SELECT max(occurred_at) FROM domain_event_outbox")
-            )
-        present = True
-        newest = last if newest is None or (last and last > newest) else newest
-        while taken < BATCH:
-            rows = await _read_after(engine, outbox, state.cursors.get(outbox.name))
-            if not rows:
-                break
-            async with ctx.checkpoint() as uow:
-                for name in outbox.routes:
-                    taken += await take_over_rows(uow.session, routes[name], rows)
-            last_row = rows[-1]
-            state.cursors[outbox.name] = [
-                last_row["occurred_at"].isoformat(),
-                str(last_row["id"]),
-            ]
-    return taken, newest, present
-
-
-async def _read_after(
-    engine: AsyncEngine, outbox: LegacyOutbox, cursor: list[str] | None
-) -> list[dict[str, Any]]:
-    after_at, after_id = (
-        (datetime.fromisoformat(cursor[0]), UUID(cursor[1]))
-        if cursor
-        else (datetime(1970, 1, 1, tzinfo=UTC), UUID(int=0))
-    )
-    async with engine.connect() as conn:
-        result = await conn.execute(
-            text(
-                "SELECT id, event_type, payload, occurred_at FROM domain_event_outbox "
-                "WHERE dead_lettered_at IS NULL AND event_type LIKE :like "
-                "AND (occurred_at, id) > (:after_at, :after_id) "
-                "ORDER BY occurred_at, id LIMIT :limit"
-            ),
-            {
-                "like": outbox.like,
-                "after_at": after_at,
-                "after_id": after_id,
-                "limit": BATCH,
-            },
-        )
-        return [dict(row._mapping) for row in result]
 
 
 async def convert_streaq_jobs(ctx: JobContext) -> int:
@@ -356,6 +433,20 @@ async def convert_streaq_jobs(ctx: JobContext) -> int:
     return converted
 
 
+async def retire_legacy_streams() -> None:
+    """Destroy the old consumer groups and their streams. Best effort: nothing
+    reads them, and a Redis that cannot be reached keeps them harmlessly."""
+    from app.core.infrastructure.redis.client import get_redis
+
+    redis = get_redis(decode_responses=False)
+    try:
+        for stream, group in LEGACY_GROUPS:
+            await destroy_group(redis, stream, group)
+        await redis.delete(*sorted({stream for stream, _ in LEGACY_GROUPS}))
+    except RedisError, OSError:
+        logger.warning("cutover.finish.streams_not_retired", exc_info=True)
+
+
 def register_cutover_work(registry: WorkRegistry) -> None:
     registry.handler(
         kind=LEGACY_EVENT,
@@ -392,15 +483,18 @@ def register_cutover_work(registry: WorkRegistry) -> None:
 register_cutover_work(default_registry)
 
 __all__ = [
+    "FinishResult",
     "LegacyEvent",
     "LegacyOutbox",
     "SweepState",
     "TAKEN_OVER_MARK",
     "convert",
+    "finish",
     "last_activity",
     "legacy_tables_present",
     "register_cutover_work",
     "register_legacy_outbox",
+    "retire_legacy_streams",
     "run_legacy_event",
     "run_sweep",
 ]

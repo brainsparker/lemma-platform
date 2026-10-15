@@ -3,10 +3,11 @@
 Migration ``0056_agent_surface_bundle_work`` queues the cutover sweep
 (``app/core/infrastructure/cutover``), which takes over everything the old
 event transport still owes and, once the previous release has stopped,
-converts what only Redis held. It drops nothing: the old tables, streams and
-groups stay until the next release's ``python -m app.cutover_finish`` (and
-migration ``0057_drop_old_transport``) drop them, so this release can still be
-rolled back. Nothing waits on this check, but it says where the cutover is:
+converts what only Redis held. The old tables, streams and groups are dropped
+by ``finish`` -- the sweep's own with ``WORK_CUTOVER_AUTO_FINISH``, otherwise
+``python -m app.cutover_finish``, which refuses while this check shows
+anything owed -- and, when both tables are empty, by migration
+``0057_drop_old_transport``. It says where the cutover is:
 
 * whether ``domain_event_outbox`` / ``domain_event_inbox`` still exist, and how
   many deliveries each route is still owed in them;
@@ -19,8 +20,8 @@ rolled back. Nothing waits on this check, but it says where the cutover is:
   schemas the change-log backfill has not reached yet.
 
 ``finished`` is true once the tables are gone, the sweep has completed and no
-converted delivery is left -- after ``app.cutover_finish``, not before. Exits 0 unless the check itself fails;
-``--json`` prints the report as JSON.
+converted delivery is left. Exits 0 unless the check itself fails; ``--json``
+prints the report as JSON.
 """
 
 from __future__ import annotations

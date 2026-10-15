@@ -36,6 +36,8 @@ LEGACY_SWEEP = "cutover.legacy_sweep"
 LEGACY_NS = "system"
 LEGACY_CLASS = "events"
 LEGACY_CLASS_CAP = 16
+#: Rows per route per pass.
+BATCH = 5_000
 
 #: A claim younger than this belongs to a live old consumer (the inbox's own
 #: redelivery window).
@@ -121,7 +123,7 @@ async def take_over(
     session: AsyncSession,
     *,
     routes: Sequence[LegacyRoute] = ROUTES,
-    limit: int = 5_000,
+    limit: int = BATCH,
     since: datetime | None = None,
 ) -> dict[str, int]:
     """One batch per route from the main outbox; items written per route.
@@ -185,6 +187,7 @@ def _encode(rows: Sequence[dict[str, Any]]) -> str:
 
 
 __all__ = [
+    "BATCH",
     "ENSURE_QUEUE",
     "LEGACY_CLASS",
     "LEGACY_EVENT",

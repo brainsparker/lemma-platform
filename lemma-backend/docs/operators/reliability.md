@@ -129,9 +129,32 @@ nothing, so its image can still be rolled back:
 5. **Then it keeps looking every five minutes** while the tables exist, so a
    rollback to the previous image that writes them again loses nothing.
 
-The tables, the datastore database's outbox and the legacy consumer groups and
-streams are dropped by the next release (`python -m app.cutover_finish` and
-migration `0057_drop_old_transport`), not by this one.
+The next release, which carries migration `0057_drop_old_transport`, drops
+them. The migration drops the agent waits' and schedule runs' columns only the
+old release read, and drops `domain_event_outbox` and `domain_event_inbox` only
+if both are empty (a fresh install); otherwise it leaves them and completes.
+The tables, a separate datastore database's outbox and the legacy consumer
+groups and streams are then dropped by `finish`, run one of two ways:
+
+- **`WORK_CUTOVER_AUTO_FINISH=true`** (the default; standalone and desktop
+  are one process with no rolling deploy): the sweep runs it itself once it
+  has converted.
+- **`false`** (cloud): the sweep keeps re-arming every five minutes and an
+  operator runs it once `app.cutover_check` shows nothing owed:
+
+  ```bash
+  uv run python -m app.cutover_finish
+  ```
+
+  It refuses (exit 1, saying why) while the sweep has not converted, a
+  delivery is owed, or a streaq job is left in Redis.
+
+`finish` takes over from the sweep's watermark outside any lock until a pass
+takes fewer than 1,000 deliveries, then in one transaction with a 5 s
+`lock_timeout` locks both tables, takes over the last rows and drops them. A
+lock it cannot get in time (something still mid-transaction on the old tables)
+is retried with backoff a bounded number of times, never waited on; the
+command then exits 2 and changes nothing, and running it again is safe.
 
 To see where it is:
 
@@ -139,10 +162,10 @@ To see where it is:
 uv run python -m app.cutover_check          # human-readable; --json for JSON
 ```
 
-It reports the tables, what each route is still owed, the sweep's state, the
-converted deliveries left per route, streaq leftovers, the legacy groups'
-backlog and the pod schemas the change-log backfill has not reached. It gates
-nothing. A dead sweep (`sweep: dead`) needs its error fixed and
+It reports the tables, what each route is still owed, the sweep's state and
+whether it has converted, the converted deliveries left per route, streaq
+leftovers, the legacy groups' backlog and the pod schemas the change-log
+backfill has not reached. It gates nothing. A dead sweep (`sweep: dead`) needs its error fixed and
 `python -m app.core.infrastructure.work.admin retry --kind cutover.legacy_sweep`;
 nothing is lost meanwhile, the tables stay.
 

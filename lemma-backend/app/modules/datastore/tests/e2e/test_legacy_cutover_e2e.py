@@ -13,10 +13,10 @@ only there. Then the release's cutover runs, as the worker runs it:
   item (or fact) that replaced its consumer, once;
 * delivering the same events again changes nothing;
 * once the previous release is gone (quiet), the sweep converts the streaq
-  jobs only Redis held and runs the state routes -- once -- and keeps the old
-  tables (the main ones and the datastore database's outbox): it re-arms on a
-  slow cadence, still taking over what becomes owed, until the next release
-  drops them.
+  jobs only Redis held and runs the state routes -- once. With
+  ``WORK_CUTOVER_AUTO_FINISH`` off it keeps the old tables (the main ones and
+  the datastore database's outbox) and re-arms on a slow cadence, still taking
+  over what becomes owed; switched on, its next pass drops them all.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ from app.core.infrastructure.work import (
     WorkRegistry,
     WorkWriter,
 )
+from app.core.infrastructure.work.config import work_settings
 from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.datastore.config import datastore_settings
@@ -169,6 +170,8 @@ async def test_every_owed_delivery_takes_effect_once(
 ) -> None:
     from app.core.analytics import domain_events
 
+    # An operator finishes (cloud); switched on at the end.
+    monkeypatch.setattr(work_settings, "work_cutover_auto_finish", False)
     projected: Counter[str] = Counter()
 
     #: The owed events' ids: the in-process sink also projects whatever this
@@ -610,7 +613,7 @@ async def test_every_owed_delivery_takes_effect_once(
         assert await scalar(
             "SELECT to_regclass('domain_event_outbox') IS NOT NULL "
             "AND to_regclass('domain_event_inbox') IS NOT NULL"
-        ), "expand-only: the old tables stay for a rollback"
+        ), "auto-finish off: the old tables stay for the operator"
         if separate:
             async with get_datastore_engine().connect() as conn:
                 assert await conn.scalar(
@@ -666,6 +669,29 @@ async def test_every_owed_delivery_takes_effect_once(
             await _dedup("pod.join_request.email", f"pod-join-request:{late_join}") == 1
         )
         assert await _sweep_rearmed()
+
+        # Auto-finish on: the next pass drops the main tables, the datastore
+        # database's outbox, and finishes.
+        monkeypatch.setattr(work_settings, "work_cutover_auto_finish", True)
+        await make_due(async_session_maker, kind=LEGACY_SWEEP)
+        await _run_cutover()
+        assert (
+            await scalar(
+                "SELECT count(*) FROM work_items WHERE kind IN (:a, :b)",
+                a=LEGACY_SWEEP,
+                b=LEGACY_EVENT,
+            )
+            == 0
+        ), "the sweep finished and every converted delivery ran"
+        assert await scalar(
+            "SELECT to_regclass('domain_event_outbox') IS NULL "
+            "AND to_regclass('domain_event_inbox') IS NULL"
+        )
+        if separate:
+            async with get_datastore_engine().connect() as conn:
+                assert await conn.scalar(
+                    text("SELECT to_regclass('domain_event_outbox') IS NULL")
+                )
     finally:
         await redis.delete(*jobs, late_job)
         cutover_routes._retired_streaq.discard("e2e_retired_cron")  # noqa: SLF001

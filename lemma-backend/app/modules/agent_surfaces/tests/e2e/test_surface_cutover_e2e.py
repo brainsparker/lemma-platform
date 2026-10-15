@@ -9,8 +9,8 @@ conversation's metadata (the old owed-reply job's record).
 The cutover sweep must turn exactly the unfinished webhooks into inbound rows
 (each once), the settled notification into the agent's item, and -- once the
 previous release is gone -- the owed reply into a PENDING delivery (clearing
-the record). It keeps the old tables (this release is expand-only) and re-arms
-itself. Running it again converts nothing.
+the record). With ``WORK_CUTOVER_AUTO_FINISH`` off it keeps the old tables for
+the operator's ``app.cutover_finish`` and re-arms itself. Running it again converts nothing.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from app.core.infrastructure.cutover.work import SweepState, register_cutover_wo
 from app.core.infrastructure.db.session import async_session_maker, get_engine
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import SYSTEM_NAMESPACE, WorkRegistry, WorkWriter
+from app.core.infrastructure.work.config import work_settings
 from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.agent.contracts import conversations_for_surfaces
 from app.modules.agent_surfaces.config import surface_settings
@@ -108,6 +109,8 @@ async def test_the_cutover_converts_what_was_owed_once(
     fake_telegram,
     monkeypatch,
 ):
+    # An operator finishes (cloud): the sweep converts and keeps the tables.
+    monkeypatch.setattr(work_settings, "work_cutover_auto_finish", False)
     monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     surface_id, secret, _ = await a_telegram_bot(
@@ -200,7 +203,7 @@ async def test_the_cutover_converts_what_was_owed_once(
     assert await scalar(
         "SELECT to_regclass('domain_event_outbox') IS NOT NULL "
         "AND to_regclass('domain_event_inbox') IS NOT NULL"
-    ), "expand-only: the tables stay for a rollback until the next release"
+    ), "auto-finish off: the tables stay for the operator"
     assert await scalar(
         "SELECT bool_and((payload->>'converted')::boolean "
         "AND run_at > now() + interval '200 seconds') "

@@ -207,6 +207,17 @@ class WorkSettings(BaseSettings):
         ge=1,
         description="Days a dead item is kept for inspection and retry before deletion.",
     )
+    work_cutover_auto_finish: bool = Field(
+        default=True,
+        description=(
+            "Let the cutover sweep drop the old event transport (its outbox and "
+            "inbox tables, a separate datastore database's outbox, the legacy "
+            "Redis streams) itself, once the previous release has stopped and "
+            "what it owed is converted. Right for a single-process install "
+            "(standalone, desktop). A deployment with rolling deploys sets it "
+            "false and runs `python -m app.cutover_finish` instead."
+        ),
+    )
 
 
 work_settings = WorkSettings()

@@ -385,6 +385,7 @@ class DatastoreFileRepository(
         *,
         pod_id: UUID,
         ctx: Context,
+        walk_ancestors: bool,
         limit: int | None = None,
     ) -> set[UUID]:
         """The readable file ids, read from the grants instead of from the pod.
@@ -403,12 +404,21 @@ class DatastoreFileRepository(
 
         A pod-wide grant -- one keyed on the pod id -- reaches every row, so
         there is nothing to narrow to and the ordinary statement runs instead.
+
+        ``walk_ancestors`` is the same human/workload split ``visible_file_ids``
+        takes, and it decides which statement runs rather than being applied on
+        top of the grant read. The shortcut is sound only where the grant
+        cascade *is* the whole rule -- a workload holds no ambient access -- so
+        a caller who needs the ancestor walk goes through the ordinary
+        statement, which applies it. That is not a slower path to the same
+        answer: dropping the walk here is what let a file under an unreadable
+        folder into a person's search scope.
         """
-        if not reads_only_through_grants(ctx):
+        if walk_ancestors or not reads_only_through_grants(ctx):
             return await self.visible_file_ids(
                 pod_id=pod_id,
                 ctx=ctx,
-                walk_ancestors=False,
+                walk_ancestors=walk_ancestors,
                 limit=limit,
             )
         resource_ids = set(
@@ -422,7 +432,7 @@ class DatastoreFileRepository(
             return await self.visible_file_ids(
                 pod_id=pod_id,
                 ctx=ctx,
-                walk_ancestors=False,
+                walk_ancestors=walk_ancestors,
                 limit=limit,
             )
         paths = set(

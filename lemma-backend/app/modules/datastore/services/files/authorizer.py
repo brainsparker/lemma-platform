@@ -269,6 +269,7 @@ class FileAuthorizer:
         readable = await self.file_repository.grant_reachable_file_ids(
             pod_id=pod_id,
             ctx=ctx,
+            walk_ancestors=not _is_workload(ctx),
             limit=ceiling + 1,
         )
         if len(readable) > ceiling:
@@ -298,6 +299,7 @@ class FileAuthorizer:
             await self.file_repository.grant_reachable_file_ids(
                 pod_id=pod_id,
                 ctx=ctx,
+                walk_ancestors=not _is_workload(ctx),
             )
         )
 

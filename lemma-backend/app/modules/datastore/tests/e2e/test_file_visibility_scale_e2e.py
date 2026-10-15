@@ -20,7 +20,7 @@ import time
 from uuid import UUID, uuid7
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.dialects import postgresql
 
 from app.core.authorization.context import ActorType, Context, PrincipalRef
@@ -28,11 +28,6 @@ from app.core.authorization.service import AuthorizationDataService
 from app.modules.datastore.infrastructure.repositories.file_repository import (
     DatastoreFileRepository,
     _file_actions_expr,
-)
-from app.modules.datastore.infrastructure.repositories.file_visibility_sql import (
-    grant_reachable_statement,
-    granted_paths,
-    granted_resource_ids,
 )
 from app.modules.datastore.infrastructure.repositories.file_visibility_sql import (
     has_unreadable_ancestor,
@@ -168,13 +163,74 @@ def _visibility_statement(
 
 
 def _scan_nodes(plan: dict, out: list[str] | None = None) -> list[str]:
+    """Every scan node, named the way EXPLAIN names it.
+
+    An ``Index Scan`` node carries a ``Relation Name`` *and* an ``Index Name``;
+    a ``Bitmap Index Scan`` carries only the index, because there is no heap
+    access to attribute to a relation. Reading ``Relation Name`` alone labelled
+    every index probe "on ?", which made an assertion that looks for the index
+    name unsatisfiable whatever the plan did.
+    """
     out = [] if out is None else out
     node = plan.get("Node Type", "")
     if "Scan" in node:
-        out.append(f"{node} on {plan.get('Relation Name', '?')}")
+        names = [plan.get("Relation Name"), plan.get("Index Name")]
+        out.append(f"{node} on " + " ".join(name for name in names if name))
     for child in plan.get("Plans", []):
         _scan_nodes(child, out)
     return out
+
+
+def _rows_examined(plan: dict) -> int:
+    """Rows the executor looked at in the file table, not rows it returned.
+
+    ``_rows_read`` counts what came back, and on this pod that is small either
+    way: the statement filters as it scans, so the scan node reports the handful
+    of matches and puts the rest under ``Rows Removed by Filter``. Adding that
+    back is what distinguishes "answered from the grants" from "walked the pod
+    and discarded almost all of it" -- the two return identical ids.
+    """
+    total = 0
+    if plan.get("Relation Name") == "datastore_files" and "Scan" in plan.get(
+        "Node Type", ""
+    ):
+        total += int(plan.get("Actual Rows", 0)) * int(plan.get("Actual Loops", 1))
+        total += int(plan.get("Rows Removed by Filter", 0))
+    for child in plan.get("Plans", []):
+        total += _rows_examined(child)
+    return total
+
+
+async def _plans_for_file_reads(db_session, run):
+    """Run ``run`` and EXPLAIN every statement it issued over the file table.
+
+    The assertion has to be about the statement the search *reached for*, not
+    about a copy of it built here: which statement the search runs is the whole
+    of the change, and a copy would be index-driven on either side of it. So
+    the read is caught at the driver and explained afterwards.
+    """
+    contexts: list = []
+    bind = db_session.get_bind()
+    # An async engine fires these on its sync engine; a plain engine or
+    # connection is listened to as it is.
+    engine = getattr(bind, "sync_engine", None) or getattr(bind, "engine", bind)
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        contexts.append(context)
+
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        result = await run()
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+
+    plans = []
+    for context in contexts:
+        statement = getattr(context.compiled, "statement", None)
+        if statement is None or "datastore_files" not in str(statement):
+            continue
+        plans.append(await _explain_statement(db_session, statement))
+    return result, plans
 
 
 async def _explain(db_session, ctx, pod_id: UUID, **kwargs) -> dict:
@@ -544,9 +600,19 @@ _GRANTED_FILES = 25
 #: The one folder the workload was granted, named so the plan can be read.
 GRANTED_FOLDER = UUID("00000000-0000-7000-8000-000000000001")
 
+#: A POD file the owner may read, sitting under a RESTRICTED folder owned by
+#: someone else. Nothing but the ancestor walk hides it, which is what makes it
+#: the file to look for in a person's readable set.
+_LEAK_FILE = UUID("00000000-0000-7000-8000-0000000000aa")
+
 
 async def _seed_mostly_unreadable_tree(
-    session, pod_id: UUID, owner_user_id: UUID, agent_id: UUID
+    session,
+    pod_id: UUID,
+    owner_user_id: UUID,
+    agent_id: UUID,
+    *,
+    stranger_user_id: UUID | None = None,
 ) -> dict:
     """A pod that is nearly all files one workload may not read.
 
@@ -554,6 +620,10 @@ async def _seed_mostly_unreadable_tree(
     caller's answer is a short list, so on a pod shaped like this the statement
     costs the pod rather than the answer -- which is the whole bug. The granted
     folder is deliberately small and deep enough to need the cascade.
+
+    ``stranger_user_id`` adds the one shape a person's answer depends on and a
+    workload's does not: a folder owned by somebody else, so that the caller
+    cannot read it by ownership, with a file the caller *does* own inside it.
     """
     await session.execute(
         text("""
@@ -589,6 +659,29 @@ async def _seed_mostly_unreadable_tree(
         """),
         {"pod": pod_id, "owner": owner_user_id, "n": _GRANTED_FILES},
     )
+    if stranger_user_id is not None:
+        await session.execute(
+            text("""
+            INSERT INTO datastore_files
+              (id, pod_id, owner_user_id, kind, visibility, path, name,
+               size_bytes, search_enabled, status, processing_attempts,
+               created_at, updated_at)
+            VALUES (gen_random_uuid(), :pod, :stranger, 'FOLDER', 'RESTRICTED',
+                    '/secret', 'secret', 0, false, 'COMPLETED', 0, now(), now())
+            """),
+            {"pod": pod_id, "stranger": stranger_user_id},
+        )
+        await session.execute(
+            text("""
+            INSERT INTO datastore_files
+              (id, pod_id, owner_user_id, kind, visibility, path, name,
+               size_bytes, search_enabled, status, processing_attempts,
+               created_at, updated_at)
+            VALUES (:id, :pod, :owner, 'FILE', 'POD', '/secret/leak.md',
+                    'leak.md', 10, true, 'COMPLETED', 0, now(), now())
+            """),
+            {"id": _LEAK_FILE, "pod": pod_id, "owner": owner_user_id},
+        )
     await session.execute(
         text("""
         INSERT INTO resource_permission_grants
@@ -627,8 +720,13 @@ async def test_a_workload_reads_its_granted_files_without_walking_the_pod(
     The statement this replaces read every row in the pod to work out that the
     caller may read a handful of them, and on a pod large enough that is past
     the statement timeout -- the search failed with a 500 rather than returning
-    the files the caller was granted. Asserted on the plan, for the same reason
-    as the rest of this file: row counts are a property of the query.
+    the files the caller was granted.
+
+    Both statements return the same ids, so the answer cannot tell them apart
+    and neither can ``_rows_read``: the scan filters as it goes, so it reports
+    the handful of matches and puts the rest under ``Rows Removed by Filter``.
+    What separates them is how much of the pod the read had to look at, which
+    is asserted on the plan of the statement the search itself issued.
     """
     pod_id = UUID(pod_api.pod_id)
     owner_id = UUID(fixed_test_user["id"])
@@ -641,7 +739,9 @@ async def test_a_workload_reads_its_granted_files_without_walking_the_pod(
         DatastoreAuthorization(object()), repository, PathResolver()
     )
 
-    scope = await authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
+    scope, plans = await _plans_for_file_reads(
+        db_session, lambda: authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
+    )
     assert scope.enumerated, (
         "a caller who may read a handful of files is above the pushdown "
         "ceiling, so the chunk query went unnarrowed and the search can only "
@@ -662,36 +762,19 @@ async def test_a_workload_reads_its_granted_files_without_walking_the_pod(
         "from the pod"
     )
 
-    resource_ids = set(
-        (await db_session.execute(granted_resource_ids(ctx, pod_id))).scalars().all()
-    )
-    paths = set(
-        (await db_session.execute(granted_paths(pod_id, resource_ids))).scalars().all()
-    )
-    narrowed = grant_reachable_statement(
-        ctx=ctx,
-        pod_id=pod_id,
-        actions=_file_actions_expr(ctx),
-        resource_ids=resource_ids,
-        paths=paths,
-    )
-    plan = await _explain_statement(db_session, narrowed)
-
-    scans = _scan_nodes(plan["Plan"])
-    assert not [node for node in scans if node == "Seq Scan on datastore_files"], (
-        "the readable-set read walks the file table: the grants are supposed "
-        f"to drive it through the indexes.\n  {scans}"
-    )
-    assert any("datastore_files_pkey" in node for node in scans) or any(
-        "ix_datastore_file_pod_path_prefix" in node for node in scans
-    ), f"nothing in the plan probes the file table by grant:\n  {scans}"
-
-    rows = _rows_read(plan["Plan"])
-    assert rows < _UNREADABLE / 10, (
-        f"the narrowed read pulled {rows} rows out of a pod of "
-        f"{_UNREADABLE + _GRANTED_FILES + 1} files; it is not bounded by the "
-        "grants"
-    )
+    assert plans, "the search answered without reading the file table at all"
+    for plan in plans:
+        scans = _scan_nodes(plan["Plan"])
+        assert "Seq Scan on datastore_files" not in scans, (
+            "the readable-set read walks the file table: the grants are "
+            f"supposed to drive it through the indexes.\n  {scans}"
+        )
+        examined = _rows_examined(plan["Plan"])
+        assert examined < _UNREADABLE / 10, (
+            f"the readable-set read examined {examined} rows of a pod of "
+            f"{_UNREADABLE + _GRANTED_FILES + 1} files to find "
+            f"{_GRANTED_FILES + 1}; it is not bounded by the grants.\n  {scans}"
+        )
 
 
 async def test_a_workloads_granted_subtree_is_the_only_thing_it_sees(
@@ -705,7 +788,12 @@ async def test_a_workloads_granted_subtree_is_the_only_thing_it_sees(
 
     ctx = _workload_ctx(pod_id, agent_id)
     repository = DatastoreFileRepository(SqlAlchemyUnitOfWork(db_session))
-    scope = await repository.grant_reachable_file_ids(pod_id=pod_id, ctx=ctx)
+    authorizer = FileAuthorizer(
+        DatastoreAuthorization(object()), repository, PathResolver()
+    )
+
+    scope = await authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
+    assert scope.enumerated, "the scope this test reads is the id list itself"
 
     ungranted = await db_session.execute(
         text("""
@@ -714,7 +802,7 @@ async def test_a_workloads_granted_subtree_is_the_only_thing_it_sees(
         """),
         {"pod": pod_id},
     )
-    leaked = [row[0] for row in ungranted.all() if row[0] in scope]
+    leaked = [row[0] for row in ungranted.all() if row[0] in scope.file_ids]
     assert not leaked, f"{len(leaked)} ungranted RESTRICTED files came back as readable"
     granted = await db_session.execute(
         text("""
@@ -724,7 +812,7 @@ async def test_a_workloads_granted_subtree_is_the_only_thing_it_sees(
         {"pod": pod_id},
     )
     expected = {row[0] for row in granted.all()}
-    assert expected and expected <= scope, (
+    assert expected and expected <= scope.file_ids, (
         "the granted folder's descendants were not readable through the grant"
     )
 
@@ -734,14 +822,24 @@ async def test_a_person_still_sees_only_what_they_may_read(
 ) -> None:
     """A human's search is unchanged: the narrowing does not apply to them.
 
-    A person reads POD files by role, which no grant points at, so narrowing
-    their readable set to what their grants reach would hide files they may
-    read. This pins the answer rather than the plan.
+    A person reads POD files by role, which no grant points at, so reading
+    their readable set from the grants would hide files they may read. It cuts
+    the other way too, and that is what this pins: a POD file under a folder
+    they cannot read is readable on its own, so a read with no ancestor walk
+    hands it back and the search returns it. The answer is asserted against the
+    ordinary statement, on both reads a search can make -- the bounded probe
+    and the unbounded fallback -- because the walk has to survive both.
     """
     pod_id = UUID(pod_api.pod_id)
     user_id = UUID(fixed_test_user["id"])
     stranger = await signup_user(async_client, "visibility-grant-scope")
-    await _seed_mostly_unreadable_tree(db_session, pod_id, user_id, uuid7())
+    await _seed_mostly_unreadable_tree(
+        db_session,
+        pod_id,
+        user_id,
+        uuid7(),
+        stranger_user_id=UUID(stranger["id"]),
+    )
 
     service = AuthorizationDataService(db_session)
     ctx = await service.build_user_context(user_id=user_id, pod_id=pod_id)
@@ -750,20 +848,32 @@ async def test_a_person_still_sees_only_what_they_may_read(
         DatastoreAuthorization(object()), repository, PathResolver()
     )
 
-    scope = await authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
+    # The oracle: the ordinary statement, which applies the ancestor walk.
     readable = await repository.visible_file_ids(
         pod_id=pod_id, ctx=ctx, walk_ancestors=True
     )
-    assert not scope.enumerated, (
-        "this pod is bigger than the ceiling, so the scope is post-filtered"
+    assert _LEAK_FILE not in readable, (
+        "the fixture's POD file under an unreadable folder is readable on its "
+        "own, so only the ancestor walk hides it -- and the walk is not "
+        "hiding it"
     )
-    assert readable == await repository.grant_reachable_file_ids(
-        pod_id=pod_id, ctx=ctx
-    ), (
-        "the grant-driven read changed a person's answer; it must fall back to "
-        "the ordinary statement for anyone who reads outside their grants"
+
+    scope = await authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
+    assert _LEAK_FILE not in scope.file_ids, (
+        "the search's readable scope carries a POD file under a folder this "
+        "person cannot read, and the searcher uses that set verbatim"
     )
-    assert UUID(stranger["id"]) != user_id
+    if scope.enumerated:
+        assert set(scope.file_ids) == readable, (
+            "the search's readable set disagrees with the ordinary statement"
+        )
+
+    # The unbounded fallback is the other read a search makes, and it is
+    # reached on a pod too large for the id list to travel.
+    unbounded = await authorizer.readable_file_scope(pod_id=pod_id, ctx=ctx)
+    assert set(unbounded.file_ids) == readable, (
+        "the unbounded readable set disagrees with the ordinary statement"
+    )
 
 
 async def _explain_statement(db_session, stmt) -> dict:

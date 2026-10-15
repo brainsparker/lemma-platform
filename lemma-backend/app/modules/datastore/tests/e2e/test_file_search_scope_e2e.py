@@ -256,6 +256,33 @@ async def test_a_narrow_reader_is_searched_by_the_readable_side(
     }
 
 
+async def test_turning_a_files_search_off_retires_the_cached_scope(
+    db_session, pod_api: DatastoreApi, searchable_pod, chosen_scopes
+) -> None:
+    """The split is cached per caller for minutes. A file whose search is
+    switched off leaves the searchable set at once -- not when the cache
+    happens to expire."""
+    for path in _SHARED[2:]:
+        await db_session.execute(
+            text("UPDATE datastore_files SET visibility = 'PERSONAL' WHERE id = :id"),
+            {"id": UUID(searchable_pod["files"][path]["id"])},
+        )
+    await db_session.commit()
+    files = searchable_pod["files"]
+
+    await searchable_pod["viewer"].search_files(NEEDLE, limit=20)
+    await pod_api.update_file(_SHARED[0], search_enabled=False)
+    await searchable_pod["viewer"].search_files(NEEDLE, limit=20)
+
+    before, after = chosen_scopes[0], chosen_scopes[-1]
+    assert before.enumerated and before.file_ids == {
+        UUID(files[path]["id"]) for path in _SHARED[:2]
+    }
+    assert after.enumerated and after.file_ids == {UUID(files[_SHARED[1]]["id"])}, (
+        f"the file whose search was turned off is still in the scope: {after}"
+    )
+
+
 async def test_both_sides_over_the_ceiling_post_filters(
     searchable_pod, chosen_scopes, monkeypatch
 ) -> None:

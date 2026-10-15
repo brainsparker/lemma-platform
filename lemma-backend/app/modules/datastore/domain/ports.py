@@ -180,6 +180,15 @@ class DatastoreFileRepositoryPort(Protocol):
         limit: int | None = None,
     ) -> set[UUID]: ...
 
+    async def grant_reachable_file_ids(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk_ancestors: bool,
+        limit: int | None = None,
+    ) -> set[UUID]: ...
+
     async def filter_visible_ids(
         self,
         *,

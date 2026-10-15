@@ -50,7 +50,12 @@ class SearchScopeTimedOut(Exception):
 
 @dataclass(frozen=True, slots=True)
 class SearchablePartition:
-    """A pod's searchable files, split by whether the caller may read them."""
+    """A pod's searchable files, split by whether the caller may read them.
+
+    Either side may have been read only up to a limit; a side that reached it
+    stands for "at least this many", which is all the choice between them
+    needs.
+    """
 
     readable: frozenset[UUID]
     hidden: frozenset[UUID]

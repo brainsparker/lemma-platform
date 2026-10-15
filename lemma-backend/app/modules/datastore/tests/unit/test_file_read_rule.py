@@ -150,16 +150,25 @@ class _Partitions:
     """The repository's split, as data; or a timeout."""
 
     def __init__(self, readable: int, hidden: int, *, timed_out: bool = False):
+        self.readable = [uuid4() for _ in range(readable)]
+        self.hidden = [uuid4() for _ in range(hidden)]
         self.partition = SearchablePartition(
-            readable=frozenset(uuid4() for _ in range(readable)),
-            hidden=frozenset(uuid4() for _ in range(hidden)),
+            readable=frozenset(self.readable), hidden=frozenset(self.hidden)
         )
         self.timed_out = timed_out
+        self.asked: list[dict] = []
 
-    async def searchable_partition(self, **_kwargs) -> SearchablePartition:
+    async def searchable_partition(
+        self, *, limit=None, readable_only=False, **_kwargs
+    ) -> SearchablePartition:
+        """Each side cut off at *limit*, the way the repository reads it."""
+        self.asked.append({"limit": limit, "readable_only": readable_only})
         if self.timed_out:
             raise SearchScopeTimedOut("too slow")
-        return self.partition
+        return SearchablePartition(
+            readable=frozenset(self.readable[:limit]),
+            hidden=frozenset() if readable_only else frozenset(self.hidden[:limit]),
+        )
 
 
 async def _scope(repository: _Partitions) -> SearchFileScope:
@@ -190,6 +199,34 @@ async def test_both_sides_over_the_ceiling_are_not_sent(monkeypatch) -> None:
     )
     scope = await _scope(_Partitions(readable=20, hidden=30))
     assert not scope.narrowed and not scope.enumerated
+
+
+async def test_the_split_is_read_no_further_than_one_past_the_ceiling(
+    monkeypatch,
+) -> None:
+    """Which side is shorter, and whether it is under the ceiling, is all the
+    choice needs -- so neither side is read past ``ceiling + 1``, however
+    large the pod."""
+    monkeypatch.setattr(
+        datastore_settings, "datastore_search_readable_id_pushdown_limit", 10
+    )
+    huge = _Partitions(readable=5_000, hidden=3)
+    scope = await _scope(huge)
+    assert huge.asked == [{"limit": 11, "readable_only": False}]
+    assert scope.excluding and scope.file_ids == huge.partition.hidden
+
+    both_over = _Partitions(readable=5_000, hidden=4_000)
+    assert await _scope(both_over) == SearchFileScope.post_filtered(), (
+        "two sides cut off at the same limit are both over the ceiling"
+    )
+
+
+async def test_widening_reads_the_whole_readable_side_and_nothing_else() -> None:
+    repository = _Partitions(readable=50, hidden=7)
+    authorizer = FileAuthorizer(object(), repository, PathResolver())
+    scope = await authorizer.readable_file_scope(pod_id=_POD, ctx=_CONTEXTS["member"])
+    assert repository.asked == [{"limit": None, "readable_only": True}]
+    assert scope.enumerated and scope.file_ids == repository.partition.readable
 
 
 async def test_a_timed_out_scope_is_post_filtered() -> None:

@@ -196,6 +196,8 @@ class DatastoreFileRepositoryPort(Protocol):
         ctx: Context,
         walk_ancestors: bool,
         timeout_ms: int,
+        limit: int | None = None,
+        readable_only: bool = False,
     ) -> SearchablePartition: ...
 
 

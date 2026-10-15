@@ -21,7 +21,7 @@ from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.work import RetryPolicy, WorkClass, WorkRegistry
 from app.core.infrastructure.work.testing import make_due, run_until_idle
-from app.modules.agent_surfaces.domain.deliveries import SENDING_LEASE
+from app.modules.agent_surfaces.domain.deliveries import SEND_TIMEOUT, SENDING_LEASE
 from app.modules.agent_surfaces.events.ingest_work import register_surface_ingest_work
 from app.modules.agent_surfaces.events.platform_update_work import (
     register_platform_update_work,
@@ -47,11 +47,17 @@ def surface_registry(
     sender: DeliverySender | None = None,
     ingest_retry: RetryPolicy | None = None,
     sending_lease: timedelta = SENDING_LEASE,
+    send_timeout: timedelta = SEND_TIMEOUT,
 ) -> WorkRegistry:
     registry = WorkRegistry()
     register_surface_ingest_work(registry, retry=ingest_retry)
     register_platform_update_work(registry)
-    register_surface_reply_work(registry, sender=sender, sending_lease=sending_lease)
+    register_surface_reply_work(
+        registry,
+        sender=sender,
+        sending_lease=sending_lease,
+        send_timeout=send_timeout,
+    )
     register_reply_for_run_work(registry)
     return registry
 

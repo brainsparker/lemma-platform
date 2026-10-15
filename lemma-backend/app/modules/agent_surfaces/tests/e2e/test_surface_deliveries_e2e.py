@@ -229,6 +229,142 @@ async def test_a_sender_killed_mid_send_leaves_unknown_and_is_never_resent(test_
     assert sent == ["may have arrived"]
 
 
+@pytest.mark.drives_work
+async def test_a_slow_send_is_retried_rather_than_left_to_go_unknown(test_pod):
+    """A platform that does not answer within the send timeout is a retry."""
+    platform = Platform()
+    slow_once = True
+
+    async def slow(row) -> SendResult:
+        nonlocal slow_once
+        if slow_once:
+            slow_once = False
+            await asyncio.sleep(3600)
+        return await platform(row)
+
+    registry = surface_registry(sender=slow, send_timeout=timedelta(seconds=0.2))
+    destination = f"dm:{uuid4()}"
+    await _stage(["late"], destination=destination, pod_id=UUID(test_pod["id"]))
+
+    await drain(registry)
+    assert await _statuses(destination) == ["PENDING"]
+    assert "TimeoutError" in await scalar(
+        "SELECT last_error FROM surface_deliveries WHERE destination_key = :d",
+        d=destination,
+    )
+    async with async_session_maker() as session:  # the retry's wait, over
+        await session.execute(
+            text(
+                "UPDATE surface_deliveries SET not_before = now() "
+                "WHERE destination_key = :d"
+            ),
+            {"d": destination},
+        )
+        await session.commit()
+    await drain(registry, due=True)
+
+    assert await _statuses(destination) == ["SENT"]
+    assert platform.arrived == ["late"]
+
+
+class _Counted:
+    """Stands in for an OTel counter: what was added, with which attributes."""
+
+    def __init__(self) -> None:
+        self.added: list[tuple[int, dict]] = []
+
+    def add(self, amount: int, attributes: dict | None = None) -> None:
+        self.added.append((amount, dict(attributes or {})))
+
+
+@pytest.mark.drives_work
+async def test_a_reply_lost_mid_send_is_said_in_the_conversation_and_counted(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    monkeypatch,
+):
+    """The worker dies between the claim and the settle of a run's answer.
+
+    The row goes UNKNOWN and is never resent -- and the person reading the
+    conversation in Lemma is told the reply may not have reached Telegram,
+    and the loss is counted, instead of the reply simply never arriving.
+    """
+    from app.modules.agent_surfaces.events import reply_work
+
+    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    counted = _Counted()
+    monkeypatch.setattr(reply_work, "delivery_unknown_counter", counted)
+    conversation_id, run_id = await _a_finished_run(
+        authenticated_client,
+        db_session,
+        test_pod,
+        fixed_test_user,
+        fake_telegram,
+        "lost-bot",
+    )
+    entered = asyncio.Event()
+
+    async def dies(row) -> SendResult:
+        entered.set()
+        await asyncio.sleep(3600)
+        return SendResult(delivered=True)
+
+    killed = asyncio.create_task(
+        drain(surface_registry(sender=dies, sending_lease=timedelta(seconds=1)))
+    )
+    await asyncio.wait_for(entered.wait(), timeout=30)
+    # SIGKILL: nothing the sender would have written gets written.
+    killed.cancel()
+    await asyncio.gather(killed, return_exceptions=True)
+    key = f"run-reply:{run_id}"
+    assert (
+        await scalar(
+            "SELECT status FROM surface_deliveries WHERE idempotency_key = :k", k=key
+        )
+        == "SENDING"
+    )
+    async with async_session_maker() as session:
+        await session.execute(
+            text(
+                "UPDATE work_items SET lease_until = now() - interval '1 second' "
+                "WHERE kind = 'surface.reply' AND state = 'running'"
+            )
+        )
+        await session.commit()
+    await asyncio.sleep(1.1)  # past the row's own sending deadline
+
+    platform = Platform()
+    registry = surface_registry(sender=platform, sending_lease=timedelta(seconds=1))
+    await drain(registry)
+    await drain(registry, due=True)
+
+    assert (
+        await scalar(
+            "SELECT status FROM surface_deliveries WHERE idempotency_key = :k", k=key
+        )
+        == "UNKNOWN"
+    )
+    assert platform.arrived == [], "never sent again"
+    notices = [
+        text_
+        for (text_,) in (
+            await db_session.execute(
+                text(
+                    "SELECT text FROM agent_messages WHERE conversation_id = :c "
+                    "AND kind = 'NOTIFICATION' AND agent_run_id IS NULL"
+                ),
+                {"c": conversation_id},
+            )
+        ).all()
+    ]
+    assert notices == [reply_work.UNKNOWN_DELIVERY_NOTICE.format(surface="Telegram")]
+    assert counted.added == [(1, {"platform": "TELEGRAM", "purpose": "answer"})]
+
+
 async def _a_finished_run(
     authenticated_client, db_session, test_pod, fixed_test_user, fake_telegram, name
 ):

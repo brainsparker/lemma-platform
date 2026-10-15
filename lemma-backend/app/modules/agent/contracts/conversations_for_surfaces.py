@@ -295,6 +295,25 @@ async def append_notification_message(
     )
 
 
+async def append_delivery_notice(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    conversation_id: UUID,
+    message: str,
+    metadata: dict[str, str],
+) -> None:
+    """Write a line about a delivery into the conversation, in no run.
+
+    For what the person reading the conversation in Lemma should know about
+    a message sent on their behalf elsewhere -- that it may not have arrived.
+    """
+    await ConversationRepository(uow).append_message(
+        conversation_id=conversation_id,
+        agent_run_id=None,
+        draft=MessageDraft.of_notification(message, metadata=dict(metadata)),
+    )
+
+
 async def pending_interaction(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> PendingInteraction | None:
@@ -544,6 +563,7 @@ __all__ = [
     "PendingInteraction",
     "SurfaceAgentIdentity",
     "SurfaceConversation",
+    "append_delivery_notice",
     "append_notification_message",
     "conversation_metadata_value",
     "lemma_message_run_started_at",

@@ -12,7 +12,8 @@ pump (``surface.reply``)::
 A row is claimed SENDING *before* the platform call, with a deadline
 (``sending_until``). A pump that later finds it still SENDING past that
 deadline cannot know whether the message reached the person, and marks it
-UNKNOWN rather than risk saying it twice.
+UNKNOWN rather than risk saying it twice -- and says so in the conversation,
+so the miss is visible rather than silent.
 """
 
 from __future__ import annotations
@@ -48,6 +49,12 @@ MAX_SEND_ATTEMPTS = 1 + len(RETRY_DELAYS)
 #: How long a claimed send may take before an observer of it reads the outcome
 #: as lost. Above every adapter's own retry budget for one send.
 SENDING_LEASE = timedelta(seconds=90)
+#: How long the pump waits on one send before it calls the send a transient
+#: failure and retries it. Below ``SENDING_LEASE`` with room to settle, so a
+#: slow platform is retried rather than left SENDING until the row goes
+#: UNKNOWN -- at the cost that a send which did arrive after all, only late,
+#: is sent again.
+SEND_TIMEOUT = timedelta(seconds=60)
 
 
 class _Target(BaseModel):
@@ -113,6 +120,7 @@ __all__ = [
     "MAX_SEND_ATTEMPTS",
     "RETRY_DELAYS",
     "SENDING_LEASE",
+    "SEND_TIMEOUT",
     "ConversationTarget",
     "DeliveryContent",
     "DeliveryStatus",

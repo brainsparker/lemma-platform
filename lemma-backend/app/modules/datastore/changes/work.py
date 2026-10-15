@@ -45,6 +45,7 @@ from app.modules.datastore.changes.reader import (
     Change,
     ChangeOp,
     fetch_rows,
+    has_unfinal_after,
     read_after,
 )
 from app.modules.datastore.changes.subscribers import (
@@ -70,6 +71,9 @@ DELIVER = "changes.deliver"
 #: idle-in-transaction timeouts, so any write that was in flight while the
 #: subscriber row appeared has committed or aborted by then.
 CATCH_UP_AFTER = timedelta(minutes=2)
+#: How soon a delivery looks again when a committed change was still behind
+#: an older open transaction (above the read horizon) when it read.
+NOT_FINAL_RETRY = timedelta(seconds=1)
 
 
 class SubscriberRef(BaseModel):
@@ -199,6 +203,18 @@ async def run_deliver(ctx: JobContext, payload: SubscriberRef) -> None:
             "datastore.changes.deliver.page_full.observed",
             subscriber=payload.subscriber,
         )
+    elif await has_unfinal_after(
+        payload.pod_id, page.cursor, table_ids=[row.table_id], ops=sorted(row.ops)
+    ):
+        # Committed, but an older transaction was still open: its wake has
+        # been spent on this read, so nothing else would deliver it.
+        async with ctx.complete_work() as uow:
+            await request_delivery(
+                ctx.writer(uow),
+                payload.pod_id,
+                payload.subscriber,
+                delay=NOT_FINAL_RETRY,
+            )
 
 
 async def _with_current_rows(

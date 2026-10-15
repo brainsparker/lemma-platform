@@ -28,9 +28,13 @@ class FakeDocumentProcessorServer:
         #: What ``/health`` answers. False is "Kreuzberg is down" as its
         #: health check reports it, while ``/extract`` still accepts requests.
         self.healthy = True
-        #: While set, ``hang-*`` documents never get an answer: an extraction
-        #: running when its worker is killed.
+        #: While set, ``hang-*`` documents get no answer until the hang is
+        #: released: an extraction running when its worker is killed.
         self.hang = False
+        #: Released by ``forget_traffic`` and ``stop``. A hung handler outlives
+        #: the worker that asked, and aiohttp's cleanup waits its full 60s
+        #: shutdown timeout for every handler still running.
+        self._hung: set[asyncio.Event] = set()
         #: While set, every extraction returns a chunk Postgres cannot store.
         self.nul_chunks = False
 
@@ -50,6 +54,12 @@ class FakeDocumentProcessorServer:
         self.healthy = True
         self.hang = False
         self.nul_chunks = False
+        self._release_hung()
+
+    def _release_hung(self) -> None:
+        for released in self._hung:
+            released.set()
+        self._hung.clear()
 
     async def start(self) -> None:
         app = web.Application()
@@ -68,6 +78,7 @@ class FakeDocumentProcessorServer:
         self.base_url = f"http://127.0.0.1:{sockets[0].getsockname()[1]}"
 
     async def stop(self) -> None:
+        self._release_hung()
         if self._runner is not None:
             await self._runner.cleanup()
 
@@ -103,7 +114,10 @@ class FakeDocumentProcessorServer:
                 ),
             )
         if filename.startswith("hang") and self.hang:
-            await asyncio.sleep(3600)
+            released = asyncio.Event()
+            self._hung.add(released)
+            await released.wait()
+            return web.Response(status=503)
 
         if filename.startswith("connection-retry") and attempt == 1:
             transport = request.transport

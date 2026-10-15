@@ -36,13 +36,13 @@ NEEDLE = "zephyrine"
 _SHARED = [f"/shared/doc{i}.md" for i in range(6)]
 
 
-async def _index(pod_id: UUID, file_id: UUID, path: str) -> None:
+async def _index(pod_id: UUID, file_id: UUID, path: str, *, text: str = "") -> None:
     """Put one chunk for *file_id* in the pod database, as indexing would."""
     service = get_datastore_composition().build_search_service(pod_id)
     parent = path.rsplit("/", 1)[0] or "/"
     await service.index_file_chunks(
         file_id,
-        [{"text": f"{NEEDLE} {path}"}],
+        [{"text": text or f"{NEEDLE} {path}"}],
         {"path": path, "parent_path": parent},
     )
 
@@ -160,6 +160,38 @@ async def test_a_member_is_searched_by_excluding_the_hidden_side(
     assert scope.excluding and scope.file_ids == hidden, (
         "two hidden searchable files against six readable: the hidden ids are "
         f"the shorter list and should have been sent, got {scope}"
+    )
+
+
+async def test_a_full_page_through_the_excluding_side_needs_no_widening(
+    searchable_pod, chosen_scopes
+) -> None:
+    """An excluding scope is narrowed but not exact, so it needs headroom too.
+
+    The hidden list names only *searchable* files the caller may not read, so
+    chunks it cannot name still come back: the stale file's old chunks, the
+    orphan chunk. Asking for exactly as many as the caller can read, with no
+    overshoot, one of those on the page leaves it short with the pool full --
+    and the searcher then widens to the caller's whole readable set, the
+    unbounded pushdown the ceiling exists to avoid.
+    """
+    # Orphans that match the query harder than any readable file -- enough to
+    # fill the first page on their own, so the pool is saturated and the page
+    # short whatever the ranking does with ties.
+    for _ in range(len(_SHARED) + 2):
+        await _index(
+            searchable_pod["pod_id"],
+            uuid7(),
+            "/shared/gone.md",
+            text=" ".join([NEEDLE] * 8),
+        )
+
+    response = await searchable_pod["viewer"].search_files(NEEDLE, limit=len(_SHARED))
+
+    assert _result_paths(response) == set(_SHARED)
+    assert len(chosen_scopes) == 1 and chosen_scopes[0].excluding, (
+        "one chunk query, through the hidden side, should fill the page; "
+        f"the search was run with {chosen_scopes}"
     )
 
 

@@ -38,7 +38,7 @@ from app.modules.datastore.infrastructure.repositories.file_visibility_sql impor
 from app.modules.datastore.infrastructure.repositories.file_read_rule import (
     resolve_blocked_folders,
     resolve_read_rule,
-    searchable_files_statement,
+    searchable_side_statement,
 )
 from app.modules.datastore.infrastructure.repositories._base import (
     DatastoreRepositoryBase,
@@ -423,10 +423,17 @@ class DatastoreFileRepository(
         ctx: Context,
         walk_ancestors: bool,
         timeout_ms: int,
+        limit: int | None = None,
+        readable_only: bool = False,
     ) -> SearchablePartition:
         """The pod's searchable files, split into readable and hidden.
 
-        Bounded in time rather than in rows. The statements run inside a
+        Each side is read up to *limit* rows (all of it when None), so a pod
+        with millions of searchable files costs the split ``2 * limit`` ids,
+        not millions; *readable_only* skips the hidden side, for the caller
+        that needs the complete readable set and nothing else.
+
+        Bounded in time as well. The statements run inside a
         savepoint under ``statement_timeout``; the savepoint is rolled back
         afterwards either way, which is what returns the timeout to the
         session's own and leaves the transaction usable after a cancel. A
@@ -442,13 +449,28 @@ class DatastoreFileRepository(
             readable = await self.readable_where(
                 pod_id=pod_id, ctx=ctx, walk_ancestors=walk_ancestors
             )
-            rows = await self.session.execute(
-                searchable_files_statement(pod_id, readable)
+            readable_ids = set(
+                (
+                    await self.session.execute(
+                        searchable_side_statement(
+                            pod_id, readable, readable_side=True, limit=limit
+                        )
+                    )
+                ).scalars()
             )
-            readable_ids: set[UUID] = set()
-            hidden_ids: set[UUID] = set()
-            for file_id, is_readable in rows.all():
-                (readable_ids if is_readable else hidden_ids).add(file_id)
+            hidden_ids: set[UUID] = (
+                set()
+                if readable_only
+                else set(
+                    (
+                        await self.session.execute(
+                            searchable_side_statement(
+                                pod_id, readable, readable_side=False, limit=limit
+                            )
+                        )
+                    ).scalars()
+                )
+            )
         except DBAPIError as exc:
             if getattr(exc.orig, "sqlstate", None) == _QUERY_CANCELED:
                 raise SearchScopeTimedOut(

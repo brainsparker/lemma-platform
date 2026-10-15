@@ -82,8 +82,9 @@ async def searchable_pod(
         ),
         {"pod": pod_id},
     )
-    # Mid-reprocess: its old chunks are still in the index, but it is not in
-    # the searchable set, so the hidden list cannot name it.
+    # Mid-reprocess: its old chunks are still in the index. It is still a
+    # searchable file, on the side the caller's access puts it -- here hidden,
+    # so the exclusion names it.
     await db_session.execute(
         text("UPDATE datastore_files SET status = 'PENDING' WHERE id = :id"),
         {"id": UUID(files["/vault/stale.md"]["id"])},
@@ -155,11 +156,12 @@ async def test_a_member_is_searched_by_excluding_the_hidden_side(
     files = searchable_pod["files"]
     hidden = {
         UUID(files["/vault/secret.md"]["id"]),
+        UUID(files["/vault/stale.md"]["id"]),
         UUID(files[searchable_pod["personal_path"]]["id"]),
     }
     assert scope.excluding and scope.file_ids == hidden, (
-        "two hidden searchable files against six readable: the hidden ids are "
-        f"the shorter list and should have been sent, got {scope}"
+        "three hidden searchable files against six readable: the hidden ids "
+        f"are the shorter list and should have been sent, got {scope}"
     )
 
 
@@ -205,6 +207,12 @@ async def test_a_narrow_reader_is_searched_by_the_readable_side(
             text("UPDATE datastore_files SET visibility = 'PERSONAL' WHERE id = :id"),
             {"id": UUID(searchable_pod["files"][path]["id"])},
         )
+    # One of the two being reprocessed: its earlier chunks are still in the
+    # index, and an exact scope must still find them.
+    await db_session.execute(
+        text("UPDATE datastore_files SET status = 'PENDING' WHERE id = :id"),
+        {"id": UUID(searchable_pod["files"][_SHARED[0]]["id"])},
+    )
     await db_session.commit()
 
     response = await searchable_pod["viewer"].search_files(NEEDLE, limit=20)

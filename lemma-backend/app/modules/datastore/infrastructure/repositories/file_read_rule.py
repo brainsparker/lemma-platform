@@ -64,7 +64,7 @@ from app.core.authorization.permissions import (
 )
 from app.core.authorization.resource_actions import owner_actions_for_resource
 from app.core.authorization.sql_actions import read_action_for_resource
-from app.modules.datastore.domain.file_entities import FileKind, FileStatus
+from app.modules.datastore.domain.file_entities import FileKind
 from app.modules.datastore.infrastructure.models import DatastoreFile
 
 _READ = read_action_for_resource(ResourceType.DOCUMENT)
@@ -422,19 +422,44 @@ def blocked_folders_statement(pod_id: UUID, rule: FileReadRule):
     return union_all(folders, with_descendants)
 
 
-def searchable_files_statement(pod_id: UUID, readable: ColumnElement[bool]):
-    """``(id, readable)`` for every file in the pod a chunk search can match.
+def _searchable(pod_id: UUID) -> list[ColumnElement[bool]]:
+    """The files in the pod a chunk search can match.
 
-    Indexed and enabled: nothing else has chunks to find, so neither side of
-    the split spends its length on folders or on documents that were never
-    indexed. A file mid-reprocess may still have chunks from before; it is on
-    neither side, so an excluding scope lets its chunks through and the
-    searcher's authorization pass decides them. Served by
-    ``ix_datastore_file_status``.
+    Enabled files, of any status. A file being reprocessed -- or whose newest
+    bytes failed -- may still hold the chunks of an earlier revision, and the
+    row does not record whether it does; leaving such files off both sides
+    made the answer depend on which side was sent: an enumerated scope dropped
+    a readable one, an excluding scope let a hidden one's chunks through to the
+    authorization pass. Counting a file that was never indexed costs only
+    length on its side.
     """
-    return select(DatastoreFile.id, readable).where(
+    return [
         DatastoreFile.pod_id == pod_id,
-        DatastoreFile.status == FileStatus.COMPLETED.value,
         DatastoreFile.kind == FileKind.FILE.value,
         DatastoreFile.search_enabled,
-    )
+    ]
+
+
+def searchable_files_statement(pod_id: UUID, readable: ColumnElement[bool]):
+    """``(id, readable)`` for every file in the pod a chunk search can match."""
+    return select(DatastoreFile.id, readable).where(*_searchable(pod_id))
+
+
+def searchable_side_statement(
+    pod_id: UUID,
+    readable: ColumnElement[bool],
+    *,
+    readable_side: bool,
+    limit: int | None,
+):
+    """The ids on one side of the split, at most *limit* of them.
+
+    The split only has to say which side is shorter and whether that side is
+    under the pushdown ceiling, so neither side needs reading past
+    ``ceiling + 1``: a side cut off there is "more than the ceiling", which is
+    all the decision uses. A predicate that is NULL for a row counts it hidden,
+    as reading ``(id, readable)`` did.
+    """
+    side = readable if readable_side else ~func.coalesce(readable, False)
+    statement = select(DatastoreFile.id).where(*_searchable(pod_id), side)
+    return statement if limit is None else statement.limit(limit)

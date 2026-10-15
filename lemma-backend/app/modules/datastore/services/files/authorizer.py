@@ -262,7 +262,10 @@ class FileAuthorizer:
         post-filtering, which is bounded by the candidate pool.
         """
         ceiling = datastore_settings.datastore_search_readable_id_pushdown_limit
-        partition = await self._searchable_partition(pod_id=pod_id, ctx=ctx)
+        # One past the ceiling is enough to know a side is over it.
+        partition = await self._searchable_partition(
+            pod_id=pod_id, ctx=ctx, limit=ceiling + 1
+        )
         if partition is None:
             return SearchFileScope.post_filtered()
         if len(partition.readable) <= len(partition.hidden):
@@ -291,13 +294,20 @@ class FileAuthorizer:
         Under the same timeout as the split. If it runs out, the scope stays
         unnarrowed and the searcher keeps the page it already has.
         """
-        partition = await self._searchable_partition(pod_id=pod_id, ctx=ctx)
+        partition = await self._searchable_partition(
+            pod_id=pod_id, ctx=ctx, limit=None, readable_only=True
+        )
         if partition is None:
             return SearchFileScope.post_filtered()
         return SearchFileScope.only(partition.readable)
 
     async def _searchable_partition(
-        self, *, pod_id: UUID, ctx: Context
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        limit: int | None,
+        readable_only: bool = False,
     ) -> SearchablePartition | None:
         """The split, or None when working it out ran past the timeout."""
         timeout_ms = datastore_settings.datastore_search_scope_timeout_ms
@@ -307,6 +317,8 @@ class FileAuthorizer:
                 ctx=ctx,
                 walk_ancestors=not _is_workload(ctx),
                 timeout_ms=timeout_ms,
+                limit=limit,
+                readable_only=readable_only,
             )
         except SearchScopeTimedOut:
             actor_type = getattr(ctx, "actor_type", None)

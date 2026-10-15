@@ -472,7 +472,7 @@ class ScheduleRunRepository:
             schedule_id=schedule_id,
             user_id=source.user_id or fallback_user_id,
             source_event_id=f"redrive:{source.id}",
-            status=ScheduleRunStatus.RECEIVED.value,
+            status=ScheduleRunStatus.PROCESSING.value,
             attempts=0,
             target_kind=source.target_kind,
             target_run_id=str(uuid7()),

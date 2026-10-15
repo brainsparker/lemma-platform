@@ -215,6 +215,21 @@ def granted_paths(pod_id: UUID, resource_ids):
     )
 
 
+def _prefix_pattern(path: str) -> str:
+    r"""``path`` as a ``LIKE`` pattern matching the files underneath it.
+
+    Every character that is special to ``LIKE`` is escaped so the pattern
+    matches the literal path and nothing else. ``\`` is the escape character
+    named at the comparison, so it has to be escaped first -- otherwise
+    ``/a\b`` would read as ``/ab`` and a granted folder's own descendants would
+    drop out of the candidate set. ``%`` and ``_`` would widen it instead, which
+    the authorization predicate filters, but escaping them keeps the pattern an
+    exact statement of the prefix.
+    """
+    escaped = path.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}/%"
+
+
 def grant_reachable_statement(
     *,
     ctx: Context,
@@ -224,7 +239,7 @@ def grant_reachable_statement(
     paths: Iterable[str],
     limit: int | None = None,
 ):
-    """The readable ids, found from the grants, with the rule still applied.
+    r"""The readable ids, found from the grants, with the rule still applied.
 
     A grant names a row by id, and a folder grant reaches its descendants. The
     two predicates are the two halves of the cascade ``_grant_exists_for_action``
@@ -233,15 +248,25 @@ def grant_reachable_statement(
     ``text_pattern_ops`` index on ``(pod_id, path)`` -- can range-scan, where
     ``left(path, length(path) + 1)`` cannot.
 
-    ``LIKE`` rather than the CASE's own ``left(...)`` also means an unescaped
-    ``_`` or ``%`` in a stored path matches more rows than the cascade would.
-    That is the safe direction and the reason it is allowed: the authorization
-    predicate is applied on top, so a wider candidate set costs rows and can
-    never admit a file the caller may not read.
+    ``LIKE`` rather than the CASE's own ``left(...)`` also means the pattern's
+    own wildcards and escape character matter: an unescaped ``_`` or ``%`` in a
+    stored path would match more rows than the cascade, and a backslash would
+    consume the next character, so ``/a\b`` would match ``/ab/...`` and *miss*
+    the folder's real descendants. Names may contain all three --
+    ``normalize_datastore_name`` rejects only ``/``, ``.``, ``..`` and empty --
+    so ``_prefix_pattern`` escapes them and the comparison names ``\`` as the
+    escape character. The pattern then describes exactly the descendants the
+    cascade reaches.
+
+    The authorization predicate is still applied on top, so this stays an
+    optimization rather than a second statement of the rule: the grant read
+    narrows, and the CASE decides.
     """
     reachable = [DatastoreFile.id.in_(list(resource_ids))]
     reachable.extend(DatastoreFile.path == path for path in paths)
-    reachable.extend(DatastoreFile.path.like(f"{path}/%") for path in paths)
+    reachable.extend(
+        DatastoreFile.path.like(_prefix_pattern(path), escape="\\") for path in paths
+    )
     stmt = select(DatastoreFile.id).where(
         DatastoreFile.pod_id == pod_id,
         allowed_actions_contains(actions, Permissions.FOLDER_READ),

@@ -876,6 +876,135 @@ async def test_a_person_still_sees_only_what_they_may_read(
     )
 
 
+#: A granted folder whose name holds ``LIKE``'s escape character, and the decoy
+#: the unescaped pattern matched instead: ``/sha\red/%`` read as ``/shared/%``.
+#: A backslash is a legal character in a name -- ``normalize_datastore_name``
+#: rejects only ``/``, ``.``, ``..`` and empty -- so this is a shape a real pod
+#: can hold, not a synthetic one.
+_ESCAPE_GRANTED_FOLDER = UUID("00000000-0000-7000-8000-0000000000b1")
+_ESCAPE_GRANTED_FILE = UUID("00000000-0000-7000-8000-0000000000b2")
+_ESCAPE_DECOY_FOLDER = UUID("00000000-0000-7000-8000-0000000000b3")
+_ESCAPE_DECOY_FILE = UUID("00000000-0000-7000-8000-0000000000b4")
+_ESCAPE_GRANTED_PATH = "/sha\\red"
+_ESCAPE_DECOY_PATH = "/shared"
+
+
+async def _seed_like_metacharacter_tree(
+    session, pod_id: UUID, owner_user_id: UUID, agent_id: UUID
+) -> None:
+    """A granted folder whose path contains ``LIKE``'s escape character.
+
+    The grant narrows the candidate set with ``path LIKE '<folder>/%'``, and the
+    pattern is built from a stored path. A backslash in that path is the pattern's
+    escape character, so the folder's own descendants only stay in the candidate
+    set if the pattern escapes it. The decoy folder is what the unescaped pattern
+    matched instead: a sibling whose name is the granted path with the backslash
+    eaten. Both the file that went missing and the folder it was confused with are
+    here, so a test can name which way the read went wrong.
+    """
+    for folder_id, path, name in (
+        (_ESCAPE_GRANTED_FOLDER, _ESCAPE_GRANTED_PATH, "sha\\red"),
+        (_ESCAPE_DECOY_FOLDER, _ESCAPE_DECOY_PATH, "shared"),
+    ):
+        await session.execute(
+            text("""
+            INSERT INTO datastore_files
+              (id, pod_id, owner_user_id, kind, visibility, path, name,
+               size_bytes, search_enabled, status, processing_attempts,
+               created_at, updated_at)
+            VALUES (:id, :pod, :owner, 'FOLDER', 'RESTRICTED', :path, :name,
+                    0, false, 'COMPLETED', 0, now(), now())
+            """),
+            {
+                "id": folder_id,
+                "pod": pod_id,
+                "owner": owner_user_id,
+                "path": path,
+                "name": name,
+            },
+        )
+    for file_id, path, name in (
+        (_ESCAPE_GRANTED_FILE, f"{_ESCAPE_GRANTED_PATH}/real.md", "real.md"),
+        (_ESCAPE_DECOY_FILE, f"{_ESCAPE_DECOY_PATH}/decoy.md", "decoy.md"),
+    ):
+        await session.execute(
+            text("""
+            INSERT INTO datastore_files
+              (id, pod_id, owner_user_id, kind, visibility, path, name,
+               size_bytes, search_enabled, status, processing_attempts,
+               created_at, updated_at)
+            VALUES (:id, :pod, :owner, 'FILE', 'RESTRICTED', :path, :name,
+                    10, true, 'COMPLETED', 0, now(), now())
+            """),
+            {
+                "id": file_id,
+                "pod": pod_id,
+                "owner": owner_user_id,
+                "path": path,
+                "name": name,
+            },
+        )
+    await session.execute(
+        text("""
+        INSERT INTO resource_permission_grants
+          (id, pod_id, resource_type, resource_id, grantee_type, grantee_id,
+           permission_id, created_at)
+        VALUES (gen_random_uuid(), :pod, 'folder', :folder, 'agent', :agent,
+                'folder.read', now())
+        """),
+        {"pod": pod_id, "folder": _ESCAPE_GRANTED_FOLDER, "agent": agent_id},
+    )
+    await session.execute(text("ANALYZE datastore_files"))
+
+
+async def test_a_granted_folder_with_a_like_metacharacter_still_reaches_its_files(
+    db_session, async_client, pod_api: DatastoreApi, fixed_test_user
+) -> None:
+    """A backslash in a granted folder's name must not drop its files.
+
+    ``normalize_datastore_name`` allows a backslash, and a backslash is ``LIKE``'s
+    default escape character: built straight from the stored path, the pattern for
+    ``/sha\red`` means ``/shared/``, so the folder's own descendants never became
+    candidates, the CASE never saw them, and the narrowed read came back short of
+    the readable set. The searcher uses that set verbatim as the readable set, so
+    a file the caller may read silently disappeared from their search results.
+    """
+    pod_id = UUID(pod_api.pod_id)
+    owner_id = UUID(fixed_test_user["id"])
+    agent_id = uuid7()
+    await _seed_like_metacharacter_tree(db_session, pod_id, owner_id, agent_id)
+
+    ctx = _workload_ctx(pod_id, agent_id)
+    repository = DatastoreFileRepository(SqlAlchemyUnitOfWork(db_session))
+    authorizer = FileAuthorizer(
+        DatastoreAuthorization(object()), repository, PathResolver()
+    )
+
+    scope = await authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
+    assert scope.enumerated, (
+        "a caller who may read one folder is above the pushdown ceiling, so the "
+        "chunk query went unnarrowed and the readable set is not being read from "
+        "the grants"
+    )
+    assert _ESCAPE_GRANTED_FILE in scope.file_ids, (
+        "a granted folder whose name contains a backslash did not reach the file "
+        "underneath it: the pattern built from its path escaped the next character "
+        "instead of the backslash, so it matched a sibling folder's contents"
+    )
+    assert _ESCAPE_DECOY_FILE not in scope.file_ids, (
+        "an ungranted folder's file was in the narrowed readable set"
+    )
+
+    # The oracle: the ordinary statement, which asks the CASE directly.
+    readable = await repository.visible_file_ids(
+        pod_id=pod_id, ctx=ctx, walk_ancestors=False
+    )
+    assert scope.file_ids == readable, (
+        "reading the readable set from the grants disagreed with reading it from "
+        "the pod"
+    )
+
+
 async def _explain_statement(db_session, stmt) -> dict:
     """Run one statement under EXPLAIN ANALYZE and return its plan."""
     compiled = stmt.compile(

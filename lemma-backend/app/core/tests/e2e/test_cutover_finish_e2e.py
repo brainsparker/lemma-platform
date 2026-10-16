@@ -236,6 +236,42 @@ async def test_cutover_finish_refuses_while_a_delivery_is_owed(
     assert await _scalar(db_manager, _GONE)
 
 
+async def test_a_delivery_from_before_the_horizon_does_not_hold_the_finish(
+    legacy, db_manager
+) -> None:
+    """An owed row older than the sweep's horizon is never replayed, so it is
+    not owed either: it goes with the tables."""
+    async with legacy.begin() as conn:
+        await outbox_row(
+            conn, event("pod.join_request.requested"), published=True, occurred_at=_OLD
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, "
+                "run_at) VALUES (gen_random_uuid(), 'system', 'admin', :k, "
+                "jsonb_build_object('horizon', now() - interval '30 minutes', "
+                "'converted', true), :k, now() + interval '1 hour')"
+            ),
+            {"k": LEGACY_SWEEP},
+        )
+    lines: list[str] = []
+    code = await run(
+        session_maker=db_manager.session_factory,
+        datastore_engine=legacy,
+        out=lines.append,
+    )
+    assert code == 0, lines
+    assert await _scalar(db_manager, _GONE)
+    assert (
+        await _scalar(
+            db_manager,
+            "SELECT count(*) FROM work_items WHERE kind = :k",
+            k=LEGACY_EVENT,
+        )
+        == 0
+    ), "the old delivery was replayed on the way out"
+
+
 @pytest.mark.parametrize("auto_finish", [True, False])
 async def test_the_sweep_finishes_only_when_auto_finish_is_on(
     legacy, db_manager, monkeypatch, auto_finish: bool

@@ -100,6 +100,7 @@ async def run(
         sessions,
         since=state.since,
         cursors=state.cursors,
+        horizon=state.horizon,
         attempts=attempts,
         lock_timeout_ms=lock_timeout_ms or LOCK_TIMEOUT_MS,
     )

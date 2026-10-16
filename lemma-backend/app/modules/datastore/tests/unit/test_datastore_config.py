@@ -44,10 +44,12 @@ EXPECTED = [
         3_000,
     ),
     ("document_processing_max_concurrency", "DOCUMENT_PROCESSING_MAX_CONCURRENCY", 2),
+    # Seconds, not minutes: until a replaced document's new revision is
+    # indexed, search still answers with the old one (factory QA AC-PR979-3).
     (
         "document_processing_debounce_seconds",
         "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS",
-        300,
+        10,
     ),
     (
         "document_processing_extractor_max_threads",

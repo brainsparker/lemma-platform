@@ -290,6 +290,39 @@ async def test_a_bulk_write_may_ask_to_fire_like_single_writes(
     assert len(await runs(schedule.id)) == 4
 
 
+async def test_a_trigger_told_to_fire_on_bulk_writes_gets_their_rows_at_once(
+    pod_api: DatastoreApi, fixed_test_user
+):
+    """A bulk write a trigger skipped was logged without its rows. Told to fire
+    on bulk writes before its subscriber re-syncs, it must still be handed the
+    rows -- not an empty payload its conditions run against."""
+    pod_id = UUID(pod_api.pod_id)
+    await orders_table(pod_api)
+    schedule = await datastore_schedule(
+        pod_id, UUID(fixed_test_user["id"]), operations=["INSERT"], bulk_writes="skip"
+    )
+    await deliver_all()
+    response = await pod_api.request(
+        "POST",
+        f"/pods/{pod_id}/datastore/tables/orders/records/bulk/create",
+        json={"records": [{"status": "new", "total": 7}], "intent": "bulk"},
+    )
+    assert response.status_code == 200, response.text
+    # The config changes; nothing re-syncs the subscriber's stored intents.
+    await execute(
+        'UPDATE schedules SET config = config || \'{"bulk_writes": "each"}\' '
+        "WHERE id = :id",
+        id=schedule.id,
+    )
+    await deliver_all()
+    assert len(await runs(schedule.id)) == 1
+    total = await scalar(
+        "SELECT payload->>'total' FROM schedule_runs WHERE schedule_id = :id",
+        id=schedule.id,
+    )
+    assert total == "7", "the trigger fired on an empty row"
+
+
 async def test_a_batch_trigger_never_fires_a_window_twice_on_replay(
     pod_api: DatastoreApi, fixed_test_user
 ):

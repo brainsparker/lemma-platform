@@ -175,6 +175,25 @@ async def test_a_page_past_the_daily_ceiling_pauses_and_records_the_rest_as_skip
     row = await schedule_row(schedule.id)
     assert (row["is_active"], row["paused_reason"]) == (False, "fire_cap")
     assert len(await items("schedule.paused_notice")) == 1
+    # One moment, one row in the history: the pause's row is rewritten with
+    # the rest of the page, not listed beside it.
+    async with async_session_maker() as session:
+        from sqlalchemy import text
+
+        skips = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT count FROM trigger_skips "
+                        "WHERE schedule_id = :s AND reason = 'fire_cap'"
+                    ),
+                    {"s": schedule.id},
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert skips == [15], skips
 
 
 async def test_the_fire_rate_admits_exactly_its_limit_across_concurrent_dispatchers(
@@ -343,3 +362,17 @@ async def test_cutover_seeds_every_active_time_schedule_and_in_flight_run_once(
     statuses = {str(row["id"]): row["status"] for row in await runs(armed)}
     assert statuses[received] == "DISPATCHED" and statuses[abandoned] == "DISPATCHED"
     assert statuses[stale] == "TARGET_FAILED"
+    # ...which no target of the schedule did: the breaker must not count it,
+    # or a schedule with a backlog at the release pauses and emails its owner.
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.schedule.repositories.schedule_run_repository import (
+        ScheduleRunRepository,
+    )
+
+    async with async_session_maker() as session:
+        assert (
+            await ScheduleRunRepository(
+                SqlAlchemyUnitOfWork(session)
+            ).consecutive_terminal_failures(UUID(armed))
+            == 0
+        )

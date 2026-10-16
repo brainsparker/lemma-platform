@@ -204,7 +204,9 @@ async def append_events(
         kept = [record for record in records if record is not None]
         if version < CHANGE_LOG_VERSION or not kept:
             # The pod's schema or table is gone: there is nothing left to
-            # trigger on, as the legacy consumer would have found too.
+            # trigger on, as the legacy consumer would have found too. (A
+            # schema that exists is migrated up just above, so "below the
+            # change-log version" here means it does not exist.)
             logger.info(
                 "datastore.changes.drain.dropped",
                 pod_id=str(pod_id),
@@ -262,7 +264,9 @@ def _recent(events: Sequence[Event], source: str) -> list[Event]:
         if (moment := _occurred_at(event)) is None or moment >= horizon
     ]
     if skipped := len(events) - len(kept):
-        logger.info(
+        # A warning, not info: these are record changes a trigger or an MCP
+        # subscription would have acted on, discarded by design.
+        logger.warning(
             "datastore.changes.drain.stale_skipped", skipped=skipped, source=source
         )
     return kept

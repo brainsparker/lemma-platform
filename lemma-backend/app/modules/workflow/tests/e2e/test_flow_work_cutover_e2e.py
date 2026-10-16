@@ -96,9 +96,11 @@ async def test_every_run_and_wait_in_flight_at_the_cutover_moves_on(
     form = await flows.workflow(
         *_single({"id": "ask", "type": "FORM", "config": {"input_schema": FORM_SCHEMA}})
     )
+    # Held by a timer, not a form: a run still on its entry form holds no
+    # place in the limit.
     capped = await flows.workflow(
         *_single(
-            {"id": "ask", "type": "FORM", "config": {"input_schema": FORM_SCHEMA}}
+            {"id": "hold", "type": "WAIT_UNTIL", "config": {"timeout_seconds": 3600}}
         ),
         limit=1,
     )
@@ -196,7 +198,9 @@ async def test_every_run_and_wait_in_flight_at_the_cutover_moves_on(
     )
     # The parked run is admitted into the room that was freed.
     admitted = await flows.run(parked["id"])
-    assert admitted["active_wait"]["wait_type"] == "HUMAN"
+    # (The drain pulls its timer forward, so it runs to the end.)
+    assert admitted["status"] == "COMPLETED"
+    assert [step["node_id"] for step in admitted["step_history"]] == ["hold", "end"]
 
 
 async def _drained_status(flows: FlowWork, run_id: str) -> str:

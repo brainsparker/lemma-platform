@@ -159,8 +159,12 @@ def document_worker(
             "E2E_DISABLE_WORKER_FILE_AUTOINDEX": "false",
             "DOCUMENT_PROCESSOR": processor,
             "KREUZBERG_URL": fake_document_processor_server.base_url,
-            "KREUZBERG_REQUEST_TIMEOUT_SECONDS": "1",
-            "KREUZBERG_CONNECT_TIMEOUT_SECONDS": "0.2",
+            # Generous on purpose. A client-side timeout is judged by the
+            # health check, so on a loaded runner a 1 s budget turned a fake
+            # that had already answered into "extractor down" whenever a test
+            # had the health check failing. The hang test sets its own.
+            "KREUZBERG_REQUEST_TIMEOUT_SECONDS": "10",
+            "KREUZBERG_CONNECT_TIMEOUT_SECONDS": "2",
             "KREUZBERG_TRANSIENT_RETRY_ATTEMPTS": "2",
             "KREUZBERG_TRANSIENT_RETRY_BASE_DELAY_SECONDS": "0.01",
             "KREUZBERG_CIRCUIT_FAILURE_THRESHOLD": "20",

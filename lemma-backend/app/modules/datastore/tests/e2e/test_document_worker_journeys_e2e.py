@@ -162,8 +162,8 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
         # Measured as "unchanged by the redelivery", not "exactly one, ever.
         # The absolute form asserted that no transient retry had happened on
         # the way here, which is not something the product promises and is not
-        # what this test is about: `KREUZBERG_REQUEST_TIMEOUT_SECONDS` is 1, so
-        # a loaded runner can time the first extract out, `release_claim`
+        # what this test is about: a loaded runner can time the first extract
+        # out (the worker's budget was 1 s when this bit), `release_claim`
         # returns the row to PENDING with its attempt refunded (PS-DATA-041),
         # and the re-drive extracts again — correct behaviour that read as a
         # duplicate. It cost a red required check on an unrelated pull request.

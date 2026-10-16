@@ -958,6 +958,49 @@ class TestPodAgentLifecycle:
         assert duplicate.json()["status"] == "reconciled"
         assert duplicate.json()["decision"] == "APPROVE_ONCE"
 
+    async def test_a_decision_may_name_the_approval_by_its_listed_id(
+        self,
+        authenticated_client,
+        fixed_test_org,
+    ):
+        """The approvals list returns messages, whose `id` is the message's,
+        while the decision route is keyed by the call's `tool_call_id`. A
+        client deciding with the id it was handed reaches the call, not 404."""
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
+            authenticated_client,
+            fixed_test_org,
+            tool_name="request_approval",
+            tool_args={
+                "tool_name": "exec_command",
+                "args": {"cmd": "echo hi"},
+                "title": "Say hi?",
+                "reason": "Testing the listed id.",
+            },
+        )
+        listed = await authenticated_client.get(
+            f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
+        )
+        [item] = listed.json()["items"]
+        assert item["id"] != approval_id
+
+        decision = await authenticated_client.post(
+            f"/pods/{pod_id}/conversations/{conversation_id}"
+            f"/approvals/{item['id']}/decision",
+            json={"decision": "DENY", "response": {"confirmed": False}},
+        )
+        assert decision.status_code == 200, decision.text
+        _resume_run, tool_return = await _resume_run_and_tool_return(
+            conversation_id, paused_run.id, approval_id
+        )
+        assert tool_return is not None
+        assert tool_return.tool_result["success"] is False
+
     async def test_request_approval_denial_resumes_without_executing(
         self,
         authenticated_client,

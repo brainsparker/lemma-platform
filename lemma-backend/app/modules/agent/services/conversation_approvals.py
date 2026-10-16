@@ -142,6 +142,19 @@ class ApprovalCoordinator:
             approval_id=approval_id,
         )
         if decision_row is None and paused is None:
+            # The approvals list's `id` is the message's; accept it for the call.
+            alias = await self._tool_call_id_of(conversation.id, approval_id)
+            if alias is not None:
+                return await self.resolve_user_approval_internal(
+                    conversation=conversation,
+                    approval_id=alias,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                    decision=decision,
+                    response=response,
+                    agent_name=agent_name,
+                )
+        if decision_row is None and paused is None:
             # Nothing to resolve and nothing to heal — the approval never existed
             # or its call was never persisted.
             raise UnknownApprovalError()
@@ -478,6 +491,18 @@ class ApprovalCoordinator:
             ),
         )
         return [saved]
+
+    async def _tool_call_id_of(
+        self, conversation_id: UUID, approval_id: str
+    ) -> str | None:
+        try:
+            message_id = UUID(approval_id)
+        except ValueError:
+            return None
+        found = await self.conversation_repository.tool_call_id_of_message(
+            conversation_id=conversation_id, message_id=message_id
+        )
+        return found if found and found != approval_id else None
 
     async def paused_call(
         self,

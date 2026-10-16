@@ -136,15 +136,21 @@ async def settle(
         if state is None:
             return "lease_lost"
         decision = decide(spec, state, exc, env.clock())
-        logger.warning(
-            "work.item.failed",
-            item_id=str(item.id),
-            kind=item.kind,
-            ns=item.ns,
-            error_class=_error_class(decision),
-            attempts=decision.attempts,
-            exc_info=exc,
-        )
+        if isinstance(exc, Defer):
+            # "Not now", not a failure: a per-pod cap held until a run ends
+            # defers thousands of times under load, and logging each as a
+            # failed item with its traceback buried the real ones.
+            logger.debug("work.item.deferred", kind=item.kind, ns=item.ns)
+        else:
+            logger.warning(
+                "work.item.failed",
+                item_id=str(item.id),
+                kind=item.kind,
+                ns=item.ns,
+                error_class=_error_class(decision),
+                attempts=decision.attempts,
+                exc_info=exc,
+            )
         hook_error = await capture(
             apply_decision(uow, item, decision, spec, env.registry)
         )

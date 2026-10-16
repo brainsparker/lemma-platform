@@ -146,6 +146,23 @@ class ConversationApprovalQueriesMixin:
         response = row.response if isinstance(row.response, dict) else {}
         return AgentRunApprovalDecision(row.decision), response
 
+    async def tool_call_id_of_message(
+        self, *, conversation_id: UUID, message_id: UUID
+    ) -> str | None:
+        """The tool_call_id of a TOOL_CALL message, by the message's own id.
+
+        The approvals list returns messages, whose ``id`` is the message's; a
+        decision is addressed by the call's ``tool_call_id``. This lets a
+        client that sent the one it was given still reach the call.
+        """
+        return await self.session.scalar(
+            select(MessageModel.tool_call_id).where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.id == message_id,
+                MessageModel.kind == MessageKind.TOOL_CALL.value,
+            )
+        )
+
     async def get_tool_call(
         self,
         *,

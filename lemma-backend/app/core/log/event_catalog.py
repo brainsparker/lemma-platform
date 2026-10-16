@@ -1024,6 +1024,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'work.heartbeat.failed': EventSpec('warning', frozenset({'item_id', 'kind'})),
     'work.item.coalesced': EventSpec('info', frozenset({'dedup_key', 'item_id', 'kind'})),
     'work.item.dead': EventSpec('warning', frozenset({'attempts', 'error_class', 'item_id', 'kind', 'lease_losses', 'ns'})),
+    'work.item.deferred': EventSpec('debug', frozenset({'kind', 'ns'})),
     'work.item.failed': EventSpec('warning', frozenset({'attempts', 'error_class', 'item_id', 'kind', 'ns'})),
     'work.item.lease_lost': EventSpec('warning', frozenset({'item_id', 'kind', 'ns'})),
     'work.item.on_dead_failed': EventSpec('error', frozenset({'item_id', 'kind', 'ns'})),

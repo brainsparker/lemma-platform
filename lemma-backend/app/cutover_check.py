@@ -112,13 +112,22 @@ async def _check_main_database(
     async with session_maker() as session:
         report.legacy_tables = await legacy_tables_present(session)
         # The sweep's horizon: older rows are not owed, they are not replayed.
+        # Every sweep item carries the same one, a dead item included; the
+        # newest is read. With none left, nothing records it any more.
         horizon = await session.scalar(
             text(
                 "SELECT (payload->>'horizon')::timestamptz FROM work_items "
-                "WHERE kind = :kind LIMIT 1"
+                "WHERE kind = :kind AND payload ? 'horizon' "
+                "ORDER BY created_at DESC LIMIT 1"
             ),
             {"kind": LEGACY_SWEEP},
         )
+        if horizon is None and report.legacy_tables:
+            report.notes.append(
+                "the sweep's item is gone, so its release horizon is unknown: "
+                "owed counts include rows from before the release, which "
+                "nothing converts -- they go with the tables"
+            )
         if report.legacy_tables:
             for route in ROUTES:
                 owed = await count_owed(session, route, horizon=horizon)

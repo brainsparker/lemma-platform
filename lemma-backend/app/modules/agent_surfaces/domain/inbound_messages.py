@@ -1,8 +1,10 @@
 """One inbound delivery, stored before anything acts on it.
 
 A webhook or a receiver poll writes one row per delivery, unique on
-``(receiver_scope, source_event_id)``: the unique conflict *is* the dedup,
-durable and with no TTL, so a platform that retries for days is answered once.
+``(receiver_scope, source_event_id)``: the unique conflict *is* the dedup, and
+it lasts as long as the row -- 7 days once ROUTED or DROPPED (Meta retries for
+up to 7), 30 once FAILED (``events/periodic_work.py``) -- so a platform
+retrying within that is answered once.
 The row then moves through ``surface.ingest``::
 
     RECEIVED -> INGESTING -> ROUTED     (a run started, or joined one)

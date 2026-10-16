@@ -698,7 +698,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'cutover.finish.outbox_lock_timeout': EventSpec('warning', frozenset({'database'})),
     'cutover.finish.streams_not_retired': EventSpec('warning', frozenset()),
     'cutover.legacy_sweep.converted': EventSpec('info', frozenset({'streaq_converted'})),
-    'cutover.legacy_sweep.streaq_stale_skipped': EventSpec('info', frozenset({'skipped'})),
+    'cutover.legacy_sweep.streaq_stale_skipped': EventSpec('warning', frozenset({'functions'})),
     'cutover.legacy_sweep.streaq_unconverted': EventSpec('warning', frozenset({'functions'})),
     'cutover.legacy_sweep.taken_over': EventSpec('info', frozenset({'other', 'routes'})),
     'datastore.access.files_withheld': EventSpec('warning', frozenset({'actor_type', 'total_candidates', 'withheld_count'})),

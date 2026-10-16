@@ -444,12 +444,22 @@ async def test_the_cutover_resumes_only_a_turn_that_was_moving(scenario) -> None
                 )
             ).all()
         }
+        # Not due yet: an old worker may still be driving it, with no lease
+        # this release can see. Resumed once it has been quiet ten minutes.
+        due_later = (
+            await one(
+                "SELECT run_at > now() + interval '9 minutes' FROM work_items "
+                "WHERE kind LIKE 'agent.turn%' AND payload->>'run_id' = :id",
+                id=str(moving_run),
+            )
+        ).scalar_one()
         await one("DELETE FROM work_items WHERE kind LIKE 'agent.turn%'")
         await session.commit()
     assert (run_status, conversation) == ("FAILED", "FAILED")
     assert error.startswith("Interrupted before the upgrade")
     assert str(stale_run) not in seeded
     assert str(moving_run) in seeded
+    assert due_later, "a turn still moving on the old release was made due at once"
 
 
 async def test_the_cutover_fails_a_wait_long_past_due_instead_of_waking_it(
@@ -474,6 +484,61 @@ async def test_the_cutover_fails_a_wait_long_past_due_instead_of_waking_it(
             )
         ).scalar_one()
     assert status == "FAILED"
+
+
+async def test_the_cutover_fails_a_conversation_whose_approval_is_too_old_to_run(
+    scenario,
+) -> None:
+    """An approval decided long before the release is not executed -- that
+    would run an old tool call on its own. The conversation paused on it has
+    nothing else to wake it, so it is failed rather than left waiting."""
+    seeded = await seeded_conversation(scenario)
+    run_id = await running_run(seeded)
+    approval_id = await pausing_call(
+        seeded, run_id, tool_name="ask_user", tool_args={"questions": []}
+    )
+    await finish(run_id, conversation_status=ConversationStatus.WAITING)
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await ConversationRepository(uow).record_approval_decision(
+            conversation_id=seeded.conversation_id,
+            approval_id=approval_id,
+            agent_run_id=run_id,
+            tool_name="ask_user",
+            decision=AgentRunApprovalDecision.APPROVE_ONCE,
+            response={"answers": {"q": "yes"}},
+            resolved_by_user_id=seeded.user_id,
+        )
+        await uow.commit()
+    async with async_session_maker() as session:
+        await session.execute(
+            text(
+                "UPDATE agent_approval_decisions SET created_at = now() - "
+                "interval '2 hours' WHERE conversation_id = :id"
+            ),
+            {"id": seeded.conversation_id},
+        )
+        await session.commit()
+
+    await _seed()
+
+    async with async_session_maker() as session:
+        status = (
+            await session.execute(
+                text("SELECT status FROM agent_conversations WHERE id = :id"),
+                {"id": seeded.conversation_id},
+            )
+        ).scalar_one()
+        queued = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM work_items "
+                    "WHERE kind = 'agent.approval.execute' "
+                    "AND payload->>'conversation_id' = :id"
+                ),
+                {"id": str(seeded.conversation_id)},
+            )
+        ).scalar_one()
+    assert (status, queued) == ("FAILED", 0)
 
 
 @pytest.mark.drives_work

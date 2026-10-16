@@ -19,7 +19,8 @@ receiver (Telegram polling, Slack Socket Mode, Resend polling):
 4. **Messages**: one ``surface_inbound_messages`` row per message the delivery
    carries (``ON CONFLICT DO NOTHING`` on ``(receiver_scope, source_event_id)``)
    plus its ``surface.ingest`` item, in one transaction. The unique conflict is
-   the dedup, durable and with no TTL: a redelivery days later is a no-op.
+   the dedup, kept for the row's retention (7 days once ROUTED or DROPPED, 30
+   once FAILED): a redelivery inside that is a no-op.
 
 A receiver passes ``after_store`` to advance its cursor in the same transaction
 as the rows it read.

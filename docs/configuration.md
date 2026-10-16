@@ -961,7 +961,7 @@ Three things govern it:
 ```dotenv
 WORK_CLASSES=                          # empty = every class; e.g. ingestion
 WORK_SLOTS_JSON={"ingestion": 4}       # per-class slots per process
-WORK_MAX_RUNNING_JSON={"ingestion": 2} # per-class cap per pod
+WORK_MAX_RUNNING_JSON={"ingestion": 4} # per-class cap per pod
 ```
 
 Document processing is a `file.process` work item in the **ingestion** class,
@@ -970,8 +970,8 @@ agent turns and surface messages. A large upload therefore cannot occupy the
 slots interactive work needs. Ingestion's slots (4 per process by default) are
 the real cap on concurrent extractions and the main lever on worker peak RAM.
 
-Every class claims fairly across pods, under a per-pod cap (2 running
-extractions per pod by default). So one tenant uploading a thousand documents
+Every class claims fairly across pods, under a per-pod cap (4 running
+extractions per pod by default, as the old per-pod in-flight gate allowed). So one tenant uploading a thousand documents
 waits behind itself, not in front of everyone else, and every file is still
 processed eventually: the backlog is the `work_items` table.
 `WORK_LIMIT_OVERRIDES_JSON` raises the cap for one organization or pod.

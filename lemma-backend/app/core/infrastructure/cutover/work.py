@@ -447,7 +447,9 @@ async def convert_streaq_jobs(ctx: JobContext, horizon: datetime | None = None) 
     from app.core.infrastructure.redis.client import get_redis
 
     redis = get_redis(decode_responses=False)
-    converted, stale, left = 0, 0, {}
+    converted = 0
+    stale: dict[str, int] = {}
+    left: dict[str, int] = {}
     retired = retired_streaq_jobs()
     try:
         async for job in queued_jobs(redis):
@@ -457,7 +459,7 @@ async def convert_streaq_jobs(ctx: JobContext, horizon: datetime | None = None) 
                 and job.enqueued_at < horizon
             )
             if job.function in STREAQ_ROUTES and old:
-                stale += 1
+                stale[job.function] = stale.get(job.function, 0) + 1
             elif job.function in STREAQ_ROUTES:
                 # One job's arguments, as JSON (a UUID or a datetime as text).
                 event = to_jsonable_python(
@@ -484,7 +486,12 @@ async def convert_streaq_jobs(ctx: JobContext, horizon: datetime | None = None) 
             "cutover.legacy_sweep.streaq_unconverted", functions=_counts(left)
         )
     if stale:
-        logger.info("cutover.legacy_sweep.streaq_stale_skipped", skipped=stale)
+        # Per function, and a warning: a dropped process_surface_message is a
+        # person's message that will now never be answered; this line is the
+        # only record of it once the job's data is deleted.
+        logger.warning(
+            "cutover.legacy_sweep.streaq_stale_skipped", functions=_counts(stale)
+        )
     return converted
 
 

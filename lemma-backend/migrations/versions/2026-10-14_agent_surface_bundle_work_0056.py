@@ -37,7 +37,8 @@ The waits' ``fire_lease_until`` and ``wake_attempts`` are no longer read; they
 stay until ``0057`` so the previous release keeps working.
 
 **Surfaces.** ``surface_inbound_messages`` (one row per inbound delivery,
-unique on ``(receiver_scope, source_event_id)`` -- the dedup, with no TTL),
+unique on ``(receiver_scope, source_event_id)`` -- the dedup, for as long as
+the row is kept: 7 days once handled, 30 once failed),
 ``surface_message_claims``, ``surface_deliveries`` (``PENDING -> SENDING ->
 SENT | UNKNOWN | FAILED``) and ``surface_receiver_state`` replace the Redis
 delivery claims, ``event_dedup`` keys, owed-reply metadata and receiver
@@ -119,7 +120,17 @@ def park_statements() -> list[str]:
         "WHERE j.status IN ('QUEUED', 'EXPORTING', 'APPLYING', 'FETCHING', "
         f"'PLANNING') AND COALESCE(j.heartbeat_at, j.updated_at) < {_HORIZON}"
     )
-    return [runs, waits, bundles]
+    # An approval decided before the horizon is not executed (see
+    # agent_wait_seed_statements). Its conversation is paused on the call, and
+    # with no item nothing would ever wake it: fail it, as a run is, so the
+    # person sees it ended and can carry on.
+    approvals = (
+        "UPDATE agent_conversations c SET status = 'FAILED' "
+        "WHERE c.status = 'WAITING' AND c.id IN ("
+        f"SELECT d.conversation_id FROM {_OPEN_DECISIONS} "
+        f"AND d.created_at < {_HORIZON})"
+    )
+    return [runs, waits, bundles, approvals]
 
 
 # -- agent turns ---------------------------------------------------------------
@@ -171,6 +182,19 @@ def _queues(cls: str, ns: str, source: str) -> str:
     )
 
 
+#: When a seeded turn may run. A run the old release is still driving has no
+#: lease this one can see, so resuming it at once would run it twice -- two
+#: answers, and a tool's side effect done twice. Ten minutes past its last sign
+#: of life lets an old worker finish it (the turn then finds it no longer
+#: RUNNING and does nothing) while one the deploy killed resumes soon after.
+#: Ten minutes is also how long the sweep waits before it calls the previous
+#: release gone (``QUIET_SECONDS``).
+_TURN_DUE = (
+    "GREATEST(now(), GREATEST(r.updated_at, r.started_at, c.last_activity_at) "
+    "+ interval '10 minutes')"
+)
+
+
 def _turns(cls: str, kind: str, source: str) -> str:
     return (
         "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, "
@@ -178,8 +202,8 @@ def _turns(cls: str, kind: str, source: str) -> str:
         f"SELECT gen_random_uuid(), {_RUN_NS}, '{cls}', '{kind}', "
         "jsonb_build_object('run_id', r.id::text, 'conversation_id', "
         "c.id::text, 'user_id', c.user_id::text, 'agent_name', NULL), "
-        "'agent-run:' || r.id::text, 'conversation:' || c.id::text, 1, now() "
-        f"FROM {source} {_ON_CONFLICT}"
+        "'agent-run:' || r.id::text, 'conversation:' || c.id::text, 1, "
+        f"{_TURN_DUE} FROM {source} {_ON_CONFLICT}"
     )
 
 

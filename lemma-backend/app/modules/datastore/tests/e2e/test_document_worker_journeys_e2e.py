@@ -69,7 +69,7 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
     document_worker,
     fake_document_processor_server: FakeDocumentProcessorServer,
 ):
-    """One document, end to end: upload, extract, project, search, dedup.
+    """One document, end to end: upload, extract, project, search.
 
     The PR-lane half of what used to be a single 130-second test — the slowest
     in the entire e2e suite, 5.6% of its wall-clock on its own. It uploaded
@@ -78,8 +78,10 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
 
     What every pull request needs to know is that the pipeline is connected:
     an uploaded PDF reaches the extractor, its children get written, the
-    projection lands, search finds it, and a redelivered event does not
-    duplicate the work. That is this test, on one document.
+    projection lands and search finds it. That is this test, on one document.
+    (There is no event left to redeliver: processing is a work item keyed by
+    the file's bytes, and writing the same bytes again queues nothing --
+    test_file_work_e2e's test_the_same_bytes_again_are_not_reprocessed.)
 
     The extractor-behaviour matrix — config fallback, connection retry, chunk
     fallback, pages-only, and all three search methods — is
@@ -353,7 +355,7 @@ async def _work_item(db_manager, file_id: str):
 
 
 @pytest.mark.asyncio
-async def test_docling_adapter_runs_through_http_outbox_and_worker(
+async def test_docling_adapter_runs_through_the_work_table_and_worker(
     pod_api: DatastoreApi,
     db_manager,
     document_worker,

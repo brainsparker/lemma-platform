@@ -178,7 +178,10 @@ def trigger_seed_statements() -> list[str]:
     )
     abandoned = (
         "UPDATE schedule_runs r SET status = 'TARGET_FAILED', "
-        "error_code = 'NOT_STARTED_BEFORE_UPGRADE', error_type = 'cutover', "
+        "error_code = 'NOT_STARTED_BEFORE_UPGRADE', "
+        # The breaker passes over this error type (DEPLOYMENT_FAILURES): the
+        # upgrade did not start these, no target of the schedule failed.
+        "error_type = 'ScheduleNotStartedBeforeUpgrade', "
         f"completed_at = now() WHERE {_ABANDONED}"
     )
     reserve = (

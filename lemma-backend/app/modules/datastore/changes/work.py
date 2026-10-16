@@ -211,8 +211,15 @@ async def run_deliver(ctx: JobContext, payload: SubscriberRef) -> None:
     if page.changes:
         note_delivery_lag(_age(page.changes[0].at))
         async with ctx.checkpoint() as uow:
+            # The stored intents are the subscriber's as of its last sync. A
+            # config change since (a trigger told to fire on bulk writes) is
+            # live for deliver() at once, so its changes need rows now too.
+            spec = await module.spec(uow, payload.pod_id, subscriber_id)
+            intents = row.snapshot_intents | (
+                spec.snapshot_intents if spec is not None else frozenset()
+            )
             changes = await _with_current_rows(
-                uow, payload.pod_id, page.changes, row.snapshot_intents
+                uow, payload.pod_id, page.changes, intents
             )
             outcome = await module.deliver(uow, payload.pod_id, subscriber_id, changes)
         if outcome is DeliverOutcome.GONE:
@@ -268,9 +275,10 @@ async def _with_current_rows(
 
     The subscriber watches changes committed after its row exists; a write
     already in flight when it was created was logged slim. What it gets for
-    those is the row as it is now -- the best the log can say. A change whose
-    intent the subscriber does not act on (a bulk write a trigger skips) was
-    logged slim on purpose and stays that way.
+    those is the row as it is now -- the best the log can say. So is a change
+    logged slim because the subscriber skipped its intent then, but acts on it
+    now. A change whose intent it still does not act on (a bulk write a
+    trigger skips) stays slim.
     """
 
     def wants(c: Change) -> bool:

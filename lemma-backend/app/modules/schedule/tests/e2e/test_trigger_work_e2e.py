@@ -21,7 +21,7 @@ from app.modules.schedule.contracts.webhook_source import NormalizedWebhook
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.repositories.schedule_run_repository import (
-    DEPLOYMENT_FILTER_FAILURES,
+    DEPLOYMENT_FAILURES,
 )
 from app.modules.schedule.services.trigger_filter import (
     MAX_FILTER_ASKS,
@@ -340,7 +340,7 @@ async def test_a_filter_interrupted_every_time_is_dead_lettered_uncounted(
         "DEAD_LETTERED",
         "ScheduleFilterInterrupted",
     )
-    assert "ScheduleFilterInterrupted" in DEPLOYMENT_FILTER_FAILURES
+    assert "ScheduleFilterInterrupted" in DEPLOYMENT_FAILURES
 
 
 async def test_the_daily_ceiling_pauses_the_trigger_records_the_skip_and_tells_the_owner(

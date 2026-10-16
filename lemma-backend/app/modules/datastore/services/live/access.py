@@ -34,18 +34,6 @@ def _denied(exc: DomainError) -> LiveAccessDenied:
     return LiveAccessDenied(LiveErrorCode.FORBIDDEN, exc.message)
 
 
-async def _rows_readable(ctx: Context, pod_id: UUID, table_id: UUID) -> bool:
-    """Whether *ctx* may read this table's rows, as the record API decides it.
-
-    Seeing a table is not reading it: a member granted ``datastore.table.read``
-    on a RESTRICTED table and nothing else gets a 403 from the record API, and
-    a frame carries the row -- so a socket must ask what the record API asks.
-    """
-    return await ctx.can(
-        Permissions.DATASTORE_RECORD_READ, ResourceRef.table(pod_id, table_id)
-    )
-
-
 async def _visible(
     service: TableService, pod_id: UUID, ctx: Context
 ) -> list[LiveTable]:
@@ -57,7 +45,12 @@ async def _visible(
             pod_id, ctx, limit=_LIST_PAGE, cursor=cursor
         )
         for table in page:
-            if await _rows_readable(ctx, pod_id, table.id):
+            # Seeing a table is not reading it: a member granted only
+            # ``datastore.table.read`` on a RESTRICTED table gets a 403 from the
+            # record API, and a frame carries the row. The listing already
+            # decided each table's actions in its one query (``ctx.can``'s rule,
+            # in SQL), so this costs nothing per table.
+            if Permissions.DATASTORE_RECORD_READ in table.allowed_actions:
                 tables.append(LiveTable(id=table.id, name=table.table_name))
         if not cursor:
             return tables

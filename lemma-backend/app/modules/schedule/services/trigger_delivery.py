@@ -194,10 +194,12 @@ class _Page:
             return True
         if self.budget is None or self.budget > 0:
             return False
+        # Keyed as the page's own fire_cap row is (the change's position), so
+        # that row rewrites this one instead of appearing beside it.
         await pause_at_fire_cap(
             self.uow,
             self.schedule,
-            source_event_id=first.source_event_id,
+            source_event_id=str(first.position),
             work=self.writer,
         )
         self.result.paused = True

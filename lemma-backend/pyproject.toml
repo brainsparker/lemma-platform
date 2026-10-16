@@ -58,6 +58,9 @@ dependencies = [
     # same time -- and the server apps here rely on that. A 3.x install would
     # satisfy the old floor and speak only the handshake era.
     "fastmcp>=4.0.1",
+    # Arrives through fastmcp and pydantic-ai; floored here past
+    # CVE-2026-59951, which neither of them pins away from.
+    "mcp>=2.2.0",
     # History compaction for providers with no native CompactionPart support.
     "summarization-pydantic-ai>=0.1.11",
     "websockets>=16.0",

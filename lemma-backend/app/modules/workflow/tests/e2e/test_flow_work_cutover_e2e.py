@@ -104,6 +104,7 @@ async def test_every_run_and_wait_in_flight_at_the_cutover_moves_on(
     )
 
     queued_fn = await flows.start(function_step)  # function run PENDING
+    stale_fn = await flows.start(function_step)  # queued hours before the release
     lost_fn = await flows.start(function_step)  # function run ends, resume lost
     started_fn = await flows.start(running_step)  # function run RUNNING
     timed = await flows.start(timer)
@@ -137,6 +138,13 @@ async def test_every_run_and_wait_in_flight_at_the_cutover_moves_on(
         "UPDATE workflow_run_waits SET status = 'CANCELLED' WHERE run_id = :id",
         id=UUID(first_capped["id"]),
     )
+    stale_ref = stale_fn["active_wait"]["external_ref"]
+    await _execute(
+        flows,
+        "UPDATE function_runs SET created_at = now() - interval '2 hours' "
+        "WHERE id = :id",
+        id=UUID(stale_ref),
+    )
     # Written by the previous release: nothing in the work table.
     await _execute(flows, "DELETE FROM work_items")
 
@@ -153,6 +161,14 @@ async def test_every_run_and_wait_in_flight_at_the_cutover_moves_on(
     # Queued function run: started by its seeded item, once.
     queued_ref = queued_fn["active_wait"]["external_ref"]
     assert flows.runtime.invocations[queued_ref] == 1
+    # Queued long before the release: not started by the cutover, failed
+    # saying why.
+    assert flows.runtime.invocations[stale_ref] == 0
+    stale_run = await flows.scalar(
+        "SELECT status || ': ' || error FROM function_runs WHERE id = :id",
+        id=UUID(stale_ref),
+    )
+    assert stale_run.startswith("FAILED: Not started before the upgrade"), stale_run
     # The function run whose end the old consumer never delivered: resumed.
     assert (await flows.run(lost_fn["id"]))["status"] == "COMPLETED"
     # The one an old worker started: never invoked again, failed at its deadline.

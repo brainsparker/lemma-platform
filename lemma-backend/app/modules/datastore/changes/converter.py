@@ -13,7 +13,10 @@ same id, which the legacy consumer used too.
 
 It waits until no ``changes.sync_subscribers`` item is outstanding, so the
 subscribers seeded by the migration exist before the changes they are owed are
-appended. It keeps running while any process may still write to the outbox,
+appended. Only changes that occurred within ``LIVE_WINDOW`` are appended: an
+older one was not in flight when the release went out, and firing triggers on
+it now would be a replay. Those are still deleted or acknowledged, and counted
+in the log. It keeps running while any process may still write to the outbox,
 and exits (destroying the drained groups) once the outbox and both groups have
 stayed empty for ``QUIET_FOR`` with the change log switched on.
 """
@@ -74,6 +77,9 @@ IDLE_DELAY = timedelta(seconds=2)
 #: How long everything must stay empty, with the log on, before the drain
 #: ends: longer than a process takes to notice every schema is ready.
 QUIET_FOR = timedelta(seconds=4 * RECHECK_SECONDS)
+
+#: How recently a change must have occurred to be carried over.
+LIVE_WINDOW = timedelta(minutes=30)
 
 _OPS = {"INSERT": "I", "UPDATE": "U", "DELETE": "D"}
 
@@ -139,7 +145,11 @@ async def convert_outbox(uow: SqlAlchemyUnitOfWork) -> int:
         if not rows:
             return 0
         events = [_as_event(row[1]) for row in rows]
-        await append_events(conn, uow, [event for event in events if event is not None])
+        await append_events(
+            conn,
+            uow,
+            _recent([event for event in events if event is not None], "outbox"),
+        )
         await conn.execute(
             text("DELETE FROM domain_event_outbox WHERE id = ANY(:ids)"),
             {"ids": [row[0] for row in rows]},
@@ -160,7 +170,7 @@ async def convert_stream(uow: SqlAlchemyUnitOfWork, redis: Redis) -> int:
             if (event := _stream_event(fields)) is not None
         ]
         async with get_datastore_engine().begin() as conn:
-            await append_events(conn, uow, events)
+            await append_events(conn, uow, _recent(events, group))
         await redis.xack(
             DATASTORE_EVENTS_STREAM, group, *[entry_id for entry_id, _ in entries]
         )
@@ -223,6 +233,39 @@ async def append_events(
     if appended:
         await conn.execute(text("SELECT pg_notify(:c, '')"), {"c": PENDING_CHANNEL})
     return appended
+
+
+def _occurred_at(event: Event) -> datetime | None:
+    value = event.get("occurred_at")
+    if isinstance(value, datetime):
+        moment = value
+    elif isinstance(value, str):
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _recent(events: Sequence[Event], source: str) -> list[Event]:
+    """The events that occurred within ``LIVE_WINDOW``; the rest are dropped.
+
+    An event with no readable time is kept: it cannot be shown to be old, and
+    the record events this drain reads always carry one.
+    """
+    horizon = datetime.now(timezone.utc) - LIVE_WINDOW
+    kept = [
+        event
+        for event in events
+        if (moment := _occurred_at(event)) is None or moment >= horizon
+    ]
+    if skipped := len(events) - len(kept):
+        logger.info(
+            "datastore.changes.drain.stale_skipped", skipped=skipped, source=source
+        )
+    return kept
 
 
 def _encode_records(records: list[dict[str, object]]) -> str:

@@ -373,6 +373,11 @@ async def test_the_drain_converts_the_old_paths_backlog_once(
     for event in streamed:
         await bus.publish(DATASTORE_EVENTS_STREAM, event)
     await bus.publish(DATASTORE_EVENTS_STREAM, streamed[0])  # a redelivery
+    # A change from long before the release that a group never read: cleared,
+    # and no trigger fires on it.
+    stale = await _legacy_event(pod_id, str(uuid4()))
+    stale["occurred_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    await bus.publish(DATASTORE_EVENTS_STREAM, stale)
 
     async with async_session_maker() as session:
         await WorkWriter(session).add(DRAIN, SYSTEM_NAMESPACE, {}, dedup_key=DRAIN)
@@ -385,6 +390,7 @@ async def test_the_drain_converts_the_old_paths_backlog_once(
     fired = {run["source_event_id"] for run in await runs(schedule.id)}
     assert {event["event_id"] for event in streamed} <= fired
     assert len(fired) == 4
+    assert stale["event_id"] not in fired
     assert (
         await datastore_scalar(
             "SELECT count(*) FROM domain_event_outbox WHERE event_type LIKE 'datastore.record.%'"

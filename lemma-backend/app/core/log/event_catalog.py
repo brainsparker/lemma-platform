@@ -697,6 +697,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.changes.drain.converted': EventSpec('info', frozenset({'converted'})),
     'datastore.changes.drain.dropped': EventSpec('info', frozenset({'dropped', 'pod_id'})),
     'datastore.changes.drain.finished': EventSpec('info', frozenset()),
+    'datastore.changes.drain.stale_skipped': EventSpec('info', frozenset({'skipped', 'source'})),
     'datastore.changes.drain.group_absent': EventSpec('info', frozenset({'detail', 'group'})),
     'datastore.changes.drain.undecodable_entry': EventSpec('warning', frozenset()),
     'datastore.changes.retention.observed': EventSpec('info', frozenset({'deleted'})),

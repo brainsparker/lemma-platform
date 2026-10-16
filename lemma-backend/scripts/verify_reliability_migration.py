@@ -196,12 +196,12 @@ def main() -> int:
             """
         )
         assert all(row[0] for row in cursor.fetchall())
-        # 0057 never drops the old event transport's tables, even empty: a
-        # previous release still running may write them. ``finish`` does.
+        # 0057 drops the old event transport's tables: the cutover replays
+        # nothing from them.
         cursor.execute(
             """
-            SELECT to_regclass('domain_event_outbox') IS NOT NULL,
-                   to_regclass('domain_event_inbox') IS NOT NULL
+            SELECT to_regclass('domain_event_outbox') IS NULL,
+                   to_regclass('domain_event_inbox') IS NULL
             """
         )
         assert cursor.fetchone() == (True, True)

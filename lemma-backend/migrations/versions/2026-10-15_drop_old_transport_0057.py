@@ -9,26 +9,22 @@ expand-only. Running it ends the rollback window to an image older than 0056.
   (dropped concurrently, so the table is never locked for writes): an agent or
   workflow outcome reaches its schedule run as a fact written in the run's
   finishing transaction, and the recovery sweep that read them is gone.
-* Not ``domain_event_outbox`` or ``domain_event_inbox``, ever, empty or not.
-  A migration runs before the rollout, while the previous release may still
-  be running (a rolling deploy, or a direct upgrade from an older image) and
-  committing to the outbox: "empty" now says nothing about the next commit,
-  and a dropped table fails every one of them. Dropping them, after the last
-  take-over and under a lock with a timeout, is ``finish``'s job --
-  ``python -m app.cutover_finish``, or the cutover sweep itself where
-  ``WORK_CUTOVER_AUTO_FINISH`` is on.
+* ``domain_event_outbox`` and ``domain_event_inbox``, whatever they still
+  hold: the cutover in ``0054``-``0056`` replays nothing from them. Like that
+  release, this one is deployed with the previous release's workers stopped.
+  A separately configured datastore database keeps an unused outbox of its
+  own; nothing reads it, and an operator may drop it by hand. The old Redis
+  streams and consumer groups are likewise unread, and expire with Redis.
 
 Every step is idempotent: the concurrent index drop commits on its own, so a
 failure after it leaves the revision half applied, and a rerun must finish it.
 
-The downgrade restores the columns and the index, and recreates whichever of
-the two tables ``finish`` already dropped, empty, as 0003 created them.
+The downgrade restores the columns and the index, and recreates the two
+tables, empty, as 0003 created them.
 
 Revision ID: 0057_drop_old_transport
 Revises: 0056_agent_surface_bundle_work
 """
-
-import logging
 
 import sqlalchemy as sa
 from alembic import op
@@ -38,8 +34,6 @@ revision = "0057_drop_old_transport"
 down_revision = "0056_agent_surface_bundle_work"
 branch_labels = None
 depends_on = None
-
-logger = logging.getLogger("alembic.runtime.migration")
 
 _TABLES = ("domain_event_inbox", "domain_event_outbox")
 
@@ -70,13 +64,8 @@ def upgrade() -> None:
             "DROP COLUMN IF EXISTS wake_attempts"
         )
     )
-    if any(_exists(table) for table in _TABLES):
-        logger.info(
-            "domain_event_outbox / domain_event_inbox are kept: "
-            "`python -m app.cutover_finish` drops them once the old transport "
-            "owes nothing (or the cutover sweep does, with "
-            "WORK_CUTOVER_AUTO_FINISH)."
-        )
+    for table in _TABLES:
+        op.execute(sa.text(f"DROP TABLE IF EXISTS {table}"))
 
 
 def downgrade() -> None:
@@ -161,12 +150,6 @@ def _create_outbox() -> None:
         "ix_domain_event_outbox_occurred",
         "domain_event_outbox",
         [sa.text("occurred_at DESC"), sa.text("id DESC")],
-    )
-    # 0056's downgrade drops it, and its upgrade builds it only if it is missing.
-    op.create_index(
-        "ix_domain_event_outbox_cutover",
-        "domain_event_outbox",
-        ["event_type", "occurred_at"],
     )
 
 

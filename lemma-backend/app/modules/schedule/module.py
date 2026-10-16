@@ -74,9 +74,6 @@ def _register_work() -> None:
 def _register_periodic_work() -> None:
     import app.modules.schedule.events.tasks  # noqa: F401
 
-    # Worker only: what the old event transport still owed, converted (cutover).
-    import app.modules.schedule.events.legacy_cutover  # noqa: F401
-
 
 def _resource_names():
     """How this module's resources are addressed by name in a grant.

@@ -9,9 +9,7 @@ list.
 The embedded app *is* the whole deployment -- desktop, the Docker local stack
 and `make dev` all launch `uvicorn local_app:app` and nothing else -- so it runs
 every work class (``WORK_CLASSES`` is for split deployments of the standalone
-worker), and it finishes the cutover from the old event transport itself
-(``WORK_CUTOVER_AUTO_FINISH`` on, unless set explicitly): with one process
-there is no previous release left running once this one serves. uvicorn owns the process's signals: the lifespan's exit is the stop,
+worker). uvicorn owns the process's signals: the lifespan's exit is the stop,
 and the work runtime drains within its per-class grace before the API's own
 teardown closes what its handlers use.
 """
@@ -20,8 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from collections.abc import Callable, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -75,7 +73,6 @@ def build_standalone_app(
         from app.core.registry.installed import OSS_MODULES
 
         async with AsyncExitStack() as stack:
-            stack.enter_context(_single_process_cutover())
             await stack.enter_async_context(api_lifespan(app))
             for item in embedded_apps:
                 await stack.enter_async_context(
@@ -95,23 +92,6 @@ def build_standalone_app(
 
     api_app.router.lifespan_context = standalone_lifespan
     return api_app
-
-
-@contextmanager
-def _single_process_cutover() -> Iterator[None]:
-    """``WORK_CUTOVER_AUTO_FINISH`` on for this process's life, unless the
-    environment set it: the default (off) is for multi-process deployments."""
-    from app.core.infrastructure.work.config import work_settings
-
-    if "work_cutover_auto_finish" in work_settings.model_fields_set:
-        yield
-        return
-    work_settings.work_cutover_auto_finish = True
-    try:
-        yield
-    finally:
-        work_settings.work_cutover_auto_finish = False
-        work_settings.model_fields_set.discard("work_cutover_auto_finish")
 
 
 def _drain_on_signal(begin_stop: Callable[[], None]) -> Callable[[], None]:

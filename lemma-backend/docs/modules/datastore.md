@@ -19,7 +19,7 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | Periodic work | Daily, drop the schemas of pods deleted more than `DATASTORE_ORPHAN_SCHEMA_RETENTION_DAYS` ago (0 disables, `datastore.orphan_schemas_reap`) and purge expired signed-link rows (`datastore.signed_links_purge`) |
 | API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily |
 | Worker lifespan | Runs the change-log handoff (LISTEN on the datastore database plus a poll), which turns a watched write's wake row into a `changes.deliver` item |
-| Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly, `admin`); record events the old transport still owed are appended by the cutover converter `changes/legacy_cutover.py`; see [Record change log](#record-change-log) |
+| Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly, `admin`); see [Record change log](#record-change-log) |
 
 ## Storage model
 
@@ -105,14 +105,8 @@ own two tables, never the search-chunk rewrite of version 2.
 `domain_event_outbox`, which a dispatcher published to `datastore.events` for
 the `schedule-datastore-events` and `mcp-access-event-deliveries` consumer
 groups. Every write appends to the change log now. A record event the old
-transport still owed -- an outbox row for a pod with an active DATASTORE
-trigger or a live MCP subscription, with no settled inbox row for that
-consumer -- is appended to its pod's log by the cutover
-(`changes/legacy_cutover.py`, run by `cutover.legacy_event`), under the event's
-own id, so it is appended once however many consumers owed it. It waits until
-no `changes.sync_subscribers` item is outstanding, so the subscribers exist
-first. A separately configured datastore database's outbox is read by the
-cutover sweep and dropped once the previous release has stopped; see
+transport still owed is not carried over: a trigger or MCP subscription sees
+the changes written after the upgrade. See
 [the cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13).
 
 **Operating it.** A transaction left open on the datastore database -- an

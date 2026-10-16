@@ -30,18 +30,11 @@
       plus teardown, or it SIGKILLs the worker mid-drain and those items wait
       out their leases (60 s for a turn) instead. Say in the notes whether a
       release is expected to interrupt runs, not whether it drains.
-- [ ] After the first deploy of a release that carries migration
-      `0056_agent_surface_bundle_work`, `python -m app.cutover_check` reports
-      the sweep converted once the previous release has stopped (about ten
-      minutes after the rollout), and `finished` only after the next release's
-      `python -m app.cutover_finish`; a dead `cutover.legacy_sweep` is retried, not ignored (see
+- [ ] A release that carries migrations `0054_work_runtime` to
+      `0056_agent_surface_bundle_work` is deployed with the previous release's
+      workers scaled to zero before the migrations run. The release notes say
+      that runs, turns and jobs in flight at the upgrade are failed, and that
+      nothing still queued on the old transport is replayed (see
       [reliability operations](../../lemma-backend/docs/operators/reliability.md#cutover-from-the-old-transport-design-13)).
-- [ ] Every multi-process deployment leaves `WORK_CUTOVER_AUTO_FINISH` at
-      its default (`false`); only the single-process app and the self-hosted
-      Compose worker turn it on. With it off, once `app.cutover_check` shows
-      the sweep converted and nothing owed, run `python -m app.cutover_finish`
-      and confirm it exits 0. Migration `0057_drop_old_transport` never drops
-      the old tables, but deploying it (or finishing) ends the rollback window
-      to images older than `0056`.
 - [ ] Every resolved issue entry contains implementation and exact test evidence.
 - [ ] Rollback, replay, DLQ, partial cancellation, and support guidance are ready.

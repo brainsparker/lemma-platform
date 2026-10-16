@@ -460,34 +460,6 @@ class NotificationService:
             await self.notifications.update(notification)
         return len(notifications)
 
-    async def expire_past_due(self, *, limit: int = 100) -> int:
-        """Sweep notifications nobody answered in time.
-
-        Each notification carries its own ``notification.expire`` item now
-        (``expire_one``); this sweep remains for rows written before that and
-        is run by the cutover drain, not by a cron.
-
-        Not a failure — people are busy — but a row that stays OPEN forever is a
-        badge that never clears and an asker that waits on nothing.
-        """
-        expired = 0
-        now = datetime.now(timezone.utc)
-        for notification in await self.notifications.list_past_due(limit=limit):
-            # Re-check rather than catching the entity's refusal: it may have
-            # been answered between the query and here, and the answer wins.
-            if not notification.is_past_due(now=now):
-                continue
-            notification.expire()
-            # An expired ask is as settled as an answered one: the asking
-            # conversation counts it as no longer outstanding, so the sweep that
-            # closes the last one has to say so, or that conversation waits on a
-            # question nobody can answer any more.
-            await self._announce_if_settled(
-                await self.notifications.update(notification)
-            )
-            expired += 1
-        return expired
-
     async def is_from_outside(
         self, *, pod_id: UUID, notification_id: UUID, user_id: UUID
     ) -> bool:
@@ -573,7 +545,13 @@ async def _arm_expiry(uow, notification: NotificationEntity) -> None:
     )
 
 
-async def expire_one(uow, notifications, notification_id: UUID) -> bool:
+async def expire_one(
+    uow,
+    notifications,
+    notification_id: UUID,
+    *,
+    work: NotificationWork | None = None,
+) -> bool:
     """Expire one notification if it is still open and past due. True if it was.
 
     The answer wins a race: a notification answered meanwhile is left alone.
@@ -585,6 +563,6 @@ async def expire_one(uow, notifications, notification_id: UUID) -> bool:
         return False
     notification.expire()
     await announce_if_settled(
-        uow, notifications, await notifications.update(notification)
+        uow, notifications, await notifications.update(notification), work=work
     )
     return True

@@ -993,23 +993,6 @@ in; every other class gets `WORK_SHUTDOWN_GRACE_SECONDS` (default 20);
 grace above the longest class grace plus teardown (120 seconds for the
 defaults). See [reliability operations](../lemma-backend/docs/operators/reliability.md).
 
-### Retiring the old event transport
-
-```dotenv
-WORK_CUTOVER_AUTO_FINISH=false   # default; true lets the cutover sweep finish by itself
-```
-
-Once the previous release has stopped and the cutover sweep has converted what
-the old transport owed, the old tables (`domain_event_outbox`,
-`domain_event_inbox`) and Redis streams are dropped -- which ends the rollback
-window to images older than migration `0056`. By default (`false`) an operator
-does it: run `python -m app.cutover_finish` when `python -m app.cutover_check`
-shows nothing owed. That is the right default for any deployment with several
-processes or rolling deploys, which should not end its rollback window by
-itself. The single-process app (standalone, desktop, the Docker local stack)
-turns it on for itself, and the self-hosted Compose file sets it on its
-worker; an explicit value wins in both. See [reliability operations](../lemma-backend/docs/operators/reliability.md#cutover-from-the-old-transport-design-13).
-
 ## Observability
 
 Off by default. [Observability](observability.md) documents the full OTel

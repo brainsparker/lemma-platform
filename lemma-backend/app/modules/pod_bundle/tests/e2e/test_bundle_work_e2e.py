@@ -291,10 +291,13 @@ async def test_the_sweep_leaves_a_job_with_a_live_item_alone(
     await pause_admin(str(pod_id), paused=False)
 
 
-async def test_the_cutover_seeds_one_item_per_job_a_worker_owes(
+async def test_the_cutover_ends_every_unfinished_job_and_queues_none(
     authenticated_client, fixed_test_org, fixed_test_user
 ) -> None:
+    """A job the old workers were running is not restarted by the release: it
+    fails, saying why, and its owner starts it again. A finished job is left."""
     import importlib.util
+    import json
     from pathlib import Path
 
     spec = importlib.util.spec_from_file_location(
@@ -313,107 +316,43 @@ async def test_the_cutover_seeds_one_item_per_job_a_worker_owes(
     )
     user_id = UUID(str(fixed_test_user["id"]))
     jobs = {
-        "export": (uuid4(), "EXPORT", "EXPORTING", {}),
-        "apply": (uuid4(), "IMPORT", "APPLYING", {}),
-        "plan": (uuid4(), "IMPORT", "PLANNING", {"staging_key": "k"}),
-        "github": (
-            uuid4(),
-            "IMPORT",
-            "QUEUED",
-            {"source": {"kind": "GITHUB", "repo_url": "https://github.com/a/b"}},
-        ),
-        "url_unfetched": (uuid4(), "IMPORT", "QUEUED", {"source": {"kind": "URL"}}),
-        "publish": (uuid4(), "PUBLISH", "PUBLISHING", {}),
-        "done": (uuid4(), "EXPORT", "READY", {}),
+        "export": (uuid4(), "EXPORT", "EXPORTING"),
+        "apply": (uuid4(), "IMPORT", "APPLYING"),
+        "plan": (uuid4(), "IMPORT", "PLANNING"),
+        "queued": (uuid4(), "IMPORT", "QUEUED"),
+        "publish": (uuid4(), "PUBLISH", "PUBLISHING"),
+        "done": (uuid4(), "EXPORT", "READY"),
     }
-    import json
-
-    for job_id, job_kind, job_status, snapshot in jobs.values():
+    for job_id, job_kind, job_status in jobs.values():
         await execute(
             "INSERT INTO pod_bundle_jobs (id, job_kind, pod_id, user_id, status, "
             "snapshot, version, attempt, heartbeat_at, committed_steps, "
             "created_at, updated_at) VALUES (:id, :kind, :pod, :user, :status, "
-            "CAST(:snap AS jsonb), 1, 0, now() - interval '1 hour', '[]', now(), "
-            "now())",
+            "CAST(:snap AS jsonb), 1, 0, now(), '[]', now(), now())",
             id=job_id,
             kind=job_kind,
             pod=pod_id,
             user=user_id,
             status=job_status,
-            snap=json.dumps(snapshot),
+            snap=json.dumps({}),
         )
-    for _ in range(2):  # a re-run seeds nothing twice
-        for statement in migration.bundle_seed_statements():
-            await execute(statement)
 
-    expected = {
-        "export": ("pod_bundle.export", "pod-export:"),
-        "apply": ("pod_bundle.apply", "pod-import:"),
-        "plan": ("pod_bundle.plan", "pod-import-plan:"),
-        "github": ("pod_bundle.import_github", "pod-import-plan:"),
-        "publish": ("pod_bundle.publish", "pod-publish:"),
-    }
-    for name, (job_id, *_rest) in jobs.items():
-        seeded = await rows(
-            "SELECT kind, run_at <= now() FROM work_items "
-            "WHERE ns = :ns AND payload::text LIKE :id",
-            ns=f"pod:{pod_id}",
-            id=f"%{job_id}%",
-        )
-        if name in expected:
-            kind, prefix = expected[name]
-            assert [tuple(row) for row in seeded] == [(kind, True)], name
-            assert (await item(f"{prefix}{job_id}"))[3] == kind
-        else:
-            assert seeded == [], name
-    await execute("DELETE FROM work_items WHERE ns = :ns", ns=f"pod:{pod_id}")
-
-
-async def test_the_cutover_fails_a_job_nobody_touched_for_half_an_hour(
-    authenticated_client, fixed_test_org, fixed_test_user
-) -> None:
-    """A job whose worker went quiet long before the release is not restarted
-    by it: it fails, saying why, and its owner starts it again."""
-    import importlib.util
-    from pathlib import Path
-
-    spec = importlib.util.spec_from_file_location(
-        "agent_surface_bundle_work_0056",
-        Path(__file__).resolve().parents[5]
-        / "migrations"
-        / "versions"
-        / "2026-10-14_agent_surface_bundle_work_0056.py",
-    )
-    assert spec is not None and spec.loader is not None
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-
-    pod_id = UUID(
-        await new_pod(authenticated_client, fixed_test_org["id"], label="Quiet")
-    )
-    user_id = UUID(str(fixed_test_user["id"]))
-    quiet, live = uuid4(), uuid4()
-    for job_id, heartbeat in ((quiet, "2 hours"), (live, "1 minute")):
-        await execute(
-            "INSERT INTO pod_bundle_jobs (id, job_kind, pod_id, user_id, status, "
-            "snapshot, version, attempt, heartbeat_at, committed_steps, "
-            "created_at, updated_at) VALUES (:id, 'EXPORT', :pod, :user, "
-            f"'EXPORTING', '{{}}', 1, 0, now() - interval '{heartbeat}', '[]', "
-            "now() - interval '3 hours', now() - interval '3 hours')",
-            id=job_id,
-            pod=pod_id,
-            user=user_id,
-        )
-    for statement in [
-        *migration.park_statements(),
-        *migration.bundle_seed_statements(),
-    ]:
+    for statement in migration.cutover_statements():
         await execute(statement)
 
-    (status, code), *_ = await rows(
-        "SELECT status, error_code FROM pod_bundle_jobs WHERE id = :id", id=quiet
+    for name, (job_id, *_rest) in jobs.items():
+        (status, code), *_ = await rows(
+            "SELECT status, error_code FROM pod_bundle_jobs WHERE id = :id",
+            id=job_id,
+        )
+        expected = (
+            ("READY", None) if name == "done" else ("FAILED", "INTERRUPTED_BY_UPGRADE")
+        )
+        assert (status, code) == expected, name
+    assert (
+        await rows(
+            "SELECT 1 FROM work_items WHERE ns = :ns AND kind LIKE 'pod_bundle.%'",
+            ns=f"pod:{pod_id}",
+        )
+        == []
     )
-    assert (status, code) == ("FAILED", "NOT_FINISHED_BEFORE_UPGRADE")
-    assert await item(f"pod-export:{quiet}") is None
-    assert (await item(f"pod-export:{live}"))[3] == "pod_bundle.export"
-    await execute("DELETE FROM work_items WHERE ns = :ns", ns=f"pod:{pod_id}")

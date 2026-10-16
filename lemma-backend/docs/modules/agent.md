@@ -29,9 +29,10 @@ the turn, which resumes; it is never recorded as the model failing. Transient to
 a Redis Pub/Sub adapter; each SSE connection leases one subscription connection
 and releases it on completion, failure, or cancellation.
 
-Migration `0059_agent_turn_work` seeds a turn item for every running run, and
-`0060_agent_wait_approval_work` items for active waits and decided approvals,
-so nothing in flight on the old transport is lost
+Migration `0056_agent_surface_bundle_work` arms every active wait. A turn that
+was running on the old transport, and a conversation paused on an approval that
+was decided but not yet executed, are failed with a message asking the person
+to continue; nothing is replayed
 ([cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13)).
 
 ## Main data model

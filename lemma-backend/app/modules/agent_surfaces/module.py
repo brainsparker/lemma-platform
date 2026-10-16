@@ -118,13 +118,7 @@ def _register_work() -> None:
     import app.modules.agent_surfaces.events.reply_work  # noqa: F401
 
 
-def _register_periodic_work() -> None:
-    # Worker only: what the old event transport still owed, converted (cutover).
-    import app.modules.agent_surfaces.events.legacy_cutover  # noqa: F401
-
-
 module = LemmaModule(
-    register_periodic_work=_register_periodic_work,
     name="agent_surfaces",
     routers=_routers,
     register_work=_register_work,

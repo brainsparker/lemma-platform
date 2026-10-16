@@ -1,13 +1,8 @@
-"""Migration 0057 drops the old columns and never the old transport's tables.
+"""Migration 0057 drops the old transport's tables and the old columns.
 
-* A fresh install (both tables empty) upgrades with both tables kept -- a
-  previous release still running could write them, so dropping them is
-  ``finish``'s job -- and the agent waits' ``fire_lease_until`` /
-  ``wake_attempts`` and ``schedule_runs.last_inspected_at`` with its index
-  dropped; the downgrade restores the columns and the index, recreates the
-  tables empty where ``finish`` had dropped them, and upgrading again works.
-* An install whose outbox still holds rows upgrades the same way, keeping both
-  tables for ``app.cutover_finish``; rerunning it changes nothing.
+The outbox is dropped whatever it still holds: the cutover replays nothing
+from it. The downgrade restores the columns and the index and recreates the
+tables empty, and upgrading again works.
 """
 
 from __future__ import annotations
@@ -15,14 +10,11 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from uuid import uuid4
 
 import psycopg
 import pytest
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.test_utils import get_postgres_container, get_postgres_url
-from app.modules.test_support.e2e.legacy_transport import event, outbox_row
 
 pytestmark = pytest.mark.e2e
 
@@ -71,7 +63,7 @@ _OLD_COLUMNS = (
     "agent_conversation_waits.wake_attempts,"
     "schedule_runs.last_inspected_at"
 )
-_UPGRADED = {"tables": _TABLES, "index": None, "columns": None}
+_UPGRADED = {"tables": (), "index": None, "columns": None}
 _KEPT_BY_0056 = {
     "tables": _TABLES,
     "index": "ix_schedule_runs_recoverable",
@@ -79,52 +71,31 @@ _KEPT_BY_0056 = {
 }
 
 
-def test_a_fresh_install_keeps_the_tables_and_downgrades_after_finish() -> None:
+def test_the_old_tables_are_dropped_with_what_they_still_hold() -> None:
     with get_postgres_container() as postgres:
         database_url = get_postgres_url(postgres)
         sync_url = database_url.replace("postgresql+asyncpg", "postgresql")
         _migrate(database_url, "upgrade", BEFORE)
         assert _state(sync_url) == _KEPT_BY_0056, "0056 is expand-only"
+        with psycopg.connect(sync_url) as connection:
+            connection.execute(
+                "INSERT INTO domain_event_outbox (id, stream, event_type, "
+                "producer, payload, occurred_at, available_at, created_at) "
+                "VALUES (gen_random_uuid(), 's', 'pod.member.removed', 'p', "
+                "'{}', now(), now(), now())"
+            )
 
         _migrate(database_url, "upgrade", REVISION)
-        assert _state(sync_url) == _UPGRADED, "empty is no reason to drop them"
+        assert _state(sync_url) == _UPGRADED
 
-        # ``finish`` has run: the downgrade recreates what it dropped.
-        with psycopg.connect(sync_url) as connection:
-            connection.execute("DROP TABLE domain_event_inbox, domain_event_outbox")
         _migrate(database_url, "downgrade", BEFORE)
         assert _state(sync_url) == _KEPT_BY_0056
         with psycopg.connect(sync_url) as connection:
             row = connection.execute(
                 "SELECT (SELECT count(*) FROM domain_event_outbox), "
-                "(SELECT count(*) FROM domain_event_inbox), "
-                "to_regclass('ix_domain_event_outbox_cutover') IS NOT NULL"
+                "(SELECT count(*) FROM domain_event_inbox)"
             ).fetchone()
-        assert row == (0, 0, True), "recreated empty, as the sweep reads them"
+        assert row == (0, 0), "recreated empty"
 
-        _migrate(database_url, "upgrade", REVISION)
-        assert _state(sync_url) == _UPGRADED
-
-
-@pytest.mark.asyncio
-async def test_an_install_still_holding_rows_keeps_the_tables() -> None:
-    with get_postgres_container() as postgres:
-        database_url = get_postgres_url(postgres)
-        sync_url = database_url.replace("postgresql+asyncpg", "postgresql")
-        _migrate(database_url, "upgrade", BEFORE)
-        engine = create_async_engine(database_url)
-        try:
-            async with engine.begin() as conn:
-                await outbox_row(conn, event("pod.member.removed", pod_id=uuid4()))
-        finally:
-            await engine.dispose()
-
-        output = _migrate(database_url, "upgrade", REVISION)
-        assert "app.cutover_finish" in output, output[-2000:]
-        assert _state(sync_url) == _UPGRADED
-
-        # Idempotent both ways: the half that ran is not tripped over.
-        _migrate(database_url, "downgrade", BEFORE)
-        assert _state(sync_url) == _KEPT_BY_0056
         _migrate(database_url, "upgrade", REVISION)
         assert _state(sync_url) == _UPGRADED

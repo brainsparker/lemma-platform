@@ -21,7 +21,6 @@ Resend address.
 | Request-time intake | Every webhook route and receiver classifies a delivery, answers provider-deadline interactions in the request, and writes each message as a `surface_inbound_messages` row plus a `surface.ingest` item in one transaction |
 | Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination) and `surface.reply_for_run` (subscribes `AgentRunFinished`), `surface.receiver` (`receivers`, one leased item per polling credential), `notification.expire`, `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
 | Periodic work | `surfaces.receivers.reconcile` (15 s), `surfaces.onboarding_cleanup` (1 min), `surfaces.web_visitors` (hourly), `surfaces.retention` (daily) |
-| Cutover converters | `events/legacy_cutover.py`, run by `cutover.legacy_event`: owed webhooks (through `InboundAcceptor`), onboarding hand-offs, `process_surface_message` jobs only Redis held, and, once at the end, owed replies kept in conversation metadata and open notifications' expiry items. See [the cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13) |
 
 ## Main data model
 
@@ -43,7 +42,7 @@ Resend address.
 | `surface_inbound_messages` | One row per inbound message any webhook or receiver accepted, unique on (receiver scope, the platform's event id), so a delivery retried a minute or three days later is the same row. RECEIVED → INGESTING → ROUTED, DROPPED or FAILED; the `surface.ingest` item that turns it into a turn is written with it. ROUTED and DROPPED rows are kept 7 days, FAILED 30 |
 | `surface_message_claims` | The durable message-level claim: one row per platform message, owned by the inbound row that took it, taken in the transaction that routes it so a duplicate under another scope is answered once. Kept 7 days |
 | `surface_deliveries` | Every outbound message the platform owes: a run's answer, a held reply, a notification, a "please resend". Unique on an idempotency key; PENDING → SENDING → SENT, or UNKNOWN when a send's outcome was lost (never re-sent), or FAILED. One `surface.reply` pump per destination sends them in order |
-| `surface_receiver_state` | One cursor per polling receiver (Telegram offset, Resend cursor, the Telegram manager bot), written in the transaction that stores the messages before it, so a receiver that moves to another worker resumes without a gap or a duplicate. Also the cutover converter's per-group progress |
+| `surface_receiver_state` | One cursor per polling receiver (Telegram offset, Resend cursor, the Telegram manager bot), written in the transaction that stores the messages before it, so a receiver that moves to another worker resumes without a gap or a duplicate |
 
 Conversation metadata records surface, platform, external user/channel/thread,
 and message identifiers so delivery and debugging do not depend only on the

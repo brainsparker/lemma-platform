@@ -120,38 +120,3 @@ async def test_standalone_owns_mounted_app_lifespan(monkeypatch) -> None:
         "embedded-stopped",
         "api-stopped",
     ]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("explicit", [None, False])
-async def test_standalone_finishes_the_cutover_itself_unless_told_not_to(
-    monkeypatch, explicit: bool | None
-) -> None:
-    """One process, no rolling deploy: auto-finish is on for its life, unless
-    the environment set ``WORK_CUTOVER_AUTO_FINISH``."""
-    from app.core.infrastructure.work.config import WorkSettings
-
-    monkeypatch.delenv("WORK_CUTOVER_AUTO_FINISH", raising=False)
-    settings = (
-        WorkSettings()
-        if explicit is None
-        else WorkSettings(work_cutover_auto_finish=explicit)
-    )
-    monkeypatch.setattr("app.core.infrastructure.work.config.work_settings", settings)
-    seen: list[bool] = []
-
-    @asynccontextmanager
-    async def worker_services(modules, **kwargs) -> AsyncIterator[None]:
-        del modules, kwargs
-        seen.append(settings.work_cutover_auto_finish)
-        yield
-
-    monkeypatch.setattr(
-        "app.core.infrastructure.work.process.worker_services", worker_services
-    )
-    app = build_standalone_app(FastAPI())
-    async with app.router.lifespan_context(app):
-        pass
-
-    assert seen == [explicit is None]
-    assert settings.work_cutover_auto_finish is False, "restored on exit"

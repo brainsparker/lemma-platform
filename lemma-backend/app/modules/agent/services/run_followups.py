@@ -25,7 +25,6 @@ this, so a second finalize of the same run writes nothing.
 
 from __future__ import annotations
 
-from collections.abc import Collection
 from datetime import datetime
 from uuid import UUID
 
@@ -101,14 +100,11 @@ async def stage_run_followups(
     conversation_id: UUID,
     finish: AgentRunFinishResult,
     started_at: datetime | None = None,
-    fact_only: Collection[str] | None = None,
 ) -> AgentRunFinished | None:
     """Write every follow-up of a run that ``finish`` just ended, in ``uow``.
 
     Returns the fact, or ``None`` when there is nothing to write: the finish
     moved nothing (a second finalize), or the conversation is gone.
-    ``fact_only`` limits the fact's subscribers to those kinds (the cutover
-    replaying a run the old transport finished, for its own consumers only).
     """
     if not finish.updated:
         return None
@@ -120,7 +116,7 @@ async def stage_run_followups(
         conversation, run_id=run_id, finish=finish, started_at=started_at
     )
     work = WorkWriter.of(uow)
-    subscribers = await facts.emit(uow, fact, writer=work, only=fact_only)
+    subscribers = await facts.emit(uow, fact, writer=work)
     origin = run_origin(
         metadata=conversation.metadata,
         parent_id=conversation.parent_id,

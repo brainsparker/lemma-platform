@@ -186,13 +186,6 @@ services:
       migrate: {condition: service_completed_successfully}
       sandbox-images: {condition: service_completed_successfully}
     command: ["python", "-m", "app.worker"]
-    # One machine, and `docker compose up -d` replaces the previous release's
-    # containers rather than rolling beside them: the cutover sweep drops the
-    # old event transport itself once it has converted what that owed. The
-    # backend's default is off (multi-process deployments run
-    # `python -m app.cutover_finish`); a value in .env still wins.
-    environment:
-      WORK_CUTOVER_AUTO_FINISH: ${WORK_CUTOVER_AUTO_FINISH:-true}
     # Above the longest work-class shutdown grace (interactive, 90 s) plus
     # teardown, so a deploy drains rather than SIGKILLing mid-turn.
     stop_grace_period: 120s

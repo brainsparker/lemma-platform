@@ -77,14 +77,14 @@ async def searchable_pod(
 
     await db_session.execute(
         text(
-            "UPDATE datastore_files SET status = 'COMPLETED', search_enabled = true "
-            "WHERE pod_id = :pod AND kind = 'FILE'"
+            "UPDATE datastore_files SET status = 'COMPLETED', search_enabled = true, "
+            "indexed_sha256 = repeat('a', 64) WHERE pod_id = :pod AND kind = 'FILE'"
         ),
         {"pod": pod_id},
     )
-    # Mid-reprocess: its old chunks are still in the index. It is still a
-    # searchable file, on the side the caller's access puts it -- here hidden,
-    # so the exclusion names it.
+    # Mid-reprocess: its old chunks are still in the index, and the revision
+    # they came from is still recorded, so it is a searchable file on the side
+    # the caller's access puts it -- here hidden, so the exclusion names it.
     await db_session.execute(
         text("UPDATE datastore_files SET status = 'PENDING' WHERE id = :id"),
         {"id": UUID(files["/vault/stale.md"]["id"])},
@@ -197,6 +197,37 @@ async def test_a_full_page_through_the_excluding_side_needs_no_widening(
     )
 
 
+async def test_widening_is_never_served_a_split_cut_off_at_the_ceiling(
+    searchable_pod, chosen_scopes, monkeypatch
+) -> None:
+    """The split is cached per caller, and read two ways: cut off one past the
+    ceiling to choose a side, and whole when the searcher widens. A cache key
+    that ignored the difference would hand the widening the cut-off readable
+    side -- an "exact" scope missing most of what the caller may read.
+    """
+    monkeypatch.setattr(
+        datastore_settings, "datastore_search_readable_id_pushdown_limit", 1
+    )
+    # Orphans that outrank every readable file and fill the pool, so a
+    # one-result page comes back empty and the searcher widens.
+    for _ in range(10):
+        await _index(
+            searchable_pod["pod_id"],
+            uuid7(),
+            "/shared/gone.md",
+            text=" ".join([NEEDLE] * 8),
+        )
+
+    response = await searchable_pod["viewer"].search_files(NEEDLE, limit=1)
+
+    assert len(response["items"]) == 1
+    first, widened = chosen_scopes
+    assert not first.narrowed, "both sides were over a ceiling of one"
+    assert widened.enumerated and widened.file_ids == {
+        UUID(searchable_pod["files"][path]["id"]) for path in _SHARED
+    }, f"widening must see every readable file, got {widened}"
+
+
 async def test_a_narrow_reader_is_searched_by_the_readable_side(
     db_session, searchable_pod, chosen_scopes
 ) -> None:
@@ -223,6 +254,64 @@ async def test_a_narrow_reader_is_searched_by_the_readable_side(
     assert scope.file_ids == {
         UUID(searchable_pod["files"][path]["id"]) for path in _SHARED[:2]
     }
+
+
+async def test_turning_a_files_search_off_retires_the_cached_scope(
+    db_session, pod_api: DatastoreApi, searchable_pod, chosen_scopes
+) -> None:
+    """The split is cached per caller for minutes. A file whose search is
+    switched off leaves the searchable set at once -- not when the cache
+    happens to expire."""
+    for path in _SHARED[2:]:
+        await db_session.execute(
+            text("UPDATE datastore_files SET visibility = 'PERSONAL' WHERE id = :id"),
+            {"id": UUID(searchable_pod["files"][path]["id"])},
+        )
+    await db_session.commit()
+    files = searchable_pod["files"]
+
+    await searchable_pod["viewer"].search_files(NEEDLE, limit=20)
+    await pod_api.update_file(_SHARED[0], search_enabled=False)
+    await searchable_pod["viewer"].search_files(NEEDLE, limit=20)
+
+    before, after = chosen_scopes[0], chosen_scopes[-1]
+    assert before.enumerated and before.file_ids == {
+        UUID(files[path]["id"]) for path in _SHARED[:2]
+    }
+    assert after.enumerated and after.file_ids == {UUID(files[_SHARED[1]]["id"])}, (
+        f"the file whose search was turned off is still in the scope: {after}"
+    )
+
+
+async def test_a_stale_cached_scope_is_not_trusted_to_authorize(
+    db_session, searchable_pod, chosen_scopes
+) -> None:
+    """A change the epoch never heard about -- a bump lost to a Redis blip,
+    here a raw write -- leaves the cached split stale for its TTL. The scope
+    may still narrow the query; it must not decide what the caller sees."""
+    files = searchable_pod["files"]
+    for path in _SHARED[2:]:
+        await db_session.execute(
+            text("UPDATE datastore_files SET visibility = 'PERSONAL' WHERE id = :id"),
+            {"id": UUID(files[path]["id"])},
+        )
+    await db_session.commit()
+    await searchable_pod["viewer"].search_files(NEEDLE, limit=20)
+
+    await db_session.execute(
+        text("UPDATE datastore_files SET visibility = 'PERSONAL' WHERE id = :id"),
+        {"id": UUID(files[_SHARED[1]]["id"])},
+    )
+    await db_session.commit()
+    response = await searchable_pod["viewer"].search_files(NEEDLE, limit=20)
+
+    stale = chosen_scopes[-1]
+    assert stale.enumerated and UUID(files[_SHARED[1]]["id"]) in stale.file_ids, (
+        f"the second search was not served the cached split: {stale}"
+    )
+    assert _result_paths(response) == {_SHARED[0]}, (
+        "a file the caller can no longer read came back from a stale cached scope"
+    )
 
 
 async def test_both_sides_over_the_ceiling_post_filters(

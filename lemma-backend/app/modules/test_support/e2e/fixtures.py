@@ -8,6 +8,8 @@ from app.modules.test_support import e2e_base
 from app.modules.test_support.e2e.builders import scenario
 
 postgres_container = e2e_base.postgres_container
+postgres_only_container = e2e_base.postgres_only_container
+postgres_only_database_url = e2e_base.postgres_only_database_url
 supertokens_container = e2e_base.supertokens_container
 redis_container = e2e_base.redis_container
 test_database_url = e2e_base.test_database_url
@@ -35,6 +37,8 @@ __all__ = [
     "fixed_test_org",
     "fixed_test_user",
     "postgres_container",
+    "postgres_only_container",
+    "postgres_only_database_url",
     "redis_container",
     "sample_pod_entity",
     "scenario",

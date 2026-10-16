@@ -64,7 +64,7 @@ from app.core.authorization.permissions import (
 )
 from app.core.authorization.resource_actions import owner_actions_for_resource
 from app.core.authorization.sql_actions import read_action_for_resource
-from app.modules.datastore.domain.file_entities import FileKind
+from app.modules.datastore.domain.file_entities import FileKind, FileStatus
 from app.modules.datastore.infrastructure.models import DatastoreFile
 
 _READ = read_action_for_resource(ResourceType.DOCUMENT)
@@ -422,19 +422,33 @@ def blocked_folders_statement(pod_id: UUID, rule: FileReadRule):
     return union_all(folders, with_descendants)
 
 
+#: Statuses a file that was indexed before can be in while it still has chunks.
+_REINDEXING = (
+    FileStatus.PENDING.value,
+    FileStatus.PROCESSING.value,
+    FileStatus.FAILED_PERMANENT.value,
+)
+
+
 def _searchable(pod_id: UUID) -> list[ColumnElement[bool]]:
     """The files in the pod a chunk search can match.
 
-    Enabled files, of any status. A file being reprocessed -- or whose newest
-    bytes failed -- may still hold the chunks of an earlier revision, and the
-    row does not record whether it does; leaving such files off both sides
-    made the answer depend on which side was sent: an enumerated scope dropped
-    a readable one, an excluding scope let a hidden one's chunks through to the
-    authorization pass. Counting a file that was never indexed costs only
-    length on its side.
+    Indexed and enabled: nothing else has chunks to find, so neither side of
+    the split spends its length on folders or on documents that were never
+    indexed. A file being reprocessed -- or whose newest bytes failed -- keeps
+    the revision it was last indexed at (``indexed_sha256``), and that stays
+    findable until a new one replaces it, on whichever side the caller's
+    access puts it. Served by ``ix_datastore_file_status``.
     """
     return [
         DatastoreFile.pod_id == pod_id,
+        or_(
+            DatastoreFile.status == FileStatus.COMPLETED.value,
+            and_(
+                DatastoreFile.status.in_(_REINDEXING),
+                DatastoreFile.indexed_sha256.is_not(None),
+            ),
+        ),
         DatastoreFile.kind == FileKind.FILE.value,
         DatastoreFile.search_enabled,
     ]

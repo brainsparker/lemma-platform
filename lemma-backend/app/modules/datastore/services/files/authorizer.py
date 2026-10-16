@@ -10,6 +10,12 @@ from app.core.authorization.context import (
     normalize_resource_visibility,
 )
 from app.core.log.log import get_logger
+from app.core.authorization.authz_epoch import pod_authz_epoch
+from app.modules.datastore.services.files.search_scope_cache import (
+    cached_partition,
+    caller_key,
+    store_partition,
+)
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
 from app.modules.datastore.domain.search_scope import (
@@ -309,13 +315,49 @@ class FileAuthorizer:
         limit: int | None,
         readable_only: bool = False,
     ) -> SearchablePartition | None:
-        """The split, or None when working it out ran past the timeout."""
+        """The split, from Redis while the pod's permissions have not moved."""
+        walk = not _is_workload(ctx)
+        epoch = (
+            await pod_authz_epoch(pod_id)
+            if datastore_settings.datastore_search_scope_cache_ttl_seconds > 0
+            else None
+        )
+        shape = {"limit": limit, "readable_only": readable_only}
+        if epoch is None:
+            return await self._compute_partition(
+                pod_id=pod_id, ctx=ctx, walk=walk, **shape
+            )
+        # The read's shape is part of the key: a split cut off at the ceiling
+        # must never stand in for the complete readable set, or the reverse.
+        key = (
+            f"{caller_key(ctx, walk_ancestors=walk)}:"
+            f"{limit if limit is not None else 'all'}:{int(readable_only)}"
+        )
+        cached = await cached_partition(pod_id, epoch, key)
+        if cached is not None:
+            return cached
+        partition = await self._compute_partition(
+            pod_id=pod_id, ctx=ctx, walk=walk, **shape
+        )
+        if partition is not None:
+            await store_partition(pod_id, epoch, key, partition)
+        return partition
+
+    async def _compute_partition(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk: bool,
+        limit: int | None,
+        readable_only: bool,
+    ) -> SearchablePartition | None:
         timeout_ms = datastore_settings.datastore_search_scope_timeout_ms
         try:
             return await self.file_repository.searchable_partition(
                 pod_id=pod_id,
                 ctx=ctx,
-                walk_ancestors=not _is_workload(ctx),
+                walk_ancestors=walk,
                 timeout_ms=timeout_ms,
                 limit=limit,
                 readable_only=readable_only,

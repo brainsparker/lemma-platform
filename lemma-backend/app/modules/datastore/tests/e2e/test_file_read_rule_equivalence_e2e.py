@@ -407,10 +407,14 @@ async def test_resolved_rule_matches_the_per_row_case(
     rng, world, rows = await _build_world(db_session, pod_api, seed)
     repository = DatastoreFileRepository(SqlAlchemyUnitOfWork(db_session))
     all_ids = {row["id"] for row in rows}
-    # Any status: a file mid-reprocess may still hold an earlier revision's
-    # chunks, so it belongs on whichever side the caller's access puts it.
+    # Indexed files: the world's rows are COMPLETED or never indexed, so
+    # ``indexed_sha256`` (the reprocessing half of the rule) does not arise.
     searchable = {
-        row["id"] for row in rows if row["kind"] == "FILE" and row["search_enabled"]
+        row["id"]
+        for row in rows
+        if row["kind"] == "FILE"
+        and row["status"] == "COMPLETED"
+        and row["search_enabled"]
     }
     paths = {row["id"]: row["path"] for row in rows}
 

@@ -4,6 +4,9 @@ import os
 
 import pytest
 
+#: Fixtures every suite may ask for by name.
+pytest_plugins = ["app.modules.test_support.e2e.committed_events"]
+
 # Tests are deterministic and self-contained: they set the config they need (via
 # fixtures / the defaults below / monkeypatch), NOT a developer's local ``.env``.
 # A leaked ``.env`` makes the suite non-deterministic — a value present locally
@@ -215,6 +218,38 @@ def _isolate_shared_redis_clients():
     redis_client._clients.clear()
     yield
     redis_client._clients.clear()
+
+
+@pytest.fixture(autouse=True)
+def _hold_session_worker_for_work_drivers(request: pytest.FixtureRequest) -> None:
+    """Hold the session's worker still for a ``drives_work`` test.
+
+    Sync and a no-op for every other test, so the unit lane pays nothing; the
+    hold itself is the async ``held_worker`` fixture. Autouse, so it is set up
+    before the test's own fixtures write any work the worker could take.
+    """
+    if request.node.get_closest_marker("drives_work") is None:
+        return
+    needs_worker = {"worker", "document_worker"} & set(request.fixturenames)
+    if needs_worker:
+        raise pytest.UsageError(
+            f"{request.node.nodeid} is marked drives_work but needs "
+            f"{sorted(needs_worker)}: a held worker would never run its work"
+        )
+    if "db_manager" in request.fixturenames:
+        # Truncate before the hold, not under it: the worker's last transaction
+        # has settled by then, so nothing it does lands in the fresh tables.
+        request.getfixturevalue("db_manager")
+    request.getfixturevalue("held_worker")
+
+
+@pytest.fixture
+async def held_worker():
+    """See ``app/modules/test_support/e2e/worker_hold.py``."""
+    from app.modules.test_support.e2e.worker_hold import worker_held
+
+    async with worker_held():
+        yield
 
 
 def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:

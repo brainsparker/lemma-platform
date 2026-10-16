@@ -137,6 +137,7 @@ async def owed_replies(ctx: JobContext, event: LegacyPayload, route: str) -> Non
         conversation_metadata_records as metadata_records,
     )
 
+    stale = 0
     while True:
         ctx.raise_if_stopping()
         async with ctx.checkpoint() as uow:
@@ -150,6 +151,8 @@ async def owed_replies(ctx: JobContext, event: LegacyPayload, route: str) -> Non
             for record in records:
                 if _recent(record.value, horizon):
                     await _owed_to_delivery(uow, record)
+                else:
+                    stale += 1
                 await metadata_records.forget_conversation_metadata_record(
                     uow,
                     record.conversation_id,
@@ -157,7 +160,11 @@ async def owed_replies(ctx: JobContext, event: LegacyPayload, route: str) -> Non
                     matching=_identity(record.value),
                 )
         if len(records) < _BATCH:
-            return
+            break
+    if stale:
+        # The only record of them once the metadata is forgotten: replies a
+        # person was owed and, by the release's choice, will not get.
+        logger.warning("agent_surfaces.cutover.owed_replies_dropped", dropped=stale)
 
 
 @legacy_converter("state:surfaces.notification_expiry")

@@ -48,6 +48,15 @@ def build_standalone_app(
     ``modules`` is the list the worker half registers and runs (the open-source
     list when omitted); it must be the list ``api_app`` was built from.
     """
+    if modules is not None and not isinstance(modules, (list, tuple)):
+        # The second argument used to be the streaq worker. A caller still
+        # passing one (an un-updated lemma-cloud wrapper) gets this rather than
+        # a failure deep in module registration.
+        raise TypeError(
+            "build_standalone_app(api_app, modules): the second argument is the "
+            "module list the work runtime registers (the one api_app was built "
+            f"from), not a worker; got {type(modules).__name__}"
+        )
     api_app.state.embedded_worker = True
     api_app.state.embedded_apps = tuple(item.path for item in embedded_apps)
     api_lifespan = api_app.router.lifespan_context

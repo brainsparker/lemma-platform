@@ -302,6 +302,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.credential_resolver.pooled_number_missing.degraded': EventSpec('warning', frozenset({'phone_number_id', 'surface_id'})),
     'agent_surfaces.credential_resolver.provider_lookup_failed.degraded': EventSpec('warning', frozenset({'auth_config_id'})),
     'agent_surfaces.credential_uniqueness.several_surfaces_share_one_bot.degraded': EventSpec('warning', frozenset({'answered_by', 'external_workspace_id', 'platform', 'surface_identity_id', 'surface_ids'})),
+    'agent_surfaces.cutover.owed_replies_dropped': EventSpec('warning', frozenset({'dropped'})),
     'agent_surfaces.cutover.webhook_unreadable': EventSpec('warning', frozenset({'event_id'})),
     'agent_surfaces.decision_cards.handle_not_read.degraded': EventSpec('warning', frozenset()),
     'agent_surfaces.decision_cards.handle_not_stored.degraded': EventSpec('warning', frozenset({'platform'})),

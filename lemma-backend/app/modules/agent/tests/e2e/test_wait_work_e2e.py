@@ -369,7 +369,7 @@ def _seed_statements() -> list[str]:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.agent_wait_seed_statements()
+    return [*module.park_statements(), *module.agent_wait_seed_statements()]
 
 
 async def _seed() -> None:
@@ -377,6 +377,103 @@ async def _seed() -> None:
         for statement in _seed_statements():
             await session.execute(text(statement))
         await session.commit()
+
+
+async def test_the_cutover_resumes_only_a_turn_that_was_moving(scenario) -> None:
+    """A turn untouched for hours when the release goes out is not resumed --
+    that would spend a model call on a conversation nobody is in. It fails,
+    saying so; a turn that was moving is carried over."""
+    path = next(
+        Path(__file__)
+        .resolve()
+        .parents[5]
+        .joinpath("migrations", "versions")
+        .glob("*_agent_surface_bundle_work_0056.py")
+    )
+    spec = importlib.util.spec_from_file_location("migration_0056", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    stale = await seeded_conversation(scenario)
+    stale_run = await running_run(stale)
+    moving = await seeded_conversation(scenario)
+    moving_run = await running_run(moving)
+    async with async_session_maker() as session:
+        await session.execute(
+            text(
+                "UPDATE agent_runs SET started_at = now() - interval '3 hours', "
+                "updated_at = now() - interval '3 hours' WHERE id = :id"
+            ),
+            {"id": stale_run},
+        )
+        await session.execute(
+            text(
+                "UPDATE agent_conversations SET status = 'RUNNING', "
+                "last_activity_at = now() - interval '3 hours' WHERE id = :id"
+            ),
+            {"id": stale.conversation_id},
+        )
+        for statement in (
+            *module.park_statements(),
+            *module.agent_turn_seed_statements(),
+        ):
+            await session.execute(text(statement))
+        await session.commit()
+
+        def one(sql: str, **params: object):
+            return session.execute(text(sql), params)
+
+        run_status, error = (
+            await one(
+                "SELECT status, error FROM agent_runs WHERE id = :id", id=stale_run
+            )
+        ).one()
+        conversation = (
+            await one(
+                "SELECT status FROM agent_conversations WHERE id = :id",
+                id=stale.conversation_id,
+            )
+        ).scalar_one()
+        seeded = {
+            row[0]
+            for row in (
+                await one(
+                    "SELECT payload->>'run_id' FROM work_items "
+                    "WHERE kind LIKE 'agent.turn%'"
+                )
+            ).all()
+        }
+        await one("DELETE FROM work_items WHERE kind LIKE 'agent.turn%'")
+        await session.commit()
+    assert (run_status, conversation) == ("FAILED", "FAILED")
+    assert error.startswith("Interrupted before the upgrade")
+    assert str(stale_run) not in seeded
+    assert str(moving_run) in seeded
+
+
+async def test_the_cutover_fails_a_wait_long_past_due_instead_of_waking_it(
+    scenario,
+) -> None:
+    """A wake the old poller missed by hours is not delivered at the release:
+    the agent would resume on an old cue. It fails, saying so, and the person
+    continues by sending a message."""
+    seeded, _, stale = await _waiting(
+        scenario, AgentWaitType.TIME, due_in=-timedelta(hours=2), armed=False
+    )
+
+    await _seed()
+
+    assert (await _wait(stale.id)).status is AgentWaitStatus.FAILED
+    assert await _items(stale.id) == 0
+    async with async_session_maker() as session:
+        status = (
+            await session.execute(
+                text("SELECT status FROM agent_conversations WHERE id = :id"),
+                {"id": seeded.conversation_id},
+            )
+        ).scalar_one()
+    assert status == "FAILED"
 
 
 @pytest.mark.drives_work

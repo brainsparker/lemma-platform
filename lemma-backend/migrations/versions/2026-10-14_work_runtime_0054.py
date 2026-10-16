@@ -37,13 +37,16 @@ are vacuumed on a fixed threshold instead.
   the table is written on every upload and a full-table update would hold it.
 
 And the cutover: processing used to be driven by a stream consumer and two
-crons reading ``status``. Every file that was waiting, mid-extraction or
-failed-but-retryable gets the ``file.process`` work item that now drives it,
-in this transaction, so nothing in flight is lost between the two runtimes.
-``FAILED`` folds into ``PENDING``: a retryable failure is now a work item with
-a backoff, and ``FAILED_PERMANENT`` is the one terminal failure. (The old
-recovery cron already re-queued every ``FAILED`` row, so seeding them adds no
-work the previous release would not have done.) A row that an old worker is
+crons reading ``status``. Nothing old is replayed. Only a file that was
+genuinely in flight when the release went out -- ``PENDING`` or
+``PROCESSING`` and touched within ``_LIVE_WINDOW`` -- gets the
+``file.process`` work item that now drives it, so an upload made during the
+deploy is not lost. Every older waiting or mid-extraction row becomes
+``FAILED`` with a note saying it was not processed before the upgrade, and an
+existing ``FAILED`` row stays as it is: neither is processed until someone
+asks (the retry API accepts both), so a release cannot set off a backlog of
+extractions and embeddings. (The old recovery cron re-queued these rows on
+its own; the new runtime has no such cron.) A row that an old worker is
 still processing during a rolling deploy is fenced by the token *it* knows
 (``processing_attempts``): the seed moves that counter on by one rather than
 resetting it, so the new runtime's first claim can never reissue the token the
@@ -72,8 +75,13 @@ depends_on = None
 #: refreshes it from the limits port within a minute.
 _INGESTION_DEFAULT_CAP = 4
 
-_IN_FLIGHT = (
-    "kind = 'FILE' AND search_enabled AND status IN ('PENDING', 'PROCESSING', 'FAILED')"
+#: How recently a waiting row must have been touched to count as in flight
+#: when the release goes out. Anything older is not replayed.
+_LIVE_WINDOW = "interval '30 minutes'"
+_WAITING = "kind = 'FILE' AND search_enabled AND status IN ('PENDING', 'PROCESSING')"
+_IN_FLIGHT = f"{_WAITING} AND updated_at >= now() - {_LIVE_WINDOW}"
+_NOT_PROCESSED = (
+    "Not processed before the upgrade. Retry processing to index this file."
 )
 
 
@@ -125,7 +133,15 @@ def seed_statements() -> list[str]:
         "processing_attempts = processing_attempts + 1 "
         f"WHERE {_IN_FLIGHT} AND status <> 'PENDING'"
     )
-    return [queues, items, rows]
+    # After `rows`, which moved every live row's `updated_at` to now: what is
+    # still older than the window here is exactly what was not seeded.
+    stale = (
+        "UPDATE datastore_files SET status = 'FAILED', "
+        f"last_processing_error = '{_NOT_PROCESSED}', "
+        "processing_attempts = processing_attempts + 1 "
+        f"WHERE {_WAITING} AND updated_at < now() - {_LIVE_WINDOW}"
+    )
+    return [queues, items, rows, stale]
 
 
 #: Storage parameters for the churning queue tables (see the module docstring).

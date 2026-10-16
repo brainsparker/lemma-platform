@@ -122,8 +122,12 @@ async def agent_outcome(ctx: JobContext, event: LegacyPayload, route: str) -> No
 
 @legacy_converter("state:schedule.dispatched_runs")
 async def dispatched_runs(ctx: JobContext, event: LegacyPayload, route: str) -> None:
-    """Every DISPATCHED run whose target has ended, recorded; in batches."""
-    del event, route
+    """Every DISPATCHED run since the horizon whose target has ended, recorded;
+    in batches. Older ones stay as they are: recording a backlog of old
+    failures would trip schedules' failure breakers and send paused notices."""
+    del route
+    horizon = event.get("horizon")
+    since = datetime.fromisoformat(horizon) if isinstance(horizon, str) else None
     from app.modules.agent.contracts.conversation_outcomes import (
         load_conversation_outcomes,
     )
@@ -146,6 +150,9 @@ async def dispatched_runs(ctx: JobContext, event: LegacyPayload, route: str) -> 
                         ScheduleRun.target_outcome.is_(None),
                         ScheduleRun.target_run_id.is_not(None),
                         ScheduleRun.id > after,
+                        ScheduleRun.created_at >= since
+                        if since is not None
+                        else ScheduleRun.id.is_not(None),
                     )
                     .order_by(ScheduleRun.id)
                     .limit(_BATCH)

@@ -70,6 +70,15 @@ old behaviour, so each one that sets neither is given ``each``. New triggers
 keep the ``skip`` default. The downgrade leaves the configs as they are:
 ``each`` is what these triggers did before the setting existed.
 
+**Nothing old is replayed.** Only what was genuinely in flight as the release
+went out -- within ``_LIVE_WINDOW`` -- is carried over. A schedule run that
+never reached its target and is older than that becomes ``TARGET_FAILED``
+(``NOT_STARTED_BEFORE_UPGRADE``), redrivable by hand; a queued function run
+older than that becomes ``FAILED``; a TIME schedule whose next fire is older
+than that is re-armed from now instead of firing late; and the record-change
+drain appends only changes that occurred within the window, so no trigger
+fires on an old write.
+
 Every step is idempotent: the concurrent index builds commit on their own, so
 a failure after them leaves the revision half applied, and a rerun must finish
 it rather than trip over what is already there.
@@ -95,13 +104,21 @@ _NS = "CASE WHEN s.pod_id IS NULL THEN 'system' ELSE 'pod:' || s.pod_id::text EN
 
 _ACTIVE_TIME = "s.schedule_type = 'TIME' AND s.is_active"
 
-#: Matches the sweep's cutoffs: younger than this it was still in flight on the
-#: old path; older than six hours the sweep dead-lettered instead of re-sending.
+#: How recent something must be to count as in flight when the release goes
+#: out. Anything older is not replayed (see the module docstring).
+_LIVE_WINDOW = "interval '30 minutes'"
+_RECENT_RUN = f"r.created_at > now() - {_LIVE_WINDOW}"
+
+#: A run younger than five minutes was still in flight on the old path.
 _RESERVABLE = (
-    "r.target_outcome IS NULL AND ("
+    f"r.target_outcome IS NULL AND {_RECENT_RUN} AND ("
     " r.status = 'RECEIVED'"
-    " OR (r.status = 'PROCESSING' AND r.started_at < now() - interval '5 minutes'"
-    "     AND r.created_at > now() - interval '6 hours'))"
+    " OR (r.status = 'PROCESSING' AND r.started_at < now() - interval '5 minutes'))"
+)
+#: Never reached its target and too old to carry over.
+_ABANDONED = (
+    "r.target_outcome IS NULL AND r.status IN ('RECEIVED', 'PROCESSING') "
+    f"AND NOT ({_RECENT_RUN})"
 )
 
 
@@ -155,6 +172,15 @@ def trigger_seed_statements() -> list[str]:
         "ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL AND state = 'queued' "
         "DO NOTHING"
     )
+    missed = (
+        "UPDATE schedules s SET next_fire_at = NULL "
+        f"WHERE {_ACTIVE_TIME} AND s.next_fire_at < now() - {_LIVE_WINDOW}"
+    )
+    abandoned = (
+        "UPDATE schedule_runs r SET status = 'TARGET_FAILED', "
+        "error_code = 'NOT_STARTED_BEFORE_UPGRADE', error_type = 'cutover', "
+        f"completed_at = now() WHERE {_ABANDONED}"
+    )
     reserve = (
         "UPDATE schedule_runs r SET status = 'PROCESSING', attempts = 0, "
         "started_at = NULL, completed_at = NULL "
@@ -171,7 +197,7 @@ def trigger_seed_statements() -> list[str]:
         "ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL AND state = 'queued' "
         "DO NOTHING"
     )
-    return [*queues, arm, reserve, start]
+    return [*queues, missed, arm, abandoned, reserve, start]
 
 
 _ON_CONFLICT = (
@@ -205,7 +231,15 @@ def _queues(cls: str, ns: str, source: str) -> str:
 
 def flow_seed_statements() -> list[str]:
     """The cutover, as statements -- importable so a test can run them."""
-    queued_runs = f"{_RUNS} WHERE r.status = 'PENDING' AND r.job_id IS NOT NULL"
+    queued = "r.status = 'PENDING' AND r.job_id IS NOT NULL"
+    queued_runs = f"{_RUNS} WHERE {queued} AND {_RECENT_RUN}"
+    # Queued too long ago to be carried over: failed, saying why, before the
+    # wait seeds below so a workflow waiting on one hears that it ended.
+    stale_runs = (
+        "UPDATE function_runs r SET status = 'FAILED', completed_at = now(), "
+        "error = 'Not started before the upgrade. Run it again to retry.' "
+        f"WHERE {queued} AND NOT ({_RECENT_RUN})"
+    )
     open_runs = (
         f"{_RUNS} WHERE r.status IN ('PENDING', 'RUNNING') "
         "AND NOT (r.status = 'PENDING' AND r.job_id IS NOT NULL)"
@@ -234,6 +268,7 @@ def flow_seed_statements() -> list[str]:
     )
     wait_sources = (timers, finished_functions, decisions, expiring, parked)
     return [
+        stale_runs,
         _queues("automation", _RUN_NS, queued_runs),
         _queues("events", _RUN_NS, open_runs),
         *(_queues("events", _WAIT_NS, source) for source in wait_sources),

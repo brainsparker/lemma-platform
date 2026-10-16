@@ -60,7 +60,10 @@ def lock_not_available(exc: DBAPIError) -> bool:
 
 
 async def sweep_other_outboxes(
-    sessions: Sessions, cursors: dict[str, list[str]]
+    sessions: Sessions,
+    cursors: dict[str, list[str]],
+    *,
+    horizon: datetime | None = None,
 ) -> tuple[int, datetime | None, bool]:
     """Take over each other outbox from its cursor on: (taken, the newest row,
     whether any such outbox still exists). Advances ``cursors``."""
@@ -84,13 +87,17 @@ async def sweep_other_outboxes(
                 rows = await _outbox_rows_after(conn, outbox, cursors.get(outbox.name))
             if not rows:
                 break
-            taken += await _take_over_other(sessions, outbox, rows)
+            taken += await _take_over_other(sessions, outbox, rows, horizon)
             cursors[outbox.name] = _cursor(rows[-1])
     return taken, newest, present
 
 
 async def drop_other_outboxes(
-    sessions: Sessions, cursors: dict[str, list[str]], lock_timeout_ms: int
+    sessions: Sessions,
+    cursors: dict[str, list[str]],
+    lock_timeout_ms: int,
+    *,
+    horizon: datetime | None = None,
 ) -> tuple[int, tuple[str, ...]]:
     """Take over the rest of each other outbox under its lock, and drop it:
     (taken, the outboxes whose lock was not granted in time)."""
@@ -120,7 +127,7 @@ async def drop_other_outboxes(
                 while rows := await _outbox_rows_after(
                     conn, outbox, cursors.get(outbox.name)
                 ):
-                    taken += await _take_over_other(sessions, outbox, rows)
+                    taken += await _take_over_other(sessions, outbox, rows, horizon)
                     cursors[outbox.name] = _cursor(rows[-1])
                 await conn.execute(text("DROP TABLE domain_event_outbox"))
         except DBAPIError as exc:
@@ -155,13 +162,16 @@ async def _is_main_outbox(sessions: Sessions) -> bool:
 
 
 async def _take_over_other(
-    sessions: Sessions, outbox: LegacyOutbox, rows: list[dict[str, Any]]
+    sessions: Sessions,
+    outbox: LegacyOutbox,
+    rows: list[dict[str, Any]],
+    horizon: datetime | None = None,
 ) -> int:
     routes = {route.consumer: route for route in ROUTES}
     taken = 0
     async with sessions() as session:
         for name in outbox.routes:
-            taken += await take_over_rows(session, routes[name], rows)
+            taken += await take_over_rows(session, routes[name], rows, horizon=horizon)
         await session.commit()
     return taken
 

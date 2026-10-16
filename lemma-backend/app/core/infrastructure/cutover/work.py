@@ -113,6 +113,9 @@ SINCE_SLACK = timedelta(minutes=5)
 SETTLE_BELOW = 1_000
 #: How long ``finish`` waits for the table lock before giving up the attempt.
 LOCK_TIMEOUT_MS = 5_000
+#: How recent an old delivery or job must be to count as in flight when the
+#: release went out. Older ones are not converted: that would replay them.
+LIVE_WINDOW = timedelta(minutes=30)
 
 
 class LegacyEvent(BaseModel):
@@ -130,6 +133,9 @@ class SweepState(BaseModel):
     cursors: dict[str, list[str]] = Field(default_factory=dict)
     #: The one-time conversion (streaq jobs, state routes) has run.
     converted: bool = False
+    #: Nothing older than this is converted: the release time less
+    #: ``LIVE_WINDOW``, seeded by 0056 and carried through every re-arm.
+    horizon: datetime | None = None
 
 
 # --- cutover.legacy_event ---------------------------------------------------
@@ -148,13 +154,17 @@ async def run_legacy_event(ctx: JobContext, payload: LegacyEvent) -> None:
 async def run_sweep(ctx: JobContext, state: SweepState) -> None:
     taken: dict[str, int] = {}
     last = None
+    if state.horizon is None:
+        state.horizon = datetime.now(UTC) - LIVE_WINDOW
     async with ctx.checkpoint() as uow:
         present = await legacy_tables_present(uow.session)
         if present:
             newest_row = await uow.session.scalar(
                 text("SELECT max(occurred_at) FROM domain_event_outbox")
             )
-            taken = await take_over(uow.session, limit=BATCH, since=state.since)
+            taken = await take_over(
+                uow.session, limit=BATCH, since=state.since, horizon=state.horizon
+            )
             last = await last_activity(uow.session)
             if newest_row is not None and not _full(taken):
                 # Everything that occurred before this pass began is taken
@@ -162,7 +172,7 @@ async def run_sweep(ctx: JobContext, state: SweepState) -> None:
                 # rows committed after others that occurred later.
                 state.since = newest_row - SINCE_SLACK
     other_taken, other_last, others_present = await sweep_other_outboxes(
-        _job_sessions(ctx), state.cursors
+        _job_sessions(ctx), state.cursors, horizon=state.horizon
     )
     busy = sum(taken.values()) + other_taken
     if busy:
@@ -179,13 +189,17 @@ async def run_sweep(ctx: JobContext, state: SweepState) -> None:
         await _rearm(ctx, state, 0 if full else state.poll_seconds)
         return
     if not state.converted:
-        await convert(ctx)
+        await convert(ctx, state.horizon)
         state.converted = True
     if not (present or others_present):
         return
     if work_settings.work_cutover_auto_finish:
         result = await finish(
-            _job_sessions(ctx), since=state.since, cursors=state.cursors, attempts=3
+            _job_sessions(ctx),
+            since=state.since,
+            cursors=state.cursors,
+            attempts=3,
+            horizon=state.horizon,
         )
         if result.done:
             return
@@ -219,23 +233,28 @@ def _full(taken: dict[str, int]) -> bool:
     return any(count >= BATCH for count in taken.values())
 
 
-async def convert(ctx: JobContext) -> int:
+async def convert(ctx: JobContext, horizon: datetime | None = None) -> int:
     """The previous release is gone: take over what is still owed, watermark or
-    not, convert what only Redis held and queue the state routes. Once."""
+    not, convert what only Redis held and queue the state routes. Once.
+    Nothing from before ``horizon`` is converted."""
     while True:
         async with ctx.checkpoint() as uow:
             if not await legacy_tables_present(uow.session):
                 break
-            if not _full(await take_over(uow.session, limit=BATCH)):
+            taken = await take_over(uow.session, limit=BATCH, horizon=horizon)
+            if not _full(taken):
                 break
-    converted = await convert_streaq_jobs(ctx)
+    converted = await convert_streaq_jobs(ctx, horizon)
     async with ctx.checkpoint() as uow:
         work = WorkWriter.of(uow)
         for route in STATE_ROUTES:
             await work.add(
                 LEGACY_EVENT,
                 LEGACY_NS,
-                LegacyEvent(route=route),
+                LegacyEvent(
+                    route=route,
+                    event={"horizon": horizon.isoformat() if horizon else None},
+                ),
                 dedup_key=f"legacy:{route}",
             )
     logger.info("cutover.legacy_sweep.converted", streaq_converted=converted)
@@ -269,26 +288,28 @@ async def finish(
     lock_timeout_ms: int = LOCK_TIMEOUT_MS,
     attempts: int = 5,
     backoff_seconds: float = 2.0,
+    horizon: datetime | None = None,
 ) -> FinishResult:
     """Take over the last of what is owed and drop the old transport, bounded.
 
     Never waits on a lock longer than ``lock_timeout_ms``: an attempt that
     cannot get it rolls back, backs off and tries again, ``attempts`` times in
-    all, and the result says so. Safe to run again at any point.
+    all, and the result says so. Safe to run again at any point. Nothing from
+    before ``horizon`` is taken over: it is dropped with the tables.
     """
-    taken, since = await _settle(sessions, since)
+    taken, since = await _settle(sessions, since, horizon)
     # Other databases' outboxes first: their rows are taken over against the
     # main inbox, so each is taken over to the end and dropped while that
     # inbox still exists. One whose lock is not granted keeps the main tables
     # too, for the next attempt to take it over against.
     other_taken, left = await drop_other_outboxes(
-        sessions, dict(cursors or {}), lock_timeout_ms
+        sessions, dict(cursors or {}), lock_timeout_ms, horizon=horizon
     )
     taken += other_taken
     lock_timeouts, dropped = 0, False
     if not left:
         main_taken, dropped, lock_timeouts = await _drop_main(
-            sessions, since, lock_timeout_ms, attempts, backoff_seconds
+            sessions, since, lock_timeout_ms, attempts, backoff_seconds, horizon
         )
         taken += main_taken
     if dropped:
@@ -312,12 +333,13 @@ async def _drop_main(
     lock_timeout_ms: int,
     attempts: int,
     backoff_seconds: float,
+    horizon: datetime | None = None,
 ) -> tuple[int, bool, int]:
     """``_drop_locked``, retried with backoff: (taken, dropped, lock timeouts)."""
     taken = 0
     for attempt in range(1, attempts + 1):
         try:
-            taken += await _drop_locked(sessions, since, lock_timeout_ms)
+            taken += await _drop_locked(sessions, since, lock_timeout_ms, horizon)
         except DBAPIError as exc:
             if not lock_not_available(exc):
                 raise
@@ -332,7 +354,7 @@ async def _drop_main(
 
 
 async def _settle(
-    sessions: Sessions, since: datetime | None
+    sessions: Sessions, since: datetime | None, horizon: datetime | None = None
 ) -> tuple[int, datetime | None]:
     """Take over outside any lock until a pass takes fewer than ``SETTLE_BELOW``,
     advancing the watermark as the sweep does; (taken, watermark)."""
@@ -344,7 +366,7 @@ async def _settle(
             newest_row = await session.scalar(
                 text("SELECT max(occurred_at) FROM domain_event_outbox")
             )
-            taken = await take_over(session, limit=BATCH, since=since)
+            taken = await take_over(session, limit=BATCH, since=since, horizon=horizon)
             await session.commit()
         total += sum(taken.values())
         if newest_row is not None and not _full(taken):
@@ -354,7 +376,10 @@ async def _settle(
 
 
 async def _drop_locked(
-    sessions: Sessions, since: datetime | None, lock_timeout_ms: int
+    sessions: Sessions,
+    since: datetime | None,
+    lock_timeout_ms: int,
+    horizon: datetime | None = None,
 ) -> int:
     """One transaction: lock both tables, take over the last rows, drop them."""
     taken = 0
@@ -371,7 +396,7 @@ async def _drop_locked(
             )
         )
         while True:
-            batch = await take_over(session, limit=BATCH, since=since)
+            batch = await take_over(session, limit=BATCH, since=since, horizon=horizon)
             taken += sum(batch.values())
             if not _full(batch):
                 break
@@ -416,16 +441,24 @@ async def last_activity(session: AsyncSession) -> datetime | None:
     )
 
 
-async def convert_streaq_jobs(ctx: JobContext) -> int:
-    """Each streaq job only Redis held becomes a ``cutover.legacy_event``."""
+async def convert_streaq_jobs(ctx: JobContext, horizon: datetime | None = None) -> int:
+    """Each streaq job only Redis held becomes a ``cutover.legacy_event`` --
+    unless it was enqueued before ``horizon``: then it is only forgotten."""
     from app.core.infrastructure.redis.client import get_redis
 
     redis = get_redis(decode_responses=False)
-    converted, left = 0, {}
+    converted, stale, left = 0, 0, {}
     retired = retired_streaq_jobs()
     try:
         async for job in queued_jobs(redis):
-            if job.function in STREAQ_ROUTES:
+            old = (
+                horizon is not None
+                and job.enqueued_at is not None
+                and job.enqueued_at < horizon
+            )
+            if job.function in STREAQ_ROUTES and old:
+                stale += 1
+            elif job.function in STREAQ_ROUTES:
                 # One job's arguments, as JSON (a UUID or a datetime as text).
                 event = to_jsonable_python(
                     {"args": list(job.args), "kwargs": job.kwargs}, fallback=str
@@ -450,6 +483,8 @@ async def convert_streaq_jobs(ctx: JobContext) -> int:
         logger.warning(
             "cutover.legacy_sweep.streaq_unconverted", functions=_counts(left)
         )
+    if stale:
+        logger.info("cutover.legacy_sweep.streaq_stale_skipped", skipped=stale)
     return converted
 
 

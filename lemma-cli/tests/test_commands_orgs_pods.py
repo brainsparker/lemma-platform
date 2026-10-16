@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from lemma_cli.cli_core.app import app
 from lemma_cli.cli_core.commands import organizations, pods
+from lemma_sdk import errors as organizations_errors
 
 runner = CliRunner()
 
@@ -98,7 +99,10 @@ def _make_pods_run(fake_pods_obj):
         client = SimpleNamespace(pods=fake_pods_obj)
         state = SimpleNamespace(
             config={
-                "defaults": {"org_id": "org-1", "pod_id": None},
+                "defaults": {
+                    "org_id": "99999999-9999-9999-9999-999999999999",
+                    "pod_id": None,
+                },
                 "_runtime": {"pod": POD_UUID},
             },
             output="pretty",
@@ -138,3 +142,40 @@ def test_pods_list_json_output(monkeypatch):
     payload = json.loads(result.stdout)
     assert "items" in payload
     assert any(item["id"] == POD_UUID for item in payload["items"])
+
+
+def test_pods_list_takes_the_org_by_slug(monkeypatch):
+    """`--org acme` names the org the way `lemma orgs` shows it; the API takes
+    its id, and a slug sent as-is was refused as a badly formed UUID."""
+    fake_pods_obj = FakePods()
+
+    class SlugOrgs:
+        def get(self, org):
+            raise organizations_errors.LemmaNotFoundError(404, "not an id")
+
+        def list(self, *, limit=100, page_token=None):
+            return {
+                "items": [
+                    {
+                        "id": "99999999-9999-9999-9999-999999999999",
+                        "slug": "acme",
+                        "name": "Acme",
+                    }
+                ]
+            }
+
+    def fake_run_with_client(ctx, fn):
+        client = SimpleNamespace(pods=fake_pods_obj, orgs=SlugOrgs())
+        state = SimpleNamespace(
+            config={"defaults": {"org_id": None, "pod_id": None}}, output="pretty"
+        )
+        return fn(client, state)
+
+    monkeypatch.setattr(pods, "run_with_client", fake_run_with_client)
+
+    result = runner.invoke(app, ["--json", "pods", "list", "--org", "acme"])
+
+    assert result.exit_code == 0, result.stdout
+    assert (
+        fake_pods_obj._calls["list"]["org_id"] == "99999999-9999-9999-9999-999999999999"
+    )

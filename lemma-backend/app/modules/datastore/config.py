@@ -90,14 +90,11 @@ class DatastoreSettings(BaseSettings):
     )
     datastore_search_readable_id_pushdown_limit: int = Field(
         default=5_000,
-        description=(
-            "How many readable file ids a search may enumerate and send to the "
-            "pod database to narrow its chunk query. Below this the filter is "
-            "exact; above it the search runs unnarrowed and authorizes the "
-            "rows it gets back -- bounded by the candidate pool instead of by "
-            "the pod, at the cost of recall for a caller who may read very "
-            "little of a very large pod."
-        ),
+        description="How many file ids a search may send to the pod database to narrow its chunk query: the readable searchable files or the hidden ones, whichever is shorter. When both are longer the search runs unnarrowed and authorizes the rows it gets back -- bounded by the candidate pool, at the cost of recall for a caller who may read very little of a very large pod.",
+    )
+    datastore_search_scope_timeout_ms: int = Field(
+        default=3_000,
+        description="Statement timeout (ms) for working out which files a search may return. Past it the search runs unnarrowed and authorizes what comes back, instead of failing.",
     )
 
     # Document processing

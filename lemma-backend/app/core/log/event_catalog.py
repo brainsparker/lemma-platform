@@ -760,6 +760,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.reranker.openai_compat_reranking_requires_lemma.diagnostic': EventSpec('debug', frozenset()),
     'datastore.schema_manager.dropped_schema_pod.observed': EventSpec('debug', frozenset({'pod_id'})),
     'datastore.search.readable_set_enumerated': EventSpec('warning', frozenset({'candidates', 'pod_id', 'post_filtered', 'requested'})),
+    'datastore.search.scope_timed_out.degraded': EventSpec('warning', frozenset({'actor_type', 'pod_id', 'timeout_ms'})),
     'datastore.signed_url.cache_population_failed.observed': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
     'datastore.signed_url.live_cache_write_failed.observed': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
     'datastore.signed_url.purged_expired_link_rows.observed': EventSpec('info', frozenset({'count'})),

@@ -270,25 +270,36 @@ async def test_cutover_seeds_every_active_time_schedule_and_in_flight_run_once(
         cursor=None,
         config=f'{{"scheduled_at": "{(now - timedelta(hours=1)).isoformat()}"}}',
     )
+    # A cron whose fire the old poller missed hours ago: re-armed from now, not
+    # fired late at the cutover.
+    late = await time_row(
+        active=True,
+        cursor=now - timedelta(hours=2),
+        config='{"cron": "*/15 * * * *"}',
+    )
     inactive = await time_row(
         active=False,
         cursor=now + timedelta(minutes=15),
         config='{"cron": "*/15 * * * *"}',
     )
 
-    async def run_row(status: str, started_ago: timedelta | None) -> str:
+    async def run_row(
+        status: str, started_ago: timedelta | None, *, age: timedelta = timedelta()
+    ) -> str:
         run_id = str(uuid4())
         await execute(
             "INSERT INTO schedule_runs (id, schedule_id, user_id, source_event_id, status, "
             "attempts, target_kind, target_run_id, payload, metadata, llm_output, "
             "started_at, created_at, updated_at) VALUES (:id, :sid, :uid, :src, :status, "
-            "1, 'AGENT', gen_random_uuid()::text, '{}', '{}', '{}', :started, now(), now())",
+            "1, 'AGENT', gen_random_uuid()::text, '{}', '{}', '{}', :started, "
+            ":created, now())",
             id=run_id,
             sid=armed,
             uid=owner,
             src=f"src-{run_id}",
             status=status,
             started=None if started_ago is None else now - started_ago,
+            created=now - age,
         )
         return run_id
 
@@ -296,6 +307,8 @@ async def test_cutover_seeds_every_active_time_schedule_and_in_flight_run_once(
     abandoned = await run_row("PROCESSING", timedelta(minutes=10))
     fresh = await run_row("PROCESSING", timedelta(seconds=5))
     done = await run_row("DISPATCHED", timedelta(minutes=10))
+    # Never reached its target, and from long before the release: not replayed.
+    stale = await run_row("RECEIVED", None, age=timedelta(hours=2))
 
     async with async_session_maker() as session:
         from sqlalchemy import text
@@ -306,15 +319,19 @@ async def test_cutover_seeds_every_active_time_schedule_and_in_flight_run_once(
         await session.commit()
 
     arms = {item.payload["schedule_id"] for item in await items("schedule.arm")}
-    assert arms == {armed, legacy, missed}
+    assert arms == {armed, legacy, missed, late}
     starts = {item.payload["schedule_run_id"] for item in await items(SCHEDULE_START)}
     assert starts == {received, abandoned}
     assert inactive not in arms and fresh not in starts and done not in starts
+    assert stale not in starts
 
     await run(WorkClass.EVENTS)
 
     fires = {item.payload["schedule_id"] for item in await items("schedule.fire")}
-    assert fires == {armed, legacy}
+    assert fires == {armed, legacy, late}
+    assert (await schedule_row(late))["next_fire_at"] > now, (
+        "a fire missed hours before the cutover was replayed"
+    )
     assert (await schedule_row(legacy))["next_fire_at"] is not None
     retired = await schedule_row(missed)
     assert (retired["is_active"], retired["paused_reason"]) == (
@@ -325,3 +342,4 @@ async def test_cutover_seeds_every_active_time_schedule_and_in_flight_run_once(
     await run(WorkClass.AUTOMATION)
     statuses = {str(row["id"]): row["status"] for row in await runs(armed)}
     assert statuses[received] == "DISPATCHED" and statuses[abandoned] == "DISPATCHED"
+    assert statuses[stale] == "TARGET_FAILED"

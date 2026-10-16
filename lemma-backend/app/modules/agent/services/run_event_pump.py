@@ -13,7 +13,8 @@ terminal, which is how the driver knows to stop consuming.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
 
@@ -27,6 +28,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     JsonValue,
     MessageDraft,
+    MessageKind,
 )
 from app.modules.agent.services.run_message_writer import split_reasoning_drafts
 from app.modules.agent.services.serialization import message_to_payload
@@ -37,6 +39,7 @@ from app.modules.agent.services.realtime import (
     token_payload,
 )
 from app.modules.agent.services.run_identity import RunIdentity
+from app.modules.agent.services.run_phase_spans import observe_first_output
 from app.modules.agent.services.run_observer_delivery import notify_event
 from app.modules.agent.services.run_finalizer import (
     rejected_run_error_message,
@@ -47,6 +50,46 @@ logger = get_logger(__name__)
 #: The retry path's "discard what you have" signal, sent as a token with no
 #: payload (`PydanticAIHarness._stream_reset_event`).
 _STREAM_RESET_KIND = "stream_reset"
+
+
+class TurnYielded(BaseException):
+    """The worker is shutting down and the turn stopped at a step boundary.
+
+    Not an ``Exception``: nothing on the way out may record it as the run
+    failing. The run stays RUNNING with every step it took committed; its work
+    item goes back to the queue, uncharged, and the next worker resumes it from
+    the last step. Distinct from a user's Stop, which ends the run STOPPED.
+    """
+
+
+@dataclass(slots=True)
+class StepBoundary:
+    """Whether the run is between steps: every tool call it made has returned.
+
+    The only place a shutdown may cut a turn short and lose nothing: the next
+    thing would be a new model request, and every committed row up to here is
+    exactly what a resumed turn reloads. Mid-stream, a partial answer would be
+    persisted as though it were one; mid-tool, the call would be left unpaired.
+    """
+
+    open_calls: set[str] = field(default_factory=set)
+
+    def observe(self, event: AgentEvent) -> bool:
+        """Track ``event``; True when it closed the last open tool call."""
+        draft = event.data
+        if event.type is not AgentEventType.MESSAGE or not isinstance(
+            draft, MessageDraft
+        ):
+            return False
+        if not draft.tool_call_id:
+            return False
+        if draft.kind is MessageKind.TOOL_CALL:
+            self.open_calls.add(draft.tool_call_id)
+            return False
+        if draft.kind is MessageKind.TOOL_RETURN:
+            self.open_calls.discard(draft.tool_call_id)
+            return not self.open_calls
+        return False
 
 
 @dataclass(slots=True)
@@ -82,6 +125,10 @@ class RunEventPump:
         # constructed per run (`handlers.process_agent_run`), so this needs no
         # keying by run id.
         self._token_splitter = ThinkingStreamSplitter()
+        # Provider tool call id -> the id it was stored under, for the pauses
+        # `RunMessageWriter` had to rename. The WAITING event that follows a
+        # pause still carries the provider's, and a surface answers by it.
+        self._stored_ids: dict[str, str] = {}
 
     async def handle(
         self,
@@ -114,15 +161,7 @@ class RunEventPump:
             return False
 
         if event.type == AgentEventType.MESSAGE:
-            saved_message = await self.message_writer.persist(
-                conversation_id=run.conversation_id,
-                agent_run_id=run.agent_run_id,
-                data=event.data,
-            )
-            await publish_conversation_event(
-                run.conversation_id,
-                message_payload(run.agent_run_id, message_to_payload(saved_message)),
-            )
+            await self._persist_message(event, run)
             return False
 
         if event.type == AgentEventType.STATUS:
@@ -141,6 +180,8 @@ class RunEventPump:
             await self.finalizer.finish(
                 status=AgentRunStatus.FAILED,
                 error=str(event.data),
+                error_code=event.error_code,
+                error_reason=event.error_reason,
                 usage_data=outcome.usage_data,
                 run=run,
             )
@@ -200,6 +241,7 @@ class RunEventPump:
         observer: Any,
         conversation: Any,
         ctx: Any,
+        yield_requested: Callable[[], bool] | None = None,
     ) -> None:
         """Consume the harness's events until it stops producing them.
 
@@ -209,7 +251,12 @@ class RunEventPump:
 
         A stream that simply stops without a terminal event is finalized here
         rather than left: see the end of this method.
+
+        ``yield_requested`` is the worker shutting down: checked at each step
+        boundary, and when it holds the turn raises ``TurnYielded`` there
+        without finalizing anything.
         """
+        boundary = StepBoundary()
         async for raw_event in events:
             if outcome.terminal_seen:
                 continue
@@ -219,7 +266,8 @@ class RunEventPump:
             # applied only at the database would still hand the model's
             # reasoning back as the run's answer.
             should_stop = False
-            for event in _split_message_event(raw_event):
+            for split in _split_message_event(raw_event):
+                event = self._addressed_as_stored(split)
                 await notify_event(observer, event, conversation, ctx, run.agent_run_id)
                 if event.type == AgentEventType.USAGE:
                     outcome.usage_data = _usage_from_event(event) or outcome.usage_data
@@ -229,6 +277,12 @@ class RunEventPump:
                     self._absorb_message(event, outcome)
                 if should_stop:
                     break
+                if (
+                    boundary.observe(event)
+                    and yield_requested is not None
+                    and yield_requested()
+                ):
+                    raise TurnYielded()
             if should_stop:
                 outcome.terminal_seen = True
 
@@ -257,6 +311,29 @@ class RunEventPump:
             output_data=outcome.output_data,
             usage_data=outcome.usage_data,
         )
+
+    async def _persist_message(self, event: AgentEvent, run: RunIdentity) -> None:
+        saved_message = await self.message_writer.persist(
+            conversation_id=run.conversation_id,
+            agent_run_id=run.agent_run_id,
+            data=event.data,
+        )
+        sent_as = getattr(event.data, "tool_call_id", None)
+        if sent_as and saved_message.tool_call_id not in (None, sent_as):
+            self._stored_ids[sent_as] = saved_message.tool_call_id
+        await publish_conversation_event(
+            run.conversation_id,
+            message_payload(run.agent_run_id, message_to_payload(saved_message)),
+        )
+
+    def _addressed_as_stored(self, event: AgentEvent) -> AgentEvent:
+        """A WAITING event naming its pause by the id the pause is stored under."""
+        if event.type is not AgentEventType.WAITING or not isinstance(event.data, dict):
+            return event
+        stored = self._stored_ids.get(str(event.data.get("tool_call_id")))
+        if stored is None:
+            return event
+        return event.model_copy(update={"data": {**event.data, "tool_call_id": stored}})
 
     def _classify_token(self, kind: str, text: str) -> list[tuple[str, str]]:
         """Re-tag reasoning a model wrote into the text stream.
@@ -311,6 +388,39 @@ class RunEventPump:
             outcome.final_status = final_status
         if final_error:
             outcome.final_error = final_error
+
+
+async def drive_harness(
+    pump: RunEventPump,
+    events: AsyncIterator[AgentEvent],
+    *,
+    yield_requested: Callable[[], bool] | None,
+    run: RunIdentity,
+    outcome: RunOutcome,
+    observer: Any,
+    conversation: Any,
+    ctx: Any,
+) -> None:
+    """Pump a harness's events; on a shutdown yield, close the harness too.
+
+    Closed explicitly so its driver task unwinds in this turn rather than
+    whenever the abandoned generator happens to be collected.
+    """
+    try:
+        await pump.drive(
+            observe_first_output(events),
+            run=run,
+            outcome=outcome,
+            observer=observer,
+            conversation=conversation,
+            ctx=ctx,
+            yield_requested=yield_requested,
+        )
+    except TurnYielded:
+        aclose = getattr(events, "aclose", None)
+        if aclose is not None:
+            await aclose()
+        raise
 
 
 def _split_message_event(event: AgentEvent) -> list[AgentEvent]:

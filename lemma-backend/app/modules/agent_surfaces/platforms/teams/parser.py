@@ -23,6 +23,19 @@ from app.modules.agent_surfaces.platforms.common import (
 TEAMS_FORM_CALLBACK_KEY = "lemma_form_callback_id"
 # Key carrying the approval decision on an approval-card Action.Submit `data`.
 TEAMS_APPROVAL_DECISION_KEY = "lemma_approval_decision"
+# Key carrying a conversation-level action ("retry") on an Action.Submit `data`.
+TEAMS_ACTION_KEY = "lemma_action"
+# Key carrying the thread a conversation-level action belongs to.
+TEAMS_THREAD_KEY = "lemma_thread"
+# What a submit carries about itself rather than as a form answer.
+_CONTROL_KEYS = frozenset(
+    {
+        TEAMS_FORM_CALLBACK_KEY,
+        TEAMS_APPROVAL_DECISION_KEY,
+        TEAMS_ACTION_KEY,
+        TEAMS_THREAD_KEY,
+    }
+)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _IMG_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.IGNORECASE)
@@ -121,11 +134,7 @@ def _submitted_fields(value: dict[str, Any]) -> tuple[str | None, dict[str, Any]
     decision = str(value.get(TEAMS_APPROVAL_DECISION_KEY) or "").strip() or None
     if decision is not None:
         return decision, {}
-    return None, {
-        key: item
-        for key, item in value.items()
-        if key not in (TEAMS_FORM_CALLBACK_KEY, TEAMS_APPROVAL_DECISION_KEY)
-    }
+    return None, {key: item for key, item in value.items() if key not in _CONTROL_KEYS}
 
 
 def _interaction_reply_target(payload: dict[str, Any]) -> dict[str, str | None]:
@@ -239,14 +248,20 @@ class TeamsMessageParser:
         reply_target = _interaction_reply_target(payload)
         channel_data = payload_section(payload, "channelData")
         tenant = payload_section(channel_data, "tenant")
-        channel = payload_section(channel_data, "channel")
+        channel_id = payload_text(payload_section(channel_data, "channel"), "id")
+        thread_id = reply_target["reply_to_id"] or reply_target["conversation_id"]
+        is_retry = value.get(TEAMS_ACTION_KEY) == "retry"
+        if is_retry:
+            # Located the way the conversation's link was keyed, by its
+            # channel (the conversation itself for a chat) and thread.
+            routing = _teams_routing(payload)
+            channel_id = routing.external_channel_id
+            thread_id = str(value.get(TEAMS_THREAD_KEY) or "") or thread_id
         return ParsedSurfaceInteraction(
             platform="TEAMS",
             tenant_id=str(tenant.get("id") or payload.get("tenantId") or "") or None,
-            external_channel_id=payload_text(channel, "id") or None,
-            external_thread_id=(
-                reply_target["reply_to_id"] or reply_target["conversation_id"]
-            ),
+            external_channel_id=channel_id or None,
+            external_thread_id=thread_id,
             # Match the same aad_id-or-bf_user_id precedence identity resolution
             # uses (TeamsSurfaceAdapter.fetch_sender_profile): when the AAD Object
             # ID was resolvable, it — not the bot-framework `id` — is what got
@@ -257,6 +272,7 @@ class TeamsMessageParser:
                 or None
             ),
             callback_id=callback_id,
+            action="retry" if is_retry else None,
             values=field_values,
             approval_decision=approval_decision,
             reply_target=reply_target,
@@ -317,8 +333,9 @@ class TeamsMessageParser:
                 payload_first(message, "serviceUrl")
                 or payload_text(payload, "serviceUrl")
             ).rstrip("/"),
-            # No entities array in this shape, so an <at> tag is the only signal.
-            mentioned="<at>" in text.lower(),
+            # No entities array in this shape, so an <at> tag is the only signal
+            # -- read from the raw HTML, since `strip_html` removes the tag.
+            mentioned="<at" in payload_text(message, "text").lower(),
         )
 
     def _event_from_activity(

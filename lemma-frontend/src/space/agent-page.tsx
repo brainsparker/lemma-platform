@@ -6,14 +6,14 @@ import { source, type ConversationRef, type Pod, type Surface } from "@/data";
 import { AskBox } from "@/chat/ask-box";
 import { lemma } from "@/session/client";
 import {
-    AGENT_EDIT, AGENT_REMOVE, AGENT_RUN, may, runtimeLine, surfacesLost, whyNot,
+    AGENT_EDIT, AGENT_REMOVE, AGENT_RUN, may, surfacesLost, whyNot,
     type AgentDetail,
 } from "@/data/agents";
 import { displayAgentName } from "@/data/agent-names";
 import { surfacesForAgent, surfaceStatus } from "@/data/surface-settings";
 import { groupsSupported } from "@/data/surface-groups";
 import { capabilityList, grantedToolsets } from "@/stage/colleagues";
-import { ConfirmRemove, Editor } from "@/stage/agents-view";
+import { ConfirmRemove, Editor, useRunsOn } from "@/stage/agents-view";
 import { useSchedules } from "@/schedule/queries";
 import { wakeFor, wakeRequest } from "@/docpages/comments/wake";
 import { readWorkflows, sayWhen } from "@/workflow/runs";
@@ -43,7 +43,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
     onBack: () => void;
     onOpenConversation: (id: string) => void;
     /** Start a conversation in the Chat tab, with this bot when it is named. */
-    onAsk: (text: string, createWith?: Record<string, unknown>) => void;
+    onAsk: (text: string, createWith?: Record<string, unknown>, files?: File[]) => void;
     onOpenSchedules: () => void;
     onOpenWorkflows: () => void;
 }) {
@@ -123,7 +123,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
                                 {editing ? (
                                     <section className="agentpage__card">
                                         <h2>Edit {detail.label}</h2>
-                                        <Editor key={detail.name} podId={pod.id} detail={detail} onDone={() => setEditing(false)} />
+                                        <Editor key={detail.name} podId={pod.id} orgId={pod.orgId} detail={detail} onDone={() => setEditing(false)} />
                                     </section>
                                 ) : (
                                     <>
@@ -136,7 +136,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
                                 <Instructions detail={detail} />
                                 <Abilities detail={detail} />
                                 <Channels space={pod} detail={detail} surfaces={surfaces.data ?? []} loading={surfaces.isPending} />
-                                <Facts detail={detail} />
+                                <Facts orgId={pod.orgId} detail={detail} />
                                 <CommentReplies pod={pod} detail={detail} />
                                 <UsedBy pod={pod} detail={detail} onOpenSchedules={onOpenSchedules} onOpenWorkflows={onOpenWorkflows} />
                                 <Access pod={pod} detail={detail} />
@@ -153,7 +153,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
 
 /** The box. Sending starts a conversation with this bot — made with its
  *  `agent_name`, so it is this bot answering — in the Chat tab. */
-function Ask({ detail, onAsk }: { detail: AgentDetail; onAsk: (text: string, createWith?: Record<string, unknown>) => void }) {
+function Ask({ detail, onAsk }: { detail: AgentDetail; onAsk: (text: string, createWith?: Record<string, unknown>, files?: File[]) => void }) {
     if (detail.takesInput) {
         return (
             <p className="agentpage__card agentpage__called">
@@ -167,7 +167,7 @@ function Ask({ detail, onAsk }: { detail: AgentDetail; onAsk: (text: string, cre
     return (
         <div className="agentpage__ask">
             <AskBox placeholder={"Message " + detail.label + "…"}
-                onAsk={(text) => onAsk(text, detail.front ? undefined : { agent_name: detail.name })} />
+                onAsk={(text, files) => onAsk(text, detail.front ? undefined : { agent_name: detail.name }, files)} />
         </div>
     );
 }
@@ -365,10 +365,10 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
     );
 }
 
-function Facts({ detail }: { detail: AgentDetail }) {
-    const runtime = runtimeLine(detail);
+function Facts({ orgId, detail }: { orgId: string; detail: AgentDetail }) {
+    const runtime = useRunsOn(orgId, detail);
     return (
-        <Rail title="Runs on">
+        <Rail title="Model">
             <p className="agentpage__fact">{runtime || "The default model here"}</p>
             {(detail.input || detail.output) && (
                 <dl className="agentpage__schema">

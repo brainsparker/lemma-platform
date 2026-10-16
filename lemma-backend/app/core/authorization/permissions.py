@@ -79,6 +79,8 @@ class Permissions:
     CONVERSATION_READ: ClassVar[str] = "conversation.read"
     CONVERSATION_WRITE: ClassVar[str] = "conversation.write"
 
+    CONTACT_MESSAGE: ClassVar[str] = "contact.message"
+
     CONNECTOR_USE: ClassVar[str] = "connector.use"
     CONNECTOR_MANAGE: ClassVar[str] = "connector.manage"
     CONNECTOR_ACCOUNT_USE: ClassVar[str] = "connector_account.use"
@@ -282,6 +284,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "Create and update conversations",
     ),
     PermissionDefinition(
+        Permissions.CONTACT_MESSAGE,
+        PermissionScope.POD,
+        "contact",
+        "Write first to the pod's contacts",
+    ),
+    PermissionDefinition(
         Permissions.CONNECTOR_USE,
         PermissionScope.POD,
         "connector",
@@ -373,6 +381,10 @@ POD_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.WORKFLOW_UPDATE,
         Permissions.SCHEDULE_CREATE,
         Permissions.SCHEDULE_UPDATE,
+        # Writing first to somebody outside the pod speaks for the pod, to a
+        # person who did not ask, on a channel whose sender reputation the pod
+        # shares. Writing in one's own conversations does not; this does.
+        Permissions.CONTACT_MESSAGE,
     }
 )
 POD_ADMIN_PERMISSIONS: frozenset[str] = frozenset(
@@ -459,3 +471,12 @@ def equivalent_permission_ids(permission_id: str) -> set[str]:
         if permission_id in implied:
             candidates.add(candidate)
     return candidates
+
+
+def pod_principal_may_hold(permission_id: str) -> bool:
+    """Whether another pod may ever hold ``permission_id`` here.
+
+    Reading, and running this pod's assistant -- the link itself. Nothing that
+    changes anything, whatever a grant row says.
+    """
+    return permission_id.endswith(".read") or permission_id == Permissions.AGENT_EXECUTE

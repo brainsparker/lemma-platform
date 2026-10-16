@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.modules.datastore.infrastructure import pod_schema_memo
 from app.core.bounded import BoundedSet
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
@@ -16,6 +17,9 @@ from app.modules.datastore.infrastructure.session import (
     close_datastore_engine,
     get_datastore_engine,
     get_datastore_session_maker,
+)
+from app.modules.datastore.infrastructure.pod_schema_migrations import (
+    migrate_pod_schema,
 )
 from app.modules.datastore.infrastructure.pod_schema_catalog import (
     bootstrap_pod_schema,
@@ -33,11 +37,10 @@ from app.modules.datastore.infrastructure.sql_identifiers import (
     sanitize_identifier,
 )
 from app.core.log.log import get_logger
+from app.modules.datastore.domain.row_security import RowPrincipal
+from app.modules.datastore.infrastructure.rls_context import apply_row_principal
 
 logger = get_logger(__name__)
-
-# The user an anonymous context reads RLS tables as: nobody, so no rows.
-_NOBODY = UUID(int=0)
 
 
 class SchemaManager:
@@ -177,6 +180,10 @@ class SchemaManager:
         async with self._engine.begin() as conn:
             await bootstrap_pod_schema(conn, schema_name, grant=grant)
 
+    async def migrate_search_tables(self, pod_id: UUID) -> int:
+        """Bring the pod's search tables to the latest version; see ``pod_schema_migrations``."""
+        return await migrate_pod_schema(self._engine, self._get_schema_name(pod_id))
+
     async def datastore_schema_exists(self, pod_id: UUID) -> bool:
         schema_name = self._get_schema_name(pod_id)
         async with self._engine.connect() as conn:
@@ -195,6 +202,7 @@ class SchemaManager:
         logger.debug(
             "datastore.schema_manager.dropped_schema_pod.observed", pod_id=pod_id
         )
+        pod_schema_memo.forget(schema_name)
 
     async def create_table(
         self,
@@ -552,36 +560,10 @@ class SchemaManager:
         )
 
     async def set_rls_context(
-        self,
-        session: AsyncSession,
-        user_id: UUID | None,
-        *,
-        is_pod_admin: bool = False,
+        self, session: AsyncSession, principal: RowPrincipal
     ) -> None:
-        """Set the RLS context for the current session, in one round trip.
-
-        This runs before every RLS-guarded read and write, so a second statement
-        here is a second round trip on the hottest path there is. Both settings
-        stay transaction-local (``set_config(..., true)`` is the function form
-        of ``SET LOCAL``), so nothing leaks to the next borrower of the
-        connection and a transaction-mode pooler stays usable.
-
-        ``None`` is somebody with no rows: a run answering a person outside the
-        pod reads a Public table under an anonymous context. It becomes the nil
-        UUID, which no row is stamped with, so the policy matches nothing --
-        where ``str(None)`` failed the policy's uuid cast and turned an empty
-        answer into an error.
-        """
-        await session.execute(
-            text(
-                "SELECT set_config('app.current_user_id', :user_id, true), "
-                "set_config('app.current_user_is_pod_admin', :is_pod_admin, true)"
-            ),
-            {
-                "user_id": str(user_id or _NOBODY),
-                "is_pod_admin": "true" if is_pod_admin else "false",
-            },
-        )
+        """Name who this session reads as; see ``rls_context.apply_row_principal``."""
+        await apply_row_principal(session, principal)
 
     async def close(self) -> None:
         if self._owns_engine:

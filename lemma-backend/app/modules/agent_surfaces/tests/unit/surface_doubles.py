@@ -57,6 +57,14 @@ from app.modules.test_support.surface_routing_double import routing_surfaces_dou
 #: ones reach a database.
 _CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
 _AGENT_DIRECTORY = "app.modules.agent.contracts.agents"
+_METADATA_RECORDS = "app.modules.agent.contracts.conversation_metadata_records"
+
+
+async def _the_tap_stands(_uow, **kwargs) -> agent_conversations.ApprovalResolution:
+    """A fresh pause: the decision recorded is the one that was tapped."""
+    return agent_conversations.ApprovalResolution(
+        status="resolved", decision=kwargs["decision"]
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -75,14 +83,26 @@ def conversation_operations(monkeypatch):
         "pending_interaction": AsyncMock(return_value=None),
         "pending_question": AsyncMock(return_value=None),
         "pending_approval": AsyncMock(return_value=None),
-        "resolve_pending_interaction": AsyncMock(return_value=True),
+        "undecided_pauses": AsyncMock(return_value=[]),
+        "resolve_pending_interaction": AsyncMock(side_effect=_the_tap_stands),
         "retry_failed_run": AsyncMock(),
         "surface_agent_identity": AsyncMock(return_value=None),
         "conversation_metadata_value": AsyncMock(return_value=None),
         "set_conversation_metadata_value": AsyncMock(),
+        # Nobody typed into Lemma: the ordinary answer for an egress target
+        # resolved for a channel. The real one reads the conversation's latest
+        # run, which these doubles have no rows for.
+        "lemma_message_run_started_at": AsyncMock(return_value=None),
     }
     for name, double in doubles.items():
         monkeypatch.setattr(f"{_CONVERSATIONS}.{name}", double)
+    records = {
+        "conversation_metadata_record": AsyncMock(return_value=None),
+        "forget_conversation_metadata_record": AsyncMock(),
+        "due_conversation_metadata_records": AsyncMock(return_value=[]),
+    }
+    for name, double in records.items():
+        monkeypatch.setattr(f"{_METADATA_RECORDS}.{name}", double)
     monkeypatch.setattr(
         f"{_AGENT_DIRECTORY}.agent_name_for_id", AsyncMock(return_value="Surface Agent")
     )
@@ -123,6 +143,7 @@ def _slack_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
         agent_id=agent_id if agent_id is not None else uuid4(),
         surface_type=SurfacePlatform.SLACK,
         account_id=uuid4(),
+        external_workspace_id="T123",
         surface_identity_id="U-BOT",
         config=SurfaceConfig(),
         is_active=True,
@@ -288,6 +309,7 @@ def build_doubles(
     # A bare AsyncMock answers every call with a truthy mock, which the binder
     # would read as "this person has an earlier private-chat link".
     conversation_link_repository.find_latest_dm_link_for_person.return_value = None
+    conversation_link_repository.latest_dm_links_for_person.return_value = []
     conversation_link_repository.create.side_effect = lambda link, **_: link
     conversation_link_repository.update_last_event.side_effect = lambda **kwargs: (
         existing_link
@@ -359,6 +381,8 @@ def build_doubles(
     adapter.enrich_inbound_event.side_effect = lambda *, credentials, event: event
     adapter.unresolved_sender_reply = Mock(return_value=None)
     adapter.linked_sender_confirmation = Mock(return_value=None)
+    # Synchronous on the port, so an AsyncMock's coroutine would read as True.
+    adapter.mention_is_provisional = Mock(return_value=False)
     return SurfaceDoubles(
         uow=uow,
         surface_repository=surface_repository,
@@ -567,6 +591,49 @@ _REQUEST_APPROVAL_TOOL_ARGS = {
 }
 
 
+class MembershipDouble:
+    """Pod membership, as the group roster asks it: are these people in?
+
+    Stands in for `SurfacePodMembershipPort` where the answer under test is what
+    a roster does with it, not how it is looked up.
+    """
+
+    def __init__(self, members: set[UUID] | None = None) -> None:
+        self.members = members or set()
+
+    async def pod_members_among(self, _pod_id: UUID, user_ids) -> set[UUID]:
+        return {user_id for user_id in user_ids if user_id in self.members}
+
+
+class ExternalIdentityDouble:
+    """The pod's cache of who a platform sender is, as a roster reads it.
+
+    Stands in for `ExternalSurfaceUserRepository`, and records how it was asked:
+    the roster's answer turns on the platform and tenant it asks with, because a
+    Slack id means one person in one workspace and somebody else in another.
+    """
+
+    def __init__(self, known: dict[str, UUID] | None = None) -> None:
+        self.known = known or {}
+        self.asked: list[dict[str, object]] = []
+
+    async def resolved_users_by_external_ids(
+        self, *, platform: str, tenant_id: str | None, external_user_ids
+    ) -> dict[str, UUID]:
+        self.asked.append(
+            {
+                "platform": platform,
+                "tenant_id": tenant_id,
+                "external_user_ids": list(external_user_ids),
+            }
+        )
+        return {
+            external: self.known[external]
+            for external in external_user_ids
+            if external in self.known
+        }
+
+
 class ScopeCountingFactory:
     """A unit-of-work factory over one doubled session, counting open scopes.
 
@@ -603,6 +670,7 @@ def build_turn_starter(
     uow_factory: object | None = None,
     file_ingest_service: object | None = None,
     pooled_numbers: object | None = None,
+    roster_reads: object | None = None,
 ) -> SurfaceTurnStarter:
     """The worker's half, over doubled collaborators.
 
@@ -631,4 +699,28 @@ def build_turn_starter(
             ingest_attachments=AsyncMock(return_value=AttachmentIngest())
         ),
         pooled_numbers=pooled_numbers,
+        **({"roster_reads": roster_reads} if roster_reads is not None else {}),
     )
+
+
+class RecordingNotificationWork:
+    """What a notification writes as work, recorded instead of written.
+
+    ``settled`` holds the ``NotificationSettled`` facts; ``events`` (when
+    given) receives them too, for a harness that reads one list.
+    """
+
+    def __init__(self, events: list | None = None) -> None:
+        self.settled_facts: list = []
+        self.armed: list = []
+        self._events = events
+
+    async def arm_expiry(self, uow, notification) -> None:
+        del uow
+        self.armed.append(notification)
+
+    async def settled(self, uow, fact) -> None:
+        del uow
+        self.settled_facts.append(fact)
+        if self._events is not None:
+            self._events.append(fact)

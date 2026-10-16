@@ -57,6 +57,7 @@ def _surface(*, pod_id, surface_id=None):
         pod_id=pod_id,
         surface_type=SurfacePlatform.SLACK,
         external_workspace_id="T1",
+        account_id=None,
         agent_id=uuid4(),
         name="slack",
     )
@@ -82,6 +83,9 @@ async def test_configuration_candidates_are_scoped_to_verified_receiver_and_memb
             get_by_identity=AsyncMock(
                 return_value=SimpleNamespace(resolved_user_id=user_id)
             )
+        ),
+        identity_service=SimpleNamespace(
+            resolve=AsyncMock(return_value=SimpleNamespace(internal_user_id=user_id))
         ),
         pod_membership_port=SimpleNamespace(
             get_user_pod_ids=AsyncMock(return_value=[member_pod])
@@ -135,6 +139,9 @@ async def test_configuration_requires_the_same_agent_permission_as_http(
                 return_value=SimpleNamespace(resolved_user_id=user_id)
             )
         ),
+        identity_service=SimpleNamespace(
+            resolve=AsyncMock(return_value=SimpleNamespace(internal_user_id=user_id))
+        ),
         pod_membership_port=SimpleNamespace(
             get_user_pod_ids=AsyncMock(return_value=[pod_id])
         ),
@@ -160,6 +167,68 @@ async def test_configuration_requires_the_same_agent_permission_as_http(
 
     assert authorized == []
     context.can.assert_awaited_once_with(Permissions.AGENT_UPDATE)
+
+
+async def test_a_cached_actor_whose_account_is_gone_configures_nothing():
+    """The cache row is asked through identity resolution, never read raw.
+
+    A deactivated person's external-user row survives them, and it used to be
+    returned straight from the table -- so they could still open the setup
+    modal and repoint a channel while their pod membership row lingered.
+    """
+    from app.modules.agent_surfaces.services.identity_resolution_service import (
+        SurfaceIdentityResolutionService,
+    )
+
+    departed = uuid4()
+    # Telegram's menu asks the same question as Slack's App Home; it is used
+    # here because its verified-identity lookup is the injectable one.
+    surface = SimpleNamespace(
+        **{**vars(_surface(pod_id=uuid4())), "surface_type": SurfacePlatform.TELEGRAM}
+    )
+    cached_row = SimpleNamespace(
+        resolved_user_id=departed,
+        external_user_id="U1",
+        email=None,
+        phone=None,
+        display_name=None,
+    )
+    external_users = SimpleNamespace(
+        get_by_identity=AsyncMock(return_value=cached_row),
+        upsert=AsyncMock(return_value=cached_row),
+    )
+
+    async def nobody_verified(event):
+        return None
+
+    async def gone(user_id):
+        return None
+
+    identity = SurfaceIdentityResolutionService(
+        uow=SimpleNamespace(session=object()),
+        external_user_repository=external_users,
+        user_directory=SimpleNamespace(
+            user_id_by_email=AsyncMock(return_value=None),
+            user_ids_by_mobile_numbers=AsyncMock(return_value=[]),
+        ),
+        verified_identity_lookup=nobody_verified,
+        live_user_lookup=gone,
+    )
+    harness = _access(
+        external_user_repository=external_users, identity_service=identity
+    )
+    harness.credential_resolver = SimpleNamespace(
+        for_surface=AsyncMock(return_value={})
+    )
+    harness.uow = SimpleNamespace(session=None)
+
+    actor = await harness._resolve_configuration_actor(
+        candidates=[surface],
+        actor_external_user_id="U1",
+        adapter=SimpleNamespace(fetch_sender_profile=AsyncMock(return_value=None)),
+    )
+
+    assert actor is None
 
 
 async def test_explicit_or_default_surface_replaces_first_row_selection():

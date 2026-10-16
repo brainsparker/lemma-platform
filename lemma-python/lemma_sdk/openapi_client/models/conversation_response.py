@@ -40,6 +40,9 @@ class ConversationResponse:
             and where its files land, so it is the directory a file pane should be showing.
         agent_id (None | Unset | UUID):
         agent_runtime (AgentRuntimeConfig | None | Unset):
+        has_pending_interaction (bool | Unset): A question, approval or Agent Host permission request here is waiting on
+            the conversation's owner. Not implied by status: a WAITING conversation may be waiting on a timer, and a
+            permission request waits inside a RUNNING one. Default: False.
         instructions (None | str | Unset):
         is_archived (bool | Unset):  Default: False.
         last_run_error (None | str | Unset):
@@ -67,6 +70,7 @@ class ConversationResponse:
     workspace_cwd: str
     agent_id: None | Unset | UUID = UNSET
     agent_runtime: AgentRuntimeConfig | None | Unset = UNSET
+    has_pending_interaction: bool | Unset = False
     instructions: None | str | Unset = UNSET
     is_archived: bool | Unset = False
     last_run_error: None | str | Unset = UNSET
@@ -121,6 +125,8 @@ class ConversationResponse:
             agent_runtime = self.agent_runtime.to_dict()
         else:
             agent_runtime = self.agent_runtime
+
+        has_pending_interaction = self.has_pending_interaction
 
         instructions: None | str | Unset
         if isinstance(self.instructions, Unset):
@@ -232,6 +238,8 @@ class ConversationResponse:
             field_dict["agent_id"] = agent_id
         if agent_runtime is not UNSET:
             field_dict["agent_runtime"] = agent_runtime
+        if has_pending_interaction is not UNSET:
+            field_dict["has_pending_interaction"] = has_pending_interaction
         if instructions is not UNSET:
             field_dict["instructions"] = instructions
         if is_archived is not UNSET:
@@ -322,6 +330,8 @@ class ConversationResponse:
             return cast(AgentRuntimeConfig | None | Unset, data)
 
         agent_runtime = _parse_agent_runtime(d.pop("agent_runtime", UNSET))
+
+        has_pending_interaction = d.pop("has_pending_interaction", UNSET)
 
         def _parse_instructions(data: object) -> None | str | Unset:
             if data is None:
@@ -511,6 +521,7 @@ class ConversationResponse:
             workspace_cwd=workspace_cwd,
             agent_id=agent_id,
             agent_runtime=agent_runtime,
+            has_pending_interaction=has_pending_interaction,
             instructions=instructions,
             is_archived=is_archived,
             last_run_error=last_run_error,

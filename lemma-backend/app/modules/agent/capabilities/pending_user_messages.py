@@ -74,12 +74,12 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         # Rendered exactly as history renders a user message, so a steered one
         # reads the same as one the run started with -- sender label, quoted
         # message, the paths of whatever they attached.
-        from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
-            user_prompt_text,
+        from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+            timed_user_prompt_text,
         )
 
         for message in messages:
-            ctx.enqueue(user_prompt_text(message))
+            ctx.enqueue(timed_user_prompt_text(message))
         # The claim is committed and the prompts are in the run: the frame only
         # tells the client. Failing it must not cost the turn the messages it
         # just took -- a reload reads the same claim. Publishing already

@@ -300,6 +300,85 @@ async def test_reused_worker_preserves_legacy_function_environment(
     }
 
 
+def _contact_artifact(root: Path) -> tuple[Path, FunctionArtifactManifest]:
+    artifact = root / ("c" * 64)
+    artifact.mkdir()
+    manifest = FunctionArtifactManifest(
+        runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
+        builder_digest="test",
+        source_path="function.py",
+        input_model="Input",
+        output_model="Output",
+        entrypoint="execute",
+    )
+    (artifact / "manifest.json").write_text(
+        manifest.model_dump_json(), encoding="utf-8"
+    )
+    (artifact / "function.py").write_text(
+        """
+import os
+from pydantic import BaseModel
+
+class Input(BaseModel):
+    value: int
+
+class Output(BaseModel):
+    user_id: str | None
+    contact_id: str | None
+    env_user_id: str | None
+    env_contact_id: str | None
+
+def execute(ctx, data):
+    return Output(
+        user_id=str(ctx.user_id) if ctx.user_id else None,
+        contact_id=str(ctx.contact_id) if ctx.contact_id else None,
+        env_user_id=os.environ.get("LEMMA_USER_ID"),
+        env_contact_id=os.environ.get("LEMMA_CONTACT_ID"),
+    )
+""".strip(),
+        encoding="utf-8",
+    )
+    return artifact, manifest
+
+
+@pytest.mark.asyncio
+async def test_a_contacts_run_has_no_user_and_names_its_contact(
+    tmp_path: Path,
+) -> None:
+    artifact, manifest = _contact_artifact(tmp_path)
+    registry = RevisionWorkerRegistry(max_workers=1)
+    function_id = uuid4()
+    contact_id = uuid4()
+    request = _request(artifact, manifest, function_id=function_id, value=1)
+    request = request.model_copy(
+        update={
+            "identity": request.identity.model_copy(
+                update={"user_id": None, "contact_id": contact_id}
+            )
+        }
+    )
+    try:
+        result = await registry.execute(
+            function_id=function_id,
+            revision_hash=f"sha256:{'c' * 64}",
+            artifact_root=artifact,
+            run_id=request.run_id,
+            request=request,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=10),
+        )
+    finally:
+        await registry.close()
+
+    # Unset rather than the string "None": a function testing for a member
+    # must not find one.
+    assert result.output_data == {
+        "user_id": None,
+        "contact_id": str(contact_id),
+        "env_user_id": None,
+        "env_contact_id": str(contact_id),
+    }
+
+
 @pytest.mark.asyncio
 async def test_idle_revision_caches_are_evicted_by_lru(tmp_path: Path) -> None:
     artifact, manifest = _artifact(tmp_path)
@@ -381,14 +460,10 @@ async def test_idle_workers_are_reclaimed_across_revision_pools(
 
 
 @pytest.mark.asyncio
-async def test_active_workers_are_never_reclaimed(tmp_path: Path) -> None:
+def _single_worker_invoker(tmp_path: Path, registry: RevisionWorkerRegistry):
     artifact, manifest = _artifact(tmp_path)
-    registry = RevisionWorkerRegistry(max_workers=1, max_cached_revisions=4)
-    first_function = uuid4()
-    second_function = uuid4()
-    deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
 
-    async def invoke(function_id, *, hold_ms: int = 0):
+    async def invoke(function_id, *, hold_ms: int = 0, deadline: datetime):
         return await registry.execute(
             function_id=function_id,
             revision_hash=f"sha256:{str(function_id).replace('-', '') * 2}",
@@ -404,24 +479,85 @@ async def test_active_workers_are_never_reclaimed(tmp_path: Path) -> None:
             deadline_at=deadline,
         )
 
-    active = asyncio.create_task(invoke(first_function, hold_ms=500))
-    try:
-        for _ in range(100):
-            async with registry._lock:
-                if registry._active:
-                    break
-            await asyncio.sleep(0.01)
-        else:
-            raise AssertionError("first worker never became active")
+    return invoke
 
-        with pytest.raises(RuntimeOverloaded):
-            await invoke(second_function)
-        await active
+
+async def _until_a_worker_is_active(registry: RevisionWorkerRegistry) -> None:
+    for _ in range(500):
+        async with registry._lock:
+            if registry._active:
+                return
+        await asyncio.sleep(0.01)
+    raise AssertionError("first worker never became active")
+
+
+@pytest.mark.asyncio
+async def test_full_budget_waits_for_the_active_worker_then_runs(
+    tmp_path: Path,
+) -> None:
+    registry = RevisionWorkerRegistry(max_workers=1, max_cached_revisions=4)
+    invoke = _single_worker_invoker(tmp_path, registry)
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
+
+    active = asyncio.create_task(invoke(uuid4(), hold_ms=500, deadline=deadline))
+    try:
+        await _until_a_worker_is_active(registry)
+        # The only slot is busy and nothing is idle to reclaim. This used to
+        # fail on the spot; it now queues behind the active run.
+        waited = await invoke(uuid4(), deadline=deadline)
+        first = await active
     finally:
         if not active.done():
             active.cancel()
             await asyncio.gather(active, return_exceptions=True)
         await registry.close()
+
+    # The active worker was never taken away mid-run.
+    assert first.ok and first.output_data == {"value": 1, "counter": 1}
+    assert waited.ok and waited.output_data == {"value": 1, "counter": 1}
+
+
+@pytest.mark.asyncio
+async def test_full_budget_fails_as_never_started_once_the_deadline_passes(
+    tmp_path: Path,
+) -> None:
+    registry = RevisionWorkerRegistry(max_workers=1, max_cached_revisions=4)
+    invoke = _single_worker_invoker(tmp_path, registry)
+    long_deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
+
+    active = asyncio.create_task(invoke(uuid4(), hold_ms=3_000, deadline=long_deadline))
+    try:
+        await _until_a_worker_is_active(registry)
+        short_deadline = datetime.now(timezone.utc) + timedelta(milliseconds=300)
+        with pytest.raises(RuntimeOverloaded, match="never started") as raised:
+            await invoke(uuid4(), deadline=short_deadline)
+        # Waited for its deadline rather than failing on first contact.
+        assert datetime.now(timezone.utc) >= short_deadline
+    finally:
+        active.cancel()
+        await asyncio.gather(active, return_exceptions=True)
+        await registry.close()
+
+    assert isinstance(raised.value, TimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_budget_wait_wakes_on_a_release_that_raced_the_failed_reserve() -> None:
+    budget = WorkerBudget(1)
+    await budget.reserve()
+    observed = budget.generation
+    # Freed between the caller's failed attempt and its wait: the snapshot
+    # makes the wait return at once instead of sleeping to the deadline.
+    await budget.release()
+
+    await asyncio.wait_for(
+        budget.wait_for_capacity(
+            since=observed,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        ),
+        timeout=1,
+    )
+    await budget.reserve()
 
 
 @pytest.mark.asyncio

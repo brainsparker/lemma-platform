@@ -18,37 +18,39 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.core.log.log import get_logger
-from httpx import HTTPError
 
 from app.modules.agent_surfaces.domain.errors import (
-    AgentSurfaceError,
     AgentSurfaceValidationError,
     NotificationNotFoundError,
 )
-from app.modules.agent_surfaces.domain.events import NotificationSettledEvent
+from app.core.infrastructure.work import WorkWriter, facts, pod_namespace
+from app.modules.agent_surfaces.contracts.notification_facts import (
+    NotificationSettled,
+)
+from app.modules.agent_surfaces.domain.work_payloads import NotificationExpirePayload
+from app.modules.agent_surfaces.events.work_kinds import (
+    NOTIFICATION_EXPIRE,
+    notification_expire_key,
+)
 from app.modules.agent_surfaces.domain.notification import (
     NotificationEntity,
     NotificationOriginKind,
     NotificationStatus,
 )
 from app.modules.agent_surfaces.domain.ports import SurfaceNotificationEgressPort
-from app.modules.agent_surfaces.services.notification_delivery import (
-    DeliveryChannel,
-    UndeliverableReason,
-)
+from app.modules.agent_surfaces.services.notification_delivery import DeliveryChannel
 from app.modules.agent_surfaces.services.notification_channels import (
     NotificationChannelResolver,
     SurfaceProvisioner,
-    can_cold_open,
+)
+from app.modules.agent_surfaces.services.notification_dispatch import (
+    send_on_first_channel,
 )
 from app.modules.agent_surfaces.services.notification_egress import NotificationEgress
 from app.modules.agent_surfaces.services.outside_questions import (
     MAX_OUTSIDE_QUESTION_CHARS,
     OutsideOriginReader,
     outside_question_message,
-)
-from app.modules.agent_surfaces.services.notification_rate_limiter import (
-    EmailSendLimitExceeded,
 )
 
 logger = get_logger(__name__)
@@ -91,6 +93,20 @@ def attribute(body: str, *, actor_display_name: str | None) -> str:
     return f"On behalf of {actor_display_name}:\n\n{body}"
 
 
+class NotificationWork:
+    """The work a notification writes on its unit of work: its expiry, its settling.
+
+    A collaborator rather than calls inline, so a test of what the service
+    decides records these instead of needing the work tables.
+    """
+
+    async def arm_expiry(self, uow, notification: NotificationEntity) -> None:
+        await _arm_expiry(uow, notification)
+
+    async def settled(self, uow, fact: NotificationSettled) -> None:
+        await facts.emit(uow, fact)
+
+
 class NotificationService:
     """Creates notifications, delivers them, and owns their lifecycle."""
 
@@ -107,8 +123,10 @@ class NotificationService:
         outside_origin_reader: OutsideOriginReader,
         rate_limiter=None,
         surface_provisioner: SurfaceProvisioner | None = None,
+        work: NotificationWork | None = None,
     ):
         self.uow = uow
+        self.work = work or NotificationWork()
         # Required, so no way of building this service can forget it: it is
         # what marks a question passed on from outside the pod, and an unmarked
         # one would have its answer recorded without the recipient's say-so.
@@ -212,6 +230,7 @@ class NotificationService:
                 origin_conversation_id=origin_conversation_id,
                 from_outside=outside is not None,
                 origin_group_title=outside.group_title if outside else None,
+                asked_in_private=outside.in_private if outside else False,
                 asked_by_name=outside.asked_by_name if outside else None,
                 title=title,
                 body=body,
@@ -222,8 +241,18 @@ class NotificationService:
                 expires_at=expires_at or default_expiry(),
             )
         )
-        # An idempotency hit returns the original, already-delivered row. Sending
-        # again is the exact double-post the key exists to prevent.
+        await self.work.arm_expiry(self.uow, notification)
+        # An idempotency hit returns the original row. Sending again is the
+        # exact double-post the key exists to prevent -- whether it was
+        # delivered, or its send was started and never recorded, which is when
+        # the platform may well have it and only the bookkeeping failed.
+        if idempotency_key and notification.send_outcome_unknown:
+            logger.warning(
+                "agent_surfaces.notification_service.send_outcome_unknown.degraded",
+                notification_id=str(notification.id),
+                pod_id=str(pod_id),
+            )
+            return notification
         if idempotency_key and notification.delivered_at is not None:
             logger.info(
                 "agent_surfaces.notification_service.duplicate_suppressed.observed",
@@ -290,88 +319,16 @@ class NotificationService:
             )
         )
 
-        # First success wins. Three copies of one message across three apps is
-        # how a useful feature comes to read as spam.
-        last_error: str | None = None
-        for channel in channels:
-            try:
-                if can_cold_open(channel.surface) and self.rate_limiter is not None:
-                    # Charged per email, not per notification: a message that
-                    # went out on Slack costs the shared sending domain nothing.
-                    # Refusing here rather than raising leaves the notification
-                    # in the recipient's inbox with an explanation, which is the
-                    # right outcome for a budget being spent — the thing is real,
-                    # we just will not mail it.
-                    try:
-                        await self.rate_limiter.check_email(pod_id=notification.pod_id)
-                    except EmailSendLimitExceeded as exc:
-                        last_error = str(exc)
-                        continue
-
-                conversation_id = await self.egress.conversation_for(
-                    channel, notification=notification
-                )
-                if conversation_id is None:
-                    last_error = UndeliverableReason.NEVER_INTERACTED
-                    continue
-
-                # Persist before send: a failed platform call must still leave
-                # the person a message they can read, and the agent handling
-                # their reply a record of what was asked.
-                await self.egress.persist_outbound(
-                    conversation_id=conversation_id,
-                    notification=notification,
-                    message=message,
-                )
-                # Commit before the platform call, for two reasons that point
-                # the same way. It makes "persist before send" mean it — an
-                # uncommitted row is not a message anyone can read. And it hands
-                # the pooled connection back, so the send below does not hold
-                # one (nor the row locks it is sitting on) for the seconds a
-                # platform API can take. The update after the send opens its own
-                # transaction.
-                await self.uow.commit()
-                sent = await self.egress.send(
-                    channel,
-                    conversation_id=conversation_id,
-                    notification=notification,
-                    message=message,
-                    # Both names, unconditionally — wider than the body header
-                    # above. On email they become the From display name, which
-                    # is all an unopened inbox list shows; on chat the agent
-                    # name is the bot's username and avatar.
-                    agent_name=agent_name,
-                    actor_display_name=actor_display_name,
-                )
-                if not sent:
-                    last_error = (
-                        UndeliverableReason.COLD_OPEN_UNSUPPORTED
-                        if channel.link is None
-                        else f"{channel.platform.value} send returned no delivery."
-                    )
-                    continue
-
-                notification.mark_delivered(
-                    surface_id=channel.surface.id,
-                    conversation_id=conversation_id,
-                    platform=channel.platform.value,
-                )
-                return await self.notifications.update(notification)
-            except (AgentSurfaceError, HTTPError, OSError) as exc:
-                # Deliberately NOT bare `Exception`: a bug in our own code must
-                # surface rather than be reported as "that channel didn't work".
-                last_error = f"{channel.platform.value}: {exc}"
-                logger.warning(
-                    "agent_surfaces.notification_service.channel_send_failed.degraded",
-                    notification_id=str(notification.id),
-                    platform=channel.platform.value,
-                    error=str(exc),
-                )
-
-        notification.mark_delivery_failed(
-            last_error or "No channel accepted the message."
+        return await send_on_first_channel(
+            notification,
+            channels=channels,
+            message=message,
+            agent_name=agent_name,
+            uow=self.uow,
+            notifications=self.notifications,
+            egress=self.egress,
+            rate_limiter=self.rate_limiter,
         )
-        return await self.notifications.update(notification)
 
     async def resolve_channels(
         self,
@@ -429,9 +386,9 @@ class NotificationService:
 
         The domain decides whether the answer is legal. Whether the asking
         conversation should be brought back is decided here and announced as
-        ``NotificationSettledEvent``: this module may not reach into `agent`,
-        and the two respond paths used to each have to remember to make that
-        call themselves.
+        the ``NotificationSettled`` fact, in this transaction: this module may
+        not reach into `agent`, and the agent's subscriber item commits with the
+        answer -- an answer can no longer be recorded and then lost.
 
         The count is read after the write has been flushed, so the row just
         closed is already counted as settled.
@@ -449,31 +406,8 @@ class NotificationService:
         return updated
 
     async def _announce_if_settled(self, notification: NotificationEntity) -> None:
-        """Raise ``NotificationSettledEvent`` once this conversation is owed nothing.
-
-        Scoped to ``AGENT_RUN`` because that is the only origin a conversation
-        has: a workflow form is owed to its run, and resuming that is the
-        workflow engine's job.
-        """
-        conversation_id = notification.origin_conversation_id
-        if conversation_id is None or not notification.expects_response:
-            # An FYI closes nothing the asker was waiting on, so its expiry is
-            # not news either.
-            return
-        if notification.origin_kind is not NotificationOriginKind.AGENT_RUN:
-            return
-        if await self.notifications.count_open_from_origin_conversation(
-            conversation_id
-        ):
-            return
-        self.uow.collect_events(
-            [
-                NotificationSettledEvent(
-                    pod_id=notification.pod_id,
-                    conversation_id=conversation_id,
-                    notification_id=notification.id,
-                )
-            ]
+        await announce_if_settled(
+            self.uow, self.notifications, notification, work=self.work
         )
 
     async def resolve_through_action(
@@ -526,30 +460,6 @@ class NotificationService:
             await self.notifications.update(notification)
         return len(notifications)
 
-    async def expire_past_due(self, *, limit: int = 100) -> int:
-        """Sweep notifications nobody answered in time.
-
-        Not a failure — people are busy — but a row that stays OPEN forever is a
-        badge that never clears and an asker that waits on nothing.
-        """
-        expired = 0
-        now = datetime.now(timezone.utc)
-        for notification in await self.notifications.list_past_due(limit=limit):
-            # Re-check rather than catching the entity's refusal: it may have
-            # been answered between the query and here, and the answer wins.
-            if not notification.is_past_due(now=now):
-                continue
-            notification.expire()
-            # An expired ask is as settled as an answered one: the asking
-            # conversation counts it as no longer outstanding, so the sweep that
-            # closes the last one has to say so, or that conversation waits on a
-            # question nobody can answer any more.
-            await self._announce_if_settled(
-                await self.notifications.update(notification)
-            )
-            expired += 1
-        return expired
-
     async def is_from_outside(
         self, *, pod_id: UUID, notification_id: UUID, user_id: UUID
     ) -> bool:
@@ -583,3 +493,76 @@ class NotificationService:
         ):
             raise NotificationNotFoundError(str(notification_id))
         return notification
+
+
+async def announce_if_settled(
+    uow,
+    notifications,
+    notification: NotificationEntity,
+    *,
+    work: NotificationWork | None = None,
+) -> None:
+    """Emit ``NotificationSettled`` once this conversation is owed nothing.
+
+    Scoped to ``AGENT_RUN`` because that is the only origin a conversation
+    has: a workflow form is owed to its run, and resuming that is the workflow
+    engine's job. The count is read after the write has been flushed, so the
+    row just closed is already counted as settled.
+    """
+    conversation_id = notification.origin_conversation_id
+    if conversation_id is None or not notification.expects_response:
+        # An FYI closes nothing the asker was waiting on, so its expiry is
+        # not news either.
+        return
+    if notification.origin_kind is not NotificationOriginKind.AGENT_RUN:
+        return
+    if await notifications.count_open_from_origin_conversation(conversation_id):
+        return
+    await (work or NotificationWork()).settled(
+        uow,
+        NotificationSettled(
+            conversation_id=conversation_id, pod_id=notification.pod_id
+        ),
+    )
+
+
+async def _arm_expiry(uow, notification: NotificationEntity) -> None:
+    """The item that expires this notification if nobody answers in time.
+
+    Written with the row (an idempotency hit re-arms nothing: the dedup key
+    coalesces), so no sweep has to find past-due rows.
+    """
+    if notification.id is None or notification.expires_at is None:
+        return
+    if notification.status is not NotificationStatus.OPEN:
+        return
+    await WorkWriter.of(uow).add(
+        NOTIFICATION_EXPIRE,
+        pod_namespace(notification.pod_id),
+        NotificationExpirePayload(notification_id=notification.id),
+        dedup_key=notification_expire_key(notification.id),
+        run_at=notification.expires_at,
+    )
+
+
+async def expire_one(
+    uow,
+    notifications,
+    notification_id: UUID,
+    *,
+    work: NotificationWork | None = None,
+) -> bool:
+    """Expire one notification if it is still open and past due. True if it was.
+
+    The answer wins a race: a notification answered meanwhile is left alone.
+    """
+    notification = await notifications.get(notification_id)
+    if notification is None or notification.status is not NotificationStatus.OPEN:
+        return False
+    if not notification.is_past_due(now=datetime.now(timezone.utc)):
+        return False
+    notification.expire()
+    await announce_if_settled(
+        uow, notifications, await notifications.update(notification), work=work
+    )
+    return True

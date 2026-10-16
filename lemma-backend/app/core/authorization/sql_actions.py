@@ -30,7 +30,10 @@ from app.core.authorization.context import (
 from app.core.authorization.delegation import DESTRUCTIVE_ACTIONS
 from app.core.authorization.grants import grant_resource_type_values
 from app.core.authorization.models import ResourcePermissionGrantModel
-from app.core.authorization.permissions import equivalent_permission_ids
+from app.core.authorization.permissions import (
+    equivalent_permission_ids,
+    pod_principal_may_hold,
+)
 from app.core.authorization.resource_actions import (
     RESOURCE_ACTIONS,
     owner_actions_for_resource,
@@ -98,7 +101,20 @@ def allowed_actions_expr(
         ]
     empty_actions = _text_array([])
 
-    if ctx.actor_type == ActorType.ANONYMOUS:
+    # Before the outsider branch: another pod is an outsider too, but one this
+    # pod may have granted things to.
+    if ctx.actor_type == ActorType.POD:
+        return _pod_allowed_actions_expr(
+            ctx=ctx,
+            resource_type=resource_type,
+            resource_actions=resource_actions,
+            resource_id_col=resource_id_col,
+            pod_id_col=pod_id_col,
+            visibility_col=visibility_col,
+            resource_path_col=resource_path_col,
+        )
+
+    if ctx.is_outsider:
         return _anonymous_allowed_actions_expr(
             resource_actions=resource_actions,
             visibility_col=visibility_col,
@@ -220,6 +236,48 @@ def _anonymous_allowed_actions_expr(
         (is_public, _text_array(public_read_actions)),
         else_=_text_array([]),
     )
+
+
+def _pod_allowed_actions_expr(
+    *,
+    ctx: Context,
+    resource_type: ResourceType,
+    resource_actions: Sequence[str],
+    resource_id_col,
+    pod_id_col,
+    visibility_col,
+    resource_path_col=None,
+) -> ColumnElement:
+    """Another pod's reach, row by row: what `Authorizer._pod_decision` allows.
+
+    Its grants on anything but a personal row, Public reads on top, and nothing
+    outside the pod the context is pinned to. Grants apply whatever the row's
+    visibility, as the authorizer's grant path does: a pod is granted a table
+    by name, not by the table first being made restricted.
+    """
+    if pod_id_col is None or ctx.pod_id is None:
+        return _text_array([])
+    resource_actions = [a for a in resource_actions if pod_principal_may_hold(a)]
+    granted = _grant_actions_array_expr(
+        ctx=ctx,
+        resource_type=resource_type,
+        resource_id_col=resource_id_col,
+        pod_id_col=pod_id_col,
+        principal_sets=ctx.grant_principal_sets or (ctx.principal_refs,),
+        candidate_actions=resource_actions,
+        resource_path_col=resource_path_col,
+    )
+    public_reads = [action for action in resource_actions if action.endswith(".read")]
+    whens = [(pod_id_col != ctx.pod_id, _text_array([]))]
+    if visibility_col is not None:
+        whens.append((visibility_col == "PERSONAL", _text_array([])))
+        whens.append(
+            (
+                visibility_col == "PUBLIC",
+                func.array_cat(granted, _text_array(public_reads)),
+            )
+        )
+    return case(*whens, else_=granted)
 
 
 def _delegated_allowed_actions_expr(
@@ -380,22 +438,29 @@ def _grant_exists_for_action(
         # ancestor folder (granted path is a prefix), or the pod-wide grant
         # (grant keyed on the pod id). ``granted`` is the folder the grant
         # points at; its path is read live so renames/moves stay consistent.
+        #
+        # Two EXISTS, not one with an OR inside. Written as one, ``granted``
+        # sits in the FROM of both branches but only the second constrains it,
+        # so the planner cannot use ``granted.id = resource_id`` as a join key:
+        # every (row, grant) pair scanned the whole file table -- every pod's
+        # files -- before it could answer false. Split, the second EXISTS
+        # reaches ``granted`` through its primary key.
         granted = aliased(DatastoreFile)
-        return exists().where(
+        pod_wide = exists().where(
             *base_conditions,
+            ResourcePermissionGrantModel.resource_id == pod_id_col,
+        )
+        on_self_or_ancestor = exists().where(
+            *base_conditions,
+            granted.id == ResourcePermissionGrantModel.resource_id,
+            granted.pod_id == pod_id_col,
             or_(
-                ResourcePermissionGrantModel.resource_id == pod_id_col,
-                and_(
-                    granted.id == ResourcePermissionGrantModel.resource_id,
-                    granted.pod_id == pod_id_col,
-                    or_(
-                        resource_path_col == granted.path,
-                        func.left(resource_path_col, func.length(granted.path) + 1)
-                        == granted.path.concat("/"),
-                    ),
-                ),
+                resource_path_col == granted.path,
+                func.left(resource_path_col, func.length(granted.path) + 1)
+                == granted.path.concat("/"),
             ),
         )
+        return or_(pod_wide, on_self_or_ancestor)
 
     return exists().where(
         *base_conditions,

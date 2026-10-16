@@ -14,6 +14,7 @@ from ..models.schedule_type import ScheduleType
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.listening_response import ListeningResponse
     from ..models.schedule_detail_response_config import ScheduleDetailResponseConfig
     from ..models.schedule_detail_response_filter_output_schema_type_0 import (
         ScheduleDetailResponseFilterOutputSchemaType0,
@@ -50,11 +51,17 @@ class ScheduleDetailResponse:
         agent_name (None | str | Unset):
         allowed_actions (list[str] | Unset):
         consecutive_failures (int | Unset):  Default: 0.
+        include_outside_rows (bool | Unset):  Default: False.
         instruction (None | str | Unset):
         last_error (None | str | Unset):
         last_fire_status (None | ScheduleFireStatus | Unset):
         last_fired_at (datetime.datetime | None | Unset):
         last_run_id (None | str | Unset):
+        listening (ListeningResponse | None | Unset): For a schedule on an MCP server's event: whether it is still
+            hearing from the server. Absent for every other schedule.
+        paused_reason (None | str | Unset): Why the platform paused this schedule: `fire_cap` (it fired more than its
+            daily ceiling), `consecutive_failures`, `fire_failed` (a scheduled run could not be started), or another system
+            reason. Absent while it runs, or when a person paused it. Reactivating clears it.
         workflow_name (None | str | Unset):
     """
 
@@ -79,15 +86,19 @@ class ScheduleDetailResponse:
     agent_name: None | str | Unset = UNSET
     allowed_actions: list[str] | Unset = UNSET
     consecutive_failures: int | Unset = 0
+    include_outside_rows: bool | Unset = False
     instruction: None | str | Unset = UNSET
     last_error: None | str | Unset = UNSET
     last_fire_status: None | ScheduleFireStatus | Unset = UNSET
     last_fired_at: datetime.datetime | None | Unset = UNSET
     last_run_id: None | str | Unset = UNSET
+    listening: ListeningResponse | None | Unset = UNSET
+    paused_reason: None | str | Unset = UNSET
     workflow_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.listening_response import ListeningResponse
         from ..models.schedule_detail_response_filter_output_schema_type_0 import (
             ScheduleDetailResponseFilterOutputSchemaType0,
         )
@@ -165,6 +176,8 @@ class ScheduleDetailResponse:
 
         consecutive_failures = self.consecutive_failures
 
+        include_outside_rows = self.include_outside_rows
+
         instruction: None | str | Unset
         if isinstance(self.instruction, Unset):
             instruction = UNSET
@@ -198,6 +211,20 @@ class ScheduleDetailResponse:
             last_run_id = UNSET
         else:
             last_run_id = self.last_run_id
+
+        listening: dict[str, Any] | None | Unset
+        if isinstance(self.listening, Unset):
+            listening = UNSET
+        elif isinstance(self.listening, ListeningResponse):
+            listening = self.listening.to_dict()
+        else:
+            listening = self.listening
+
+        paused_reason: None | str | Unset
+        if isinstance(self.paused_reason, Unset):
+            paused_reason = UNSET
+        else:
+            paused_reason = self.paused_reason
 
         workflow_name: None | str | Unset
         if isinstance(self.workflow_name, Unset):
@@ -235,6 +262,8 @@ class ScheduleDetailResponse:
             field_dict["allowed_actions"] = allowed_actions
         if consecutive_failures is not UNSET:
             field_dict["consecutive_failures"] = consecutive_failures
+        if include_outside_rows is not UNSET:
+            field_dict["include_outside_rows"] = include_outside_rows
         if instruction is not UNSET:
             field_dict["instruction"] = instruction
         if last_error is not UNSET:
@@ -245,6 +274,10 @@ class ScheduleDetailResponse:
             field_dict["last_fired_at"] = last_fired_at
         if last_run_id is not UNSET:
             field_dict["last_run_id"] = last_run_id
+        if listening is not UNSET:
+            field_dict["listening"] = listening
+        if paused_reason is not UNSET:
+            field_dict["paused_reason"] = paused_reason
         if workflow_name is not UNSET:
             field_dict["workflow_name"] = workflow_name
 
@@ -252,6 +285,7 @@ class ScheduleDetailResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.listening_response import ListeningResponse
         from ..models.schedule_detail_response_config import (
             ScheduleDetailResponseConfig,
         )
@@ -398,6 +432,8 @@ class ScheduleDetailResponse:
 
         consecutive_failures = d.pop("consecutive_failures", UNSET)
 
+        include_outside_rows = d.pop("include_outside_rows", UNSET)
+
         def _parse_instruction(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -459,6 +495,32 @@ class ScheduleDetailResponse:
 
         last_run_id = _parse_last_run_id(d.pop("last_run_id", UNSET))
 
+        def _parse_listening(data: object) -> ListeningResponse | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                listening_type_0 = ListeningResponse.from_dict(data)
+
+                return listening_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(ListeningResponse | None | Unset, data)
+
+        listening = _parse_listening(d.pop("listening", UNSET))
+
+        def _parse_paused_reason(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        paused_reason = _parse_paused_reason(d.pop("paused_reason", UNSET))
+
         def _parse_workflow_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -490,11 +552,14 @@ class ScheduleDetailResponse:
             agent_name=agent_name,
             allowed_actions=allowed_actions,
             consecutive_failures=consecutive_failures,
+            include_outside_rows=include_outside_rows,
             instruction=instruction,
             last_error=last_error,
             last_fire_status=last_fire_status,
             last_fired_at=last_fired_at,
             last_run_id=last_run_id,
+            listening=listening,
+            paused_reason=paused_reason,
             workflow_name=workflow_name,
         )
 

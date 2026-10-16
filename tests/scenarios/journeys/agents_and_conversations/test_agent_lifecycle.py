@@ -134,7 +134,7 @@ class TestSteeringAConversation:
 
         response = await alice.retries(conversation, in_pod=the_pod)
 
-        assert response.status_code >= 400, (
+        assert response.status_code == 409, (
             f"a completed run should not be retryable ({response.status_code})"
         )
 
@@ -159,7 +159,7 @@ class TestSteeringAConversation:
             in_pod=the_pod,
         )
 
-        assert response.status_code >= 400, (
+        assert response.status_code == 404, (
             f"an approval that does not exist must not be decidable "
             f"({response.status_code})"
         )
@@ -194,7 +194,7 @@ class TestModelProfiles:
             "GET", f"/organizations/{alice.organization['id']}/agent-runtime/profiles"
         )
 
-        assert response.status_code >= 400, response.status_code
+        assert response.status_code == 403, response.status_code
 
 
 @scenario("Granting a table is enough — the agent needs no second switch for it")

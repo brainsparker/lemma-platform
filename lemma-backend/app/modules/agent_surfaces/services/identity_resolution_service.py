@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -21,6 +20,13 @@ from app.modules.agent_surfaces.infrastructure.adapters.user_directory_adapter i
     IdentityUserDirectoryAdapter,
 )
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.phone_numbers import (
+    normalize_phone_number as _normalize_phone_number,
+    phone_lookup_candidates as _phone_lookup_candidates,
+)
+from app.modules.agent_surfaces.services.email_sender_trust import (
+    email_sender_is_believable as _email_sender_is_believable,
+)
 
 logger = get_logger(__name__)
 
@@ -28,7 +34,6 @@ logger = get_logger(__name__)
 @dataclass(frozen=True)
 class _UserMatch:
     user_id: UUID | None
-    cacheable: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,61 +71,6 @@ class _KnownSender:
         )
 
 
-def _email_sender_is_believable(event: ParsedInboundSurfaceEvent) -> bool:
-    """May this inbound email's ``From:`` be resolved to a Lemma user?
-
-    Only email is asked. Every chat platform asserts its sender inside a payload
-    whose signature was already verified, so there is nothing here to doubt --
-    ``sender_authentication`` is None for them and this passes.
-
-    **There is no setting.** There used to be one, defaulting to "believe an
-    unauthenticated ``From:``", on the reasoning that not every provider writes
-    ``Authentication-Results`` and refusing blind would stop resolving every
-    inbound sender. That reasoning rested on a question nobody had asked the
-    provider: 20 of 20 real inbound messages carry the header, written by
-    ``amazonses.com``, because Resend receives through SES. So the config was
-    protecting against something that does not happen, at the price of leaving
-    account takeover a single environment variable away -- and a flag whose safe
-    value is the default is not a flag, it is an unexploited hole.
-
-    What is left is the rule ``PS-SURF-022`` already stated and the code did not
-    keep: a sender the receiving mail service did not vouch for does not become
-    a member. They are a stranger, and the unresolved-sender path tells them how
-    to get access -- which is what should happen to someone we cannot identify.
-
-    ``None`` on an email surface is UNKNOWN, not "nothing to check". Only
-    ``merge_received_email`` ever sets the verdict, so it is absent whenever
-    enrichment did not run: no ``email_id`` on the webhook, an ``HTTPError`` on
-    the body fetch, or the whole polling receiver. Reading that as the chat
-    platforms' "no question to ask" meant an attacker who could make the fetch
-    fail -- or a deployment in polling mode -- skipped this check entirely.
-    """
-    from app.modules.agent_surfaces.platforms.email_authentication import (
-        EmailAuthenticationVerdict,
-    )
-
-    verdict = event.sender_authentication
-    if verdict is None and not event.platform.is_email:
-        return True
-    if verdict == EmailAuthenticationVerdict.PASS:
-        return True
-    if verdict == EmailAuthenticationVerdict.FAIL:
-        logger.warning(
-            "agent_surfaces.identity.email_sender_failed_authentication.degraded",
-            platform=str(event.platform),
-            sender_email=event.sender_email,
-        )
-        return False
-    # UNKNOWN. Nothing vouched for this address, so it names nobody here.
-    logger.warning(
-        "agent_surfaces.identity.email_sender_unauthenticated.degraded",
-        platform=str(event.platform),
-        sender_email=event.sender_email,
-        resolved=False,
-    )
-    return False
-
-
 class _CachedSender(Protocol):
     """What a stored external-user row has to be able to answer.
 
@@ -144,16 +94,19 @@ class SurfaceIdentityResolutionService:
     ----------------
     1. Cache hit — ExternalSurfaceUser row already has a resolved_user_id, and
        that user is still live. Skipped entirely when the caller asked for a
-       proven identity: the row does not record what proved it.
-    2. Telegram username — a Telegram sender whose @username matches a user's
-       ``telegram_username`` resolves directly (no contact-share needed).
-    3. Email match — profile email (fetched from platform API) matched against
+       proven identity, unless the platform still attests the match.
+    2. Email match — profile email (fetched from platform API) matched against
        the users table.
-    4. Phone match — for platforms that expose phone numbers (WhatsApp, and
+    3. Phone match — for platforms that expose phone numbers (WhatsApp, and
        Telegram's contact-share flow), against numbers verified on a profile.
        An unverified profile number matches only where the deployment has opted
        in (``surface_allow_unverified_phone_match``) and exactly one profile
        claims it.
+
+    A Telegram sender is matched on nothing else: Telegram gives no email, and
+    its @username is not proof of anything -- anyone can claim any free handle,
+    and a handle given up is taken by a stranger. An unresolved Telegram sender
+    is asked to share their own contact, and the number in it is what matches.
 
     No connected-account (OAuth Account table) lookups are performed.  Platform
     adapters fetch sender emails directly from the platform API (Teams Graph /
@@ -202,7 +155,10 @@ class SurfaceIdentityResolutionService:
         sender_profile: SurfaceSenderProfile | None = None,
         installation_id: UUID | None = None,
         require_proven_identity: bool = False,
+        profile_unavailable: bool = False,
     ) -> ResolvedSurfaceUser:
+        """``profile_unavailable``: the platform could not be asked who sent
+        this, so a miss here is not an answer and is not remembered as one."""
         if installation_id is not None and event.platform in (
             SurfacePlatform.SLACK,
             SurfacePlatform.TEAMS,
@@ -245,20 +201,15 @@ class SurfaceIdentityResolutionService:
             if cached is not None:
                 return cached
 
-        # ── 2-4. Match against Lemma users: telegram username, then email,
-        #         then phone ─────────────────────────────────────────────────
+        # ── 2-3. Match against Lemma users: email, then phone ──────────────
         match = (
             await self._match_proven_sender(event, known)
             if require_proven_identity
-            else await self._match_user_result(
-                email=known.email,
-                phone=known.phone,
-                telegram_username=_telegram_username(event),
-            )
+            else await self._match_user_result(email=known.email, phone=known.phone)
         )
 
         # Persist the resolved_user_id so the next message is a cache hit.
-        if known.external_user_id and match.cacheable:
+        if known.external_user_id and not profile_unavailable:
             external_user = await self._upsert(
                 event, known, resolved_user_id=match.user_id
             )
@@ -333,11 +284,6 @@ class SurfaceIdentityResolutionService:
         already verified on the account -- and asks whether either still names
         the same person.
 
-        Deliberately not the Telegram-username match, which is the reason this
-        exists: `telegram_username` is free text on a Lemma profile that nobody
-        confirms, so a handle that changes hands would otherwise let its new
-        owner be bound to the previous one's account.
-
         What this does not do is make a profile email proof of ownership. It is
         the platform's word, and a workspace administrator can set it; the
         `require_proven_identity` matcher refuses it outright for a sender with
@@ -368,14 +314,14 @@ class SurfaceIdentityResolutionService:
     ) -> bool:
         """Was this cached resolution made on a number nobody verified, and only that?
 
-        The cache stores who a sender resolved to and not how, so a resolution
-        made while unverified numbers were accepted would outlive the setting
-        that allowed it: turning it off would change nothing for anyone already
-        matched. Where the deployment does not accept them, a cached resolution
-        is dropped when the *only* thing linking this sender to that user is an
-        unverified profile number -- and kept when anything else does: a verified
-        number, the profile email, the Telegram handle, or nothing about the
-        phone at all, which is how a managed bot's owner is bound.
+        A row records the number it was matched on, not whether the profile's
+        number was verified then, so a resolution made while unverified numbers were
+        accepted would outlive the setting that allowed it: turning it off would
+        change nothing for anyone already matched. Where the deployment does not
+        accept them, a cached resolution is dropped when the *only* thing
+        linking this sender to that user is an unverified profile number -- and
+        kept when anything else does: a verified number, the profile email, or
+        nothing about the phone at all.
 
         Dropping it sends the sender through ordinary matching, which now
         resolves nobody and clears the row.
@@ -399,27 +345,22 @@ class SurfaceIdentityResolutionService:
         verified = await self._users.user_ids_by_mobile_numbers(
             candidates, verified=True
         )
-        if cached_user_id in verified:
-            return False
-        handle = _telegram_username(event)
-        if handle and (
-            await self._match_user_by_telegram_username(handle) == cached_user_id
-        ):
-            return False
-        return True
+        return cached_user_id not in verified
 
     async def _match_proven_sender(
         self, event: ParsedInboundSurfaceEvent, known: _KnownSender
     ) -> _UserMatch:
         # A signed WhatsApp sender proves a phone already verified on the account.
-        # Other unknown actors must complete private verification; profile email
-        # and Telegram usernames may describe someone, but do not prove ownership.
+        # Other unknown actors must complete private verification; a profile
+        # email may describe someone, but does not prove ownership.
         if event.platform != SurfacePlatform.WHATSAPP or not known.phone:
             return _UserMatch(None)
         ids = await self._users.user_ids_by_mobile_numbers(
             _phone_lookup_candidates(known.phone), verified=True
         )
-        return _UserMatch(ids[0] if len(ids) == 1 else None)
+        if len(ids) != 1:
+            return _UserMatch(None)
+        return _UserMatch(ids[0])
 
     async def _upsert(
         self,
@@ -444,15 +385,7 @@ class SurfaceIdentityResolutionService:
         *,
         email: str | None,
         phone: str | None,
-        telegram_username: str | None = None,
     ) -> _UserMatch:
-        # Telegram username first: a direct @username match links the sender
-        # without the contact-share (phone) flow.
-        if telegram_username:
-            user_id = await self._match_user_by_telegram_username(telegram_username)
-            if user_id:
-                return _UserMatch(user_id)
-
         if email:
             user_id = await self._users.user_id_by_email(email)
             if user_id:
@@ -464,15 +397,6 @@ class SurfaceIdentityResolutionService:
                 return phone_match
 
         return _UserMatch(None)
-
-    async def _match_user_by_telegram_username(self, username: str) -> UUID | None:
-        cleaned = str(username or "").strip().lstrip("@").lower()
-        if not cleaned:
-            return None
-        # The *live*-user lookup, not the "is this handle taken" one beside it:
-        # a match here is what the run then executes as, so a deactivated or
-        # deleted holder of the handle must resolve to nobody.
-        return await self._users.user_id_by_telegram_username(cleaned)
 
     async def _match_user_by_phone(self, phone: str) -> _UserMatch:
         candidates = _phone_lookup_candidates(phone)
@@ -513,42 +437,3 @@ class SurfaceIdentityResolutionService:
                 candidate_count=len(unverified_ids),
             )
         return _UserMatch(None)
-
-
-def _telegram_username(event: ParsedInboundSurfaceEvent) -> str | None:
-    """The Telegram sender's @username (only Telegram populates it), else None."""
-    if event.platform != SurfacePlatform.TELEGRAM:
-        return None
-    metadata = event.metadata if isinstance(event.metadata, dict) else {}
-    username = metadata.get("sender_username")
-    return str(username).strip() or None if username else None
-
-
-def _normalize_phone_number(phone: str | None) -> str | None:
-    raw = str(phone or "").strip()
-    if not raw:
-        return None
-    digits = re.sub(r"\D", "", raw)
-    if not digits:
-        return None
-    # Meta wa_id is E.164 without '+'. Telegram contacts may include or omit
-    # it. Store one canonical representation while matching profile data by
-    # digits so legacy formatting remains compatible.
-    return f"+{digits}"
-
-
-def _phone_lookup_candidates(phone: str) -> list[str]:
-    normalized = _normalize_phone_number(phone)
-    if not normalized:
-        return []
-
-    digits_only = re.sub(r"\D", "", normalized)
-    candidates: list[str] = []
-    for candidate in (
-        normalized,
-        digits_only,
-        f"+{digits_only}" if digits_only else None,
-    ):
-        if candidate and candidate not in candidates:
-            candidates.append(candidate)
-    return candidates

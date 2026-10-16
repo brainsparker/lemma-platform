@@ -4,7 +4,8 @@
 - Use shared tokens in `src/styles/tokens.css` and `accents.css` for both themes.
   Keep the page neutral; concentrate identity color in teammate cards and marks.
 - Schibsted Grotesk for UI, Newsreader for documents, DM Mono for code and
-  metadata. Font weight stays at or below 500 except documented allowances.
+  metadata. Font weight stays at or below 500 except documented allowances:
+  the badge wordmark, and bold inside a page's prose.
 - Pair fills with their ink tokens: `--field-ink`, `--on-accent`, `--on-ok`,
   `--on-bad`. Measure contrast in both themes; never assume white text works.
 - The Lemma mark is the three rising bars of `app/icon.svg`, in
@@ -102,9 +103,22 @@ you talk to, the space is what you share. The app has two altitudes.
   its face, its job (the pod's `description`), one line of news (what is
   waiting on you, or its latest conversation) and the people in its space.
   Those that need you come first; there are never more than two groups.
-- About is long, so a row of jumps (People, Channels, Taught, Remembers,
-  Standing work, Hands work to, Runs on) stays at the top while it scrolls
-  and marks the section in view.
+- About opens on an overview that fits one screen: the face, name and job,
+  then ten tiles in two columns (Default model, Skills / Memory, Agents /
+  Connectors, Standing work / Channels, MCP / People, Teammates), named with
+  plain nouns — "Agents", not "Hands work to". Each tile carries one live
+  line of what is true there and a dot when it waits on a person. A tile
+  opens its part as a page of its own, `/t/{pod}/about/{part}`, so Back
+  steps out and a link can name it.
+- A part's page uses the width it has. Nothing on it is a compact widget
+  carried over from a long page: the default model is the full list of the
+  organization's models, one row each, with a link to Settings → Models;
+  skills wrap in a grid rather than travelling in a carousel; channels are
+  the whole channel manager, not a strip of chips with a sheet behind it.
+  Connectors is a part of About although the accounts are the
+  organization's — what a teammate can reach is the first thing people look
+  for on its page. The organization's models and usage stay in Settings,
+  linked under the tiles.
 - Zoomed in, `/t/{pod}/…`: one teammate's space. Its face and job head the
   sidebar and open About (`/t/{pod}/about`), which holds everything about how
   it works — people, channels, skills, standing work, the agents it hands work
@@ -128,8 +142,8 @@ March by Priya", on About, from the pod's `created_at` and `user_id`),
 reliability (run history on standing work, never called learning), and
 learning (what it wrote down).
 
-- About has "What Kit remembers" beside "What Kit has been taught". Taught is
-  skills, which people write; remembers is memory, which the teammate writes
+- About has Memory beside Skills. Skills are what people write; memory is
+  what the teammate writes
   under `/memory`, `/memory/agents/pod-default` and, privately,
   `/me/agents/pod-default`. One line a note, indexes (`AGENTS.md`) left out,
   a filled dot for a note changed this week. Shared and Personal are two
@@ -144,8 +158,11 @@ learning (what it wrote down).
   memory has a revision history that records who changed what.
 
 "Needs you" is one queue in two parts: workflow forms, and conversations
-paused on a question or an approval (scheduled runs included). The rail
-badge, the Teammates page and Home all read both. An ask left for more than a
+paused on a question, an approval or an Agent Host permission request
+(scheduled runs and sub-agents included). The rail badge, the Teammates page,
+Home and the Waiting on you inbox all read both; a conversation row in the
+history says "Needs you" in place of its time. Nothing is pushed or repeated —
+a pause never expires, so the queue is where it waits. An ask left for more than a
 week goes quiet: it stops counting on the rail and the Teammates page, and
 Home folds it behind "N older". Any ask can be dismissed from Home, which
 archives the conversation — the same put-away the chat list offers, so it
@@ -190,6 +207,33 @@ any of its bots is in, from `podGroups`.
 - Only the sample's Marketing has groups; every other sample space opens on
   the first run.
 
+## Contacts
+
+The people a space's bots answer who are not in it are a place in it:
+`/t/{pod}/contacts`, behind the `contacts` flag. Styles in
+`src/styles/contacts.css`; words in `src/data/contacts.ts`.
+
+- Three parts, each a thing a member does: **People** (who has written; one
+  opens in a sheet with how they are known, a name, a box to write back, and
+  Export / Forget), **On your website** (the space's chat, with its link and
+  code to paste), **What contacts can use** (switches for contact-owned
+  tables and for functions opened to contacts).
+- Forms are not here. A form is a table opened to people outside: **Collect
+  responses** in a table's header (`src/library/collect-responses.tsx`, words
+  in `src/data/public-rows.ts`) picks who can answer and which columns, then
+  gives the hosted link, the script tag, plain HTML, and "ask for a custom
+  design". It reuses the space's first web chat as the door, making one named
+  "Website" if there is none.
+- A host id is never shown — "Signed in on your site". Every handle says who
+  vouched for it in plain words.
+- A signing secret is shown once, in its own sheet, with the code to paste
+  after it; New signing secret shows the new one the same way.
+- A follow-up that cannot go says why (unsubscribed, WhatsApp's day has
+  passed, never wrote) — never a generic failure when the API gave a reason.
+- A bot's setting is one select in its settings, "Private messages from
+  people outside {space}", disabled with a reason on a bot that is not the
+  space's own. The organization's cap sits in its Usage.
+
 ## Empty places
 
 An empty list is most people's first sight of every place in a new space, so
@@ -212,7 +256,8 @@ for every place, as one set; `SpaceEmpty` draws them.
   finishes them, or sends them. The run that follows refreshes the space's
   lists as it ends, so what it made appears where the empty state was.
 - Files take files: the empty state and the list accept a drop, and New has
-  Upload files.
+  Upload files and New folder. A folder dropped from the desktop is read, not
+  refused: its folders are made and what is inside them is uploaded.
 
 ## The tour
 
@@ -253,7 +298,7 @@ somebody standing in it (`src/tour/guides.ts`, drawn by `PlaceGuide`).
   by being one, made from its template the first time; other guides put a
   whole-sentence ask in the chat box, unsent.
 - A place that already explains each of its parts gets no card: About has a
-  note under every section.
+  line on every tile and a note atop every part.
 
 ## Desktop
 

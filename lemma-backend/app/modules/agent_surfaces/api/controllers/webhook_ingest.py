@@ -1,4 +1,4 @@
-"""Turning a raw platform webhook into an event, before any route sees it.
+"""Turning a raw platform webhook into a stored delivery, before any route sees it.
 
 Signature checks, payload decoding, and the per-platform special cases that have
 to happen inside the HTTP request: a Resend catch-all address resolved to a
@@ -10,14 +10,16 @@ ever reach it.
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from uuid import UUID
+
+from fastapi import HTTPException
 
 from app.modules.agent_surfaces.contracts.whatsapp import (
     deployment_owns_whatsapp_number,
 )
-from app.core.infrastructure.events.inbox import stable_event_id
-from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.redaction import redact_value
 from app.core.authorization.scope import uow_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -26,11 +28,18 @@ from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
-from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
+from app.modules.agent_surfaces.services.inbound_acceptor import (
+    AcceptResult,
+    InboundDelivery,
+)
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.errors import SurfaceWebhookAuthenticationError
 from app.modules.identity.contracts.whatsapp_verification import (
+    WhatsAppVerificationPayload,
+    add_whatsapp_verification_work,
     is_whatsapp_verification_configured,
     parse_reserved_verification_message,
 )
@@ -48,6 +57,43 @@ from app.modules.agent_surfaces.api.controllers.slack_webhook_verification impor
     slack_candidates_for_workspace,
     slack_team_id,
 )
+
+# Slack's challenge is a short opaque token. Anything else is not Slack's, and
+# echoing it would make this unauthenticated branch a reflector.
+_SLACK_CHALLENGE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def parse_webhook_platform(platform: str) -> SurfacePlatform:
+    """The platform a shared webhook path names, read once, case-insensitively.
+
+    The routes branched on the raw string, case-sensitively, while the
+    allow-list upper-cased it -- so ``/webhooks/WHATSAPP`` was allowed in but
+    skipped the WhatsApp verification-code branch, and ``/webhooks/Slack``
+    skipped per-workspace signature candidates.
+    """
+    try:
+        return SurfacePlatform(str(platform or "").strip().upper())
+    except ValueError:
+        raise SurfaceWebhookAuthenticationError(
+            "This platform does not support direct webhook ingress",
+            status_code=404,
+        ) from None
+
+
+def slack_url_verification(
+    payload: Mapping[str, object],
+    headers: dict[str, str],
+    security_service: SurfaceWebhookSecurityServiceDep,
+) -> dict[str, str]:
+    """Answer Slack's ``url_verification`` with its challenge and nothing else."""
+    security_service.verify_slack_handshake(headers=headers)
+    challenge = payload.get("challenge")
+    if not isinstance(challenge, str) or not _SLACK_CHALLENGE.fullmatch(challenge):
+        raise SurfaceWebhookAuthenticationError(
+            "Malformed Slack url_verification challenge", status_code=400
+        )
+    return {"challenge": challenge}
+
 
 _MODAL_OPENING_ACTION_IDS = {
     "lemma_channel_setup",
@@ -91,12 +137,17 @@ def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
-    """Decode a webhook body to JSON.
+    """Decode a webhook body to JSON, or refuse it with a 400.
 
     Most platforms send JSON. Slack interactivity (block_actions /
     view_submission) is ``application/x-www-form-urlencoded`` with a single
     ``payload=<json>`` field. Signature verification still runs over the raw
     bytes, so decoding here does not weaken auth.
+
+    A body that does not decode is refused rather than read as ``{}``. As an
+    empty object it was published as an event with nothing in it, and on Slack
+    it lost its ``team_id`` and was refused as a 401 -- which Slack counts
+    towards disabling the subscription, for what was a malformed request.
     """
     if not raw_body:
         return {}
@@ -107,10 +158,14 @@ def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
 
             fields = parse_qs(raw_body.decode("utf-8"))
             payload_values = fields.get("payload")
-            return json.loads(payload_values[0]) if payload_values else {}
-        return json.loads(raw_body.decode("utf-8"))
-    except Exception:
-        return {}
+            decoded = json.loads(payload_values[0]) if payload_values else {}
+        else:
+            decoded = json.loads(raw_body.decode("utf-8"))
+    except UnicodeDecodeError, ValueError:
+        decoded = None
+    if not isinstance(decoded, dict):
+        raise HTTPException(status_code=400, detail="Webhook body is not a JSON object")
+    return decoded
 
 
 async def _slack_candidates(uow_factory: UnitOfWorkFactory, payload: dict):
@@ -169,8 +224,9 @@ async def _handle_resend_webhook(
     raw_body: bytes,
     security_service: SurfaceWebhookSecurityServiceDep,
     uow_factory: UnitOfWorkFactory,
+    accept: Callable[[InboundDelivery], Awaitable[AcceptResult]],
 ) -> dict[str, str]:
-    """Resolve a catch-all Resend delivery to one surface, then publish it."""
+    """Resolve a catch-all Resend delivery to one surface, then store it."""
     # Authenticate the Svix signature over the raw body BEFORE trusting any
     # of it (Resend does not go through assert_platform_request_allowed).
     await security_service.verify_resend_request(headers=headers, raw_body=raw_body)
@@ -189,25 +245,30 @@ async def _handle_resend_webhook(
     # Resend's own id rather than the generic candidate list, because the
     # polling receiver has to be able to mint the same one for the same email
     # and has no raw body to fall back on.
-    source_event_id = resend_webhook_source_event_id(
-        normalized, raw_body, receiver=str(surface.id)
+    # Keyed by the surface, as the poller keys it, so a deployment running
+    # both routes stores one email once.
+    await accept(
+        InboundDelivery(
+            request=SurfaceDirectWebhookIngress(
+                surface_id=surface.id,
+                payload=normalized,
+                headers=_redacted_headers(headers),
+            ),
+            receiver_scope=str(surface.id),
+            source_event_id=resend_webhook_source_event_id(
+                normalized, raw_body, receiver=str(surface.id)
+            ),
+            platform=SurfacePlatform.RESEND,
+            pod_id=surface.pod_id,
+        )
     )
-    event = SurfaceWebhookReceivedEvent(
-        event_id=stable_event_id({"event_id": source_event_id}),
-        source="resend",
-        payload=normalized,
-        headers=_redacted_headers(headers),
-        surface_id=surface.id,
-        source_event_id=source_event_id,
-    )
-    await EventPublisher.publish(event.stream_name(), event)
     return {"message": "Webhook received"}
 
 
 async def _published_whatsapp_verification(
     payload: dict[str, Any], uow_factory: UnitOfWorkFactory
 ) -> bool:
-    """Publish a reserved verification message, when that is what arrived.
+    """Queue a reserved verification message, when that is what arrived.
 
     Verification commands are identity traffic, not agent messages. This is
     reached only after Meta's raw-body signature succeeds, and only acts when
@@ -228,16 +289,18 @@ async def _published_whatsapp_verification(
     if not await deployment_owns_whatsapp_number(destination_id):
         return False
 
-    identity_event = WhatsAppMobileVerificationReceivedEvent(
-        event_id=stable_event_id(
-            {"whatsapp_mobile_verification_message_id": message_id}
-        ),
-        code=code,
-        sender_wa_id=sender_wa_id,
-        destination_phone_number_id=destination_id,
-        whatsapp_message_id=message_id,
-    )
-    await EventPublisher.publish(identity_event.stream_name(), identity_event)
+    # Keyed by the WhatsApp message, so Meta's retries of one delivery are
+    # one verification.
+    async with uow_factory() as uow:
+        await add_whatsapp_verification_work(
+            uow,
+            WhatsAppVerificationPayload(
+                code=code,
+                sender_wa_id=sender_wa_id,
+                destination_phone_number_id=destination_id,
+                whatsapp_message_id=message_id,
+            ),
+        )
     return True
 
 

@@ -18,10 +18,9 @@ Resend address.
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Pod surface CRUD/setup/catalog/send, current-user defaults, public webhooks/verification |
-| Redis consumers | Surface webhooks, schedule fires, and pod deletion |
-| streaq task | Execute one prepared surface message outside the webhook request |
-| Worker lifespan | Optional Telegram polling and Slack Socket Mode receivers |
-| API/worker cleanup | Close Redis event-dedup clients |
+| Request-time intake | Every webhook route and receiver classifies a delivery, answers provider-deadline interactions in the request, and writes each message as a `surface_inbound_messages` row plus a `surface.ingest` item in one transaction |
+| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination) and `surface.reply_for_run` (subscribes `AgentRunFinished`), `surface.receiver` (`receivers`, one leased item per polling credential), `notification.expire`, `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
+| Periodic work | `surfaces.receivers.reconcile` (15 s), `surfaces.onboarding_cleanup` (1 min), `surfaces.web_visitors` (hourly), `surfaces.retention` (daily) |
 
 ## Main data model
 
@@ -36,7 +35,14 @@ Resend address.
 | `surface_whatsapp_numbers` | The deployment's WhatsApp numbers, one row each and each independent: its own WABA, access token, verify token and Flow ids, every one falling back to settings when absent so a single-number deployment declares nothing. `role` separates the one `SHARED` line everybody rides from the `ALLOCATABLE` pool; `status` separates "stop handing this out" from "we no longer own it". Who holds a number is not stored here — it is `agent_surfaces.surface_identity_id`, so there is no second copy to disagree |
 | `notifications` | Something the pod needs a person to see: recipient, actor, origin, body, optional background instruction, and open/expiry state. It lives in this module because delivery is surface work; the agent and workflow modules reach it through ports in `app/composition` |
 | `agent_surface_groups` | A group chat a surface's bot is in, one row per (surface, chat): its title, whether the bot answers people outside the pod there, and `owner_user_id`, the member who answers for them. No owner means outsiders are not answered. A WhatsApp group the bot asked Meta to create exists here before its chat id does: `external_channel_id` is null and `request_id` set until the confirmation webhook fills in the id and `invite_link` |
+| `agent_surface_web_widgets` | A pod's chat on other people's web pages, each answering as one of its agents, and the door a form page adds rows through. `public_key` (unique, readable by anybody) names the widget; `signing_secret` (encrypted) signs host tokens on the customer's server; `allowed_origins`, `answer` (`off`/`known`/`anyone`) and `looked_after_by` as for a bot's contacts. See `services/web_chat.py`. A form is any page that adds a row to a table the pod opened to visitors (`datastore_public_rows`): `GET /public/web/{key}/table` says what to ask, `POST /public/web/{key}/rows` adds the row, and `/public/web/{key}/page?table=` is the form Lemma hosts, with the chat beside it. On a web visitor's run the agent's `fill_form` tool fills that form's fields; it never sends it. Answers reach the page live on `GET /public/web/{key}/stream`, one JSON object per line after an `open` handshake, at most two per session, translated by `agent/contracts/visitor_stream.py`: the answer's text as it is written, `typing`, the finished message and `done` -- never thinking, tool traffic or a private note's run |
+| `visitor_sessions` (contacts' table) | One visitor's hold on one widget, found by a secret stored only as its digest and traded at `POST /public/web/{key}/session` for a 15-minute `visitor-access` token sent as `Authorization: Bearer` (`api/public_dependencies.py`). `strength` is `ANONYMOUS`, `CODE` or `HOST`; anonymous sessions end 90 days after they began, a contact's 30 days after last use, and a `HOST` session never refreshes without a fresh host token. Reissuing a widget's secret revokes its host sessions; forgetting a contact revokes theirs. Cascades from its conversation. CORS for `/public/web/*` is answered from the widget's own origins, never with credentials (`api/public_cors.py`), and nothing there is served unless `PUBLIC_WEB_ENABLED` is on |
+| `agent_surface_web_codes` | One-time codes sent to email addresses web visitors typed, stored salted with their session, expiring in ten minutes after five guesses at most, each counted before it is compared. `events/visitor_retention.py` sweeps ended sessions, spent codes and anonymous web conversations idle for 90 days, hourly |
 | `agent_surface_group_messages` | What the bot heard in a group and what it said there, kept only where the platform keeps no readable history (Telegram, WhatsApp). Always read newest-first and bounded |
+| `surface_inbound_messages` | One row per inbound message any webhook or receiver accepted, unique on (receiver scope, the platform's event id), so a delivery retried a minute or three days later is the same row. RECEIVED → INGESTING → ROUTED, DROPPED or FAILED; the `surface.ingest` item that turns it into a turn is written with it. ROUTED and DROPPED rows are kept 7 days, FAILED 30 |
+| `surface_message_claims` | The durable message-level claim: one row per platform message, owned by the inbound row that took it, taken in the transaction that routes it so a duplicate under another scope is answered once. Kept 7 days |
+| `surface_deliveries` | Every outbound message the platform owes: a run's answer, a held reply, a notification, a "please resend". Unique on an idempotency key; PENDING → SENDING → SENT, or UNKNOWN when a send's outcome was lost (never re-sent), or FAILED. One `surface.reply` pump per destination sends them in order |
+| `surface_receiver_state` | One cursor per polling receiver (Telegram offset, Resend cursor, the Telegram manager bot), written in the transaction that stores the messages before it, so a receiver that moves to another worker resumes without a gap or a duplicate |
 
 Conversation metadata records surface, platform, external user/channel/thread,
 and message identifiers so delivery and debugging do not depend only on the
@@ -74,16 +80,16 @@ impossible to leave stale.
 sequenceDiagram
     participant P as External platform
     participant API as Webhook/receiver
-    participant Bus as surface_events
-    participant In as Ingress service
+    participant DB as surface_inbound_messages
+    participant In as surface.ingest
     participant A as Agent module
-    participant Out as Platform adapter
+    participant Out as surface.reply
     P->>API: webhook / poll / socket event
-    API->>API: verify + normalize headers/payload
-    API-->>Bus: publish and return quickly
-    Bus->>In: resolve surface, identity, dedup, conversation link
-    In->>A: append user message + queue run
-    A-->>Out: progress/final messages
+    API->>API: verify, classify, answer deadline interactions
+    API->>DB: row + surface.ingest item (one transaction), return quickly
+    DB->>In: resolve surface, identity, claim, conversation link
+    In->>A: user message + agent.turn (one transaction)
+    A-->>Out: AgentRunFinished -> surface_deliveries row
     Out-->>P: reply in original channel/thread
 ```
 
@@ -172,8 +178,18 @@ observer renders them on the surface and a submission resumes the run.
   is the sender's own, in the route's pod and with the route's agent, is taken;
   the reset window still applies. Channel and email threads are never adopted.
 - **A sender is a user only on proof.** A chat sender resolves to a Lemma user by
-  the profile email or Telegram handle, or by a mobile number already
-  *verified* on the profile. A number a profile merely lists does not match by
+  the profile email the platform's API returns, or by a mobile number already
+  *verified* on the profile (WhatsApp's signed sender, a Telegram contact the
+  sender shares about themselves). A Telegram handle is matched on not at all,
+  and a profile holds none: anyone can claim a free handle, and one given up on
+  Telegram is taken by a stranger. An unresolved Telegram sender is asked to
+  share their own contact; proven, the account stays resolved whatever their
+  handle later says. A managed bot's creator is not bound by opening the setup
+  link -- a link can leak -- and is recognised the same way, by a contact share
+  in the new bot. Someone with no verified number cannot be recognised on a
+  pod's own bot: they verify their number in account settings first, or sign up
+  through the shared bot, whose email-code step verifies the contact they
+  share. A number a profile merely lists does not match by
   default: it would hand the number's real owner's messages -- and the agent's
   replies, sent from the shared number -- to whoever typed it. That sender goes
   through signup instead. A deployment can accept that risk with
@@ -244,7 +260,7 @@ is answered *for the pod*, in a group the pod has opened to them.
 - **A WhatsApp group is one the bot opened.** A business number cannot be added
   to a group, only create one, so a member asks in their own WhatsApp chat and
   the agent calls `whatsapp_open_group` (offered only in a member's private
-  chat; `platforms/whatsapp/tools.py`). Meta answers the creation with a
+  chat; `services/whatsapp_group_tool.py`). Meta answers the creation with a
   `request_id` only, so the row is recorded pending
   (`services/whatsapp_groups.py`) and the member's turn waits a few seconds
   for the `group_lifecycle_update` webhook (`services/group_updates.py`), which
@@ -355,6 +371,24 @@ is answered *for the pod*, in a group the pod has opened to them.
   for an answer the member would give in front of them
   (`services/group_audience.py`, rendered by the agent module's
   `audience_notice`).
+- **A member's run is told who else is in the room.** Beside the recent lines it
+  is handed the group's people -- everyone the pod's log has heard speak there,
+  most recent first and bounded -- each marked as in the pod or not, rendered by
+  the agent module's `group_participants_notice`. The run acts with the member's
+  access and posts where all of them read it, so knowing who else is reading is
+  what the answer is shaped by. A stranger's run is handed no roster: it acts as
+  nobody, and who holds access to the pod is not its to know. Where the pod
+  keeps no log (Slack, Teams) the roster comes from the history fetched for that
+  run instead, and membership is never read off it: a platform names who spoke,
+  and marks only a line from another company's workspace, so a speaker counts as
+  a member only where the pod itself resolved them to one
+  (`group_log.live_participants`). The roster is who *else* is there: the asker
+  is left off, and so is an app's line -- the bot's own answers among them.
+  People are told apart by platform id, never folded by name, so an outsider
+  showing a member's name stays on it. Somebody with no name is counted, never
+  named by their platform id (a phone number on WhatsApp). Only the current turn
+  carries a roster -- a replayed one would still name people since removed --
+  and a failed roster read leaves the turn without one rather than failing it.
 - **Own bots are no different.** A pod's own Telegram bot or WhatsApp number is
   delivered to at `/surfaces/{id}/webhook`; its group messages go through the
   same log, mention check, name addressing and admission as a shared bot's
@@ -368,6 +402,15 @@ is answered *for the pod*, in a group the pod has opened to them.
 - **A notification is never delivered into a group.** Reaching a member
   proactively reuses only private threads; a member whose only thread with the
   bot is a group is reached by email or their Lemma inbox instead.
+- **A word for one person is never posted in the group.** `surface_send_message`
+  reaches the current conversation's user alone. In a group that conversation is
+  one member's but its address is the group, so the message goes to that
+  member's own chat with the bot (`services/private_message.py`, over
+  `SurfaceDelivery.private_thread_for`, the latest one *in this pod*) -- and a
+  member who has never had one is not reached at all rather than reached in
+  front of everybody. On an email thread that copies other people it goes to the
+  sender alone on the same thread, without the copies. The tool tells the run
+  which happened: sent, nobody to reach privately, or a send that failed.
 - **An email thread with other people on it is a group.** The inbound
   normalizer keeps To and Cc; a reply goes to the sender and copies the others
   (at most `MAX_REPLY_CC`). Copied is not asked: an email that only Cc's the
@@ -396,7 +439,20 @@ Management routes use pod permissions and ensure connector account ownership.
 Webhook security handles Slack signatures, Teams/Telegram/WhatsApp verification,
 email provider metadata, timestamp windows, and challenge responses. Identity
 policy controls whether unknown external senders are rejected, linked, or
-represented as contacts. Redis dedup guards repeat provider deliveries.
+represented as contacts. The inbound row's unique key and the message claim
+(`surface_message_claims`) make a repeated provider delivery one message.
+
+The contact path (`services/contacts.py`) never answers mail a machine sent
+(`platforms/email_automated.py`, plus the pod's own addresses), and treats a
+message that is only "STOP" as an unsubscribe. What it says or notes without a
+model -- a refusal, a parked-mail note, "a person will reply" -- is windowed in
+Redis by `services/contact_windows.py`, failing closed. Before a run for
+somebody outside the pod starts, `services/outside_cap.py` asks whether the
+organization's contacts cap is reached or a member has the conversation; if so
+the message is kept, no run starts, the member is told, and the person hears
+once a day that a person will reply. `SurfaceTurnStarter` calls it for chat and
+email surfaces, before the typing indicator and any file handling. Writing first to a
+contact takes `contact.message`.
 
 A contact shared during Telegram signup is matched by `onboarding_contact`: a
 verified profile number first, then -- only with

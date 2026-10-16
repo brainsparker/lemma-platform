@@ -26,9 +26,18 @@ class UpdateScheduleRequest:
 
     Attributes:
         agent_name (None | str | Unset):
-        config (None | Unset | UpdateScheduleRequestConfigType0):
+        config (None | Unset | UpdateScheduleRequestConfigType0): Replaces the whole config. Settings for the schedule's
+            type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for
+            DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once,
+            from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set
+            `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the
+            trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting
+            `triggers.bulk_writes_default` changes the default for `bulk_writes`.
         filter_instruction (None | str | Unset):
         filter_output_schema (None | Unset | UpdateScheduleRequestFilterOutputSchemaType0):
+        include_outside_rows (bool | None | Unset): DATASTORE schedules only: also fire on rows people outside the pod
+            added to an open table. Off by default. When it fires, the run is told the row's content came from outside and
+            is untrusted.
         instruction (None | str | Unset):
         is_active (bool | None | Unset):
         name (None | str | Unset):
@@ -42,6 +51,7 @@ class UpdateScheduleRequest:
     filter_output_schema: (
         None | Unset | UpdateScheduleRequestFilterOutputSchemaType0
     ) = UNSET
+    include_outside_rows: bool | None | Unset = UNSET
     instruction: None | str | Unset = UNSET
     is_active: bool | None | Unset = UNSET
     name: None | str | Unset = UNSET
@@ -87,6 +97,12 @@ class UpdateScheduleRequest:
         else:
             filter_output_schema = self.filter_output_schema
 
+        include_outside_rows: bool | None | Unset
+        if isinstance(self.include_outside_rows, Unset):
+            include_outside_rows = UNSET
+        else:
+            include_outside_rows = self.include_outside_rows
+
         instruction: None | str | Unset
         if isinstance(self.instruction, Unset):
             instruction = UNSET
@@ -128,6 +144,8 @@ class UpdateScheduleRequest:
             field_dict["filter_instruction"] = filter_instruction
         if filter_output_schema is not UNSET:
             field_dict["filter_output_schema"] = filter_output_schema
+        if include_outside_rows is not UNSET:
+            field_dict["include_outside_rows"] = include_outside_rows
         if instruction is not UNSET:
             field_dict["instruction"] = instruction
         if is_active is not UNSET:
@@ -216,6 +234,17 @@ class UpdateScheduleRequest:
             d.pop("filter_output_schema", UNSET)
         )
 
+        def _parse_include_outside_rows(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        include_outside_rows = _parse_include_outside_rows(
+            d.pop("include_outside_rows", UNSET)
+        )
+
         def _parse_instruction(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -266,6 +295,7 @@ class UpdateScheduleRequest:
             config=config,
             filter_instruction=filter_instruction,
             filter_output_schema=filter_output_schema,
+            include_outside_rows=include_outside_rows,
             instruction=instruction,
             is_active=is_active,
             name=name,

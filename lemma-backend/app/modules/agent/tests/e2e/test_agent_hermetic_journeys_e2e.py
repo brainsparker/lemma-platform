@@ -256,7 +256,7 @@ async def test_public_sse_sanitizes_provider_failure_matrix_and_persists_failure
             "A tool failed repeatedly after several attempts",
         ),
         ("usage_limit", None, "The run hit a usage limit."),
-        ("generic", None, "The model provider returned an error."),
+        ("generic", None, "The run failed."),
     )
 
     for kind, provider_status, expected_message in scenarios:
@@ -2445,6 +2445,9 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
         json={
             "source": "OPENAI_COMPATIBLE",
             "base_url": "http://169.254.169.254/latest",
+            # A new host needs its own key, or the move is refused before the
+            # address is even checked.
+            "api_key": "sk-for-the-new-host",
         },
     )
     assert unsafe_move.status_code == status.HTTP_400_BAD_REQUEST
@@ -2545,13 +2548,14 @@ async def test_a_server_key_without_model_names_still_lists_and_says_so(
 
 
 @pytest.mark.asyncio
-async def test_archived_runtime_profile_fails_a_pinned_agent_run_safely(
+async def test_archived_runtime_profile_refuses_a_pinned_agent_s_turn_safely(
     authenticated_client,
     fixed_test_org,
     e2e_settings,
     worker,
 ):
-    """A user cannot run an agent against a profile archived meanwhile."""
+    """A user cannot run an agent against a profile archived meanwhile, and is
+    told so before a run exists to fail."""
     del worker
     runtime = await _create_runtime_profile(
         authenticated_client,
@@ -2577,26 +2581,23 @@ async def test_archived_runtime_profile_fails_a_pinned_agent_run_safely(
     )
     assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
     conversation_id = conversation.json()["id"]
-    events = await _send_message(
-        authenticated_client,
-        pod["id"],
-        conversation_id,
-        "Run even though the profile was archived.",
+    refused = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations/{conversation_id}/messages",
+        json={"content": "Run even though the profile was archived."},
     )
-    assert events[-1]["type"] == "error", events
-    assert json.dumps(events).find(_RUNTIME_SECRET) == -1
-    # The message `resolve()` composed says which model went away and where to
-    # pick another. It used to be replaced with "check the agent runtime
-    # configuration", which is the one thing the server already knew the answer
-    # to.
-    assert runtime["name"] in str(events[-1]["data"]), events[-1]
-    assert "was retired" in str(events[-1]["data"]), events[-1]
+    assert refused.status_code == status.HTTP_409_CONFLICT, refused.text
+    assert refused.text.find(_RUNTIME_SECRET) == -1
+    # The message `resolve()` composes says which model went away and where to
+    # pick another, and the turn-start check reuses it rather than a vaguer one.
+    assert refused.json()["code"] == "runtime_profile_archived"
+    assert runtime["name"] in refused.json()["message"]
+    assert "was retired" in refused.json()["message"]
 
     durable = await authenticated_client.get(
         f"/pods/{pod['id']}/conversations/{conversation_id}"
     )
     assert durable.status_code == status.HTTP_200_OK, durable.text
-    assert durable.json()["status"] == "FAILED"
+    assert durable.json()["last_run_status"] is None
 
 
 @pytest.mark.asyncio
@@ -3370,13 +3371,25 @@ async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
     assert run.status_code == status.HTTP_201_CREATED, run.text
     run_id = run.json()["id"]
 
-    inbox = await authenticated_client.get(f"/pods/{pod_id}/notifications")
-    assert inbox.status_code == status.HTTP_200_OK, inbox.text
-    notification = next(
-        item
-        for item in inbox.json()["items"]
-        if item["origin_kind"] == "WORKFLOW_FORM" and item["origin_id"] == run_id
-    )
+    # The FORM notification is written by the run's `workflow.notify_form`
+    # item, which the worker runs after the run's transaction commits.
+    async def form_notifications() -> list[dict]:
+        inbox = await authenticated_client.get(f"/pods/{pod_id}/notifications")
+        assert inbox.status_code == status.HTTP_200_OK, inbox.text
+        return [
+            item
+            for item in inbox.json()["items"]
+            if item["origin_kind"] == "WORKFLOW_FORM" and item["origin_id"] == run_id
+        ]
+
+    notification = (
+        await eventually(
+            label="the form's notification",
+            probe=form_notifications,
+            done=lambda found: len(found) == 1,
+            timeout_seconds=30,
+        )
+    )[0]
     assert notification["responds_through_action"] is True
 
     agent_name = f"formfiller_{uuid4().hex[:8]}"

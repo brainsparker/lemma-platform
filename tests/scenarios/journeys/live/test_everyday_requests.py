@@ -20,6 +20,7 @@ import json
 import re
 import time
 import zipfile
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -385,3 +386,47 @@ async def test_a_widget_of_its_own_design(desk):
     widget = await _the_widget(person, pod, transcript)
     # Live from the table, or the seven orders carried in the page: both show them.
     assert table in widget or all(o["customer"] in widget for o in ORDERS), widget
+
+
+@scenario("A widget opens through its own link, and for nobody else")
+@proves("PS-AGENT-031")
+@covers("widget.embed_token")
+async def test_a_widget_opens_only_through_the_link_its_owner_was_given(world, desk):
+    """The fast lane can only ask for a result that does not exist; this is the
+    half that needs a real one. Expiry is a clock and is pinned in the module
+    suite (`test_widget_serve_e2e.py`), not waited out here."""
+    person, pod, table = desk
+    transcript = await _asks(
+        person, pod, f"Show me units by status in {table} as a widget.", budget=QUICK
+    )
+    shown = next(
+        (
+            m
+            for m in json.loads(transcript)
+            if m.get("kind") == "TOOL_CALL"
+            and m.get("tool_name") == "display_resource"
+            and str((m.get("tool_args") or {}).get("type")).upper() == "WIDGET"
+        ),
+        None,
+    )
+    assert shown is not None, f"no widget was displayed:\n{transcript[-1500:]}"
+    minting = (
+        f"/pods/{pod['id']}/widgets/{shown['conversation_id']}"
+        f"/{shown['tool_call_id']}/embed-token"
+    )
+
+    link = urlsplit((await person.api.post(minting))["url"])
+    anybody = await world.new_person("anybody", sign_up=False)
+    opened = await anybody.api.call("GET", f"{link.path}?{link.query}")
+    forged = await anybody.api.call("GET", f"{link.path}?{link.query[:-2]}xx")
+    bare = await anybody.api.call("GET", link.path)
+
+    assert opened.status_code == 200, opened.text[:300]
+    assert forged.status_code == 401, forged.status_code
+    assert bare.status_code == 401, bare.status_code
+    # Someone who is not in this conversation is refused a link of their own:
+    # 403 outside the pod, 404 inside it, so a result's existence is not told
+    # to a member who does not own it. Never a link.
+    colleague = await world.person("hannah")
+    refused = await colleague.api.call("POST", minting)
+    assert refused.status_code in (403, 404), refused.status_code

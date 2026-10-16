@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.authorization.permissions import Permissions
+from app.modules.datastore.domain.search_scope import SearchablePartition
 from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
 from app.modules.datastore.domain.errors import DatastoreConflictError
 from app.modules.datastore.domain.errors import DatastoreFileNotFoundError
@@ -180,7 +181,15 @@ def file_repository_mock() -> AsyncMock:
             if "/" not in item.path[len(prefix) :]
         ]
 
+    # Search's split of the pod, from the same stub: every row readable, so
+    # nothing hidden. The status/kind narrowing the statement applies is the
+    # e2e suite's to check; here every stubbed row stands for a searchable file.
+    async def _searchable_partition(**kwargs) -> SearchablePartition:
+        readable = await _visible_file_ids(pod_id=kwargs["pod_id"])
+        return SearchablePartition(readable=frozenset(readable), hidden=frozenset())
+
     repository.visible_file_ids.side_effect = _visible_file_ids
+    repository.searchable_partition.side_effect = _searchable_partition
     repository.get_descendants.side_effect = _descendants
     repository.get_direct_children.side_effect = _direct_children
     return repository
@@ -1186,16 +1195,16 @@ async def test_search_files_excludes_private_or_private_ancestor_results_for_non
         ctx=_ctx(requester_user_id),
     )
 
-    assert [result.file_id for result in results] == [pod_root_id]
-    file_scope = seen_search_kwargs["file_scope"]
-    assert file_scope.enumerated and file_scope.file_ids == frozenset({pod_root_id}), (
-        "a readable set this small is sent to the pod database as an exact "
-        "filter rather than being applied after the fact"
+    assert [result.file_id for result in results] == [pod_root_id], (
+        "a chunk whose file row the pod no longer has must not survive -- "
+        "results are authorized against the file table, so a row that is not "
+        "there cannot pass"
     )
-    assert pod_child_id not in file_scope.file_ids, (
-        "a chunk whose file row the pod no longer has must not survive the "
-        "filter -- the scope is built from the file table, so a row that is "
-        "not there cannot be in it"
+    file_scope = seen_search_kwargs["file_scope"]
+    assert not file_scope.enumerated and not file_scope.file_ids, (
+        "the caller reads every searchable file, so the shorter side is the "
+        "empty hidden set: nothing to send, and the results are authorized "
+        "after the fact"
     )
 
 

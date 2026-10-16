@@ -9,6 +9,7 @@ from app.modules.function.config import function_settings
 from app.modules.workspace.config import workspace_settings
 
 import os
+import threading
 import json
 import socket
 from concurrent.futures import ThreadPoolExecutor
@@ -18,7 +19,8 @@ import subprocess
 import sys
 import asyncio
 import logging
-from typing import TYPE_CHECKING, AsyncGenerator, Any, Callable
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, AsyncGenerator, Any, Callable, Iterator
 from uuid import uuid4
 
 import pytest
@@ -35,10 +37,16 @@ from app.core.test_utils import (
     get_redis_url,
     get_supertokens_container,
     get_supertokens_url,
+)
+from app.core.test_shared_containers import (
+    E2E_REUSE_ENV,
+    drop_set_aside_databases,
+    e2e_reuse_requested,
+    recreate_postgres_database,
+    reused_container_name,
     shared_postgres,
     shared_redis,
 )
-from app.modules.schedule.config import schedule_settings
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -262,24 +270,13 @@ async def _close_e2e_process_clients() -> None:
     Call it only through the ``e2e_process_clients`` fixture, which exists to
     put it after every fixture that could still be using one of these -- see
     that fixture for what goes wrong when it runs earlier.
-
-    The message bus is deliberately not in the list, and nothing else in the
-    harness closes it either. It is the one process-wide client an E2E request
-    cannot open: ``SqlAlchemyUnitOfWork`` stages domain events in the outbox
-    and a separate dispatcher publishes them, so no request path ever reaches
-    ``FastStreamRedisMessageBus._get_broker``. The only connect in this process
-    is ``app/app.py``'s lifespan, which closes it in the same ``finally``.
-    Measured rather than assumed: ``_get_broker`` is called 0 times across the
-    112 tests of ``app/modules/pod/tests/e2e``, and exactly as many times as
-    ``close`` on a suite that runs ``backend_server``.
     """
 
     from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
     from app.core.infrastructure.channels.channel_service import channel_service
     from app.core.infrastructure.db.session import close_engine
-    from app.core.infrastructure.jobs.streaq_job_queue import close_streaq_job_queue
-    from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
-        close_surface_event_dedup_store,
+    from app.modules.agent_surfaces.infrastructure.adapters.stranger_reply_window import (
+        close_stranger_reply_window,
     )
     from app.modules.datastore.infrastructure.session import close_datastore_engine
     from app.modules.identity.infrastructure.user_cache import close_user_cache
@@ -296,13 +293,10 @@ async def _close_e2e_process_clients() -> None:
         "close_workspace_tool_runtimes", close_workspace_tool_runtimes
     )
     await _run_cleanup_step("reset_workspace_store_state", reset_workspace_store_state)
-    await _run_cleanup_step(
-        "close_surface_event_dedup_store", close_surface_event_dedup_store
-    )
+    await _run_cleanup_step("close_stranger_reply_window", close_stranger_reply_window)
     await _run_cleanup_step("close_user_cache", close_user_cache)
     await _run_cleanup_step("close_auth_abuse_store", close_auth_abuse_store)
     await _run_cleanup_step("close_telegram_oidc_store", close_telegram_oidc_store)
-    await _run_cleanup_step("close_streaq_job_queue", close_streaq_job_queue)
     await _run_cleanup_step("close_redis_json_caches", close_redis_json_caches)
     await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
     await _run_cleanup_step("close_datastore_engine", close_datastore_engine)
@@ -328,7 +322,9 @@ def _close_shared_contexts() -> None:
     _SHARED_RESOURCES.clear()
 
 
-def _reset_supertokens_testing_state() -> None:
+def _supertokens_singleton_classes() -> tuple[type, ...]:
+    """Every SDK class that keeps process-wide state between ``init`` calls."""
+    from supertokens_python.querier import Querier
     from supertokens_python.recipe.accountlinking.recipe import AccountLinkingRecipe
     from supertokens_python.recipe.dashboard.recipe import DashboardRecipe
     from supertokens_python.recipe.emailpassword.recipe import EmailPasswordRecipe
@@ -345,8 +341,9 @@ def _reset_supertokens_testing_state() -> None:
     from supertokens_python.recipe.usermetadata.recipe import UserMetadataRecipe
     from supertokens_python.supertokens import Supertokens
 
-    Supertokens.reset()
-    for recipe in (
+    return (
+        Supertokens,
+        Querier,
         SessionRecipe,
         AccountLinkingRecipe,
         EmailPasswordRecipe,
@@ -359,8 +356,57 @@ def _reset_supertokens_testing_state() -> None:
         MultitenancyRecipe,
         UserMetadataRecipe,
         OAuth2ProviderRecipe,
-    ):
-        recipe.reset()
+    )
+
+
+def _reset_supertokens_testing_state() -> None:
+    from supertokens_python.querier import Querier
+    from supertokens_python.supertokens import Supertokens
+
+    Supertokens.reset()
+    for recipe in _supertokens_singleton_classes():
+        if recipe not in (Supertokens, Querier):
+            recipe.reset()
+
+
+#: Class state the SDK keeps under plain names: ``Querier.init`` installs a
+#: ``network_interceptor``, and the first request caches the core's
+#: ``api_version``. A test that initialises with its own leaves both behind.
+_SUPERTOKENS_PUBLIC_CLASS_STATE = frozenset({"network_interceptor", "api_version"})
+
+
+@contextmanager
+def supertokens_state_restored() -> Iterator[None]:
+    """Reset SuperTokens for the body, then put back what was there before.
+
+    Importing ``app.app`` initialises the SDK once for the whole process, and
+    unit tests that drive the app without its lifespan rely on that. A test
+    that resets the SDK and leaves it reset turns every later request in the
+    same worker into "Initialisation not done" -- a failure that depends on
+    which tests xdist happened to put together. Restoring the private class
+    attributes (the singletons and the querier's host list) is the only way
+    back, because the SDK has no public "re-install this instance" call.
+    """
+    snapshot = [
+        (
+            cls,
+            {
+                k: v
+                for k, v in vars(cls).items()
+                if k.startswith(f"_{cls.__name__}__")
+                or k in _SUPERTOKENS_PUBLIC_CLASS_STATE
+            },
+        )
+        for cls in _supertokens_singleton_classes()
+    ]
+    _reset_supertokens_testing_state()
+    try:
+        yield
+    finally:
+        _reset_supertokens_testing_state()
+        for cls, attributes in snapshot:
+            for name, value in attributes.items():
+                setattr(cls, name, value)
 
 
 async def verify_emailpassword_for_tests(user_id: str, email: str) -> None:
@@ -439,29 +485,137 @@ def _postgres_worker_supertokens_db_name(worker_id: str) -> str:
     return f"supertokens_{_sanitize_worker_id(worker_id)}"
 
 
-def _start_postgres(worker_id: str, basetemp_parent) -> None:
+def _start_postgres(worker_id: str, basetemp_parent, *, schema: bool = True) -> None:
     """Connect to the ONE Postgres server shared across all xdist workers.
 
     Each worker gets its own logical database inside it (created via
     ``create_postgres_database``), rather than its own full container -- one
     `docker run postgres` and one idle Postgres server process for the whole
-    run instead of N. See ``shared_postgres`` in test_utils for the
+    run instead of N. See ``shared_postgres`` in test_shared_containers for the
     coordination mechanism (mirrors ``shared_kreuzberg``).
     """
 
     def _factory():
         return shared_postgres(basetemp_parent, worker_id)
 
+    _claim_reuse(worker_id)
     postgres = _shared_context_resource("postgres", _factory)
     if not getattr(postgres, "_lemma_worker_databases_created", False):
-        create_postgres_database(postgres, _postgres_worker_db_name(worker_id))
-        create_postgres_database(
-            postgres, _postgres_worker_datastore_db_name(worker_id)
-        )
+        if e2e_reuse_requested():
+            _fresh_reused_databases(postgres, worker_id, schema=schema)
+        else:
+            create_postgres_database(postgres, _postgres_worker_db_name(worker_id))
+            create_postgres_database(
+                postgres, _postgres_worker_datastore_db_name(worker_id)
+            )
         create_postgres_database(
             postgres, _postgres_worker_supertokens_db_name(worker_id)
         )
         setattr(postgres, "_lemma_worker_databases_created", True)
+
+
+#: Held for the life of this process when it reuses containers, so a second
+#: session in the same checkout cannot recreate the databases under it.
+_REUSE_LOCKS: list[Any] = []
+_REUSE_CLAIM = threading.Lock()
+
+
+def _claim_reuse(worker_id: str) -> None:
+    """Take this worker's reuse lock, or fall back to fresh containers.
+
+    Reused containers are shared by every session in a checkout, but each
+    xdist worker's databases and Redis index are its own -- so two sessions
+    at once would wipe each other's. The second one simply runs cold.
+    """
+    with _REUSE_CLAIM:
+        if not e2e_reuse_requested() or _REUSE_LOCKS:
+            return
+        from filelock import FileLock, Timeout
+
+        # Not thread-local: containers are warmed from several threads of
+        # this one process, and all of them hold the same claim.
+        lock = FileLock(
+            f"/tmp/{reused_container_name(_sanitize_worker_id(worker_id))}.lock",
+            thread_local=False,
+        )
+        try:
+            lock.acquire(timeout=0)
+        except Timeout:
+            os.environ[E2E_REUSE_ENV] = "0"
+            return
+        _REUSE_LOCKS.append(lock)
+
+
+def _fresh_reused_databases(postgres: Any, worker_id: str, *, schema: bool) -> None:
+    """This session's databases, new; for the full stack, cloned from a schema template.
+
+    Cloning a template is cheaper than creating every table again; tables
+    registered after the template was built are still created lazily by
+    ``_ensure_schema_once``. A Postgres-only session (``postgres_only_*``)
+    creates its own tables, so it skips the template and the model imports
+    that building one needs. The previous session's databases are dropped on a
+    background thread, off the path to the first test.
+    """
+    name = _postgres_worker_db_name(worker_id)
+    if schema:
+        template, tables = _schema_template(postgres)
+        recreate_postgres_database(postgres, name, template=template)
+        _CREATED_TABLES[get_postgres_url(postgres, name)] = set(tables)
+    else:
+        recreate_postgres_database(postgres, name)
+    recreate_postgres_database(postgres, _postgres_worker_datastore_db_name(worker_id))
+    threading.Thread(
+        target=drop_set_aside_databases, args=(postgres,), daemon=True
+    ).start()
+
+
+def _schema_template(postgres: Any) -> tuple[str, list[str]]:
+    """A database holding the e2e schema, named by a digest of that schema."""
+    import hashlib
+
+    import psycopg
+    from sqlalchemy import create_engine
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.schema import CreateIndex, CreateTable
+
+    _import_e2e_models()
+    dialect = postgresql.dialect()
+    tables = sorted(Base.metadata.tables.values(), key=lambda t: t.name)
+    ddl = "".join(
+        str(CreateTable(t).compile(dialect=dialect))
+        + "".join(str(CreateIndex(i).compile(dialect=dialect)) for i in t.indexes)
+        for t in tables
+    )
+    name = f"lemma_e2e_tpl_{hashlib.sha256(ddl.encode()).hexdigest()[:12]}"
+    admin = get_postgres_url(postgres).replace("+asyncpg", "+psycopg")
+    with psycopg.connect(
+        admin.replace("postgresql+psycopg", "postgresql"), autocommit=True
+    ) as conn:
+        # One builder at a time across xdist workers; the rest find it built.
+        conn.execute("SELECT pg_advisory_lock(%s)", (0x6C656D7470,))
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM pg_database WHERE datname = %s", (name,)
+            ).fetchone()
+            if exists is None:
+                for (stale,) in conn.execute(
+                    "SELECT datname FROM pg_database WHERE datname LIKE 'lemma\\_e2e\\_tpl\\_%'"
+                ).fetchall():
+                    conn.execute(f'DROP DATABASE IF EXISTS "{stale}"')
+                building = f"{name}_building"
+                conn.execute(f'DROP DATABASE IF EXISTS "{building}"')
+                conn.execute(f'CREATE DATABASE "{building}"')
+                engine = create_engine(admin.rsplit("/", 1)[0] + f"/{building}")
+                try:
+                    with engine.begin() as schema:
+                        schema.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                        Base.metadata.create_all(schema, tables=tables)
+                finally:
+                    engine.dispose()
+                conn.execute(f'ALTER DATABASE "{building}" RENAME TO "{name}"')
+        finally:
+            conn.execute("SELECT pg_advisory_unlock(%s)", (0x6C656D7470,))
+    return name, [t.name for t in tables]
 
 
 def _start_supertokens(worker_id: str, basetemp_parent) -> None:
@@ -478,8 +632,16 @@ def _start_supertokens(worker_id: str, basetemp_parent) -> None:
         postgres, _postgres_worker_supertokens_db_name(worker_id)
     )
 
+    reuse_name = (
+        reused_container_name(f"supertokens-{_sanitize_worker_id(worker_id)}")
+        if e2e_reuse_requested()
+        else None
+    )
+
     def _factory():
-        return get_supertokens_container(postgres_uri, network=SHARED_E2E_NETWORK_NAME)
+        return get_supertokens_container(
+            postgres_uri, network=SHARED_E2E_NETWORK_NAME, reuse_name=reuse_name
+        )
 
     _shared_context_resource("supertokens", _factory)
 
@@ -490,7 +652,7 @@ def _start_redis(worker_id: str, basetemp_parent) -> None:
     Each worker gets its own logical DB index inside it (selected via the
     connection URL, see ``_redis_worker_db_index``), rather than its own full
     container -- one `docker run redis` for the whole run instead of N. See
-    ``shared_redis`` in test_utils for the coordination mechanism (mirrors
+    ``shared_redis`` in test_shared_containers for the coordination mechanism (mirrors
     ``shared_postgres``/``shared_kreuzberg``). Unlike Postgres, no
     per-worker provisioning step is needed here -- Redis DBs exist by index
     already, nothing to create.
@@ -499,7 +661,17 @@ def _start_redis(worker_id: str, basetemp_parent) -> None:
     def _factory():
         return shared_redis(basetemp_parent, worker_id)
 
-    _shared_context_resource("redis", _factory)
+    _claim_reuse(worker_id)
+    first = "redis" not in _SHARED_RESOURCES
+    redis_container = _shared_context_resource("redis", _factory)
+    if first and e2e_reuse_requested():
+        # A reused server keeps the last session's keys; this worker's index
+        # starts empty, as it would on a fresh container.
+        import redis as redis_sync
+
+        url = get_redis_url(redis_container, _redis_worker_db_index(worker_id))
+        with redis_sync.Redis.from_url(url) as client:
+            client.flushdb()
 
 
 def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
@@ -528,6 +700,7 @@ def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
     # concurrently raced two `mkdir`s for the same path, one losing with
     # ``FileExistsError``.
     basetemp_parent = tmp_path_factory.getbasetemp().parent
+    _claim_reuse(worker_id)
 
     jobs: list[Callable[[], Any]] = []
     if "postgres" not in _SHARED_RESOURCES or "supertokens" not in _SHARED_RESOURCES:
@@ -544,6 +717,27 @@ def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
 def postgres_container(worker_id, tmp_path_factory):
     _warm_shared_containers(worker_id, tmp_path_factory)
     yield _SHARED_RESOURCES["postgres"]
+
+
+@pytest.fixture(scope="session")
+def postgres_only_container(worker_id, tmp_path_factory):
+    """The shared Postgres server alone, for tests of the database layer.
+
+    ``postgres_container`` warms SuperTokens and Redis alongside it, which is
+    right for a test that boots the app and pure cost -- most of the setup
+    time -- for one that only needs a database. Same shared server and
+    per-worker database, so a later test asking for the full stack reuses it
+    and starts only what is missing.
+    """
+    _start_postgres(worker_id, tmp_path_factory.getbasetemp().parent, schema=False)
+    yield _SHARED_RESOURCES["postgres"]
+
+
+@pytest.fixture(scope="session")
+def postgres_only_database_url(postgres_only_container, worker_id) -> str:
+    return get_postgres_url(
+        postgres_only_container, _postgres_worker_db_name(worker_id)
+    )
 
 
 @pytest.fixture(scope="session")
@@ -742,21 +936,9 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     datastore_settings.e2e_disable_worker_file_autoindex = True
     os.environ.setdefault("E2E_DISABLE_WORKER_FILE_AUTOINDEX", "true")
 
-    # The schedule poller is a real background loop in the worker subprocess,
-    # defaulting to a 5s production cadence. Every schedule/wait-until test
-    # that goes through the HTTP API + poller (rather than calling the claim
-    # function directly, as test_due_schedule_claimer_e2e.py does) pays that
-    # full cadence. Setting the attribute alone does nothing for the worker --
-    # it re-reads its own config from its own environment at startup, not
-    # this process's settings singleton -- so set os.environ too, same as
-    # E2E_LLM_MODE/E2E_DISABLE_WORKER_FILE_AUTOINDEX above; the worker's
-    # env={**os.environ, ...} already inherits it, no extra Popen key needed.
-    schedule_settings.schedule_poll_interval_seconds = 0.5
-    os.environ["SCHEDULE_POLL_INTERVAL_SECONDS"] = "0.5"
-
-    # The same argument as the schedule poller, for the other production
-    # cadences the suite sits through. Each is a background loop the tests wait
-    # on rather than drive, so the production interval is pure latency here.
+    # The production cadences the suite sits through. Each is a background
+    # loop the tests wait on rather than drive, so the production interval is
+    # pure latency here.
     # Attribute + os.environ for the same reason as above: the worker subprocess
     # re-reads its own config from its own environment.
     #
@@ -813,12 +995,17 @@ def _import_e2e_models() -> None:
     module first. The other modules listed below re-export their submodels
     through a package ``__init__``, so importing the package is enough.
     """
-    from app.core.infrastructure.events import models as event_models
+    from app.core.infrastructure.work import models as work_models
     from app.modules.agent.infrastructure import models as agent_models
     from app.modules.agent.infrastructure import runtime_models as agent_runtime_models
     from app.modules.agent_surfaces.infrastructure import models as agent_surface_models
     from app.modules.apps.infrastructure import models as app_models
     from app.modules.connectors.infrastructure import models as connector_models
+    from app.modules.contacts.infrastructure import models as contact_models
+    from app.modules.contacts.infrastructure import (
+        visitor_sessions as visitor_session_models,
+    )
+    from app.modules.agent_surfaces.infrastructure import web_widget_models
     from app.modules.datastore.infrastructure.models import datastore_models
     from app.modules.function.infrastructure import models as function_models
     from app.modules.mcp_access.infrastructure import models as mcp_access_models
@@ -837,7 +1024,7 @@ def _import_e2e_models() -> None:
     _ = (
         workspace_models,
         agent_runtime_models,
-        event_models,
+        work_models,
         user_models,
         organization_models,
         pod_models,
@@ -853,6 +1040,9 @@ def _import_e2e_models() -> None:
         pod_role_models,
         pod_bundle_models,
         mcp_access_models,
+        contact_models,
+        visitor_session_models,
+        web_widget_models,
     )
 
 
@@ -993,7 +1183,8 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 # spent its whole grace draining, overran, and got SIGKILLed. SIGKILL
                 # cannot be trapped, so coverage's `sigterm = true` handler never
                 # flushed and the subprocess's coverage was lost.
-                "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
+                "WORK_SHUTDOWN_GRACE_SECONDS": "1",
+                "WORK_SHUTDOWN_GRACE_JSON": '{"interactive": 1}',
                 "DEBUG": "true",
                 "EMAIL_TRANSPORT": "filesystem",
                 # `settings`, not `e2e_settings`: they are the same object --
@@ -1020,7 +1211,7 @@ async def worker(e2e_settings, sandbox_reachable_backend):
         )
 
         readiness_markers = (
-            '"logger": "app.core.infrastructure.jobs.streaq_runtime"',
+            '"logger": "app.core.infrastructure.work.process"',
             '"event": "service.started"',
         )
         startup_ok = False
@@ -1052,9 +1243,16 @@ async def worker(e2e_settings, sandbox_reachable_backend):
             logs = log_file.read()
             pytest.fail(f"Timed out waiting for streaq worker startup.\n{logs}")
 
+        from app.modules.test_support.e2e.worker_hold import (
+            register_session_worker,
+            unregister_session_worker,
+        )
+
+        register_session_worker(proc.pid, e2e_settings.database_url)
         try:
             yield proc
         finally:
+            unregister_session_worker(proc.pid)
             proc.terminate()
             try:
                 # Comfortably longer than the 1s grace period set at spawn, so
@@ -1193,16 +1391,56 @@ def set_test_app_factory(factory) -> None:
     _test_app_factory = factory
 
 
+# One OpenAPI document per distinct route table per test process. Every test
+# builds a fresh app, and every `backend_server` runs that app's lifespan, which
+# builds the document up front because e2e serves `/openapi.json` -- 1-3s of
+# pydantic model-graph work per test, for a document that is identical as long
+# as the routes are. Keyed by the route table rather than shared outright, so
+# an app factory that mounts different routers still gets its own document.
+_OPENAPI_BY_ROUTES: dict[tuple, dict] = {}
+
+
+def _route_table_key(app) -> tuple:
+    # Title and version too: `custom_openapi` writes both into the document.
+    return (app.title, app.version) + tuple(
+        (
+            type(route).__name__,
+            getattr(route, "path", ""),
+            getattr(route, "name", ""),
+            tuple(sorted(getattr(route, "methods", None) or ())),
+            bool(getattr(route, "include_in_schema", True)),
+        )
+        for route in app.routes
+    )
+
+
+def _share_openapi_document(app):
+    build = app.openapi
+
+    def openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+        key = _route_table_key(app)
+        schema = _OPENAPI_BY_ROUTES.get(key)
+        if schema is None:
+            schema = _OPENAPI_BY_ROUTES[key] = build()
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = openapi
+    return app
+
+
 @pytest.fixture(scope="function")
 def test_app(e2e_settings, db_manager, monkeypatch, tmp_path):
     _ensure_repo_root_on_path()
     _configure_local_datastore_runtime(monkeypatch, tmp_path)
     _reset_supertokens_testing_state()
     if _test_app_factory is not None:
-        return _test_app_factory()
+        return _share_openapi_document(_test_app_factory())
     from app.app import create_app
 
-    return create_app()
+    return _share_openapi_document(create_app())
 
 
 @pytest_asyncio.fixture(scope="function")

@@ -30,13 +30,22 @@ class CreateScheduleRequest:
             schedules.
         agent_name (None | str | Unset): Pod agent to wake, by name. Pass 'POD_DEFAULT' (or 'pod_default') to wake the
             pod's default assistant, which has no name of its own.
-        config (CreateScheduleRequestConfig | Unset):
+        config (CreateScheduleRequestConfig | Unset): Settings for the schedule's type: `cron`/`scheduled_at`/`timezone`
+            for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set
+            `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that
+            finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and
+            `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default
+            to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default`
+            changes the default for `bulk_writes`.
         connector_trigger_id (None | str | Unset): Connector trigger id for agent WEBHOOK schedules. Do not provide this
             for workflow schedules; workflow WEBHOOK schedules derive it from the workflow start configuration.
         filter_instruction (None | str | Unset): Optional schedule-level LLM filter instruction. Filters belong to the
             schedule, not the workflow start.
         filter_output_schema (CreateScheduleRequestFilterOutputSchemaType0 | None | Unset): Optional schema for the
             schedule-level filter output. Filters belong to the schedule, not the workflow start.
+        include_outside_rows (bool | Unset): DATASTORE schedules only: also fire on rows people outside the pod added to
+            an open table. Off by default. When it fires, the run is told the row's content came from outside and is
+            untrusted. Default: False.
         instruction (None | str | Unset): What the target should do when this fires, in your own words. Reaches an agent
             as the run's conversation instructions, layered after the agent's own. Required when targeting the default
             assistant, which has no standing instruction to fall back on. Distinct from filter_instruction, which decides
@@ -55,6 +64,7 @@ class CreateScheduleRequest:
     filter_output_schema: (
         CreateScheduleRequestFilterOutputSchemaType0 | None | Unset
     ) = UNSET
+    include_outside_rows: bool | Unset = False
     instruction: None | str | Unset = UNSET
     name: None | str | Unset = UNSET
     visibility: None | str | Unset = UNSET
@@ -108,6 +118,8 @@ class CreateScheduleRequest:
         else:
             filter_output_schema = self.filter_output_schema
 
+        include_outside_rows = self.include_outside_rows
+
         instruction: None | str | Unset
         if isinstance(self.instruction, Unset):
             instruction = UNSET
@@ -151,6 +163,8 @@ class CreateScheduleRequest:
             field_dict["filter_instruction"] = filter_instruction
         if filter_output_schema is not UNSET:
             field_dict["filter_output_schema"] = filter_output_schema
+        if include_outside_rows is not UNSET:
+            field_dict["include_outside_rows"] = include_outside_rows
         if instruction is not UNSET:
             field_dict["instruction"] = instruction
         if name is not UNSET:
@@ -252,6 +266,8 @@ class CreateScheduleRequest:
             d.pop("filter_output_schema", UNSET)
         )
 
+        include_outside_rows = d.pop("include_outside_rows", UNSET)
+
         def _parse_instruction(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -296,6 +312,7 @@ class CreateScheduleRequest:
             connector_trigger_id=connector_trigger_id,
             filter_instruction=filter_instruction,
             filter_output_schema=filter_output_schema,
+            include_outside_rows=include_outside_rows,
             instruction=instruction,
             name=name,
             visibility=visibility,

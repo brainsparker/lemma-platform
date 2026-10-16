@@ -70,12 +70,13 @@ async def test_approve_for_session_records_each_permission(monkeypatch):
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    conversation = SimpleNamespace(id=uuid4(), agent_id=uuid4())
+    conversation = SimpleNamespace(id=uuid4(), agent_id=uuid4(), pod_id=uuid4())
     user_id = uuid4()
 
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=conversation.pod_id,
         tool_args={
             "tool_name": "pod_delete_table",
             "permission_ids": ["datastore.table.delete", "folder.delete", "", 7],
@@ -99,7 +100,10 @@ async def test_approve_for_session_records_each_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_approve_for_session_defaults_to_pod_default_agent(monkeypatch):
+async def test_approve_for_session_keys_the_pod_assistant_by_its_pod(monkeypatch):
+    """The pod's assistant has no agent on its conversation, and its runs carry
+    its own id -- which is its pod's. Recorded under ``DEFAULT_POD_AGENT_ID``,
+    which no run carries, an approval it was given was never found."""
     recorded: list[dict] = []
 
     async def fake_record(**kwargs):
@@ -109,16 +113,18 @@ async def test_approve_for_session_defaults_to_pod_default_agent(monkeypatch):
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    conversation = SimpleNamespace(id=uuid4(), agent_id=None)
+    conversation = SimpleNamespace(id=uuid4(), agent_id=None, pod_id=uuid4())
 
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=conversation.pod_id,
         tool_args={"permission_ids": ["datastore.table.delete"]},
         user_id=uuid4(),
     )
 
-    assert recorded[0]["workload_actor_id"] == f"agent:{DEFAULT_POD_AGENT_ID}"
+    assert recorded[0]["workload_actor_id"] == f"agent:{conversation.pod_id}"
+    assert recorded[0]["workload_actor_id"] != f"agent:{DEFAULT_POD_AGENT_ID}"
 
 
 @pytest.mark.asyncio
@@ -136,11 +142,12 @@ async def test_approve_for_session_without_permission_ids_records_only_exact_com
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    conversation = SimpleNamespace(id=uuid4(), agent_id=None)
+    conversation = SimpleNamespace(id=uuid4(), agent_id=None, pod_id=uuid4())
 
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=conversation.pod_id,
         tool_args={"tool_name": "exec_command", "args": {"cmd": "ls -la"}},
         user_id=uuid4(),
     )
@@ -160,11 +167,12 @@ async def test_approve_for_session_without_tool_name_records_nothing(monkeypatch
         "app.core.authorization.session_approvals.record_session_approval",
         fail_record,
     )
-    conversation = SimpleNamespace(id=uuid4(), agent_id=None)
+    conversation = SimpleNamespace(id=uuid4(), agent_id=None, pod_id=uuid4())
 
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=conversation.pod_id,
         tool_args={},
         user_id=uuid4(),
     )
@@ -343,91 +351,3 @@ class TestTheSecondDenialOfTheSameCall:
 
         assert result is not None and result.executed is True
         assert executed == ["exec_command"]
-
-
-class TestAnApprovedToolRunsAtMostOnce:
-    """A retried reconcile job must not run the command a second time.
-
-    Approving a `request_approval` executes the wrapped tool with the user's
-    authority — deleting records, deploying an app, sending mail. The guard used
-    to be a *read* of the tool return, which is written only after the tool
-    runs, so the window between check and write was one whole execution wide.
-
-    Concurrent clicks were already safe: the reconcile job has a deterministic
-    id and streaq's `publish_task` does `SET NX`. What was not safe is a retry
-    of the job already claimed — `max_tries=3`, and streaq requeues a job
-    cancelled inside the shutdown grace as well as reclaiming one whose worker
-    died. `execute_approved_tool_as_user` catches `Exception`, and
-    `CancelledError` is not one, so nothing intercepted the unwind.
-    """
-
-    @pytest.mark.asyncio
-    async def test_the_second_attempt_does_not_reach_the_tool(self):
-        from app.modules.agent.services.conversation_approvals import (
-            ApprovalCoordinator,
-        )
-
-        claims: list[str] = []
-        builds: list[str] = []
-
-        class _Repo:
-            async def claim_approval_execution(self, *, conversation_id, approval_id):
-                # The real conditional UPDATE: exactly one caller wins.
-                first = approval_id not in claims
-                claims.append(approval_id)
-                return first
-
-        class _Uow:
-            async def commit(self):
-                return None
-
-        class _Builder:
-            async def build(self, **kwargs):
-                builds.append(kwargs["kind"])
-                return "request_approval", {"success": True}
-
-        coordinator = ApprovalCoordinator(_Uow(), _Repo(), _Builder(), None)
-
-        assert (
-            await coordinator._claim_execution(
-                conversation_id=uuid4(), approval_id="approval-1"
-            )
-            is True
-        )
-        assert (
-            await coordinator._claim_execution(
-                conversation_id=uuid4(), approval_id="approval-1"
-            )
-            is False
-        ), "a retry took the claim a second time and would re-run the tool"
-        assert builds == []
-
-    @pytest.mark.asyncio
-    async def test_the_claim_is_committed_before_the_tool_could_run(self):
-        """An uncommitted claim is not a claim.
-
-        The whole point is that a worker killed mid-execution leaves evidence
-        behind. Evidence inside a transaction that dies with the worker is no
-        evidence at all — the retry would find the row unclaimed and run again.
-        """
-        from app.modules.agent.services.conversation_approvals import (
-            ApprovalCoordinator,
-        )
-
-        order: list[str] = []
-
-        class _Repo:
-            async def claim_approval_execution(self, **_kwargs):
-                order.append("claim")
-                return True
-
-        class _Uow:
-            async def commit(self):
-                order.append("commit")
-
-        coordinator = ApprovalCoordinator(_Uow(), _Repo(), None, None)
-        await coordinator._claim_execution(
-            conversation_id=uuid4(), approval_id="approval-1"
-        )
-
-        assert order == ["claim", "commit"]

@@ -222,6 +222,31 @@ class SpaceGroups:
             for group_id, ids in conversations.items()
         }
 
+    async def group_in_pod(
+        self, *, pod_id: UUID, group_id: UUID
+    ) -> SurfaceGroup | None:
+        """The group, when it is this pod's."""
+        return await self._in_pod(pod_id=pod_id, group_id=group_id)
+
+    async def surface(self, surface_id: UUID) -> AgentSurfaceEntity | None:
+        """The bot a group belongs to."""
+        return await SurfaceRepository(self.uow).get(surface_id)
+
+    async def change(
+        self,
+        group_id: UUID,
+        *,
+        new_owner: UUID | None,
+        answers_outsiders: bool | None,
+    ) -> None:
+        """Take a group over, switch its outsiders, or both; each only if given."""
+        if new_owner is not None:
+            await self.groups.set_owner(group_id, new_owner)
+        if answers_outsiders is not None:
+            await self.groups.set_answers_outsiders(
+                group_id, answers_outsiders=answers_outsiders
+            )
+
     async def _in_pod(self, *, pod_id: UUID, group_id: UUID) -> SurfaceGroup | None:
         group = await self.groups.get_by_id(group_id)
         return group if group is not None and group.pod_id == pod_id else None

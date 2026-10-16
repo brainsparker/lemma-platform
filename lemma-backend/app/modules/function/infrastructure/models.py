@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -52,6 +53,10 @@ class FunctionModel(UUIDAuditBase):
     type: Mapped[FunctionType] = mapped_column(String, default=FunctionType.API)
     status: Mapped[FunctionStatus] = mapped_column(String, default=FunctionStatus.DRAFT)
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
+    #: Callable from a contact's run (see docs/design/contacts.md).
+    contacts_invoke: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
 
     def __str__(self) -> str:
         return self.name or str(self.id)
@@ -158,7 +163,17 @@ class FunctionRunModel(UUIDAuditBase):
         nullable=True,
     )
     revision_hash: Mapped[str | None] = mapped_column(String(71), nullable=True)
-    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    # Nullable for a run started for a contact: it acts for no member, and
+    # ``contact_id`` names who it served instead.
+    user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    # References ``contacts.id`` ON DELETE CASCADE, like the contact's handles:
+    # a run's input names the person it served, so forgetting a contact forgets
+    # the runs made for them too. Declared in migration 0044 only. The table
+    # belongs to the contacts module, and a process that never imports its
+    # models could not resolve the reference on flush.
+    contact_id: Mapped[UUID | None] = mapped_column(nullable=True)
     input_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     output_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[FunctionRunStatus] = mapped_column(
@@ -195,26 +210,20 @@ class FunctionRunModel(UUIDAuditBase):
             "function_id",
             text("id DESC"),
         ),
-        # ``fail_expired``: the once-a-minute deadline sweep. Partial because
-        # terminal runs are the overwhelming majority of the table and none of
-        # them can expire, and ordered to match the query's ORDER BY so the
-        # LIMIT is satisfied from the index instead of a sort.
+        # The per-pod gate counts a pod's RUNNING runs at every start. Partial:
+        # only runs holding a slot are in it, so the count never touches the
+        # terminal history that is most of the table.
         Index(
-            "ix_function_runs_expiring",
-            "deadline_at",
-            "id",
-            postgresql_where=text(
-                "deadline_at IS NOT NULL AND status IN ('PENDING', 'RUNNING')"
-            ),
+            "ix_function_runs_running",
+            "function_id",
+            postgresql_where=text("status = 'RUNNING'"),
         ),
-        # ``list_pending_async_runs``: the recovery half of the same cron.
+        # The contact's delete cascades through this FK; without an index it
+        # would scan every run. Partial: member runs never carry one.
         Index(
-            "ix_function_runs_pending_async",
-            "created_at",
-            "id",
-            postgresql_where=text(
-                "status = 'PENDING' AND job_id IS NOT NULL AND deadline_at IS NOT NULL"
-            ),
+            "ix_function_runs_contact_id",
+            "contact_id",
+            postgresql_where=text("contact_id IS NOT NULL"),
         ),
     )
 

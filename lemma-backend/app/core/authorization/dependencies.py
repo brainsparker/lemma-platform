@@ -17,30 +17,15 @@ from app.core.authorization.pod_liveness import (
 from app.core.authorization.context import ActorType, Context, ResourceRef, ResourceType
 from app.core.authorization.current import set_current_context
 from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_NAME,
     DESTRUCTIVE_ACTIONS,
-    is_pod_default_agent,
+    is_default_pod_agent_claims as _is_default_pod_agent_claims,
+)
+from app.core.authorization.function_run import (
+    FunctionRunClaims,
+    build_function_run_context,
 )
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-
-
-def _is_default_pod_agent_claims(claims) -> bool:
-    """Whether this token was minted for the pod's own assistant.
-
-    The one place the answer comes from a token rather than a row: this runs on
-    every delegated request, and ``is_pod_default_agent`` is deliberately free
-    of I/O so it need not become a query.
-
-    Both claims have to agree. The id arm alone would promote any workload
-    whose id happened to equal its pod's, and what turns on this is whether a
-    token acts with its user's permissions or only its own grants.
-    """
-    return (
-        claims is not None
-        and is_pod_default_agent(claims.actor_id, pod_id=claims.pod_id)
-        and claims.actor_name in {None, DEFAULT_POD_AGENT_NAME}
-    )
 
 
 async def resolve_current_context(
@@ -58,6 +43,11 @@ async def resolve_current_context(
     a short ``current_context_scope`` (release the pooled connection before slow
     non-DB work) instead of only via the request-scoped dependency.
     """
+    run_claims = _function_run_claims(request)
+    if run_claims is not None:
+        return await build_function_run_context(
+            session, run_claims, request_id=request.headers.get("x-request-id")
+        )
     claims = getattr(request.state, "delegation_claims", None)
     if claims is not None:
         return await AuthorizationDataService(
@@ -72,6 +62,15 @@ async def resolve_current_context(
         user_id=user_id,
         request_id=request.headers.get("x-request-id"),
     )
+
+
+def _function_run_claims(request: Request) -> FunctionRunClaims | None:
+    """The claims of a person-less function run, when that is the caller.
+
+    Nested getattr for the reason ``pod_context_scope`` gives: some callers
+    pass request doubles with no ``state``.
+    """
+    return getattr(getattr(request, "state", None), "function_run_claims", None)
 
 
 async def get_current_context(
@@ -116,6 +115,21 @@ async def get_org_context(
     ):
         set_current_context(existing)
         return existing
+    run_claims = _function_run_claims(request)
+    if run_claims is not None:
+        # ``verify_auth`` admits such a run to pod routes only, so this is
+        # defence in depth: its context is its pod's organization or nothing.
+        ctx = await build_function_run_context(
+            uow.session, run_claims, request_id=request.headers.get("x-request-id")
+        )
+        if ctx.organization_id != org_id:
+            raise HTTPException(
+                status_code=403, detail="Function run organization mismatch"
+            )
+        request.state.ctx = ctx
+        set_current_context(ctx)
+        await _release_after_authorization(uow)
+        return ctx
     claims = getattr(request.state, "delegation_claims", None)
     if claims is not None:
         ctx = await AuthorizationDataService(
@@ -160,6 +174,13 @@ async def resolve_pod_context(
     entire stream. The returned Context's authorizer is bound to ``session``, so
     it must only be used while that session is open.
     """
+    run_claims = _function_run_claims(request)
+    if run_claims is not None:
+        if run_claims.pod_id != pod_id:
+            raise HTTPException(status_code=403, detail="Function run pod mismatch")
+        return await build_function_run_context(
+            session, run_claims, request_id=request.headers.get("x-request-id")
+        )
     claims = getattr(request.state, "delegation_claims", None)
     if claims is not None:
         if claims.pod_id != pod_id:
@@ -328,7 +349,11 @@ def assert_pod_membership(ctx: Context, action_label: str = "browse this pod") -
     request-scoped ``PodContextDep`` that would pin a pooled connection for the
     whole StreamingResponse (see ``app.core.authorization.scope``).
     """
-    if ctx.actor_type != ActorType.USER or ctx.is_superuser:
+    if ctx.is_superuser:
+        return
+    # Somebody outside the pod is never a member of it, whatever it made
+    # Public: reaching *through* the pod is exactly what membership gates.
+    if not ctx.is_outsider and ctx.actor_type != ActorType.USER:
         return
     if any(ref.type == "POD_MEMBER" for ref in ctx.principal_refs):
         return

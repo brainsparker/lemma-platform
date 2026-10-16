@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from rich import box
 from rich.panel import Panel
@@ -11,74 +9,8 @@ from rich.rule import Rule
 from rich.text import Text
 
 from .io import emit
+from .sse import Reattach, StreamEvent, follow_run
 from .state import CliState, console, fail
-
-TERMINAL_EVENTS = {"completed", "stopped", "error"}
-
-
-@dataclass(frozen=True)
-class StreamEvent:
-    type: str
-    data: Any
-    agent_run_id: str | None = None
-    #: Which channel a token delta belongs to -- "text", "thinking" or "tool".
-    #: A sibling of ``data`` on the wire, not nested inside it: the server sends
-    #: ``{"type":"token","data":"...","kind":"tool"}`` and ``data`` is always a
-    #: bare string. Reading it from the wrong place is what let a tool call
-    #: reach users as answer text.
-    kind: str | None = None
-
-
-def iter_sse_events(response: Any) -> Iterable[StreamEvent]:
-    data_lines: list[str] = []
-
-    def flush() -> StreamEvent | None:
-        if not data_lines:
-            return None
-        raw_data = "\n".join(data_lines).strip()
-        data_lines.clear()
-        if not raw_data:
-            return None
-        try:
-            payload = json.loads(raw_data)
-        except json.JSONDecodeError:
-            return StreamEvent(type="raw", data=raw_data)
-        if not isinstance(payload, dict):
-            return StreamEvent(type="raw", data=payload)
-        return StreamEvent(
-            type=str(payload.get("type") or payload.get("event") or "message"),
-            data=payload.get("data", payload),
-            agent_run_id=(
-                str(payload["agent_run_id"]) if payload.get("agent_run_id") else None
-            ),
-            kind=str(payload["kind"]) if payload.get("kind") else None,
-        )
-
-    try:
-        line_iter = response.iter_lines(decode_unicode=True)
-    except TypeError:
-        line_iter = response.iter_lines()
-
-    for raw_line in line_iter:
-        line = raw_line.decode() if isinstance(raw_line, bytes) else str(raw_line)
-        if line == "":
-            event = flush()
-            if event is not None:
-                yield event
-            continue
-        if line.startswith(":"):
-            continue
-        if line.startswith("data:"):
-            data_lines.append(line[len("data:") :].lstrip())
-            continue
-        if line.startswith(("event:", "id:", "retry:")):
-            continue
-        data_lines.append(line)
-
-    event = flush()
-    if event is not None:
-        yield event
-
 
 #: What a stream that carried no terminal event means. The run did not report
 #: completing, stopping or failing, so its outcome is genuinely unknown -- a
@@ -117,12 +49,16 @@ def _exit_on_failed_run(
 
 
 def emit_stream_events(
-    state: CliState, response: Any, *, owns_run: bool = True
+    state: CliState,
+    response: Any,
+    *,
+    owns_run: bool = True,
+    reattach: Reattach | None = None,
 ) -> None:
     error_text: str | None = None
     saw_terminal = False
     try:
-        for event in iter_sse_events(response):
+        for event in follow_run(response, reattach):
             event_type = event.type.lower()
             if event_type == "error":
                 error_text = str(event.data)
@@ -162,14 +98,16 @@ def render_chat_stream(
     agent: str | None,
     verbose: bool = False,
     owns_run: bool = True,
+    reattach: Reattach | None = None,
 ) -> None:
+    """Render a run's stream, ending at its terminal event (see `follow_run`)."""
     if state.output == "json":
-        emit_stream_events(state, response, owns_run=owns_run)
+        emit_stream_events(state, response, owns_run=owns_run, reattach=reattach)
         return
 
     renderer = ChatRenderer(agent=agent, verbose=verbose)
     try:
-        for event in iter_sse_events(response):
+        for event in follow_run(response, reattach):
             renderer.handle(event)
     finally:
         response.close()

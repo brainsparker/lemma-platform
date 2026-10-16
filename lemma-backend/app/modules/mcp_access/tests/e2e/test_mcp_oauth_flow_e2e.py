@@ -11,8 +11,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import secrets
+import shutil
+import subprocess
 from contextlib import asynccontextmanager
+from html.parser import HTMLParser
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
@@ -21,6 +25,8 @@ import pytest
 from sqlalchemy import text
 from httpx import ASGITransport, AsyncClient
 
+from app.core.infrastructure.work import WorkClass
+from app.core.infrastructure.work.testing import run_until_idle
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.mcp_access.domain.entities import TokenKind
 from app.modules.mcp_access.infrastructure.repositories import McpAccessRepository
@@ -142,6 +148,7 @@ async def _connect(
     scope: str,
     *,
     spell_resource=lambda resource: resource,
+    answer: dict | None = None,
 ):
     resource, _ = await client.discover(pod_id)
     resource = spell_resource(resource)
@@ -152,7 +159,9 @@ async def _connect(
     assert shown.json()["client_name"] == "E2E Client"
     assert shown.json()["redirect_host"] == "127.0.0.1:53682"
 
-    answered = await person.post(f"/oauth/consent/{request_id}", json={"allow": True})
+    answered = await person.post(
+        f"/oauth/consent/{request_id}", json=answer or {"allow": True}
+    )
     assert answered.status_code == 200, answered.text
     back = urlsplit(answered.json()["redirect_to"])
     query = parse_qs(back.query)
@@ -413,6 +422,7 @@ async def test_the_cancelled_token_still_ends_the_grant_after_the_winner_rotates
     assert after.status_code == 401
 
 
+@pytest.mark.drives_work
 async def test_a_deleted_pod_refuses_its_clients_and_ends_their_grants(
     mcp_client, authenticated_client, test_pod, db_manager
 ):
@@ -427,13 +437,15 @@ async def test_a_deleted_pod_refuses_its_clients_and_ends_their_grants(
     refreshed = await mcp_client.refresh(tokens["refresh_token"])
     assert refreshed.json()["error"] == "invalid_grant"
 
-    # And the event's handler ends the grants themselves.
+    # And the deletion's `mcp_access.pod_deleted` item ends the grants
+    # themselves: once it has run, there is nothing left to end.
+    await run_until_idle(db_manager.session_factory, classes=[WorkClass.EVENTS])
     async with db_manager.session_factory() as session:
         ended = await McpAccessRepository(
             SqlAlchemyUnitOfWork(session)
         ).revoke_pod_grants(pod_id=UUID(pod_id), now=datetime.now(timezone.utc))
         await session.commit()
-    assert ended == 1
+    assert ended == 0
 
 
 async def test_a_public_client_disconnects_with_only_its_token(
@@ -540,6 +552,139 @@ async def test_a_read_only_connection_is_not_offered_the_writing_tools(
     )
     assert published.json()["result"]["isError"] is True
     assert "pod:write" in published.json()["result"]["content"][0]["text"]
+
+
+async def test_a_host_finds_the_table_view_and_the_rows_it_draws(
+    mcp_client, authenticated_client, test_pod
+):
+    """What an MCP Apps host does with a read-only connection: find the view a
+    tool names, read it from this server, and hand it a result -- here, the
+    page the view's own Next button asks for."""
+    pod_id = test_pod["id"]
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": "orders",
+            "columns": [
+                {"name": "customer", "type": "TEXT"},
+                {"name": "amount", "type": "FLOAT"},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    for customer, amount in (("Ada", 12.5), ("Grace", 40.0), ("Linus", 7.0)):
+        added = await authenticated_client.post(
+            f"/pods/{pod_id}/datastore/tables/orders/records",
+            json={"data": {"customer": customer, "amount": amount}},
+        )
+        assert added.status_code == 201, added.text
+
+    await mcp_client.register()
+    tokens = await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+    access = tokens["access_token"]
+
+    listed = await mcp_client.rpc(pod_id, access, "tools/list")
+    views = {
+        tool["name"]: tool["_meta"].get("ui", {}).get("resourceUri")
+        for tool in listed.json()["result"]["tools"]
+    }
+    assert views["lemma_pod_get_records"] == "ui://lemma/table"
+    assert views["lemma_pod_query"] == "ui://lemma/table"
+    assert views["lemma_pod_tables"] is None
+
+    read = await mcp_client.rpc(
+        pod_id, access, "resources/read", {"uri": "ui://lemma/table"}
+    )
+    assert read.status_code == 200, read.text
+    [view] = read.json()["result"]["contents"]
+    assert view["mimeType"] == "text/html;profile=mcp-app"
+    assert view["_meta"]["ui"]["csp"] == {"connectDomains": [], "resourceDomains": []}
+    assert "ui/initialize" in view["text"]
+
+    page = await mcp_client.rpc(
+        pod_id,
+        access,
+        "tools/call",
+        {
+            "name": "lemma_pod_get_records",
+            "arguments": {
+                "table_name": "orders",
+                "offset": 2,
+                "limit": 2,
+                "sorts": [{"column": "amount", "direction": "desc"}],
+            },
+        },
+    )
+    records = page.json()["result"]["structuredContent"]
+    assert records["total"] == 3
+    assert [row["customer"] for row in records["records"]] == ["Linus"]
+
+    query = await mcp_client.rpc(
+        pod_id,
+        access,
+        "tools/call",
+        {
+            "name": "lemma_pod_query",
+            "arguments": {"sql": "select customer from orders order by amount"},
+        },
+    )
+    rows = query.json()["result"]["structuredContent"]
+    assert [row["customer"] for row in rows["rows"]] == ["Linus", "Ada", "Grace"]
+    assert rows["truncated"] is False
+
+    # The served view's own model, given the results this server returned: what
+    # a host forwards to the view is what it draws, so a payload the view no
+    # longer understands fails here rather than as an empty card.
+    page_result = json.dumps(page.json()["result"])
+    query_result = json.dumps(query.json()["result"])
+    drawn = _run_view_model(
+        view["text"],
+        f"""(() => {{
+          const page = LemmaTable.model({page_result}, {{ table_name: "orders", offset: 2, limit: 2 }});
+          const query = LemmaTable.model({query_result}, {{ sql: "select customer from orders" }});
+          return [page.kind, LemmaTable.summary(page), page.columns.slice(0, 2),
+                  query.kind, LemmaTable.summary(query)];
+        }})()""",
+    )
+    assert drawn == ["records", "3 of 3", ["customer", "amount"], "query", "3 rows"]
+
+
+class _ViewScripts(HTMLParser):
+    def __init__(self, html: str) -> None:
+        super().__init__()
+        self.scripts: list[str] = []
+        self._in_script = False
+        self.feed(html)
+        self.close()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "script":
+            self._in_script = True
+            self.scripts.append("")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script":
+            self._in_script = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_script:
+            self.scripts[-1] += data
+
+
+def _run_view_model(html: str, expression: str) -> object:
+    """Evaluate ``expression`` with the view's model script loaded, under node."""
+    node = shutil.which("node")
+    assert node, "this test runs the served view's script under node; install Node"
+    model_script = _ViewScripts(html).scripts[0]
+    result = subprocess.run(
+        [node, "-e", f"{model_script}\n;console.log(JSON.stringify({expression}));"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
 
 
 async def test_a_denied_consent_redirects_with_access_denied(

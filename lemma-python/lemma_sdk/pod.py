@@ -10,6 +10,9 @@ from .settings import load_settings
 from .transport import MISSING as _MISSING, LemmaTransport
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Mapping, Sequence
+
+    from .live import LiveEvent, LiveOp
     from .resources import (
         BoundConnectors,
         PodAgents,
@@ -23,8 +26,11 @@ if TYPE_CHECKING:
         PodRecords,
         PodSchedules,
         PodNotifications,
+        PodLinks,
         PodSurfaces,
         PodGroups,
+        PodContacts,
+        PodWebWidgets,
         PodTables,
         PodWorkflows,
         Table,
@@ -145,6 +151,12 @@ class Pod:
         return self._resource(PodDecisions)
 
     @cached_property
+    def pod_links(self) -> "PodLinks":
+        from .resources import PodLinks
+
+        return self._resource(PodLinks)
+
+    @cached_property
     def apps(self) -> "PodApps":
         from .resources import PodApps
 
@@ -167,6 +179,18 @@ class Pod:
         from .resources import PodGroups
 
         return self._resource(PodGroups)
+
+    @cached_property
+    def contacts(self) -> "PodContacts":
+        from .resources import PodContacts
+
+        return self._resource(PodContacts)
+
+    @cached_property
+    def web_widgets(self) -> "PodWebWidgets":
+        from .resources import PodWebWidgets
+
+        return self._resource(PodWebWidgets)
 
     @cached_property
     def connectors(self) -> "BoundConnectors":
@@ -260,6 +284,34 @@ class Pod:
 
     def query(self, sql: str) -> Any:
         return self.queries.run(sql)
+
+    def watch_changes(
+        self,
+        table: str | None = None,
+        *,
+        ops: "Sequence[LiveOp] | None" = None,
+        since: str | None = None,
+        when: "Mapping[str, object] | None" = None,
+        max_reconnects: int | None = None,
+    ) -> "AsyncIterator[LiveEvent]":
+        """Live record changes for one table (or every readable one), as an
+        async iterator over the pod's live socket. Reconnects and resumes on
+        its own; see ``lemma_sdk.live``. Needs ``lemma-sdk[live]``."""
+        from .live import watch_changes
+
+        generated = self._transport.generated
+        return watch_changes(
+            base_url=str(generated._base_url),
+            pod_id=self.pod_id,
+            token=lambda: str(generated.token),
+            refresh=self._transport._refresh_session,
+            table=table,
+            ops=ops,
+            since=since,
+            when=when,
+            verify_ssl=bool(generated._verify_ssl),
+            max_reconnects=max_reconnects,
+        )
 
     def close(self) -> None:
         if self._owns_transport:

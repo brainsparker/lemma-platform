@@ -91,6 +91,50 @@ class GroupPageRepository:
             for group_id, external_id, name, last_said_at in rows
         ]
 
+    async def recent_speakers(
+        self, group: SurfaceGroup, *, limit: int
+    ) -> list[GroupSpeaker]:
+        """The people who spoke in one group most recently, newest first.
+
+        :meth:`speakers` answers the whole list for a page; a run's roster
+        wants only the last few, so the cut is made here rather than after
+        reading a busy group's every speaker back.
+        """
+        message = AgentSurfaceGroupMessageModel
+        last_said_at = func.max(message.created_at)
+        rows = (
+            await self.session.execute(
+                select(
+                    message.author_external_id,
+                    func.max(message.author_name),
+                    last_said_at,
+                )
+                .where(
+                    message.group_id == group.id,
+                    message.from_agent.is_(False),
+                    message.author_external_id.is_not(None),
+                )
+                .group_by(message.author_external_id)
+                .order_by(last_said_at.desc())
+                .limit(limit)
+            )
+        ).all()
+        proven = (
+            await self._proven_users(group.platform, {row[0] for row in rows})
+            if rows
+            else {}
+        )
+        return [
+            GroupSpeaker(
+                group_id=group.id,
+                external_id=external_id,
+                name=name,
+                user_id=proven.get(external_id),
+                last_said_at=said_at,
+            )
+            for external_id, name, said_at in rows
+        ]
+
     async def outsider_conversations(
         self, groups: Sequence[SurfaceGroup]
     ) -> dict[UUID, list[UUID]]:

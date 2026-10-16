@@ -7,6 +7,7 @@ from opentelemetry import metrics
 from fastapi.openapi.utils import get_openapi
 from scalar_fastapi import get_scalar_api_reference
 from starlette.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp
 from supertokens_python import get_all_cors_headers
 from supertokens_python.framework.fastapi import get_middleware
 
@@ -22,16 +23,7 @@ from app.middleware import (
     TrailingSlashMiddleware,
 )
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
-from app.core.infrastructure.events.message_bus import (
-    close_message_bus,
-    get_message_bus,
-)
 from app.core.infrastructure.db.session import close_engine
-from app.core.infrastructure.jobs.streaq_job_queue import (
-    close_streaq_job_queue,
-    get_streaq_job_queue,
-)
-from app.core.infrastructure.jobs.streaq_runtime import ensure_task_lanes_registered
 from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
 from app.core.infrastructure.redis.client import close_redis_clients
 from app.core.security import verify_auth
@@ -55,6 +47,7 @@ from app.sandbox_health import record_sandbox_probe
 from app.core.infrastructure.channels.channel_service import channel_service
 
 from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
+from app.modules.agent_surfaces.api.public_cors import PublicWebCORSMiddleware
 from app.core.registry import assembly
 from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
@@ -205,20 +198,6 @@ async def lifespan(app: FastAPI):
         if settings.api_docs_served():
             async with startup_step("openapi", service="lemma-api"):
                 await run_blocking(app.openapi, limiter="cpu_bound")
-        # Learn which lane each task runs on before serving traffic. The
-        # enqueue path resolves this lazily as a safety net, but the first
-        # resolution imports every module's handlers — half a second that
-        # would otherwise land on whichever request first enqueues a job.
-        # The composed list, not OSS: lemma-cloud installs more modules, and a
-        # cloud-only task missing here would be enqueued to the wrong lane.
-        # In a thread: it is imports, and imports on the loop are what the stall
-        # sampler keeps catching.
-        async with startup_step("task_lanes", service="lemma-api"):
-            await run_blocking(
-                ensure_task_lanes_registered,
-                getattr(app.state, "lemma_modules", OSS_MODULES),
-                limiter="cpu_bound",
-            )
         # Same trade as the line above, for the libraries a request reaches
         # rather than the handlers a job reaches. The imports are awaited: left
         # in the background they raced the first requests on importlib's module
@@ -237,10 +216,6 @@ async def lifespan(app: FastAPI):
             )
         async with startup_step("channel_connect", service="lemma-api"):
             await channel_service.connect()
-        async with startup_step("job_queue_connect", service="lemma-api"):
-            await get_streaq_job_queue().connect()
-        async with startup_step("message_bus_connect", service="lemma-api"):
-            await get_message_bus().connect()
         started = False
         try:
             # Module-contributed API lifespans (e.g. embedding preload on
@@ -289,8 +264,6 @@ async def lifespan(app: FastAPI):
             from app.core.analytics.bootstrap import stop_analytics
 
             await stop_analytics()
-            await close_streaq_job_queue()
-            await close_message_bus()
             # Outbound connector plumbing: the shared HTTP pool and any engines
             # opened against customer databases. Closed explicitly so a reload
             # does not leak sockets into the next process.
@@ -343,6 +316,42 @@ async def lifespan(app: FastAPI):
 #: outcome (a 404, a sub-app mount, an error before routing), not an error --
 #: but it is also not an identity, which is why the raw path rides along on the
 #: signals that matter.
+
+
+def _app_cors(app: ASGIApp) -> ASGIApp:
+    """The CORS policy for Lemma's own frontends: every path but `/public/web`."""
+    return CORSMiddleware(
+        app,
+        allow_origins=get_allowed_cors_origins(),
+        allow_origin_regex=get_allowed_cors_origin_regex(),
+        allow_credentials=True,
+        allow_methods=["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
+        # X-Lemma-Client is sent by the browser SDK on every request; it must be
+        # allowed or the browser blocks the (preflighted) call as a CORS error.
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "X-Lemma-Client",
+            "X-Lemma-App",
+            "x-altcha-payload",
+            "x-lemma-invitation",
+        ]
+        + get_all_cors_headers(),
+        # Let browser SDK clients read the correlation id off the response.
+        # SuperTokens sets `front-token`/`anti-csrf` (and the `st-*` token pair in
+        # header-based auth mode) as expose headers per-response, but this outer
+        # CORSMiddleware wraps everything (including the /st mount) and Starlette's
+        # `headers.update` REPLACES Access-Control-Expose-Headers — so we must list
+        # them here or the front-token gets clobbered and the SDK can't read it.
+        expose_headers=[
+            "X-Request-Id",
+            "Retry-After",
+            "front-token",
+            "anti-csrf",
+            "st-access-token",
+            "st-refresh-token",
+        ],
+    )
 
 
 def create_app(modules=OSS_MODULES) -> FastAPI:
@@ -430,37 +439,13 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         max_bytes=settings.max_request_body_bytes,
     )
 
+    # `/public/web/*` is called from widgets' customers' sites, which this list
+    # cannot name, and never with credentials: `PublicWebCORSMiddleware`
+    # answers those paths from each widget's own origins and hands every other
+    # path to the app-wide policy below, unchanged and in the same place.
     app.add_middleware(
-        CORSMiddleware,
-        allow_origins=get_allowed_cors_origins(),
-        allow_origin_regex=get_allowed_cors_origin_regex(),
-        allow_credentials=True,
-        allow_methods=["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
-        # X-Lemma-Client is sent by the browser SDK on every request; it must be
-        # allowed or the browser blocks the (preflighted) call as a CORS error.
-        allow_headers=[
-            "Content-Type",
-            "Authorization",
-            "X-Lemma-Client",
-            "X-Lemma-App",
-            "x-altcha-payload",
-            "x-lemma-invitation",
-        ]
-        + get_all_cors_headers(),
-        # Let browser SDK clients read the correlation id off the response.
-        # SuperTokens sets `front-token`/`anti-csrf` (and the `st-*` token pair in
-        # header-based auth mode) as expose headers per-response, but this outer
-        # CORSMiddleware wraps everything (including the /st mount) and Starlette's
-        # `headers.update` REPLACES Access-Control-Expose-Headers — so we must list
-        # them here or the front-token gets clobbered and the SDK can't read it.
-        expose_headers=[
-            "X-Request-Id",
-            "Retry-After",
-            "front-token",
-            "anti-csrf",
-            "st-access-token",
-            "st-refresh-token",
-        ],
+        PublicWebCORSMiddleware,
+        everything_else=_app_cors,
     )
 
     # Sits outside the auth routes so it sees their Set-Cookie headers. No-op

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from app.modules.agent_surfaces.domain.adapter_port import in_chat_setup
+
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
+
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 
@@ -43,9 +48,6 @@ from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_one_surface_per_agent,
     ensure_unique_org_credential_binding,
     ensure_unique_platform_identity,
-)
-from app.modules.agent_surfaces.services.event_receiver_service import (
-    notify_surface_receiver_config_changed,
 )
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     sync_telegram_mini_app,
@@ -95,6 +97,14 @@ class AgentSurfaceService(
         self._credential_resolver = credential_resolver
         self._adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
 
+    @property
+    def credential_resolver(self) -> "SurfaceCredentialResolver | None":
+        """The resolver this service was built with, for callers that read a
+        surface's reach or webhook credentials beside it. None where the
+        service was composed without one, which leaves nothing to verify or
+        reach with."""
+        return self._credential_resolver
+
     async def list_channels(
         self, *, surface: AgentSurfaceEntity
     ) -> list["SurfaceChannelInfo"]:
@@ -103,7 +113,7 @@ class AgentSurfaceService(
         Empty for platforms without enumerable channels, or when credentials
         cannot be resolved.
         """
-        adapter = self._adapter_registry.get(surface.surface_type)
+        adapter = in_chat_setup(self._adapter_registry.get(surface.surface_type))
         if adapter is None or self._credential_resolver is None:
             return []
         credentials = await self._credential_resolver.for_surface(surface)
@@ -191,32 +201,28 @@ class AgentSurfaceService(
                 )
             entity.surface_identity_email = surface_identity_email
         self._validate_runtime_supported(entity)
+        await self.activate_if_tenant_consented(entity)
         await ensure_one_surface_per_agent(
             entity, surface_repository=self.surface_repository
         )
         await self._ensure_identity_is_claimable(entity)
-        telegram_credentials: dict[str, Any] | None = None
+        telegram_credentials: SurfaceCredentials | None = None
         if telegram_requires_webhook_setup(entity):
             await self._ensure_unique_telegram_account(entity)
             telegram_credentials = await self._prepare_telegram_webhook(entity)
         created = await self.surface_repository.create(entity)
         if telegram_credentials is not None:
-            await self._register_telegram_webhook(
-                credentials=telegram_credentials,
-                webhook_url=self._build_public_surface_webhook_url(created.id),
-                webhook_secret=created.webhook_secret or "",
+            created = await self._register_committed_telegram_webhook(
+                created, credentials=telegram_credentials, drop_pending_updates=True
             )
         await self._notify_receivers_after_commit(created.id)
         return created
 
     async def _notify_receivers_after_commit(self, surface_id: UUID | None) -> None:
-        """Wake the receiver coordinators once the change has actually committed.
+        """Reconcile the native receivers once the change has actually committed.
 
-        Not inline, for the same two reasons the authorization service gives for
-        its snapshot invalidation: publishing inside the transaction holds a
-        pooled connection across a Redis round trip, and it is the wrong order
-        besides -- a coordinator woken before the commit reads the surface
-        configuration this change is about to replace.
+        Not inline: a reconcile that ran before the commit would read the
+        surface configuration this change is about to replace.
 
         Falls back to publishing immediately when there is no unit of work to
         defer to, which is also when there is no pooled connection to keep.
@@ -224,6 +230,12 @@ class AgentSurfaceService(
         uow = active_uow(self.surface_repository)
 
         async def _run() -> None:
+            # Imported here: the receiver work module reaches the runners,
+            # whose imports lead back to this service.
+            from app.modules.agent_surfaces.events.receiver_work import (
+                notify_surface_receiver_config_changed,
+            )
+
             await notify_surface_receiver_config_changed(surface_id)
 
         if uow is None:
@@ -262,6 +274,13 @@ class AgentSurfaceService(
         if surface is None:
             raise AgentSurfaceNotFoundError(name)
         return surface
+
+    async def surface_name_taken(self, *, pod_id: UUID, name: str) -> bool:
+        """Whether a surface of this name already exists in the pod."""
+        existing = await self.surface_repository.get_by_pod_and_name(
+            pod_id=pod_id, name=name
+        )
+        return existing is not None
 
     async def resend_surface_for_agent(
         self,
@@ -344,7 +363,7 @@ class AgentSurfaceService(
             surface.toggle_active(is_active)
 
         telegram = _telegram_transition(previous_surface, surface)
-        telegram_credentials: dict[str, Any] | None = None
+        telegram_credentials: SurfaceCredentials | None = None
         if telegram.register:
             await self._ensure_unique_telegram_account(surface)
             telegram_credentials = await self._prepare_telegram_webhook(surface)
@@ -353,10 +372,11 @@ class AgentSurfaceService(
 
         updated = await self.surface_repository.update(surface)
         if telegram_credentials is not None:
-            await self._register_telegram_webhook(
+            # Same bot, re-registered: its queue is the person's messages.
+            updated = await self._register_committed_telegram_webhook(
+                updated,
                 credentials=telegram_credentials,
-                webhook_url=self._build_public_surface_webhook_url(updated.id),
-                webhook_secret=updated.webhook_secret or "",
+                drop_pending_updates=telegram.binding_changed,
             )
         await self._notify_receivers_after_commit(updated.id)
         return updated
@@ -411,6 +431,24 @@ class AgentSurfaceService(
             cursor=cursor,
             limit=limit,
         )
+
+    async def all_surfaces_in_pod(
+        self, pod_id: UUID, *, page_size: int = 100
+    ) -> list[AgentSurfaceEntity]:
+        """Every surface in the pod, however many pages that takes.
+
+        For callers that want the whole set -- a bundle export, a plan diff --
+        and would otherwise read one page and silently drop the rest.
+        """
+        surfaces: list[AgentSurfaceEntity] = []
+        cursor: UUID | None = None
+        while True:
+            page, cursor = await self.list_surfaces_by_pod(
+                pod_id, cursor=cursor, limit=page_size
+            )
+            surfaces.extend(page)
+            if cursor is None:
+                return surfaces
 
     async def delete_surface(self, surface_id: UUID) -> None:
         surface = await self.surface_repository.get(surface_id)

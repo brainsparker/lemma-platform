@@ -33,6 +33,24 @@ from app.core.authorization.permissions import (
 from app.core.authorization.resource_actions import owner_actions_for_resource
 from app.core.authorization.authorizer import Authorizer
 from app.core.domain.errors import BadRequestError
+from app.core.registry.assembly import configure_resource_names
+from app.core.registry.installed import OSS_MODULES
+
+
+@pytest.fixture(autouse=True)
+def _resource_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assemble the resource-name registry these grant tests resolve against.
+
+    Assembly is what fills it in a running process, and nothing in this module
+    ran it: the tests passed only when some earlier test in the same process
+    had, and failed with "registry is empty" when the pod unit tests ran alone.
+    A fresh table per test, so nothing here depends on, or leaks into, another
+    test's registry either.
+    """
+    monkeypatch.setattr(
+        "app.core.authorization.resource_names._NAME_REGISTRY", {}, raising=True
+    )
+    configure_resource_names(OSS_MODULES)
 
 
 class CountingAuthorizer:
@@ -73,6 +91,13 @@ def test_system_role_permissions_are_explicit_unions():
     assert Permissions.SCHEDULE_CREATE in POD_USER_PERMISSIONS
     assert Permissions.SCHEDULE_UPDATE not in POD_USER_PERMISSIONS
     assert Permissions.SCHEDULE_DELETE not in POD_USER_PERMISSIONS
+    # Writing first to a contact speaks for the pod: an editor's, not a user's,
+    # and not implied by writing in one's own conversations.
+    assert Permissions.CONTACT_MESSAGE in POD_EDITOR_PERMISSIONS
+    assert Permissions.CONTACT_MESSAGE not in POD_USER_PERMISSIONS
+    assert equivalent_permission_ids(Permissions.CONTACT_MESSAGE) == {
+        Permissions.CONTACT_MESSAGE
+    }
 
 
 def test_schedule_owner_can_fully_manage_owned_schedules():

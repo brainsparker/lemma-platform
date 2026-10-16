@@ -84,6 +84,18 @@ def public_surface_api_url(monkeypatch):
     monkeypatch.setattr(settings, "api_url", "https://surface-e2e.test")
 
 
+@pytest.fixture(autouse=True)
+def public_web_switched_on(monkeypatch):
+    """Web chat and forms are off on a deployment until an operator turns them
+    on; these journeys are about what happens once they are. The kill switch's
+    own test turns it back off. Bot protection is on by default; these
+    journeys are not about it, and its own test turns it back on."""
+    from app.core.public_web import public_web_settings
+
+    monkeypatch.setattr(public_web_settings, "public_web_enabled", True)
+    monkeypatch.setattr(public_web_settings, "public_web_altcha_enabled", False)
+
+
 # Set before anything imports settings, so every reader sees it — including the
 # worker, which serves these tests from its own task and picked up an attribute
 # patched onto one Settings instance too late to matter. The fixture below says
@@ -228,11 +240,16 @@ async def fake_composio_server():
         await server.stop()
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="module")
 async def worker(
     e2e_settings, sandbox_reachable_backend, fake_composio_server, request
 ):
     """Surface shard's production worker with a hermetic Composio transport.
+
+    Module-scoped: a worker runs every due work item in the session's
+    database, so one left running after its module would race the in-process
+    tests that come after it for their ingest and delivery items -- sending a
+    reply twice, or taking a pump item a test is driving by hand.
 
     Default e2e mode uses the deterministic FunctionModel token source. When
     ``E2E_LLM_MODE=real`` is set, the existing system:lemma helper gates on the
@@ -255,6 +272,7 @@ async def worker(
                 "COMPOSIO_BASE_URL": fake_composio_server.base_url,
                 "MICROSOFT_BOT_APP_ID": "teams-app-id",
                 "MICROSOFT_BOT_APP_PASSWORD": "teams-app-secret",
+                "MICROSOFT_BOT_SERVICE_EXTRA_HOST": "127.0.0.1",
             },
         ) as process:
             yield process

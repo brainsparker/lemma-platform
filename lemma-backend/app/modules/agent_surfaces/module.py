@@ -8,8 +8,10 @@ from app.core.registry import LemmaModule
 
 def _routers():
     from app.modules.agent_surfaces.api.controllers.surface_controller import (
-        available_surfaces_router as surface_catalog,
         router as surface,
+    )
+    from app.modules.agent_surfaces.api.controllers.surface_catalog_controller import (
+        available_surfaces_router as surface_catalog,
         setup_guide_router as surface_setup_guide,
     )
     from app.modules.agent_surfaces.api.controllers.slack_setup_controller import (
@@ -30,6 +32,19 @@ def _routers():
     from app.modules.agent_surfaces.api.controllers.webhook_controller import (
         router as surface_public,
     )
+    from app.modules.agent_surfaces.api.controllers.web_widget_controller import (
+        router as web_widgets,
+    )
+    from app.modules.agent_surfaces.api.controllers.public_page_controller import (
+        router as public_page,
+    )
+    from app.modules.agent_surfaces.api.controllers.public_web_controller import (
+        router as public_web,
+    )
+    from app.modules.agent_surfaces.api.controllers.contact_follow_up_controller import (
+        public_router as public_contacts,
+        router as contact_follow_ups,
+    )
 
     return [
         surface,
@@ -41,38 +56,32 @@ def _routers():
         user_surfaces,
         notifications,
         surface_public,
+        web_widgets,
+        public_page,
+        public_web,
+        contact_follow_ups,
+        public_contacts,
     ]
 
 
-def _event_routers():
-    from app.modules.agent_surfaces.events.handlers import router
-
-    return [router]
-
-
-async def _close_dedup_store() -> None:
-    from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
-        close_surface_event_dedup_store,
-    )
-
-    await close_surface_event_dedup_store()
-
-
 @asynccontextmanager
-async def _dedup_store_lifespan(app):
-    """API process: close the surface webhook dedupe store on shutdown.
+async def _webhook_security_lifespan(app):
+    """API process: say whether inbound webhooks have their authenticity checked.
 
-    Also the first thing the ingress side says about itself: whether inbound
-    webhooks are having their authenticity checked. This process is the one
-    that receives them, so this is where the answer is worth stating.
+    The first thing the ingress side says about itself. This process is the
+    one that receives them, so this is where the answer is worth stating. On
+    shutdown it lets go of the stranger-reply window's Redis client.
     """
     from app.modules.agent_surfaces.config import log_surface_webhook_security
+    from app.modules.agent_surfaces.infrastructure.adapters.stranger_reply_window import (
+        close_stranger_reply_window,
+    )
 
     log_surface_webhook_security()
     try:
         yield
     finally:
-        await _close_dedup_store()
+        await close_stranger_reply_window()
 
 
 @asynccontextmanager
@@ -94,67 +103,27 @@ async def _telegram_manager_webhook_lifespan(app):
         await asyncio.gather(task, return_exceptions=True)
 
 
-@asynccontextmanager
-async def _surface_event_receiver(context):
-    """Worker process: run native surface event receivers (Telegram polling /
-    Slack socket mode) and close the dedupe store on shutdown."""
-    import asyncio
-
-    from app.modules.agent_surfaces.services.event_receiver_service import (
-        SurfaceEventReceiverService,
-    )
-    from app.modules.agent_surfaces.services.telegram_manager_receiver import (
-        TelegramManagerPollingReceiver,
-    )
-
-    receiver = SurfaceEventReceiverService(uow_factory=context.uow_factory)
-    from app.modules.agent_surfaces.services.onboarding_cleanup import (
-        run_onboarding_cleanup,
-    )
-
-    cleanup_task = create_background_task(
-        run_onboarding_cleanup(context.uow_factory), name="surface-onboarding-cleanup"
-    )
-    manager_receiver = TelegramManagerPollingReceiver(uow_factory=context.uow_factory)
-    task = (
-        create_background_task(receiver.run(), name="surface-event-receiver")
-        if receiver.should_start()
-        else None
-    )
-    manager_task = (
-        create_background_task(
-            manager_receiver.run(),
-            name="telegram-manager-receiver",
-        )
-        if manager_receiver.should_start()
-        else None
-    )
-    try:
-        yield
-    finally:
-        tasks = [
-            candidate for candidate in (task, manager_task, cleanup_task) if candidate
-        ]
-        for candidate in tasks:
-            candidate.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        await _close_dedup_store()
+def _register_work() -> None:
+    # Every process. The API writes ingest, platform-update and delivery items
+    # (webhooks, notifications) and so must know their kinds; the worker runs
+    # them. Facts subscribed here (pod lifecycle, a run finishing, a changed
+    # mobile) are written by whichever process commits the fact.
+    import app.modules.agent_surfaces.events.ingest_work  # noqa: F401
+    import app.modules.agent_surfaces.events.notification_work  # noqa: F401
+    import app.modules.agent_surfaces.events.periodic_work  # noqa: F401
+    import app.modules.agent_surfaces.events.platform_update_work  # noqa: F401
+    import app.modules.agent_surfaces.events.pod_lifecycle_work  # noqa: F401
+    import app.modules.agent_surfaces.events.receiver_work  # noqa: F401
+    import app.modules.agent_surfaces.events.reply_for_run_work  # noqa: F401
+    import app.modules.agent_surfaces.events.reply_work  # noqa: F401
 
 
 module = LemmaModule(
     name="agent_surfaces",
     routers=_routers,
-    event_routers=_event_routers,
+    register_work=_register_work,
     api_lifespans=(
-        _dedup_store_lifespan,
+        _webhook_security_lifespan,
         _telegram_manager_webhook_lifespan,
-    ),
-    worker_lifespans=(_surface_event_receiver,),
-    stream_groups=(
-        ("surface_events", "surface-webhook-events"),
-        ("surface_events", "agent-surfaces.onboarding"),
-        ("pod_events", "surface-pod-deletion-events"),
-        ("identity_events", "surface-identity-events"),
     ),
 )

@@ -1,12 +1,19 @@
+from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
 from typing import Any, ClassVar
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from app.core.authorization.context import ResourceType
 from app.core.domain.entity import Entity
-from app.modules.schedule.domain.match_conditions import (
+from app.core.domain.record_conditions import (
     ColumnCondition,
     parse_match_conditions,
 )
@@ -36,7 +43,48 @@ INSTRUCTION_REQUIRED = (
 )
 
 
-class TimeScheduleConfig(BaseModel):
+#: The most runs any one schedule may hold in flight; a workflow's own cap has
+#: the same ceiling.
+MAX_SCHEDULE_CONCURRENT_RUNS = 1000
+
+
+class ScheduleRunCapConfig(BaseModel):
+    """The run cap every schedule type's config may carry.
+
+    In ``config`` rather than a column of its own: it is an author's setting
+    like the rest of the config, and travels with it through export and import.
+    """
+
+    max_concurrent_runs: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_SCHEDULE_CONCURRENT_RUNS,
+        strict=True,
+        description=(
+            "At most this many of the schedule's runs in flight at once. A fire "
+            "that finds the schedule full is skipped and recorded as skipped, "
+            "not queued. Omit for no cap."
+        ),
+    )
+
+
+def schedule_run_cap(config: Mapping[str, object] | None) -> int | None:
+    """The cap a schedule's config sets, or None. Raises ValueError if invalid.
+
+    A plain ValueError rather than pydantic's, so a request validator raising
+    it reports one field-scoped message.
+    """
+    try:
+        parsed = ScheduleRunCapConfig.model_validate(dict(config or {}))
+    except ValidationError as exc:
+        raise ValueError(
+            "config.max_concurrent_runs must be a whole number from 1 to "
+            f"{MAX_SCHEDULE_CONCURRENT_RUNS}, or omitted"
+        ) from exc
+    return parsed.max_concurrent_runs
+
+
+class TimeScheduleConfig(ScheduleRunCapConfig):
     """Configuration for time-based schedules."""
 
     cron: str | None = Field(None, description="Cron expression for scheduling")
@@ -55,7 +103,30 @@ class TimeScheduleConfig(BaseModel):
     )
 
 
-class WebhookScheduleConfig(BaseModel):
+#: The webhook source a connected MCP server's events arrive as. A WEBHOOK
+#: schedule naming it carries the event and its arguments in its config and is
+#: subscribed on its author's account, like a connector trigger.
+MCP_EVENT_SOURCE = "mcp"
+
+#: Config keys only provisioning writes, never an author. Each is a routing key
+#: an inbound webhook is matched on by containment across every tenant's
+#: schedules: a Composio trigger or MCP subscription id, a GitHub App
+#: installation. A schedule that could carry one it typed would receive the
+#: events of whoever owns it, so they are dropped from whatever an author sends
+#: and are written back only from the schedule's own account.
+PROVISIONED_CONFIG_KEYS = frozenset({"provider_trigger_id", "installation_id"})
+
+
+def authored_config(config: Mapping[str, object] | None) -> dict[str, object]:
+    """`config` without the keys only provisioning may write."""
+    return {
+        key: value
+        for key, value in (config or {}).items()
+        if key not in PROVISIONED_CONFIG_KEYS
+    }
+
+
+class WebhookScheduleConfig(ScheduleRunCapConfig):
     """Configuration for webhook-based schedules."""
 
     source: str = Field(
@@ -65,7 +136,20 @@ class WebhookScheduleConfig(BaseModel):
     # but source is required.
 
 
-class DatastoreScheduleConfig(BaseModel):
+class TriggerWriteMode(str, Enum):
+    """What a DATASTORE trigger does with a bulk or import write's changes.
+
+    ``skip`` records them as skipped, aggregated; ``each`` fires once per
+    matching change like a single write; ``batch`` fires once per planned batch
+    with the changes as a list.
+    """
+
+    SKIP = "skip"
+    EACH = "each"
+    BATCH = "batch"
+
+
+class DatastoreScheduleConfig(ScheduleRunCapConfig):
     """Configuration for datastore-based schedules."""
 
     table_name: str = Field(..., min_length=1, description="Table name to watch")
@@ -78,6 +162,23 @@ class DatastoreScheduleConfig(BaseModel):
         description=(
             "Optional match conditions keyed by column name. Every condition "
             "must hold for the trigger to fire. Omit to fire on every row."
+        ),
+    )
+
+    bulk_writes: TriggerWriteMode | None = Field(
+        default=None,
+        description=(
+            "What a bulk write (bulk create, update or delete) does to this "
+            "trigger: skip (recorded as skipped), each (fire per matching row) "
+            "or batch (one fire with the rows as a list). Omitted means the "
+            "pod's `triggers.bulk_writes_default`, else skip."
+        ),
+    )
+    import_writes: TriggerWriteMode | None = Field(
+        default=None,
+        description=(
+            "What an import or sync does to this trigger: skip, each or batch. "
+            "Omitted means skip."
         ),
     )
 
@@ -166,6 +267,12 @@ def normalize_datastore_schedule_config(
         "table_name": cfg.table_name,
         "operations": [op.value for op in cfg.operations],
     }
+    for key, mode in (
+        ("bulk_writes", cfg.bulk_writes),
+        ("import_writes", cfg.import_writes),
+    ):
+        if mode is not None:
+            normalized[key] = mode.value
     if cfg.when is not None:
         # Store the expanded form so the saved config reads the same whether
         # the author wrote the `{"status": "approved"}` shorthand or spelled
@@ -188,6 +295,9 @@ class ScheduleFireStatus(str, Enum):
 
 class ScheduleRunStatus(str, Enum):
     RECEIVED = "RECEIVED"
+    #: An LLM filter claimed this event and is asking the model. Written before
+    #: the call, so a replay finds it and does not ask -- and bill -- twice.
+    FILTERING = "FILTERING"
     PROCESSING = "PROCESSING"
     DISPATCHED = "DISPATCHED"
     COMPLETED = "COMPLETED"
@@ -248,6 +358,11 @@ class ScheduleEntity(Entity):
     account_id: UUID | None = None
     connector_trigger_id: str | None = None
 
+    # DATASTORE only. A row added from outside the pod -- an open table's form
+    # -- is a stranger's words, and by default it starts nothing; a schedule
+    # that should react to it says so, and its run is told the row is untrusted.
+    include_outside_rows: bool = False
+
     visibility: str = "POD"
     is_active: bool = True
     is_internal: bool = (
@@ -262,6 +377,9 @@ class ScheduleEntity(Entity):
     last_fire_status: ScheduleFireStatus | None = None
     last_error: str | None = None
     consecutive_failures: int = 0
+    #: Why the platform paused it (``fire_cap``, ``consecutive_failures``, ...);
+    #: ``None`` when it is running or a person paused it.
+    paused_reason: str | None = None
 
     @property
     def time_config(self) -> TimeScheduleConfig | None:
@@ -280,6 +398,26 @@ class ScheduleEntity(Entity):
         if self.schedule_type == ScheduleType.DATASTORE:
             return DatastoreScheduleConfig(**self.config)
         return None
+
+    @property
+    def listens_to_mcp(self) -> bool:
+        """A WEBHOOK schedule on a connected MCP server's event."""
+        return (
+            self.schedule_type == ScheduleType.WEBHOOK
+            and not self.connector_trigger_id
+            and self.config.get("source") == MCP_EVENT_SOURCE
+        )
+
+    @property
+    def listens_through_account(self) -> bool:
+        """Whether its subscription is made on its author's account -- a
+        connector trigger, or an MCP server's event -- and so is created,
+        swapped and dropped with the schedule."""
+        return (
+            self.schedule_type == ScheduleType.WEBHOOK
+            and self.account_id is not None
+            and (bool(self.connector_trigger_id) or self.listens_to_mcp)
+        )
 
     @property
     def has_target(self) -> bool:
@@ -304,6 +442,7 @@ class ScheduleCreateEntity(BaseModel):
     filter_output_schema: dict[str, Any] | None = None
     account_id: UUID | None = None
     connector_trigger_id: str | None = None
+    include_outside_rows: bool = False
     # None means "caller did not specify": DATASTORE and GLOBAL-workflow
     # schedules default to POD; other schedules default to PERSONAL.
     visibility: str | None = None
@@ -311,6 +450,7 @@ class ScheduleCreateEntity(BaseModel):
 
     @model_validator(mode="after")
     def _require_explicit_datastore_operations(self) -> "ScheduleCreateEntity":
+        schedule_run_cap(self.config)
         if self.schedule_type == ScheduleType.DATASTORE:
             self.config = normalize_datastore_schedule_config(self.config)
         return self
@@ -328,5 +468,12 @@ class ScheduleUpdateEntity(BaseModel):
     instruction: str | None = None
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
+    include_outside_rows: bool | None = None
     is_active: bool | None = None
     visibility: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_run_cap(self) -> "ScheduleUpdateEntity":
+        if self.config is not None:
+            schedule_run_cap(self.config)
+        return self

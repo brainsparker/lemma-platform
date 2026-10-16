@@ -226,6 +226,15 @@ it is asked, not skipped.
 - When a message arrives from an external identity, the system shall resolve it
   to a Lemma user where one exists, and shall keep that resolution stable across
   later messages.
+- The system shall resolve a Telegram account only on proof: a contact the
+  person shares themselves whose number is verified on their Lemma account. A
+  Telegram @username is never proof — anyone can claim a free one, and one
+  given up is taken by a stranger — and a profile does not hold one. Until the
+  person has shared that contact, the system shall ask them for it and shall not
+  act as any Lemma user.
+- Where a person creates a Telegram bot from Lemma, the system shall not treat
+  opening the setup link as proof of who opened it; they are recognised in the
+  new bot the same way, by sharing their own contact.
 - The system shall give a resolved person exactly the access their Lemma
   identity has, and no more — being present in the Slack channel shall not by
   itself grant access to the pod.
@@ -326,7 +335,13 @@ themselves, exactly as in private. Everybody else is answered *for the pod*.
 ### PS-SURF-017 — A person can say something to the agent without the group reading it
 **Status:** planned
 
-> Proven at unit level by `agent/tests/unit/test_private_notes.py`,
+> Not yet a scenario: the suite has no group chat to hold the conversation in.
+> The answer staying off the platform is proven at module level by
+> `agent_surfaces/tests/e2e/test_private_note_in_channel_e2e.py`, which sends a
+> note through the endpoint the web app uses into a Teams channel's
+> conversation and checks the channel receives nothing -- not the answer, the
+> resource it shows, or its approval card. The labelling and run-marking rules
+> are proven at unit level by `agent/tests/unit/test_private_notes.py`,
 > `agent/tests/unit/test_written_in_lemma.py` and
 > `agent_surfaces/tests/unit/test_private_note_runs.py`.
 
@@ -541,13 +556,26 @@ by its link.
 ### PS-SURF-033 — What is meant for one person is not said in a group
 **Status:** planned
 
-> Proven at module level by `agent_surfaces/tests/e2e/test_member_reach_private_e2e.py`.
+> Proven at module level by `agent_surfaces/tests/e2e/test_member_reach_private_e2e.py`
+> and `agent_surfaces/tests/e2e/test_group_private_send_e2e.py`.
 
 - The system shall deliver a notification meant for one person only somewhere
   private to them.
 - Where the only place a person has spoken to the bot is a group, the system
   shall reach them another way -- email, or their Lemma inbox -- rather than in
   front of the group.
+- When the agent sends the person it is working for something mid-task from a
+  group chat, the system shall deliver it to that person's own chat with the bot
+  in the same pod.
+- If that person has no private chat with the bot, then the system shall not
+  post the message in the group.
+- If that person has no private chat with the bot, then the system shall tell
+  the agent that nobody was reached.
+- If the delivery fails for another reason, then the system shall not tell the
+  agent that the person has no private chat.
+- When the agent sends the person it is working for something mid-task on an
+  email thread that copies other people, the system shall send it to that
+  person alone.
 
 **Contracts:** `notification.send`
 
@@ -648,6 +676,169 @@ remember where the bot is, who is in there, or what is waiting on them.
   numbers are up") as speaking to the bot.
 
 **Contracts:** `surface.webhook.handle_platform`
+
+## Contacts
+
+A pod's own bot can answer somebody who is not a member, privately: a customer
+on WhatsApp, a client by email. They are the pod's contacts. They never sign in
+and are never billed, and they are answered for the pod from what it made
+Public, the way a group's people from outside it are.
+
+### PS-SURF-045 — A stranger writing to the pod's own bot is answered as a contact
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`
+> and `agent_surfaces/tests/unit/test_contacts.py`. A scenario needs a forged
+> inbound email or chat from an address no Lemma user has.
+
+- Where a bot that is the pod's own -- its own bot token, its own number, its
+  own email address -- is set to answer anyone, when somebody who is not a
+  member writes to it privately, the system shall make them a contact of the
+  pod and answer them for the pod from what it made Public.
+- Where the bot is set to answer known contacts only, the system shall answer
+  the pod's existing contacts and nobody else.
+- Where the bot is set to answer nobody outside the pod, which is how a bot
+  starts, the system shall answer only members, as before.
+- The system shall never take somebody writing to Lemma's shared bot for a
+  contact of any pod.
+- The system shall answer a contact in a conversation of their own, which
+  belongs to the member who looks after the bot's contacts -- whoever turned
+  contacts on, unless somebody else was named -- and shall pass on what it
+  cannot answer to that member.
+- The system shall answer a contact's email to them alone, copying nobody else
+  on the thread.
+- The system shall treat a contact who writes in a group as one of the group's
+  people from outside the pod, never as a contact: everyone in a group reads the
+  answer.
+
+**Contracts:** `surface.webhook.handle_platform`, `agent.surface.update`,
+`contact.list`, `contact.get`
+
+### PS-SURF-046 — Email nobody vouched for is never answered
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`.
+
+- When an email to a bot that answers contacts was not authenticated by the
+  receiving mail service, the system shall not reply to it, shall not make its
+  sender a contact, and shall tell the member who looks after contacts once an
+  hour per sender, with what it said, so they can answer by hand if it is
+  genuine.
+
+**Contracts:** `surface.webhook.handle_platform`
+
+### PS-SURF-048 — A contact sees what is theirs, and only that
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`
+> and at unit level by `agent/tests/unit/test_contact_tools.py`.
+
+- Where a pod marks a table as its contacts' (contact-owned), the system shall
+  let every member read every row of it, and let a contact's conversation read
+  only the rows naming that contact.
+- The system shall never let a contact's conversation read a row naming
+  somebody else, however it asks, and shall report a table that is not
+  contact-owned as not there.
+- Where a pod opens a function to contacts, the system shall let a contact's
+  conversation call it, tell the function which contact is asking, and never
+  let the conversation tell it somebody else.
+- The system shall let a pod's admins export what it holds about a contact --
+  their handles, their words and the bot's answers -- and shall never include
+  the pod's tool calls or a member's private notes.
+
+**Contracts:** `table.create`, `table.update`, `function.contacts.update`,
+`contact.export`
+
+### PS-SURF-049 — A web widget answers visitors on the pod's behalf
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_web_widgets_e2e.py`
+> and at unit level by `agent_surfaces/tests/unit/test_web_widgets.py`.
+
+- The system shall let a pod's editors put its chat on a web page with a
+  public key, or share it as a page Lemma hosts, and shall show its signing
+  secret once, when it is made or rotated.
+- The system shall answer an anonymous visitor from what the pod made Public,
+  and shall answer a visitor named by a token the page's server signed with the
+  widget's secret, or who entered a code sent to their email, as a contact --
+  keeping a conversation they had already started.
+- The system shall refuse a token signed with anything else, meant for another
+  widget, or living longer than ten minutes, and shall stop accepting tokens
+  signed with a secret once it is rotated.
+- The system shall answer only pages on the widget's allowed origins, and shall
+  refuse strangers at a widget that answers known contacts only.
+- The system shall stream the answer to the visitor as it is written, and
+  shall never send them the model's thinking, tool traffic, or anything from a
+  member's private note.
+
+**Contracts:** `agent.web_widget.create`, `agent.web_widget.update`,
+`agent.web_widget.reissue`, `public.web.session.start`,
+`public.web.message.send`, `public.web.stream.read`, `public.web.code.verify`
+
+### PS-SURF-050 — A member writes first to a contact only where the contact wants it
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`,
+> `test_web_widgets_e2e.py` and `test_contact_email_follow_ups_e2e.py`, and at
+> unit level by `agent_surfaces/tests/unit/test_contact_follow_ups.py`.
+
+- The system shall let a member write to a contact in the contact's most recent
+  conversation, on the channel it lives on.
+- The system shall write on WhatsApp only within 24 hours of the contact's last
+  message there, and shall leave a web visitor's message for their next visit.
+- When the member asks for email, the system shall send the follow-up to the
+  contact's verified email address from the pod's own address.
+- When the contact replies to an emailed follow-up, the system shall bring the
+  reply to the conversation that holds that follow-up.
+- The system shall end every email follow-up with a way to stop, and once the
+  contact uses it, shall write to that address no more until they write again.
+- The system shall not unsubscribe anybody for opening the link; only the
+  button on the page it opens does.
+
+**Contracts:** `contact.follow_up`
+
+### PS-SURF-051 — People outside the pod add rows to a table it opened to them
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_public_rows_e2e.py`,
+> and at unit level by `datastore/tests/unit/test_public_rows.py` and
+> `agent/tests/unit/test_form_tools.py`.
+
+- The system shall let a member who can change a table open it to rows from
+  people outside the pod -- anyone, or confirmed contacts only -- for chosen
+  columns, and shall refuse to open a per-member table or to leave closed a
+  column the table cannot do without.
+- The system shall let any page holding a widget's public key learn the open
+  columns and add one row, as the member who opened the table, and shall
+  ignore every column that is not open and read nothing back.
+- The system shall ask a stranger to confirm their email before they add a row
+  to a table open to contacts only, and shall name a confirmed sender on a
+  contact-owned table itself, whatever the page sent.
+- The system shall let the pod's chat on that page fill the form's open
+  columns from the conversation, and shall never add the row for the visitor.
+- The system shall stop taking rows the moment the table is closed.
+
+**Contracts:** `table.public_rows.open`, `table.public_rows.get`,
+`table.public_rows.close`, `table.public_rows.list`, `public.web.table.read`,
+`public.web.row.add`
+
+### PS-SURF-047 — Contacts cost the organization, never a member
+**Status:** planned
+
+> Proven at unit level by `usage/tests/unit/test_outside_audience_windows.py`
+> and at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`.
+
+- The system shall charge what answering contacts and a group's people from
+  outside the pod costs to the organization's budget, and never to the
+  allowance of the member who looks after the conversation.
+- The system shall let an organization's owners and editors set, read and clear
+  a monthly cap on that cost, and shall stop answering contacts for the rest of
+  the month once it is reached.
+- The system shall let a pod's admins forget a contact, with every handle they
+  are known by.
+
+**Contracts:** `usage.organization.contacts_cap.get`,
+`usage.organization.contacts_cap.update`, `contact.update`, `contact.delete`
 
 ---
 

@@ -67,6 +67,10 @@ async def upsert_profile(
     user: UserEntity = request.state.user
     current_user_data = await user_service.get_user(user.id)
 
-    current_user_data.update_profile(**data.model_dump(exclude_unset=True))
+    # `telegram_username` is still accepted so older clients are not refused,
+    # and dropped here: a handle on a profile proves nothing.
+    current_user_data.update_profile(
+        **data.model_dump(exclude_unset=True, exclude={"telegram_username"})
+    )
     updated_user = await user_service.update_user(current_user_data)
     return UserResponse.model_validate(updated_user)

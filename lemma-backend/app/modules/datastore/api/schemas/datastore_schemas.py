@@ -3,12 +3,9 @@ from enum import Enum
 from collections.abc import Sequence
 from typing import List, Optional, Dict, Any, Union
 from uuid import UUID
-from pydantic import AliasChoices, BaseModel, Field, ConfigDict
-from app.modules.datastore.domain.datastore_entities import ColumnSchema
+from app.modules.datastore.domain.write_intent import WriteIntent
+from pydantic import BaseModel, Field, ConfigDict
 from app.modules.datastore.domain.file_entities import SearchMethod
-from app.modules.datastore.infrastructure.sql_identifiers import (
-    MAX_IDENTIFIER_BYTES,
-)
 
 #: Largest page any record listing will serve (`PS-DATA-011`).
 #:
@@ -26,88 +23,6 @@ MAX_RECORD_PAGE_SIZE = 1000
 #: bind-parameter chunking below it splits a batch to fit Postgres' 65 535
 #: parameters; it is not a limit on how much work one request may ask for.
 MAX_BULK_RECORDS = 1000
-
-
-class CreateTableRequest(BaseModel):
-    """Schema for creating a new table."""
-
-    name: str = Field(
-        ...,
-        validation_alias=AliasChoices("name", "table_name"),
-        description=(
-            "Table name. Use alphanumeric and underscore only, at most "
-            f"{MAX_IDENTIFIER_BYTES} bytes — PostgreSQL truncates longer names "
-            "and two that share that prefix would become one table. Names "
-            "prefixed with `reserved_` are system-managed and should not be "
-            "user-created."
-        ),
-        min_length=1,
-        max_length=MAX_IDENTIFIER_BYTES,
-    )
-    primary_key_column: str = Field(
-        default="id",
-        description=(
-            "Primary key column name. If not `id`, it must also be declared in `columns`."
-        ),
-    )
-    columns: List[ColumnSchema] = Field(
-        ...,
-        description=(
-            "Table column definitions. Each column name must be unique. "
-            "Use `type`, `required`, `default`, `foreign_key`, and `computed` as needed. "
-            "The backend also materializes physical system columns so table metadata reflects "
-            "the real schema: `id` when omitted as the primary key, `created_at`, `updated_at`, "
-            "and `user_id` when RLS is enabled."
-        ),
-        min_length=1,
-    )
-    config: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description=(
-            "Optional table metadata/configuration. This updates table config metadata "
-            "and does not directly alter physical columns."
-        ),
-    )
-    enable_rls: bool = Field(
-        default=True,
-        description=(
-            "Enable row-level security for this table. When enabled, API reads/writes are scoped by current user."
-        ),
-    )
-    visibility: str | None = None
-
-    @property
-    def table_name(self) -> str:
-        return self.name
-
-
-class UpdateTableRequest(BaseModel):
-    """Schema for updating a table."""
-
-    config: Dict[str, Any] | None = Field(
-        default=None,
-        description="Replacement metadata/config payload for the table.",
-    )
-    visibility: str | None = None
-    enable_rls: bool | None = Field(
-        default=None,
-        description=(
-            "Toggle per-user row-level security. Only allowed on an empty table: "
-            "enabling adds the user_id ownership column and isolation policy, "
-            "disabling removes the policy. Omit to leave RLS unchanged."
-        ),
-    )
-
-
-class AddColumnRequest(BaseModel):
-    """Schema for adding a column to a table."""
-
-    column: ColumnSchema = Field(
-        ...,
-        description=(
-            "Column definition to append to the table. Existing column names cannot be reused."
-        ),
-    )
 
 
 class CreateRecordRequest(BaseModel):
@@ -149,6 +64,15 @@ class BulkCreateRecordsRequest(BaseModel):
         ),
         max_length=MAX_BULK_RECORDS,
     )
+    intent: WriteIntent = Field(
+        default=WriteIntent.BULK,
+        description=(
+            "Why these rows are written, as DATASTORE triggers see it: `bulk` "
+            "(the default) or `import` lets each trigger decide by its "
+            "`bulk_writes` / `import_writes` setting (by default, skipped and "
+            "recorded); `normal` fires triggers like single writes do."
+        ),
+    )
     upsert: bool = Field(
         default=False,
         description=(
@@ -169,6 +93,15 @@ class BulkUpdateRecordsRequest(BaseModel):
         ),
         max_length=MAX_BULK_RECORDS,
     )
+    intent: WriteIntent = Field(
+        default=WriteIntent.BULK,
+        description=(
+            "Why these rows are written, as DATASTORE triggers see it: `bulk` "
+            "(the default) or `import` lets each trigger decide by its "
+            "`bulk_writes` / `import_writes` setting (by default, skipped and "
+            "recorded); `normal` fires triggers like single writes do."
+        ),
+    )
 
 
 class BulkDeleteRecordsRequest(BaseModel):
@@ -180,6 +113,15 @@ class BulkDeleteRecordsRequest(BaseModel):
             f"Primary key values to delete. At most {MAX_BULK_RECORDS} per request."
         ),
         max_length=MAX_BULK_RECORDS,
+    )
+    intent: WriteIntent = Field(
+        default=WriteIntent.BULK,
+        description=(
+            "Why these rows are written, as DATASTORE triggers see it: `bulk` "
+            "(the default) or `import` lets each trigger decide by its "
+            "`bulk_writes` / `import_writes` setting (by default, skipped and "
+            "recorded); `normal` fires triggers like single writes do."
+        ),
     )
 
 
@@ -304,59 +246,6 @@ class DirectoryTreeResponse(BaseModel):
 
 
 DirectoryTreeNode.model_rebuild()
-
-
-class TableResponse(BaseModel):
-    """Schema for table response."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    pod_id: UUID
-    name: str
-    primary_key_column: str
-    columns: List[ColumnSchema]
-    config: Optional[Dict[str, Any]]
-    enable_rls: bool
-    visibility: str = "POD"
-    created_at: datetime
-    updated_at: datetime
-
-
-class TableDetailResponse(TableResponse):
-    """Schema for table detail response."""
-
-    allowed_actions: List[str] = Field(default_factory=list)
-
-
-class TableSummaryResponse(BaseModel):
-    """Lean table shape for list responses.
-
-    Omits the full `columns` definitions and `config` — fetch those from
-    `table.get`. Exposes a cheap `column_count` for list views.
-    """
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    pod_id: UUID
-    name: str
-    primary_key_column: str
-    column_count: int = 0
-    enable_rls: bool
-    visibility: str = "POD"
-    created_at: datetime
-    updated_at: datetime
-    allowed_actions: List[str] = Field(default_factory=list)
-
-
-class TableListResponse(BaseModel):
-    """Schema for table list response."""
-
-    items: List[TableSummaryResponse]
-    limit: int
-    total: int | None = None
-    next_page_token: Optional[str] = None
 
 
 class RecordListResponse(BaseModel):

@@ -16,7 +16,7 @@ from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     user_prompt_text,
 )
 from app.modules.workspace.contracts.host_execution import (
@@ -24,13 +24,13 @@ from app.modules.workspace.contracts.host_execution import (
     host_reachable_addresses,
 )
 from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
-from app.modules.agent.domain.outsiders import OutsiderRunRefused
+from app.modules.agent.domain.outsiders import OutsiderRunRefused, run_audience
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.services.runtime_model_factory import provider_model_settings
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.domain.queued_messages import STEERED_INTO_RUN
-from app.modules.agent.domain.runtime_notes import prepend_runtime_notes
+from app.modules.agent.domain.run_context_prompt import run_context_for
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     ConversationType,
@@ -106,24 +106,25 @@ def run_start_payload(
     runtime_instructions: str,
     carries_history: bool,
     resumed_tool_call_id: str | None = None,
-    open_notifications: str | None = None,
 ) -> JsonObject:
     """Everything one dispatched run needs, and nothing it does not.
 
-    ``open_notifications`` is what this person still owes an answer to, as the
-    in-process harness's capability renders it. It rides in the turn's prompt,
-    not the system prompt: it changes the moment somebody answers, and the
-    system prompt is delivered once per provider session.
+    The run's context part -- the clock, the task list, memory, the attached
+    doc, what this person still owes an answer to -- rides in the turn's
+    prompt, not the system prompt: it changes from run to run, and the system
+    prompt is delivered once per provider session, re-sent whenever its digest
+    changes.
 
     ``carries_history`` is set when the run is not even going to try to resume a
     provider session, so the prompt has to bring the conversation with it, and
     ``resumed_tool_call_id`` names the pausing call this run exists to answer.
     See :func:`_turn_messages`.
 
-    Deliberately does not carry ``runtime_credentials``. They were assembled
-    here and then dropped by the only caller, on the one code path whose
-    destination is a third-party machine — a leak waiting for someone to widen
-    the spec it feeds.
+    Its destination is somebody's laptop, where the host keeps it in its own
+    journal, so it carries the prompt and nothing else. It used to carry the
+    whole agent, the conversation with all of its metadata, and the run
+    context -- connector account ids, surface metadata, the runtime's
+    credentials slot -- none of which the host reads.
     """
     return {
         "agent_run_id": str(agent_run_id),
@@ -139,13 +140,7 @@ def run_start_payload(
             ),
             ctx=ctx,
             runtime_instructions=runtime_instructions,
-            open_notifications=open_notifications,
         ),
-        "agent": agent.model_dump(mode="json"),
-        "conversation": conversation.model_dump(
-            mode="json", exclude={"messages", "agent_runs"}
-        ),
-        "context": ctx.model_dump(mode="json"),
     }
 
 
@@ -175,7 +170,7 @@ async def mcp_payload[DepsT: AgentContext](
     returning 401, which the agent experiences as its tools quietly vanishing.
     Publishing the real expiry lets the dispatcher bound the run by it instead.
     """
-    if getattr(ctx, "answers_outsider", False):
+    if run_audience(ctx).answers_outsiders:
         # Dispatch keeps such a run in this process (services/outsider_runtime).
         # Were one to arrive here, the token below would be the member's, given
         # to a shell a stranger in the group can steer -- so it is refused twice.
@@ -307,7 +302,6 @@ def _prompt_payload(
     messages: Sequence[Message],
     ctx: AgentContext,
     runtime_instructions: str,
-    open_notifications: str | None = None,
 ) -> JsonObject:
     sections: list[str] = []
     instructions = build_agent_instructions(
@@ -328,10 +322,9 @@ def _prompt_payload(
     # spec carries only system_prompt + user_prompt, and the schema reaches the
     # agent as the `lemma_final_answer` tool's inputSchema over MCP.
     history = _render_history(messages)
-    if open_notifications:
-        history = open_notifications + ("\n\n" + history if history else "")
+    run_context = run_context_for(ctx)
     return {
-        "user_prompt": prepend_runtime_notes(history),
+        "user_prompt": run_context + ("\n\n" + history if history else ""),
         "system_prompt": "\n\n".join(section for section in sections if section),
     }
 
@@ -375,6 +368,16 @@ def _turn_messages(
     ordered = sorted(messages, key=lambda item: item.sequence)
     if carries_history:
         return ordered
+    resumed = (
+        [
+            message
+            for message in ordered
+            if message.kind == MessageKind.TOOL_RETURN
+            and message.tool_call_id == resumed_tool_call_id
+        ]
+        if resumed_tool_call_id is not None
+        else []
+    )
     if agent_run_id is not None:
         answering = [
             message
@@ -386,27 +389,15 @@ def _turn_messages(
             )
         ]
         if answering:
-            return answering
-    if resumed_tool_call_id is not None:
-        resumed = [
-            message
-            for message in ordered
-            if message.kind == MessageKind.TOOL_RETURN
-            and message.tool_call_id == resumed_tool_call_id
-        ]
-        if resumed:
-            return resumed
+            # A resume also carries what was said while the pause was being
+            # answered: the return the session is waiting on, and the messages.
+            return [*resumed, *answering]
+    if resumed:
+        return resumed
     for message in reversed(ordered):
         if message.role == MessageRole.USER:
             return [message]
     return ordered[-1:]
-
-
-def _runtime_profile_value[DepsT](
-    options: HarnessOptions[DepsT], key: str
-) -> object | None:
-    profile = options.extra.get("runtime_profile")
-    return profile.get(key) if isinstance(profile, dict) else None
 
 
 def _workspace_cwd(ctx: AgentContext) -> str:
@@ -462,7 +453,7 @@ def _render_history(messages: Sequence[Message]) -> str:
     return "\n\n".join(lines)
 
 
-def _user_turn_text(message: Message) -> str:
+def _user_turn_text(message: Message, *, with_roster: bool = True) -> str:
     """Everything the surface knows about one user message.
 
     A user turn carries more than its text: who sent it, what it quotes, which
@@ -473,7 +464,7 @@ def _user_turn_text(message: Message) -> str:
     reply, and no sign of the files already in the datastore -- reading as though
     the agent had ignored the attachment. One builder now serves both paths.
     """
-    body = user_prompt_text(message)
+    body = user_prompt_text(message, with_roster=with_roster)
     attachments = (message.metadata or {}).get("attachments")
     if isinstance(attachments, list) and attachments:
         body += f"\n\nAttachments: {json.dumps(to_json_value(attachments))}"
@@ -542,7 +533,7 @@ def _message_text(message: Message) -> str:
             f"{_history_tool_result(message.tool_result)}"
         )
     elif message.role == MessageRole.USER:
-        return _user_turn_text(message)
+        return _user_turn_text(message, with_roster=False)
     else:
         body = message.text or ""
     metadata = message.metadata or {}

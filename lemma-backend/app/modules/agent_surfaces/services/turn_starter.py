@@ -1,6 +1,6 @@
 """Starting the agent's turn on what arrived, in short scopes around long I/O.
 
-The worker task `process_surface_message` is the only caller, and `execute_chat`
+The work item `surface.ingest` is the only production caller, and `execute_chat`
 is the only method it calls. That is why this is its own object: the ingress
 service took *either* a unit of work *or* a factory, and in factory mode seven
 collaborators were `None` and about forty of its ninety-two methods would have
@@ -11,50 +11,47 @@ So the second one is this, and the constructor says what it is: a factory, an
 adapter registry, file ingest, and the dedup store. There is nothing here that
 holds a connection, because that is the whole point of the shape --
 `start_agent_chat` runs platform API calls, file ingestion and voice
-transcription, and only then opens a short scope to write. What it writes with
+transcription, and only then opens a short scope to write -- the ingest item's
+fenced completion, so the message and the item's end are one commit. What it
+writes with
 lives in `surface_inbound_message` as free functions over a unit of work, which
 is what those became once nothing needed them to be methods on a namespace.
 """
 
 from __future__ import annotations
 
-from contextlib import suppress
-from dataclasses import dataclass
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
+from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
+from app.modules.agent_surfaces.domain.personal_route import PersonalRouteUnavailable
 from app.modules.agent_surfaces.domain.ingress_context import (
     AgentSurfaceContext,
     SurfaceChatContext,
     SurfaceReplyContext,
 )
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
-from app.modules.agent_surfaces.domain.ports import SurfaceEventDedupStorePort
-from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
-    get_surface_event_dedup_store,
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.domain.ports import SurfaceEventDedupStorePort
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
-)
-from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
-    SqlAlchemySurfaceRoutingResolutionAdapter,
-)
-from app.modules.agent_surfaces.infrastructure.adapters.user_directory_adapter import (
-    IdentityUserDirectoryAdapter,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
-from app.modules.agent_surfaces.platforms.resend.email_recipients import (
-    reply_all_recipients,
-)
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.credential_resolver import (
     PooledNumberReader,
     SurfaceCredentialResolver,
@@ -62,18 +59,16 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 )
 from app.modules.agent_surfaces.services.fallback_reply_service import (
     deliver_fallback_reply,
+    to_sender_alone,
 )
-from app.modules.agent_surfaces.services.group_log import (
-    GroupBackground,
-    for_member_run,
-    group_background,
-    keeps_group_log,
+from app.modules.agent_surfaces.services.outside_cap import (
+    first_word_today,
+    hand_to_a_person,
+    held_for_a_person,
 )
-from app.modules.agent_surfaces.services.group_audience import (
-    Audience,
-    chat_audience,
-    email_audience,
-    outside_names,
+from app.modules.agent_surfaces.services.plain_reply import reply_text
+from app.modules.agent_surfaces.services.attachment_ingest_memo import (
+    AttachmentIngestMemo,
 )
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     AttachmentIngest,
@@ -81,25 +76,42 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     SurfaceFileIngestService,
     every_attachment_failed,
 )
+from app.modules.agent_surfaces.domain.decision_card import CardRetirement
+from app.modules.agent_surfaces.services.held_replies import stage_held_replies
+from app.modules.agent_surfaces.services.message_claims import SurfaceEventDedupStore
+from app.modules.agent_surfaces.services.card_retirement import (
+    retire_superseded_cards,
+)
+from app.modules.agent_surfaces.services.group_log import RosterReads, roster_reads
+from app.modules.agent_surfaces.services.run_background import (
+    reply_all_audience,
+    run_background,
+)
 from app.modules.agent_surfaces.services.surface_inbound_message import (
-    fetch_channel_context,
     transcribe_voice_attachments,
     write_inbound_message,
 )
 from app.modules.agent_surfaces.services.telegram_command_service import (
     handle_telegram_command,
+    handle_typed_retry,
 )
 
 logger = get_logger(__name__)
 
+#: Prepare an inbound delivery the ordinary way; see ``reprepare``.
+type Reprepare = Callable[
+    [SurfacePlatformWebhookIngress], Awaitable[AgentSurfaceContext | None]
+]
+#: The transaction the inbound message is written in. ``surface.ingest`` hands
+#: in its fenced completion, so the message, the run, its ``agent.turn`` item
+#: and the inbound row going ROUTED commit together or not at all.
+type WriteScope = Callable[[], AbstractAsyncContextManager[SqlAlchemyUnitOfWork]]
+#: Takes a reply that is not a run (a stranger's sign-up link, a refusal) to
+#: deliver it durably instead of sending it here. True: taken.
+type ReplySink = Callable[[SurfaceReplyContext], Awaitable[bool]]
 
-@dataclass(frozen=True, slots=True)
-class _RunBackground:
-    """The group as one run is shown it."""
-
-    lines: list[dict[str, object]]
-    withheld: int = 0
-    audience: Audience | None = None
+_COULD_NOT_READ = "I couldn't read that message. Could you send it again?"
+PROCESSING_FAILED_REPLY = "I couldn't process that message. Please send it again."
 
 
 class SurfaceTurnStarter:
@@ -113,30 +125,46 @@ class SurfaceTurnStarter:
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
         file_ingest_service: SurfaceFileIngestService | None = None,
         pooled_numbers: PooledNumberReader | None = None,
+        ingest_memo: AttachmentIngestMemo | None = None,
+        reprepare: Reprepare | None = None,
+        roster_reads: RosterReads = roster_reads,
+        write_scope: WriteScope | None = None,
+        reply_sink: ReplySink | None = None,
     ) -> None:
         self.uow_factory = uow_factory
+        self.write_scope: WriteScope = write_scope or uow_factory
+        self.reply_sink = reply_sink
+        self.roster_reads = roster_reads
+        # Shared with the file ingest by Redis key, not by instance: what a
+        # retry reuses is keyed on the message, whichever object reads it.
+        self.ingest_memo = ingest_memo or AttachmentIngestMemo()
+        # Ordinary ingress, for a message whose queued private route went away.
+        # Injected because preparing a message needs the request-mode ingress
+        # service, which this worker-side object deliberately is not.
+        self.reprepare = reprepare
         # `None` reads the pool through each short scope's own unit of work.
         self.pooled_numbers = pooled_numbers
         self.adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
         self.file_ingest_service = file_ingest_service or SurfaceFileIngestService(
             adapter_registry=self.adapter_registry
         )
-        self.event_dedup_store = event_dedup_store or get_surface_event_dedup_store()
+        self.event_dedup_store = event_dedup_store or SurfaceEventDedupStore(
+            uow_factory=uow_factory
+        )
 
     async def execute_chat(self, context: AgentSurfaceContext) -> None:
         """Answer, or -- for a sender we cannot place -- say so once and stop.
 
-        Takes the parsed context. It used to also accept a raw dict and
-        re-validate it through a `TypeAdapter`, which nothing ever needed:
-        `SurfaceProcessMessageTaskPayload.context` is an `AgentSurfaceContext`,
-        so pydantic has already validated it by the time the worker has a
-        payload at all.
+        Takes the parsed context, prepared by ``surface.ingest`` from the
+        stored inbound row.
         """
         adapter = self.adapter_registry.get(context.platform)
         if adapter is None:
             return
 
         if isinstance(context, SurfaceReplyContext):
+            if self.reply_sink is not None and await self.reply_sink(context):
+                return
             # Credentials are needed only to send the automated fallback.
             await deliver_fallback_reply(
                 adapter=adapter,
@@ -146,7 +174,14 @@ class SurfaceTurnStarter:
             )
             return
 
-        await self.start_agent_chat(context)
+        try:
+            await self.start_agent_chat(context)
+        except PersonalRouteUnavailable as unavailable:
+            # The private destination this was queued for went away between
+            # preparing the message and starting its turn (the person left the
+            # pod, the app was uninstalled). Retrying cannot bring it back; the
+            # message is still the person's, so it goes the ordinary way.
+            await self._reroute_through_ordinary_ingress(context, unavailable)
 
     async def start_agent_chat(self, context: SurfaceChatContext) -> None:
         await self._validate_personal_context(context)
@@ -155,14 +190,21 @@ class SurfaceTurnStarter:
             return
 
         credentials = await self._credentials_for(context)
-        if await handle_telegram_command(
-            context=context,
-            adapter=adapter,
-            credentials=credentials,
-            uow_factory=self.uow_factory,
-        ):
+        for handled_here in (handle_telegram_command, handle_typed_retry):
+            if await handled_here(
+                context=context,
+                adapter=adapter,
+                credentials=credentials,
+                uow_factory=self.uow_factory,
+            ):
+                return
+        if await self._waits_for_a_person(context):
+            await self._hand_to_a_person(context, adapter, credentials)
             return
-        with suppress(*PLATFORM_TRANSPORT_ERRORS):
+        # Matched after the raise rather than taken up front as `suppress` would:
+        # this call may be the one that first loads Slack's SDK, whose errors
+        # join the family only once it is loaded.
+        try:
             await adapter.add_processing_indicator(
                 credentials=credentials,
                 event=context.event,
@@ -170,6 +212,8 @@ class SurfaceTurnStarter:
                     "agent_display_name": context.agent_display_name,
                 },
             )
+        except platform_transport_errors():
+            pass
 
         ingest = await self._ingest_files(context, credentials)
         ingested: list[IngestedAttachment] = ingest.saved
@@ -179,19 +223,18 @@ class SurfaceTurnStarter:
         # the last few thread/channel messages fresh for THIS run and hand them to
         # the agent as background context. Best-effort; never blocks the run.
         if not context.event.is_dm:
-            background = await self._background(
-                context, adapter=adapter, credentials=credentials
+            background = await run_background(
+                self.uow_factory,
+                context,
+                adapter=adapter,
+                credentials=credentials,
+                roster_reads=self.roster_reads,
             )
-            if background.lines:
-                metadata["channel_context"] = background.lines
-            if background.withheld:
-                metadata["channel_context_withheld"] = background.withheld
-            if background.audience is not None:
-                metadata["outside_audience"] = background.audience.to_metadata()
-        elif not context.answers_outsider:
+            metadata.update(background.to_metadata())
+        elif not context.audience.answers_outsiders:
             # Email is a DM to the pod's mailbox, but a reply-all reaches
             # everybody on the thread.
-            audience = await self._email_audience(context)
+            audience = await reply_all_audience(self.uow_factory, context)
             if audience is not None:
                 metadata["outside_audience"] = audience.to_metadata()
 
@@ -201,6 +244,7 @@ class SurfaceTurnStarter:
             ingested=ingested,
             original_text=context.message_text,
             metadata=metadata,
+            memo=self.ingest_memo,
         )
         await self._name_new_thread(adapter, credentials, context)
 
@@ -213,11 +257,155 @@ class SurfaceTurnStarter:
         # was mostly the agent talking to itself about its own plumbing -- and
         # it is no longer true: `PendingUserMessagesCapability` steers these
         # into the run already going, which answers all of them at once.
+        async with self.write_scope() as uow:
+            finished = await write_inbound_message(context, message_text, metadata, uow)
+            # Their message reopened a closed reply window: what waited for it
+            # is written out now, ahead of the answer this message will get,
+            # and the destination pump sends them in that order.
+            await stage_held_replies(
+                uow,
+                conversation_id=context.conversation_id,
+                pod_id=context.pod_id,
+                platform=context.platform,
+            )
+        for tool_call_ids, reason in (
+            (finished.superseded, CardRetirement.SUPERSEDED),
+            (finished.answered, CardRetirement.ANSWERED),
+        ):
+            await retire_superseded_cards(
+                adapter=adapter,
+                credentials=credentials,
+                conversation_id=context.conversation_id,
+                tool_call_ids=tool_call_ids,
+                reason=reason,
+            )
+        if not message_text.strip() and not context.event.metadata.get("attachments"):
+            # Nothing a person sent is empty: a body we failed to fetch or
+            # parse. The write declined it, and silence reads as being ignored.
+            await self.tell_sender(context, _COULD_NOT_READ)
+
+    async def tell_sender(self, context: AgentSurfaceContext, message: str) -> None:
+        """A short reply to the person, outside any run, at most once per window.
+
+        For a message that will not be answered: one that could not be read, or
+        one whose processing failed for good. Through the fallback path, which
+        holds the stranger-reply window, so a burst of failures is one reply.
+        Never raises: it runs where something has already gone wrong, and its
+        own failure must not replace that one.
+        """
+        adapter = self.adapter_registry.get(context.platform)
+        if adapter is None or not context.event.sender_external_user_id:
+            return
+        reply = SurfaceReplyContext(
+            platform=context.platform,
+            surface_id=context.surface_id,
+            surface_name=context.surface_name,
+            surface_account_id=context.surface_account_id,
+            surface_config=context.surface_config,
+            agent_display_name=context.agent_display_name,
+            event=context.event,
+            reply_kind="processing_failed",
+            reply_message=message,
+        )
+        try:
+            await deliver_fallback_reply(
+                adapter=adapter,
+                context=reply,
+                credentials=await self._credentials_for(reply),
+                event_dedup_store=self.event_dedup_store,
+            )
+        except (SQLAlchemyError, *platform_transport_errors()):
+            logger.warning(
+                "agent_surfaces.turn_starter.failure_reply_not_sent.degraded",
+                platform=str(context.platform),
+                exc_info=True,
+            )
+
+    async def _reroute_through_ordinary_ingress(
+        self, context: SurfaceChatContext, unavailable: Exception
+    ) -> None:
+        logger.info(
+            "agent_surfaces.turn_starter.personal_route_gone.rerouted",
+            platform=str(context.platform),
+            reason=str(unavailable),
+        )
+        if self.reprepare is None or not context.event.raw_payload:
+            await self.tell_sender(context, PROCESSING_FAILED_REPLY)
+            return
+        # Preparing it again takes the message claim again; it is this
+        # inbound row's own, so it is granted.
+        rerouted = await self.reprepare(
+            SurfacePlatformWebhookIngress(
+                source=context.platform.value.lower(),
+                payload=context.event.raw_payload,
+            )
+        )
+        if isinstance(rerouted, SurfaceChatContext) and (
+            rerouted.personal_dm_route_id is not None
+        ):
+            # Ordinary ingress does not mint personal routes; one coming back
+            # would loop.
+            await self.tell_sender(context, PROCESSING_FAILED_REPLY)
+            return
+        if rerouted is not None:
+            await self.execute_chat(rerouted)
+
+    async def _waits_for_a_person(self, context: SurfaceChatContext) -> bool:
+        """Whether an outsider's turn starts no run, before anything is spent on it.
+
+        Asked ahead of the typing indicator, file handling and transcription:
+        a turn no run will answer should not look as if one is.
+        """
+        if not context.audience.answers_outsiders or context.pod_id is None:
+            return False
         async with self.uow_factory() as uow:
-            await write_inbound_message(context, message_text, metadata, uow)
+            return await held_for_a_person(
+                uow, pod_id=context.pod_id, conversation_id=context.conversation_id
+            )
+
+    async def _hand_to_a_person(
+        self,
+        context: SurfaceChatContext,
+        adapter: SurfacePlatformAdapterPort,
+        credentials: SurfaceCredentials,
+    ) -> None:
+        """Keep the message for the member, and tell the person once a day."""
+        if context.pod_id is None:
+            return
+        tell = await first_word_today(context.conversation_id)
+        async with self.uow_factory() as uow:
+            held = await hand_to_a_person(
+                uow,
+                tell=tell,
+                pod_id=context.pod_id,
+                conversation_id=context.conversation_id,
+                owner_id=context.user_id,
+                # Not transcribed or saved: no run will read it, and an
+                # outsider's files are never saved (see `_ingest_files`).
+                text=context.message_text.strip() or "[a message with no text]",
+                metadata=_message_metadata(context, AttachmentIngest()),
+            )
+        if held.reply is None:
+            return
+        try:
+            await reply_text(
+                adapter=adapter,
+                credentials=credentials,
+                event=to_sender_alone(context.event),
+                message=held.reply,
+                metadata={"agent_display_name": context.agent_display_name},
+            )
+        except (AgentSurfaceError, *platform_transport_errors()):
+            # The message is kept and the member told; only the courtesy line
+            # did not land, and the conversation already shows it.
+            logger.warning(
+                "agent_surfaces.outside_cap.reply_not_sent.degraded",
+                platform=context.platform.value,
+                exc_info=True,
+            )
 
     async def _ingest_files(
-        self, context: SurfaceChatContext, credentials: dict[str, Any]
+        self, context: SurfaceChatContext, credentials: SurfaceCredentials
     ) -> AttachmentIngest:
         """Auto-ingest user-provided files into the pod datastore (/me/{platform}).
 
@@ -228,7 +416,7 @@ class SurfaceTurnStarter:
         not open them anyway. The run is told, so it does not look like it
         ignored the file.
         """
-        if context.answers_outsider:
+        if context.audience.answers_outsiders:
             return every_attachment_failed(
                 context.event, reason="Files from outside the pod are not saved"
             )
@@ -243,6 +431,7 @@ class SurfaceTurnStarter:
                 credentials=credentials,
             )
         except Exception as exc:
+            raise_if_database_unavailable(exc)
             # `ingest_attachments` reports a per-file failure itself, so
             # reaching here is the whole call coming apart. This was a
             # `suppress`, which left `ingest` empty -- indistinguishable
@@ -259,104 +448,10 @@ class SurfaceTurnStarter:
                 context.event, reason="Lemma could not receive this file"
             )
 
-    async def _background(
-        self,
-        context: SurfaceChatContext,
-        *,
-        adapter: SurfacePlatformAdapterPort,
-        credentials: dict[str, object],
-    ) -> _RunBackground:
-        """What this run is shown of the group, and who outside the pod reads it.
-
-        The pod's own log where it keeps one (Telegram, WhatsApp); otherwise the
-        platform's history, read live. Either way a member's run is not shown
-        what strangers wrote (``group_log``), and is told that they are there.
-        """
-        group, logged = await self._group_background(context)
-        if logged is not None:
-            lines = [line.model_dump(mode="json") for line in logged.lines]
-            withheld, outside = logged.withheld, list(logged.outside_authors)
-        else:
-            lines = await fetch_channel_context(
-                adapter=adapter, context=context, credentials=credentials
-            )
-            outside = outside_names(lines)
-            withheld = 0
-            if not context.answers_outsider:
-                lines, withheld = for_member_run(lines)
-        # The message being answered was logged on its way in and is already
-        # the prompt; repeating it as background shows the agent the question
-        # twice. It is the latest line in all but a race, so only that one goes.
-        if lines and lines[-1].get("text") == context.event.message_text.strip():
-            lines.pop()
-        audience = (
-            None
-            if context.answers_outsider
-            else chat_audience(
-                platform=context.platform,
-                group=group,
-                parsed=context.event,
-                outside_authors=outside,
-            )
-        )
-        return _RunBackground(lines=lines, withheld=withheld, audience=audience)
-
-    async def _group_background(
-        self, context: SurfaceChatContext
-    ) -> tuple[SurfaceGroup | None, GroupBackground | None]:
-        """The group the pod keeps a log for, and that log; else nothing.
-
-        Nothing where the platform can read its history (Slack, Teams) or the
-        group is not one the pod keeps a log for -- the caller then asks the
-        platform, as it always has, and reads a shared Slack channel off the
-        event itself.
-        """
-        channel_id = context.event.external_channel_id
-        if (
-            context.surface_id is None
-            or not channel_id
-            or not keeps_group_log(context.platform.value)
-        ):
-            return None, None
-        async with self.uow_factory() as uow:
-            group = await SurfaceGroupRepository(uow.session).get(
-                surface_id=context.surface_id, external_channel_id=channel_id
-            )
-            if group is None:
-                return None, None
-            logged = await group_background(
-                uow,
-                group=group,
-                membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
-                agent_display_name=context.agent_display_name,
-                for_stranger=context.answers_outsider,
-            )
-        return group, logged
-
-    async def _email_audience(self, context: SurfaceChatContext) -> Audience | None:
-        """Who outside the pod a reply on this email thread also reaches."""
-        if context.platform is not SurfacePlatform.RESEND or context.pod_id is None:
-            return None
-        recipients = reply_all_recipients(context.event)
-        if not recipients:
-            return None
-        pod_id = context.pod_id
-        async with self.uow_factory() as uow:
-            people = IdentityUserDirectoryAdapter(uow)
-            membership = SqlAlchemySurfaceRoutingResolutionAdapter(uow)
-
-            async def is_member(address: str) -> bool:
-                user_id = await people.user_id_by_email(address)
-                return user_id is not None and pod_id in set(
-                    await membership.get_user_pod_ids(user_id)
-                )
-
-            return await email_audience(recipients=recipients, is_member=is_member)
-
     async def _name_new_thread(
         self,
         adapter: SurfacePlatformAdapterPort,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         context: SurfaceChatContext,
     ) -> None:
         """Name the thread on the platform when this turn created the conversation.
@@ -374,7 +469,7 @@ class SurfaceTurnStarter:
                 event=context.event,
                 title=context.created_conversation_title,
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             # A platform call, so a platform failure. It caught
             # `SQLAlchemyError` -- the wrong family entirely, and nothing here
             # touches the database: Slack's implementation catches only
@@ -391,7 +486,6 @@ class SurfaceTurnStarter:
     async def _validate_personal_context(self, context: SurfaceChatContext) -> None:
         if context.personal_dm_route_id is not None:
             from app.modules.agent_surfaces.services.personal_dm_routes import (
-                PersonalRouteUnavailable,
                 validate_personal_dm_route,
             )
 
@@ -408,7 +502,9 @@ class SurfaceTurnStarter:
                         "The queued personal destination no longer matches"
                     )
 
-    async def _credentials_for(self, context: AgentSurfaceContext) -> dict[str, Any]:
+    async def _credentials_for(
+        self, context: AgentSurfaceContext
+    ) -> SurfaceCredentials:
         """Credentials for a reply that has only the run's context in hand.
 
         Read in a short scope of its own and returned as a plain dict, so no

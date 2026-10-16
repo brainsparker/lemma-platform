@@ -4,7 +4,7 @@ import json
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from ..openapi_client.api.query import query_execute
@@ -25,6 +25,10 @@ from ..openapi_client.api.tables import (
     table_delete,
     table_get,
     table_list,
+    table_public_rows_close,
+    table_public_rows_get,
+    table_public_rows_list,
+    table_public_rows_open,
     table_update,
 )
 from ..openapi_client.models.add_column_request import AddColumnRequest
@@ -35,9 +39,12 @@ from ..openapi_client.models.create_record_request import CreateRecordRequest
 from ..openapi_client.models.create_table_request import CreateTableRequest
 from ..openapi_client.models.datastore_query_request import DatastoreQueryRequest
 from ..openapi_client.models.datastore_query_response import DatastoreQueryResponse
+from ..openapi_client.models.open_table_request import OpenTableRequest
+from ..openapi_client.models.open_tables_response import OpenTablesResponse
 from ..openapi_client.models.record_list_response import RecordListResponse
 from ..openapi_client.models.table_detail_response import TableDetailResponse
 from ..openapi_client.models.table_list_response import TableListResponse
+from ..openapi_client.models.table_opening_response import TableOpeningResponse
 from ..openapi_client.models.update_record_request import UpdateRecordRequest
 from ..openapi_client.models.update_table_request import UpdateTableRequest
 from ..openapi_client.types import UNSET
@@ -46,6 +53,15 @@ from .base import BoundResource
 
 RecordFilterClause = dict[str, Any]
 RecordSortClause = dict[str, Any]
+
+
+#: How DATASTORE triggers see a bulk write; see ``PodRecords.bulk_create``.
+WriteIntent = Literal["normal", "bulk", "import"]
+
+
+def _with_intent(body: dict[str, Any], intent: WriteIntent | None) -> dict[str, Any]:
+    """Send ``intent`` only when the caller chose one; the server defaults it."""
+    return body if intent is None else {**body, "intent": intent}
 
 
 def _as_record(result: Any) -> RecordData:
@@ -139,6 +155,32 @@ class PodTables(BoundResource):
 
     def remove_column(self, table: str, column: str) -> TableDetailResponse:
         return self._call(table_column_remove, self._pod_uuid(), table, column)
+
+    def public_rows(self, table: str) -> TableOpeningResponse:
+        """Who outside the pod may add rows to ``table``, and which columns could be open."""
+        return self._call(table_public_rows_get, self._pod_uuid(), table)
+
+    def open_public_rows(
+        self, table: str, *, columns: list[str], audience: str = "anyone"
+    ) -> TableOpeningResponse:
+        """Let people outside the pod add rows to ``table`` -- ``"anyone"`` or
+        confirmed ``"contacts"`` -- writing only ``columns``. A form is then any
+        page that adds a row through a web widget's key."""
+        return self._call(
+            table_public_rows_open,
+            self._pod_uuid(),
+            table,
+            body={"audience": audience, "columns": columns},
+            body_model=OpenTableRequest,
+        )
+
+    def close_public_rows(self, table: str) -> None:
+        """Stop people outside the pod adding rows to ``table``."""
+        self._call(table_public_rows_close, self._pod_uuid(), table)
+
+    def list_public_rows(self) -> OpenTablesResponse:
+        """The pod's tables that take rows from outside, and from whom."""
+        return self._call(table_public_rows_list, self._pod_uuid())
 
 
 class PodRecords(BoundResource):
@@ -251,50 +293,67 @@ class PodRecords(BoundResource):
         self._call(record_delete, self._pod_uuid(), table, record_id)
 
     def bulk_create(
-        self, table: str, records: list[RecordData], *, upsert: bool = False
+        self,
+        table: str,
+        records: list[RecordData],
+        *,
+        upsert: bool = False,
+        intent: WriteIntent | None = None,
     ) -> int:
         """Create many records at once; returns the count affected.
 
         Each item is a row dict (primary keys are generated unless provided).
         With ``upsert=True`` rows that conflict on the table's primary key are
-        updated instead of failing — idempotent re-seeding. Requires
-        DATASTORE_RECORD_WRITE (POD_USER and above).
+        updated instead of failing — idempotent re-seeding. ``intent`` is how
+        DATASTORE triggers see the write: ``"bulk"`` (the server's default) or
+        ``"import"`` lets each trigger decide by its settings (by default the
+        rows are skipped and recorded); ``"normal"`` fires triggers as single
+        writes do. Requires DATASTORE_RECORD_WRITE (POD_USER and above).
         """
         result = self._call(
             record_bulk_create,
             self._pod_uuid(),
             table,
-            body={"records": _jsonify(records), "upsert": upsert},
+            body=_with_intent({"records": _jsonify(records), "upsert": upsert}, intent),
             body_model=BulkCreateRecordsRequest,
         )
         return result.count if result is not None else 0
 
-    def bulk_update(self, table: str, records: list[dict[str, Any]]) -> int:
+    def bulk_update(
+        self,
+        table: str,
+        records: list[dict[str, Any]],
+        *,
+        intent: WriteIntent | None = None,
+    ) -> int:
         """Update many records at once; returns the count updated.
 
         Each item is a flat dict that MUST include the table's primary-key value
-        plus the fields to change. Requires DATASTORE_RECORD_WRITE (POD_USER and
-        above).
+        plus the fields to change. ``intent`` as for :meth:`bulk_create`.
+        Requires DATASTORE_RECORD_WRITE (POD_USER and above).
         """
         result = self._call(
             record_bulk_update,
             self._pod_uuid(),
             table,
-            body={"records": _jsonify(records)},
+            body=_with_intent({"records": _jsonify(records)}, intent),
             body_model=BulkUpdateRecordsRequest,
         )
         return result.count if result is not None else 0
 
-    def bulk_delete(self, table: str, record_ids: list[str]) -> int:
+    def bulk_delete(
+        self, table: str, record_ids: list[str], *, intent: WriteIntent | None = None
+    ) -> int:
         """Delete many records by primary-key value; returns the count deleted.
 
-        Requires DATASTORE_RECORD_WRITE (POD_USER and above).
+        ``intent`` as for :meth:`bulk_create`. Requires DATASTORE_RECORD_WRITE
+        (POD_USER and above).
         """
         result = self._call(
             record_bulk_delete,
             self._pod_uuid(),
             table,
-            body={"record_ids": record_ids},
+            body=_with_intent({"record_ids": record_ids}, intent),
             body_model=BulkDeleteRecordsRequest,
         )
         return result.count if result is not None else 0
@@ -359,20 +418,32 @@ class Table:
     # Inside a function sandbox that is the dominant cost of the whole call:
     # a 200-row batch is one round trip against 200.
 
-    def bulk_create(self, records: list[RecordData], *, upsert: bool = False) -> int:
+    def bulk_create(
+        self,
+        records: list[RecordData],
+        *,
+        upsert: bool = False,
+        intent: WriteIntent | None = None,
+    ) -> int:
         """Create many records in one round trip; returns the count affected.
 
-        See :meth:`PodRecords.bulk_create` for the ``upsert`` semantics.
+        See :meth:`PodRecords.bulk_create` for ``upsert`` and ``intent``.
         """
-        return self._records.bulk_create(self.name, records, upsert=upsert)
+        return self._records.bulk_create(
+            self.name, records, upsert=upsert, intent=intent
+        )
 
-    def bulk_update(self, records: list[dict[str, Any]]) -> int:
+    def bulk_update(
+        self, records: list[dict[str, Any]], *, intent: WriteIntent | None = None
+    ) -> int:
         """Update many records in one round trip; returns the count updated.
 
         Each item must include this table's primary-key value.
         """
-        return self._records.bulk_update(self.name, records)
+        return self._records.bulk_update(self.name, records, intent=intent)
 
-    def bulk_delete(self, record_ids: list[str]) -> int:
+    def bulk_delete(
+        self, record_ids: list[str], *, intent: WriteIntent | None = None
+    ) -> int:
         """Delete many records by primary-key value; returns the count deleted."""
-        return self._records.bulk_delete(self.name, record_ids)
+        return self._records.bulk_delete(self.name, record_ids, intent=intent)

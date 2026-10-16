@@ -224,6 +224,17 @@ class ContactsCapResponse(BaseModel):
             "outside the pod in groups, on models Lemma provides."
         )
     )
+    max_contacts: int | None = Field(
+        default=None,
+        description=(
+            "How many contacts the organization's bots may answer at all. "
+            "Absent for no limit."
+        ),
+    )
+    answered_contacts: int = Field(
+        default=0,
+        description="How many contacts its bots have answered so far.",
+    )
 
 
 class ContactsCapUpdate(BaseModel):
@@ -233,5 +244,13 @@ class ContactsCapUpdate(BaseModel):
         description=(
             "Null removes the cap: no limit, kept as the owner's choice. Zero "
             "stops bots answering contacts."
+        ),
+    )
+    max_contacts: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "How many contacts the bots may answer. Leave it out to keep the "
+            "current number; null removes the limit."
         ),
     )

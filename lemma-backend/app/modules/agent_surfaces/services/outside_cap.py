@@ -28,6 +28,9 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
 from app.modules.agent.contracts.contact_conversations import (
     conversation_handed_to,
     hold_outside_turn,
@@ -42,12 +45,21 @@ from app.modules.agent_surfaces.infrastructure.repositories.notification_reposit
 )
 from app.modules.agent_surfaces.services.contact_windows import ContactWindows
 from app.modules.agent_surfaces.services.outside_questions import quote
+from app.modules.contacts.contracts import (
+    answered_contacts_in_organization,
+    contact_by_id,
+    note_answered,
+)
 from app.modules.pod.contracts.members import (
     pod_member_id,
     pod_name,
     pod_organization_id,
 )
-from app.modules.usage.contracts.contacts_cap import contacts_cap_reached, this_month
+from app.modules.usage.contracts.contacts_cap import (
+    contacts_cap_reached,
+    room_for_another_contact,
+    this_month,
+)
 
 logger = get_logger(__name__)
 
@@ -73,17 +85,48 @@ async def held_for_a_person(
     conversation_id: UUID,
     now: datetime | None = None,
 ) -> bool:
-    """Whether this outsider's turn must wait for a member rather than run.
+    """Whether this contact's turn must wait for a member rather than run.
 
-    It must while a member has the conversation, and while the organization's
-    contacts cap is reached.
+    It must while a member has the conversation, while the organization's
+    contacts cap is reached, and when the contact would be one more than the
+    organization's bots may answer. A turn that may run marks its contact
+    answered, in the same transaction, so the count it was let in under holds.
     """
     now = now or datetime.now(timezone.utc)
     if await conversation_handed_to(uow, conversation_id, now=now) is not None:
         return True
     organization_id = await pod_organization_id(uow, pod_id)
-    return organization_id is not None and await contacts_cap_reached(
+    if organization_id is None:
+        return False
+    if await contacts_cap_reached(uow, organization_id=organization_id):
+        return True
+    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
+    contact_id = conversation.audience.contact_id if conversation else None
+    if contact_id is None:
+        return False
+    if not await _room_for(uow, organization_id, pod_id, contact_id):
+        logger.info(
+            "agent_surfaces.outside_cap.contact_limit_reached.observed",
+            pod_id=str(pod_id),
+            contact_id=str(contact_id),
+        )
+        return True
+    await note_answered(uow, pod_id=pod_id, contact_id=contact_id)
+    return False
+
+
+async def _room_for(
+    uow: SqlAlchemyUnitOfWork, organization_id: UUID, pod_id: UUID, contact_id: UUID
+) -> bool:
+    """Whether this contact may be answered: already was, or the count has room."""
+    contact = await contact_by_id(uow, pod_id=pod_id, contact_id=contact_id)
+    if contact is not None and contact.answered:
+        return True
+    answered = await answered_contacts_in_organization(
         uow, organization_id=organization_id
+    )
+    return await room_for_another_contact(
+        uow, organization_id=organization_id, answered=answered
     )
 
 

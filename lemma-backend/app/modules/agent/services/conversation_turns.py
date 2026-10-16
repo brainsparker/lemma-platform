@@ -20,6 +20,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.services.usage_preflight import assert_usage_preflight_allowed
 from app.modules.usage.contracts.execution import UsageService
+from app.modules.agent.domain.outsiders import refuse_retired
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.private_notes import (
     PRIVATE_NOTE_KEY,
@@ -162,6 +163,7 @@ class TurnCoordinator:
         back rather than a second message. ``supersede_pauses`` is False for a
         sender who is not the person a pause asked (``turn_admission``).
         """
+        refuse_retired(conversation)
         message_metadata = stamped(
             message_metadata, conversation, typed_in_lemma=typed_in_lemma
         )

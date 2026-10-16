@@ -31,12 +31,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.api.dependencies import get_uow_factory
 from app.core.config import settings
 from app.core.public_web import public_web_settings
-from app.modules.agent.domain.outsiders import (
-    AUDIENCE_KEY,
-    CONTACT,
-    CONTACT_KEY,
-    OUTSIDERS,
-)
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.events.visitor_retention import sweep_web_visitors
@@ -49,7 +43,15 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
 from app.modules.agent_surfaces.tests.e2e.test_telegram_group_outsiders_e2e import (
     _table,
 )
-from app.modules.contacts.infrastructure.models import ContactIdentityModel
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.work import WorkClass, WorkRegistry
+from app.core.infrastructure.work.testing import run_until_idle
+from app.modules.agent.events.contact_merged_work import register_contact_merged_work
+from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
+from app.modules.contacts.infrastructure.models import (
+    ContactIdentityModel,
+    ContactModel,
+)
 from app.modules.contacts.infrastructure.visitor_sessions import (
     VisitorCodeModel,
     VisitorSessionModel,
@@ -143,11 +145,24 @@ async def _say(
     return conversation_id
 
 
-async def _metadata(db_session: AsyncSession, conversation_id: UUID) -> dict:
+async def _contact_of(db_session: AsyncSession, conversation_id: UUID) -> UUID | None:
+    """The contact a conversation answers: its column, which only the server writes."""
     db_session.expire_all()
     conversation = await db_session.get(ConversationModel, conversation_id)
     assert conversation is not None
-    return conversation.conversation_metadata or {}
+    return conversation.contact_id
+
+
+async def _handles_of(
+    db_session: AsyncSession, contact_id: UUID
+) -> set[tuple[str, str]]:
+    db_session.expire_all()
+    rows = await db_session.execute(
+        select(ContactIdentityModel.kind, ContactIdentityModel.strength).where(
+            ContactIdentityModel.contact_id == contact_id
+        )
+    )
+    return {(kind, strength) for kind, strength in rows}
 
 
 def _host_token(secret: str, key: str, *, subject: str, lifetime: int = 300) -> str:
@@ -211,7 +226,10 @@ async def test_an_anonymous_visitor_is_answered_from_what_is_public(
             ),
         ],
     )
-    assert (await _metadata(db_session, conversation_id)).get(AUDIENCE_KEY) == OUTSIDERS
+    # Answered as a contact nobody has vouched for: known by the browser alone.
+    visitor_contact = await _contact_of(db_session, conversation_id)
+    assert visitor_contact is not None
+    assert await _handles_of(db_session, visitor_contact) == {("WEB", "SESSION")}
 
     history = await authenticated_client.get(
         f"/public/web/{key}/history", headers=_as(visitor)
@@ -289,8 +307,7 @@ async def test_a_signed_in_customer_of_the_shop_is_answered_as_a_contact(
         pod_id=pod_id,
         script=[script_text("Let me check.")],
     )
-    metadata = await _metadata(db_session, conversation_id)
-    assert metadata.get(AUDIENCE_KEY) == CONTACT
+    contact_id = await _contact_of(db_session, conversation_id)
     identity = (
         await db_session.execute(
             select(ContactIdentityModel).where(
@@ -302,7 +319,7 @@ async def test_a_signed_in_customer_of_the_shop_is_answered_as_a_contact(
     # Keyed by the pod, so another of its widgets meets the same contact.
     assert identity.value == "host:cust-42"
     assert identity.strength == "HOST"
-    assert str(identity.contact_id) == metadata.get(CONTACT_KEY)
+    assert identity.contact_id == contact_id
 
     other = await _widget(authenticated_client, pod_id, name="Help centre")
     again = await _session(
@@ -418,7 +435,9 @@ async def test_a_visitor_who_proves_an_email_becomes_a_contact_in_the_same_chat(
         pod_id=pod_id,
         script=[script_text("Hello!")],
     )
-    assert (await _metadata(db_session, conversation_id)).get(AUDIENCE_KEY) == OUTSIDERS
+    anonymous = await _contact_of(db_session, conversation_id)
+    assert anonymous is not None
+    assert await _handles_of(db_session, anonymous) == {("WEB", "SESSION")}
 
     email = f"visitor-{widget['id'][:8]}@client.example"
     sent = await authenticated_client.post(
@@ -458,16 +477,13 @@ async def test_a_visitor_who_proves_an_email_becomes_a_contact_in_the_same_chat(
         "is_contact"
     ]
 
-    # The conversation they already had is now theirs, as a contact.
-    metadata = await _metadata(db_session, conversation_id)
-    assert metadata.get(AUDIENCE_KEY) == CONTACT
-    identity = (
-        await db_session.execute(
-            select(ContactIdentityModel).where(ContactIdentityModel.value == email)
-        )
-    ).scalar_one()
-    assert identity.strength == "CODE"
-    assert str(identity.contact_id) == metadata.get(CONTACT_KEY)
+    # The address joined the contact they already were: the same conversation,
+    # the same contact, confirmed now.
+    assert await _contact_of(db_session, conversation_id) == anonymous
+    assert await _handles_of(db_session, anonymous) == {
+        ("WEB", "SESSION"),
+        ("EMAIL", "CODE"),
+    }
 
     # One session is one person: another address starts another chat.
     another = await authenticated_client.post(
@@ -607,7 +623,7 @@ async def test_a_page_knows_its_own_message_by_the_name_it_gave_it(
     ]
 
     # It is the page's bookkeeping, not what was said: an export leaves it out.
-    contact_id = (await _metadata(db_session, conversation_id))[CONTACT_KEY]
+    contact_id = await _contact_of(db_session, conversation_id)
     exported = await authenticated_client.get(
         f"/pods/{pod_id}/contacts/{contact_id}/export"
     )
@@ -800,23 +816,24 @@ async def test_a_follow_up_waits_in_a_web_contacts_chat(
     assert after.status_code == 401
 
 
-async def test_the_sweep_clears_what_visitors_left_behind(
+async def test_the_sweep_clears_ended_sessions_and_keeps_what_visitors_said(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
     fixed_test_user,
 ):
+    """A session is a credential and goes when it ends; a conversation is a
+    contact's, anonymous or not, and stays until a member deletes it."""
     pod_id = test_pod["id"]
     widget = await _widget(authenticated_client, pod_id, name="Sweep")
     key = widget["public_key"]
     gone_by = await _session(authenticated_client, key)
-    idle = await _session(authenticated_client, key)
     kept = await _session(authenticated_client, key)
     idle_conversation = await _say(
         authenticated_client,
         db_session,
         key=key,
-        visitor=idle,
+        visitor=gone_by,
         text="Anyone there?",
         owner=UUID(fixed_test_user["id"]),
         pod_id=pod_id,
@@ -835,9 +852,9 @@ async def test_the_sweep_clears_what_visitors_left_behind(
     )
     await db_session.commit()
 
-    codes, sessions, conversations = await sweep_web_visitors(get_uow_factory())
+    codes, sessions = await sweep_web_visitors(get_uow_factory())
 
-    assert sessions >= 1 and conversations >= 1 and codes >= 0
+    assert sessions >= 1 and codes >= 0
     db_session.expire_all()
     remaining = set(
         (
@@ -848,9 +865,94 @@ async def test_the_sweep_clears_what_visitors_left_behind(
             )
         ).scalars()
     )
-    # The ended session went; the idle conversation took its session with it.
     assert remaining == {_session_id(kept)}
-    assert await db_session.get(ConversationModel, idle_conversation) is None
+    # What they said, and who they were, outlive the session.
+    assert await db_session.get(ConversationModel, idle_conversation) is not None
+    assert await _contact_of(db_session, idle_conversation) is not None
+
+
+async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """One person, one contact: the visitor's chat follows them to the contact
+    the pod already had, and the anonymous one is left pointing there."""
+    pod_id = test_pod["id"]
+    widget = await _widget(authenticated_client, pod_id, name="Merge")
+    key = widget["public_key"]
+    email = f"returning-{widget['id'][:8]}@client.example"
+    async with get_uow_factory()() as uow:
+        customer = await open_contact(
+            uow,
+            pod_id=UUID(pod_id),
+            kind=IdentityKind.EMAIL,
+            value=email,
+            strength=IdentityStrength.CHANNEL,
+            display_name="Dana",
+        )
+        await uow.commit()
+
+    visitor = await _session(authenticated_client, key)
+    conversation_id = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Is my order shipped?",
+        owner=UUID(fixed_test_user["id"]),
+        pod_id=pod_id,
+        script=[script_text("Let me look.")],
+    )
+    anonymous = await _contact_of(db_session, conversation_id)
+    assert anonymous is not None and anonymous != customer.id
+
+    sent = await authenticated_client.post(
+        f"/public/web/{key}/code", json={"email": email}, headers=_as(visitor)
+    )
+    assert sent.status_code == 200, sent.text
+    verified = await authenticated_client.post(
+        f"/public/web/{key}/code/verify",
+        json={"email": email, "code": _latest_code(email)},
+        headers=_as(visitor),
+    )
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["is_contact"] is True
+    assert verified.json()["display_name"] == "Dana"
+
+    db_session.expire_all()
+    merged = await db_session.get(ContactModel, anonymous)
+    assert merged is not None and merged.merged_into_id == customer.id
+    session_contact = await db_session.scalar(
+        select(VisitorSessionModel.contact_id).where(
+            VisitorSessionModel.id == _session_id(visitor)
+        )
+    )
+    assert session_contact == customer.id
+    # The browser's handle moved with them; the old contact holds nothing.
+    assert await _handles_of(db_session, customer.id) == {
+        ("EMAIL", "CHANNEL"),
+        ("WEB", "SESSION"),
+    }
+    assert await _handles_of(db_session, anonymous) == set()
+
+    # The conversation follows by the work the merge wrote with it.
+    registry = WorkRegistry()
+    register_contact_merged_work(registry)
+    await run_until_idle(
+        async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
+    )
+    assert await _contact_of(db_session, conversation_id) == customer.id
+
+    # The pod lists one person, not two; the old id still leads to them.
+    listed = await authenticated_client.get(f"/pods/{pod_id}/contacts")
+    assert listed.status_code == 200, listed.text
+    ids = {item["id"] for item in listed.json()["items"]}
+    assert str(customer.id) in ids and str(anonymous) not in ids
+    followed = await authenticated_client.get(f"/pods/{pod_id}/contacts/{anonymous}")
+    assert followed.status_code == 200, followed.text
+    assert followed.json()["id"] == str(customer.id)
 
 
 async def test_hosted_pages_live_on_their_own_origin_when_one_is_set(

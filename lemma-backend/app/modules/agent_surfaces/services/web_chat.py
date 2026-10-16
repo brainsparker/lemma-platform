@@ -41,7 +41,7 @@ from app.modules.agent_surfaces.services.outside_cap import (
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
 from app.modules.agent_surfaces.services.visitor_access import Visitor
 from app.modules.agent_surfaces.services.widget_directory import widget_by_key
-from app.modules.contacts.contracts import contact_by_id
+from app.modules.contacts.contracts import contact_by_id, open_anonymous_contact
 from app.modules.contacts.contracts.visitor_sessions import (
     VisitorSession,
     attach_visitor_conversation,
@@ -120,7 +120,7 @@ class WebChat:
             raise refused(
                 f"Keep it under {MAX_MESSAGE_CHARS} characters", 422, "too_long"
             )
-        if widget.answer is WidgetAnswer.KNOWN and visitor.session.contact_id is None:
+        if widget.answer is WidgetAnswer.KNOWN and not visitor.session.is_vouched:
             raise refused("Verify your email to chat", 403, "not_a_contact")
         if not await self.limiter.allow_turn(
             widget_id=widget.id, session_id=visitor.session.session_id
@@ -198,9 +198,15 @@ class WebChat:
         *,
         owner: UUID,
     ) -> UUID:
-        """The visitor's conversation, opened as the member on their first word."""
+        """The visitor's conversation, opened on their first word.
+
+        Theirs: it names the contact their browser is -- opened now if this is
+        the first thing they wrote -- and the member looking after the widget
+        keeps it.
+        """
         if session.conversation_id is not None:
             return session.conversation_id
+        contact_id = await _visitor_contact_id(uow, session)
         agent_name = await agent_name_for_id(uow.session, widget.agent_id)
         name = await self._display_name(uow, session)
         context_token = set_current_context(
@@ -210,7 +216,13 @@ class WebChat:
         )
         try:
             return await self._open_visitor_conversation(
-                uow, widget, session, owner=owner, agent_name=agent_name, name=name
+                uow,
+                widget,
+                session,
+                owner=owner,
+                contact_id=contact_id,
+                agent_name=agent_name,
+                name=name,
             )
         finally:
             reset_current_context(context_token)
@@ -265,6 +277,7 @@ class WebChat:
         session: VisitorSession,
         *,
         owner: UUID,
+        contact_id: UUID,
         agent_name: str | None,
         name: str | None,
     ) -> UUID:
@@ -279,8 +292,7 @@ class WebChat:
                 "web_widget_id": str(widget.id),
                 "web_session_id": str(session.id),
             },
-            for_outsiders=session.contact_id is None,
-            for_contact=session.contact_id,
+            contact_id=contact_id,
         )
         await attach_visitor_conversation(
             uow, session.id, conversation_id=conversation.id
@@ -328,16 +340,17 @@ class WebChat:
         answers: dict[str, object],
         address: str,
     ) -> None:
-        contact_id = visitor.session.contact_id if visitor else None
-        if widget.answer is WidgetAnswer.KNOWN and contact_id is None:
+        vouched = visitor is not None and visitor.session.is_vouched
+        if widget.answer is WidgetAnswer.KNOWN and not vouched:
             raise refused("This is for existing customers only", 403, "not_a_contact")
         _opened, contacts_only = await self.visitor_table(widget, table=table)
-        if contacts_only and contact_id is None:
+        if contacts_only and not vouched:
             raise refused("Confirm your email first", 403, "needs_contact")
         if not await self.limiter.allow_submission(
             widget_id=widget.id, address=address
         ):
             raise refused("Too many answers. Try again later.", 429, "rate_limited")
+        contact_id = await self._writer(visitor) if visitor is not None else None
         try:
             await add_visitor_row(
                 self.uow_factory,
@@ -345,7 +358,8 @@ class WebChat:
                 table_name=table,
                 answers=answers,
                 contact_id=contact_id,
-                actor=visitor.session.actor_id if visitor is not None else None,
+                vouched=vouched,
+                actor=f"contact:{contact_id}" if contact_id is not None else None,
             )
         except PublicRowRefused as exc:
             raise refused(exc.message, 422, "bad_answer") from exc
@@ -353,6 +367,15 @@ class WebChat:
             raise refused(
                 "This isn't taking answers right now", 403, "table_closed"
             ) from exc
+
+    async def _writer(self, visitor: Visitor) -> UUID:
+        """The contact a visitor writing a row is, opened if this is their first write."""
+        async with self.uow_factory() as uow:
+            contact_id = await _visitor_contact_id(
+                uow, await self._visitor_session(uow, visitor)
+            )
+            await uow.commit()
+        return contact_id
 
     async def public_rows(
         self,
@@ -401,6 +424,22 @@ class WebChat:
                 raise refused("The table has no such column", 422, "bad_order") from exc
             finally:
                 reset_current_context(token)
+
+
+async def _visitor_contact_id(
+    uow: SqlAlchemyUnitOfWork, session: VisitorSession
+) -> UUID:
+    """The contact this session's browser is, opened on the first thing it writes.
+
+    Never on a read: a page that only shows what the pod made Public opens
+    nobody.
+    """
+    if session.contact_id is not None:
+        return session.contact_id
+    contact = await open_anonymous_contact(
+        uow, pod_id=session.pod_id, session_id=session.id
+    )
+    return contact.id
 
 
 def _visitor_metadata(name: str | None, client_nonce: str | None) -> dict[str, object]:

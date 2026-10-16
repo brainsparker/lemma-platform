@@ -6,7 +6,16 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Numeric, String, text
+from sqlalchemy import (
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -239,4 +248,6 @@ class UsageContactsCap(UUIDAuditBase):
     monthly_limit_usd: Mapped[Decimal | None] = mapped_column(
         Numeric(24, 9), nullable=True
     )
+    #: How many contacts the organization's bots may answer; null for no limit.
+    max_contacts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_by_user_id: Mapped[UUID | None] = mapped_column(nullable=True)

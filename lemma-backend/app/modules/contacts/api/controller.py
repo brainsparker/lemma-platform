@@ -52,6 +52,19 @@ class ContactResponse(BaseModel):
     display_name: str | None = None
     created_at: datetime
     identities: list[ContactIdentityResponse] = Field(default_factory=list)
+    is_anonymous: bool = Field(
+        default=False,
+        description=(
+            "Known only by the browser they wrote from: a web visitor nobody "
+            "has vouched for yet."
+        ),
+    )
+    answered_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When an agent first answered them; what the contact limit counts."
+        ),
+    )
 
 
 class ContactListResponse(BaseModel):
@@ -96,13 +109,18 @@ def _response(contact: Contact) -> ContactResponse:
             )
             for identity in contact.identities
         ],
+        is_anonymous=contact.is_anonymous,
+        answered_at=contact.answered_at,
     )
 
 
 async def _found(uow: UoWDep, *, pod_id: UUID, contact_id: UUID) -> Contact:
-    contact = await ContactRepository(uow.session).get(
-        pod_id=pod_id, contact_id=contact_id
-    )
+    """The contact, or the one it was merged into: a link kept from before a
+    merge still leads to the person."""
+    contacts = ContactRepository(uow.session)
+    contact = await contacts.get(pod_id=pod_id, contact_id=contact_id)
+    if contact is not None and contact.merged_into_id is not None:
+        contact = await contacts.get(pod_id=pod_id, contact_id=contact.merged_into_id)
     if contact is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
     return contact

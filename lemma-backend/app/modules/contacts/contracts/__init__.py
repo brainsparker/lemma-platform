@@ -4,6 +4,12 @@ Operations, not storage. A surface asks "who is this handle in this pod",
 optionally creating the contact; an agent run asks for the name to address
 somebody by. Nothing here lists a pod's contacts or deletes one -- that is a
 member's action, through this module's own API.
+
+Every outsider the pod talks to is a contact, opened on the first thing they
+*write* -- a message, a row, a function call -- and never on a read. A web
+visitor nobody has vouched for is one too: an anonymous contact, known by the
+browser's session (``open_anonymous_contact``), until they prove a handle
+(``prove_handle``), which may show they were an older contact all along.
 """
 
 from __future__ import annotations
@@ -21,14 +27,21 @@ from app.modules.contacts.domain.entities import (
     is_stop_request,
     normalize_handle,
 )
+from app.modules.contacts.domain.merging import ProofTooWeak
 from app.modules.contacts.infrastructure.repository import (
     ContactRepository,
     UnusableHandle,
 )
+from app.modules.contacts.infrastructure.visitor_sessions import (
+    VisitorSessionRepository,
+)
+from app.modules.contacts.services.proofs import ContactProofs
 
 __all__ = [
     "ContactHandle",
     "ContactRef",
+    "ProofTooWeak",
+    "answered_contacts_in_organization",
     "UnusableHandle",
     "contact_handles",
     "unsubscribe_handle",
@@ -40,7 +53,10 @@ __all__ = [
     "find_contact",
     "is_stop_request",
     "normalize_handle",
+    "note_answered",
+    "open_anonymous_contact",
     "open_contact",
+    "prove_handle",
 ]
 
 
@@ -52,13 +68,24 @@ class ContactRef(BaseModel):
     id: UUID
     pod_id: UUID
     display_name: str | None
+    is_anonymous: bool = False
+    #: Whether an agent has answered them yet: what the contact limit counts.
+    answered: bool = False
 
 
 def _ref(contact: Contact | None) -> ContactRef | None:
     if contact is None:
         return None
+    return _as_ref(contact)
+
+
+def _as_ref(contact: Contact) -> ContactRef:
     return ContactRef(
-        id=contact.id, pod_id=contact.pod_id, display_name=contact.display_name
+        id=contact.id,
+        pod_id=contact.pod_id,
+        display_name=contact.display_name,
+        is_anonymous=contact.is_anonymous,
+        answered=contact.answered_at is not None,
     )
 
 
@@ -95,17 +122,79 @@ async def open_contact(
         strength=strength,
         display_name=display_name,
     )
-    return ContactRef(
-        id=contact.id, pod_id=contact.pod_id, display_name=contact.display_name
+    return _as_ref(contact)
+
+
+async def open_anonymous_contact(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, session_id: UUID
+) -> ContactRef:
+    """The contact a web chat session's browser is, opened on its first write.
+
+    Named on the session in the same transaction, so a session names at most
+    one contact however many first messages race.
+    """
+    contact = await ContactRepository(uow.session).open(
+        pod_id=pod_id,
+        kind=IdentityKind.WEB,
+        value=str(session_id),
+        strength=IdentityStrength.SESSION,
+        display_name=None,
     )
+    await VisitorSessionRepository(uow.session).name_contact(
+        session_id, contact_id=contact.id
+    )
+    return _as_ref(contact)
+
+
+async def prove_handle(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    pod_id: UUID,
+    claimant_id: UUID | None,
+    kind: IdentityKind,
+    value: str,
+    strength: IdentityStrength,
+    display_name: str | None = None,
+) -> ContactRef:
+    """Who the person is, having proved they hold this handle.
+
+    ``claimant_id`` is the contact they are so far, or ``None``. The handle
+    joins that contact when nobody holds it; when another contact does, the
+    two are merged and the survivor returned (``domain/merging``). Raises
+    ``ProofTooWeak`` for a ``strength`` that proves nothing.
+    """
+    proven = await ContactProofs(uow).prove(
+        pod_id=pod_id,
+        claimant_id=claimant_id,
+        kind=kind,
+        value=value,
+        strength=strength,
+        display_name=display_name,
+    )
+    return _as_ref(proven.contact)
 
 
 async def contact_by_id(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_id: UUID
 ) -> ContactRef | None:
-    """This pod's contact, or ``None`` once they have been deleted."""
-    return _ref(
-        await ContactRepository(uow.session).get(pod_id=pod_id, contact_id=contact_id)
+    """This pod's contact, or ``None`` once they have been deleted.
+
+    A contact since merged into another answers as the one it became: every
+    reader that kept the old id is led to the same person.
+    """
+    repository = ContactRepository(uow.session)
+    contact = await repository.get(pod_id=pod_id, contact_id=contact_id)
+    if contact is not None and contact.merged_into_id is not None:
+        contact = await repository.get(pod_id=pod_id, contact_id=contact.merged_into_id)
+    return _ref(contact)
+
+
+async def note_answered(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_id: UUID
+) -> bool:
+    """An agent answered this contact. Whether it was the first time."""
+    return await ContactRepository(uow.session).note_answered(
+        pod_id=pod_id, contact_id=contact_id
     )
 
 
@@ -139,4 +228,14 @@ async def unsubscribe_by_handle(
     """The contact wrote "STOP" from this handle; whether the pod knew it."""
     return await ContactRepository(uow.session).unsubscribe_handle(
         pod_id=pod_id, kind=kind, value=value
+    )
+
+
+async def answered_contacts_in_organization(
+    uow: SqlAlchemyUnitOfWork, *, organization_id: UUID
+) -> int:
+    """How many contacts the organization's agents have answered: what its
+    contact limit counts."""
+    return await ContactRepository(uow.session).answered_in_organization(
+        organization_id
     )

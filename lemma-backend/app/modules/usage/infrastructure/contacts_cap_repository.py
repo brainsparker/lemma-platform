@@ -30,24 +30,28 @@ class UsageContactsCapRepository:
     async def stored(self, organization_id: UUID) -> StoredContactsCap | None:
         """What the organization's owners set, or ``None`` if they never did."""
         row = await self.session.execute(
-            select(UsageContactsCap.monthly_limit_usd).where(
-                UsageContactsCap.organization_id == organization_id
-            )
+            select(
+                UsageContactsCap.monthly_limit_usd, UsageContactsCap.max_contacts
+            ).where(UsageContactsCap.organization_id == organization_id)
         )
         found = row.first()
-        return None if found is None else StoredContactsCap(found.monthly_limit_usd)
+        if found is None:
+            return None
+        return StoredContactsCap(found.monthly_limit_usd, found.max_contacts)
 
     async def set_monthly_limit(
         self,
         organization_id: UUID,
         *,
         monthly_limit_usd: Decimal | None,
+        max_contacts: int | None,
         updated_by_user_id: UUID,
     ) -> None:
         """Set the cap. ``None`` is no limit, recorded as the owner's choice."""
         statement = insert(UsageContactsCap).values(
             organization_id=organization_id,
             monthly_limit_usd=monthly_limit_usd,
+            max_contacts=max_contacts,
             updated_by_user_id=updated_by_user_id,
         )
         await self.session.execute(
@@ -55,6 +59,7 @@ class UsageContactsCapRepository:
                 index_elements=[UsageContactsCap.organization_id],
                 set_={
                     "monthly_limit_usd": statement.excluded.monthly_limit_usd,
+                    "max_contacts": statement.excluded.max_contacts,
                     "updated_by_user_id": statement.excluded.updated_by_user_id,
                     "updated_at": statement.excluded.updated_at,
                 },

@@ -37,6 +37,7 @@ from app.modules.usage.domain.errors import UsageAccessDeniedError
 from app.modules.usage.infrastructure.contacts_cap_repository import (
     UsageContactsCapRepository,
 )
+from app.modules.contacts.contracts import answered_contacts_in_organization
 from app.modules.usage.services.contacts_cap import contacts_cap_status
 from app.core.authorization.permissions import Permissions, SYSTEM_ROLE_PERMISSIONS
 from app.core.log.log import get_logger
@@ -366,6 +367,10 @@ async def _contacts_cap(uow: UoWDep, organization_id: UUID) -> ContactsCapRespon
         monthly_limit_usd=None if limit is None else float(limit),
         is_default=status_now.cap.is_default,
         spent_this_month_usd=float(status_now.spent_usd),
+        max_contacts=status_now.cap.max_contacts,
+        answered_contacts=await answered_contacts_in_organization(
+            uow, organization_id=organization_id
+        ),
     )
 
 
@@ -419,9 +424,17 @@ async def update_contacts_cap(
     await _require_billing_manager(user=user, organization_id=organization_id, uow=uow)
     limit = None if body.monthly_limit_usd is None else money(body.monthly_limit_usd)
     previous = await contacts_cap_status(uow, organization_id)
+    # A caller that says nothing about the count keeps it: an owner changing
+    # the spend must not lift a limit they set on how many are answered.
+    max_contacts = (
+        body.max_contacts
+        if "max_contacts" in body.model_fields_set
+        else previous.cap.max_contacts
+    )
     await UsageContactsCapRepository(uow.session).set_monthly_limit(
         organization_id,
         monthly_limit_usd=limit,
+        max_contacts=max_contacts,
         updated_by_user_id=user.id,
     )
     logger.info(

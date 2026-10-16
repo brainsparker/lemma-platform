@@ -23,7 +23,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.outsiders import AUDIENCE_KEY, CONTACT, CONTACT_KEY
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.config import surface_settings
@@ -152,9 +151,8 @@ async def test_a_stranger_emailing_the_bot_is_answered_as_a_contact(
             )
         )
     ).scalar_one()
-    metadata = conversation.conversation_metadata or {}
     assert conversation.user_id == owner
-    assert metadata.get(AUDIENCE_KEY) == CONTACT
+    assert conversation.contact_id == context.audience.contact_id
 
     # The sender is now one of the pod's contacts, by the address that was
     # vouched for.
@@ -167,7 +165,7 @@ async def test_a_stranger_emailing_the_bot_is_answered_as_a_contact(
         )
     ).scalar_one()
     contact_id = str(identity.contact_id)
-    assert contact_id == metadata.get(CONTACT_KEY)
+    assert identity.contact_id == conversation.contact_id
     assert identity.strength == "CHANNEL"
 
     listed = await authenticated_client.get(f"/pods/{pod_id}/contacts")

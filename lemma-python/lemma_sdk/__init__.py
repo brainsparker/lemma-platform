@@ -113,3 +113,5 @@ __all__ = [
     "RecordData",
     "refresh_cli_session",
 ]
+
+# ci-experiment: SDK-only change to measure a warm workspace image

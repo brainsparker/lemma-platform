@@ -177,23 +177,22 @@ class FileSearcher:
                     include_descendants=include_descendants,
                     file_scope=file_scope,
                 )
-            # One rule, both branches: nothing is returned whose id is not in a
-            # set the *platform* database just said this caller may read.
+            # One rule, every branch: nothing is returned whose id the
+            # *platform* database did not just say this caller may read.
             #
-            # When the scope was enumerated that set is the scope itself, and
-            # the check is belt and braces -- it costs one set membership test
-            # per row and it is the only thing standing between a future bug in
-            # the pushdown and a leaked file. When it was not -- unnarrowed, or
-            # excluding only the hidden *searchable* files -- this is the
-            # authorization, and it is the only place it happens.
+            # A scope only narrows the chunk query. It can come from the Redis
+            # scope cache, keyed by the pod's authorization epoch, and a bump
+            # lost to a Redis blip -- or a change that never bumps -- would
+            # serve a stale readable side for the cache's TTL. So the page is
+            # authorized here, by primary key, at most `candidate_limit` rows,
+            # whatever the scope was; an enumerated scope also bounds it.
+            readable = await self.authorizer.readable_among(
+                pod_id=pod_id,
+                ctx=ctx,
+                file_ids={result.file_id for result in results},
+            )
             if file_scope.enumerated:
-                readable = file_scope.file_ids
-            else:
-                readable = await self.authorizer.readable_among(
-                    pod_id=pod_id,
-                    ctx=ctx,
-                    file_ids={result.file_id for result in results},
-                )
+                readable &= file_scope.file_ids
             visible_results = [
                 result for result in results if result.file_id in readable
             ][:limit]

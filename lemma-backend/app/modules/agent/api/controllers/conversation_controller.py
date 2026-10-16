@@ -566,7 +566,8 @@ async def stream_conversation(
                 return
 
             async def ended() -> str | None:
-                return terminal_run_chunk(await load(target_run.id))
+                run = await load(target_run.id)
+                return terminal_run_chunk(run) if run is not None else None
 
             async for chunk in with_keepalive(
                 iter_subscription(iterator, target_run.id), on_idle=ended

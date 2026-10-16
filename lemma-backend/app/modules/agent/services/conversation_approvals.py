@@ -133,6 +133,8 @@ class ApprovalCoordinator:
         Everything else -- answers, denials, Agent Host permissions -- is
         database work and finishes inline.
         """
+        # The approvals list's `id` is the message's; accept it for the call.
+        approval_id = await self._canonical_approval_id(conversation.id, approval_id)
         decision_row = await self.conversation_repository.get_approval_decision(
             conversation_id=conversation.id,
             approval_id=approval_id,
@@ -141,19 +143,6 @@ class ApprovalCoordinator:
             conversation_id=conversation.id,
             approval_id=approval_id,
         )
-        if decision_row is None and paused is None:
-            # The approvals list's `id` is the message's; accept it for the call.
-            alias = await self._tool_call_id_of(conversation.id, approval_id)
-            if alias is not None:
-                return await self.resolve_user_approval_internal(
-                    conversation=conversation,
-                    approval_id=alias,
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    decision=decision,
-                    response=response,
-                    agent_name=agent_name,
-                )
         if decision_row is None and paused is None:
             # Nothing to resolve and nothing to heal — the approval never existed
             # or its call was never persisted.
@@ -492,17 +481,19 @@ class ApprovalCoordinator:
         )
         return [saved]
 
-    async def _tool_call_id_of(
+    async def _canonical_approval_id(
         self, conversation_id: UUID, approval_id: str
-    ) -> str | None:
+    ) -> str:
+        """``approval_id``, or the call's tool_call_id when it names the call's
+        message instead -- what the approvals list hands out as `id`."""
         try:
             message_id = UUID(approval_id)
         except ValueError:
-            return None
+            return approval_id
         found = await self.conversation_repository.tool_call_id_of_message(
             conversation_id=conversation_id, message_id=message_id
         )
-        return found if found and found != approval_id else None
+        return found or approval_id
 
     async def paused_call(
         self,

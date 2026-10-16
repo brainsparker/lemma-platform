@@ -84,4 +84,3 @@ async def apply_schedule(
     )
     entity = ScheduleCreateEntity(user_id=user_id, pod_id=pod_id, **fields)
     await create_schedule(uow, entity, ctx=ctx)
-

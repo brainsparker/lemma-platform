@@ -87,7 +87,7 @@ def is_past_one_time_schedule(
     if moment.tzinfo is None:
         try:
             zone = ZoneInfo(str(config.get("timezone") or "UTC"))
-        except (ValueError, ZoneInfoNotFoundError):
+        except ValueError, ZoneInfoNotFoundError:
             zone = ZoneInfo("UTC")
         moment = moment.replace(tzinfo=zone)
     return moment <= (now or datetime.now(timezone.utc))

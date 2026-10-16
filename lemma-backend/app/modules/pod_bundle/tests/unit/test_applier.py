@@ -731,9 +731,7 @@ async def test_schedule_apply_maps_manifest_to_entity(tmp_path, monkeypatch):
     assert entity.config == {"cron": "0 2 * * *"}
 
 
-async def test_a_one_time_schedule_that_already_ran_is_left_out(
-    tmp_path, monkeypatch
-):
+async def test_a_one_time_schedule_that_already_ran_is_left_out(tmp_path, monkeypatch):
     """A pod exported after its one-time schedule fired carries it; creating
     one in the past is refused, which used to fail the import half applied."""
     root = tmp_path / "bundle"

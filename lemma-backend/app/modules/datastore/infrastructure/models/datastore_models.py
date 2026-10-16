@@ -115,6 +115,10 @@ class DatastoreFile(UUIDAuditBase):
     processing_attempts: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    #: The processing claim's fencing token. Only ever moves on; never shown.
+    processing_claim: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: The digest the current chunks and derived artifacts were made from.
     indexed_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)

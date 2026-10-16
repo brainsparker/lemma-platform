@@ -283,6 +283,37 @@ async def test_turning_a_files_search_off_retires_the_cached_scope(
     )
 
 
+async def test_a_stale_cached_scope_is_not_trusted_to_authorize(
+    db_session, searchable_pod, chosen_scopes
+) -> None:
+    """A change the epoch never heard about -- a bump lost to a Redis blip,
+    here a raw write -- leaves the cached split stale for its TTL. The scope
+    may still narrow the query; it must not decide what the caller sees."""
+    files = searchable_pod["files"]
+    for path in _SHARED[2:]:
+        await db_session.execute(
+            text("UPDATE datastore_files SET visibility = 'PERSONAL' WHERE id = :id"),
+            {"id": UUID(files[path]["id"])},
+        )
+    await db_session.commit()
+    await searchable_pod["viewer"].search_files(NEEDLE, limit=20)
+
+    await db_session.execute(
+        text("UPDATE datastore_files SET visibility = 'PERSONAL' WHERE id = :id"),
+        {"id": UUID(files[_SHARED[1]]["id"])},
+    )
+    await db_session.commit()
+    response = await searchable_pod["viewer"].search_files(NEEDLE, limit=20)
+
+    stale = chosen_scopes[-1]
+    assert stale.enumerated and UUID(files[_SHARED[1]]["id"]) in stale.file_ids, (
+        f"the second search was not served the cached split: {stale}"
+    )
+    assert _result_paths(response) == {_SHARED[0]}, (
+        "a file the caller can no longer read came back from a stale cached scope"
+    )
+
+
 async def test_both_sides_over_the_ceiling_post_filters(
     searchable_pod, chosen_scopes, monkeypatch
 ) -> None:

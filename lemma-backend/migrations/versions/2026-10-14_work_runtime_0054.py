@@ -22,12 +22,16 @@ default scale factor would let dead tuples pile up to a fifth of the table
 before it looks, and the claim's index probes slow down with them, so both
 are vacuumed on a fixed threshold instead.
 
-**Files.** Three columns on ``datastore_files``:
+**Files.** Four columns on ``datastore_files``:
 
 * ``indexed_sha256`` -- the bytes the current chunks and derived artifacts were
   made from. NULL on existing rows, which read it as ``content_sha256``.
 * ``storage_layout`` -- ``path`` for every existing row (bytes keyed by path);
   rows written once the object layout is switched on say ``object``.
+* ``processing_claim`` -- the processing claim's fencing token, which only
+  ever moves on. ``processing_attempts`` keeps the meaning people and clients
+  already read (attempts that failed on the current bytes) instead of
+  becoming a token that grows across revisions.
 * ``parent_id`` -- the folder a row sits in. Filled for new writes; existing
   rows are filled by the ``datastore.parent_backfill`` job, not here, because
   the table is written on every upload and a full-table update would hold it.
@@ -40,11 +44,11 @@ in this transaction, so nothing in flight is lost between the two runtimes.
 a backoff, and ``FAILED_PERMANENT`` is the one terminal failure. (The old
 recovery cron already re-queued every ``FAILED`` row, so seeding them adds no
 work the previous release would not have done.) A row that an old worker is
-still processing during a rolling deploy is fenced by its claim token
+still processing during a rolling deploy is fenced by the token *it* knows
 (``processing_attempts``): the seed moves that counter on by one rather than
 resetting it, so the new runtime's first claim can never reissue the token the
-old worker holds, and the overlap is harmless. (Attempt budgets live on the
-work item now; the row's counter is only the token.)
+old worker holds, and the overlap is harmless. The new runtime fences on
+``processing_claim``. (Retry budgets live on the work item now.)
 
 Every step is idempotent: the concurrent index builds commit on their own, so
 a failure after them leaves the revision half applied, and a rerun must finish
@@ -63,9 +67,10 @@ down_revision = "0053_folder_visibility_index"
 branch_labels = None
 depends_on = None
 
-#: The ingestion class's per-pod cap; the runtime refreshes it from the limits
-#: port within a minute, so this only has to be a sane starting value.
-_INGESTION_DEFAULT_CAP = 2
+#: The ingestion class's per-pod cap, matching ``CLASS_DEFAULTS`` and the old
+#: per-pod in-flight gate (``DATASTORE_PER_POD_MAX_INFLIGHT``, 4); the runtime
+#: refreshes it from the limits port within a minute.
+_INGESTION_DEFAULT_CAP = 4
 
 _IN_FLIGHT = (
     "kind = 'FILE' AND search_enabled AND status IN ('PENDING', 'PROCESSING', 'FAILED')"
@@ -155,6 +160,11 @@ def _add_file_columns() -> None:
             nullable=False,
             server_default="path",
         ),
+        if_not_exists=True,
+    )
+    op.add_column(
+        "datastore_files",
+        sa.Column("processing_claim", sa.Integer(), nullable=False, server_default="0"),
         if_not_exists=True,
     )
     op.add_column(
@@ -387,6 +397,7 @@ def downgrade() -> None:
                 if_exists=True,
             )
     op.drop_column("datastore_files", "parent_id")
+    op.drop_column("datastore_files", "processing_claim")
     op.drop_column("datastore_files", "storage_layout")
     op.drop_column("datastore_files", "indexed_sha256")
     op.drop_table("work_rate_buckets")

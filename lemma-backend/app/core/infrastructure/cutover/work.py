@@ -91,6 +91,9 @@ POLL_SECONDS = 30
 #: Once converted, how often the sweep looks again while the tables remain.
 REARM_SECONDS = 300
 SINCE_SLACK = timedelta(minutes=5)
+#: How recent an old delivery or job must be to count as in flight when the
+#: release went out. Older ones are not converted: that would replay them.
+LIVE_WINDOW = timedelta(minutes=30)
 
 
 class LegacyEvent(BaseModel):
@@ -108,6 +111,9 @@ class SweepState(BaseModel):
     cursors: dict[str, list[str]] = Field(default_factory=dict)
     #: The one-time conversion (streaq jobs, state routes) has run.
     converted: bool = False
+    #: Nothing older than this is converted: the release time less
+    #: ``LIVE_WINDOW``, seeded by 0056 and carried through every re-arm.
+    horizon: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,13 +152,17 @@ async def run_legacy_event(ctx: JobContext, payload: LegacyEvent) -> None:
 async def run_sweep(ctx: JobContext, state: SweepState) -> None:
     taken: dict[str, int] = {}
     last = None
+    if state.horizon is None:
+        state.horizon = datetime.now(UTC) - LIVE_WINDOW
     async with ctx.checkpoint() as uow:
         present = await legacy_tables_present(uow.session)
         if present:
             newest_row = await uow.session.scalar(
                 text("SELECT max(occurred_at) FROM domain_event_outbox")
             )
-            taken = await take_over(uow.session, limit=BATCH, since=state.since)
+            taken = await take_over(
+                uow.session, limit=BATCH, since=state.since, horizon=state.horizon
+            )
             last = await last_activity(uow.session)
             if newest_row is not None and not _full(taken):
                 # Everything that occurred before this pass began is taken
@@ -175,7 +185,7 @@ async def run_sweep(ctx: JobContext, state: SweepState) -> None:
         await _rearm(ctx, state, 0 if full else state.poll_seconds)
         return
     if not state.converted:
-        await convert(ctx)
+        await convert(ctx, state.horizon)
         state.converted = True
     if present or others_present:
         # Expand-only: the tables stay until the next release drops them, and
@@ -199,23 +209,28 @@ def _full(taken: dict[str, int]) -> bool:
     return any(count >= BATCH for count in taken.values())
 
 
-async def convert(ctx: JobContext) -> int:
+async def convert(ctx: JobContext, horizon: datetime | None = None) -> int:
     """The previous release is gone: take over what is still owed, watermark or
-    not, convert what only Redis held and queue the state routes. Once."""
+    not, convert what only Redis held and queue the state routes. Once.
+    Nothing from before ``horizon`` is converted."""
     while True:
         async with ctx.checkpoint() as uow:
             if not await legacy_tables_present(uow.session):
                 break
-            if not _full(await take_over(uow.session, limit=BATCH)):
+            taken = await take_over(uow.session, limit=BATCH, horizon=horizon)
+            if not _full(taken):
                 break
-    converted = await convert_streaq_jobs(ctx)
+    converted = await convert_streaq_jobs(ctx, horizon)
     async with ctx.checkpoint() as uow:
         work = WorkWriter.of(uow)
         for route in STATE_ROUTES:
             await work.add(
                 LEGACY_EVENT,
                 LEGACY_NS,
-                LegacyEvent(route=route),
+                LegacyEvent(
+                    route=route,
+                    event={"horizon": horizon.isoformat() if horizon else None},
+                ),
                 dedup_key=f"legacy:{route}",
             )
     logger.info("cutover.legacy_sweep.converted", streaq_converted=converted)
@@ -284,7 +299,9 @@ async def _sweep_other_outboxes(
                 break
             async with ctx.checkpoint() as uow:
                 for name in outbox.routes:
-                    taken += await take_over_rows(uow.session, routes[name], rows)
+                    taken += await take_over_rows(
+                        uow.session, routes[name], rows, horizon=state.horizon
+                    )
             last_row = rows[-1]
             state.cursors[outbox.name] = [
                 last_row["occurred_at"].isoformat(),
@@ -319,16 +336,24 @@ async def _read_after(
         return [dict(row._mapping) for row in result]
 
 
-async def convert_streaq_jobs(ctx: JobContext) -> int:
-    """Each streaq job only Redis held becomes a ``cutover.legacy_event``."""
+async def convert_streaq_jobs(ctx: JobContext, horizon: datetime | None = None) -> int:
+    """Each streaq job only Redis held becomes a ``cutover.legacy_event`` --
+    unless it was enqueued before ``horizon``: then it is only forgotten."""
     from app.core.infrastructure.redis.client import get_redis
 
     redis = get_redis(decode_responses=False)
-    converted, left = 0, {}
+    converted, stale, left = 0, 0, {}
     retired = retired_streaq_jobs()
     try:
         async for job in queued_jobs(redis):
-            if job.function in STREAQ_ROUTES:
+            old = (
+                horizon is not None
+                and job.enqueued_at is not None
+                and job.enqueued_at < horizon
+            )
+            if job.function in STREAQ_ROUTES and old:
+                stale += 1
+            elif job.function in STREAQ_ROUTES:
                 # One job's arguments, as JSON (a UUID or a datetime as text).
                 event = to_jsonable_python(
                     {"args": list(job.args), "kwargs": job.kwargs}, fallback=str
@@ -353,6 +378,8 @@ async def convert_streaq_jobs(ctx: JobContext) -> int:
         logger.warning(
             "cutover.legacy_sweep.streaq_unconverted", functions=_counts(left)
         )
+    if stale:
+        logger.info("cutover.legacy_sweep.streaq_stale_skipped", skipped=stale)
     return converted
 
 

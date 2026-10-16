@@ -81,6 +81,45 @@ _ON_CONFLICT = (
     "DO NOTHING"
 )
 
+#: How recently something must have moved to count as in flight when the
+#: release goes out. Older work is not resumed on its own: it is failed with a
+#: reason a person can act on (send a message, resume the import).
+_LIVE_WINDOW = "interval '30 minutes'"
+_HORIZON = f"now() - {_LIVE_WINDOW}"
+_INTERRUPTED = "Interrupted before the upgrade. Send a message to continue."
+
+
+def park_statements() -> list[str]:
+    """What is too old to resume, failed saying why -- before the seeds, which
+    then find nothing of it in a state they would seed."""
+    runs = (
+        "WITH stale AS ("
+        "UPDATE agent_runs r SET status = 'FAILED', finished_at = now(), "
+        f"error = '{_INTERRUPTED}' FROM agent_conversations c "
+        "WHERE c.id = r.conversation_id AND r.status = 'RUNNING' "
+        "AND GREATEST(r.updated_at, r.started_at, c.last_activity_at) "
+        f"< {_HORIZON} RETURNING r.conversation_id) "
+        "UPDATE agent_conversations c SET status = 'FAILED' FROM stale "
+        "WHERE c.id = stale.conversation_id AND c.status = 'RUNNING'"
+    )
+    waits = (
+        "WITH stale AS ("
+        "UPDATE agent_conversation_waits w SET status = 'FAILED', "
+        "completed_at = now() WHERE w.status = 'ACTIVE' "
+        "AND w.wait_type IN ('TIME', 'SUBAGENT', 'PROCESS') "
+        f"AND w.scheduled_at < {_HORIZON} RETURNING w.conversation_id) "
+        "UPDATE agent_conversations c SET status = 'FAILED' FROM stale "
+        "WHERE c.id = stale.conversation_id AND c.status = 'WAITING'"
+    )
+    bundles = (
+        "UPDATE pod_bundle_jobs j SET status = 'FAILED', completed_at = now(), "
+        "error_code = 'NOT_FINISHED_BEFORE_UPGRADE', "
+        "error = 'Not finished before the upgrade. Start it again to retry.' "
+        "WHERE j.status IN ('QUEUED', 'EXPORTING', 'APPLYING', 'FETCHING', "
+        f"'PLANNING') AND COALESCE(j.heartbeat_at, j.updated_at) < {_HORIZON}"
+    )
+    return [runs, waits, bundles]
+
 
 # -- agent turns ---------------------------------------------------------------
 
@@ -223,7 +262,7 @@ def agent_wait_seed_statements() -> list[str]:
         f"SELECT gen_random_uuid(), {_APPROVAL_NS}, 'interactive', "
         f"'agent.approval.execute', {approval_payload}, {_APPROVAL_KEY}, "
         f"{_APPROVAL_KEY}, 1, {approval_run_at} "
-        f"FROM {_OPEN_DECISIONS} {_ON_CONFLICT}"
+        f"FROM {_OPEN_DECISIONS} AND d.created_at >= {_HORIZON} {_ON_CONFLICT}"
     )
     return [
         _queues("events", _WAIT_NS, _TIMERS),
@@ -517,7 +556,8 @@ def _queue_cutover_sweep() -> None:
         sa.text(
             "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, run_at) "
             "VALUES (gen_random_uuid(), 'system', 'admin', 'cutover.legacy_sweep', "
-            "'{}'::jsonb, 'cutover.legacy_sweep', now()) "
+            f"jsonb_build_object('horizon', {_HORIZON}), 'cutover.legacy_sweep', "
+            "now()) "
             "ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL AND state = 'queued' "
             "DO NOTHING"
         )
@@ -532,6 +572,7 @@ def upgrade() -> None:
     )
     _create_surface_tables()
     for statement in (
+        *park_statements(),
         *agent_turn_seed_statements(),
         *agent_wait_seed_statements(),
         *bundle_seed_statements(),

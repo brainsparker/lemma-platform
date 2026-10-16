@@ -110,9 +110,17 @@ async def _check_main_database(
 
     async with session_maker() as session:
         report.legacy_tables = await legacy_tables_present(session)
+        # The sweep's horizon: older rows are not owed, they are not replayed.
+        horizon = await session.scalar(
+            text(
+                "SELECT (payload->>'horizon')::timestamptz FROM work_items "
+                "WHERE kind = :kind LIMIT 1"
+            ),
+            {"kind": LEGACY_SWEEP},
+        )
         if report.legacy_tables:
             for route in ROUTES:
-                owed = await count_owed(session, route)
+                owed = await count_owed(session, route, horizon=horizon)
                 if owed:
                     report.owed[route.consumer] = owed
         sweep = (

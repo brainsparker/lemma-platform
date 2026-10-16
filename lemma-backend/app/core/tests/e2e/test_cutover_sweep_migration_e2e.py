@@ -29,7 +29,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.infrastructure.cutover.routes import ROUTES
-from app.core.infrastructure.cutover.takeover import take_over
+from app.core.infrastructure.cutover.takeover import count_owed, take_over
 from app.core.infrastructure.cutover.work import last_activity
 from app.core.test_utils import get_postgres_container, get_postgres_url
 from app.modules.test_support.e2e.legacy_transport import (
@@ -156,6 +156,14 @@ async def test_an_install_with_owed_deliveries_upgrades_in_one_step() -> None:
 
         _migrate(database_url, "upgrade", REVISION)
         assert _state(sync_url) == ("domain_event_outbox", "domain_event_inbox", 1, 0)
+        with psycopg.connect(sync_url) as connection:
+            seeded = connection.execute(
+                "SELECT (payload->>'horizon')::timestamptz FROM work_items "
+                "WHERE kind = 'cutover.legacy_sweep'"
+            ).fetchone()
+            assert seeded is not None and seeded[0] is not None, (
+                "the sweep carries the release's horizon from its first pass"
+            )
 
         engine = create_async_engine(database_url)
         try:
@@ -185,6 +193,31 @@ async def test_an_install_with_owed_deliveries_upgrades_in_one_step() -> None:
                 }
             expected["pod.join-request-email"] += 1
             expected["agent-surfaces.pod-member-removed"] += 1
+
+            # Past the release's horizon nothing is replayed: an owed row from
+            # long before it is left, and is not counted as owed either.
+            horizon = datetime.now(UTC) - timedelta(minutes=30)
+            async with engine.begin() as conn:
+                await outbox_row(
+                    conn,
+                    event("pod.join_request.requested"),
+                    occurred_at=datetime.now(UTC) - timedelta(hours=2),
+                )
+                await outbox_row(conn, event("pod.join_request.requested"))
+            async with engine.begin() as conn:
+                assert await take_over(AsyncSession(bind=conn), horizon=horizon) == {
+                    "pod.join-request-email": 1
+                }
+            async with engine.begin() as conn:
+                route = next(
+                    r for r in ROUTES if r.consumer == "pod.join-request-email"
+                )
+                session = AsyncSession(bind=conn)
+                assert await count_owed(session, route, horizon=horizon) == 0
+                assert await count_owed(session, route) == 1, (
+                    "the old row is still there"
+                )
+            expected["pod.join-request-email"] += 1
         finally:
             await engine.dispose()
 

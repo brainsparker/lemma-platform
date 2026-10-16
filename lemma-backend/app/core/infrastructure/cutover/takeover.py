@@ -60,10 +60,15 @@ def _matches(route: LegacyRoute) -> str:
 
 
 def owed_predicate(route: LegacyRoute) -> str:
-    """SQL on outbox row ``o``: owed to ``route.consumer`` (``:consumer``)."""
+    """SQL on outbox row ``o``: owed to ``route.consumer`` (``:consumer``),
+    and recent enough to carry over (``:horizon``, NULL for no floor)."""
     # A dead-lettered row never reached any consumer: the old publisher gave
     # up on it and only an operator's replay sent it again. It stays dead.
+    # A row older than the horizon was not in flight when the release went
+    # out: converting it now would replay an old event, so it is not owed.
     return (
+        "(CAST(:horizon AS timestamptz) IS NULL "
+        "OR o.occurred_at >= CAST(:horizon AS timestamptz)) AND "
         f"o.dead_lettered_at IS NULL AND {_matches(route)} AND NOT EXISTS ("
         "SELECT 1 FROM domain_event_inbox i "
         "WHERE i.consumer = CAST(:consumer AS text) AND i.event_id = o.id "
@@ -108,8 +113,14 @@ ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL AND state = 'queued' DO NOTH
 """
 
 
-def _params(route: LegacyRoute, limit: int) -> dict[str, Any]:
-    params: dict[str, Any] = {"consumer": route.consumer, "limit": limit}
+def _params(
+    route: LegacyRoute, limit: int, horizon: datetime | None = None
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "consumer": route.consumer,
+        "limit": limit,
+        "horizon": horizon,
+    }
     if route.types:
         params["types"] = list(route.types)
     if route.like:
@@ -123,6 +134,7 @@ async def take_over(
     routes: Sequence[LegacyRoute] = ROUTES,
     limit: int = 5_000,
     since: datetime | None = None,
+    horizon: datetime | None = None,
 ) -> dict[str, int]:
     """One batch per route from the main outbox; items written per route.
 
@@ -135,7 +147,7 @@ async def take_over(
     await session.execute(ENSURE_QUEUE)
     taken: dict[str, int] = {}
     for route in routes:
-        params = _params(route, limit)
+        params = _params(route, limit, horizon)
         if since is not None:
             params["since"] = since
         result = await session.execute(
@@ -149,7 +161,11 @@ async def take_over(
 
 
 async def take_over_rows(
-    session: AsyncSession, route: LegacyRoute, rows: Sequence[dict[str, Any]]
+    session: AsyncSession,
+    route: LegacyRoute,
+    rows: Sequence[dict[str, Any]],
+    *,
+    horizon: datetime | None = None,
 ) -> int:
     """Take over ``rows`` (``id``, ``event_type``, ``payload``, ``occurred_at``)
     read from another database's outbox, checked against this one's inbox."""
@@ -163,18 +179,20 @@ async def take_over_rows(
     )
     result = await session.execute(
         text(_take_over(route, source)),
-        {**_params(route, len(rows)), "rows": _encode(rows)},
+        {**_params(route, len(rows), horizon), "rows": _encode(rows)},
     )
     return int(getattr(result, "rowcount", 0) or 0)
 
 
-async def count_owed(session: AsyncSession, route: LegacyRoute) -> int:
+async def count_owed(
+    session: AsyncSession, route: LegacyRoute, *, horizon: datetime | None = None
+) -> int:
     """How many outbox rows are owed to ``route`` right now (for the check)."""
     value = await session.scalar(
         text(
             f"SELECT count(*) FROM domain_event_outbox o WHERE {owed_predicate(route)}"
         ),
-        {k: v for k, v in _params(route, 0).items() if k != "limit"},
+        {k: v for k, v in _params(route, 0, horizon).items() if k != "limit"},
     )
     return int(value or 0)
 

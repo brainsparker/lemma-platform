@@ -129,7 +129,10 @@ async def surface_message(ctx: JobContext, event: LegacyPayload, route: str) -> 
 
 @legacy_converter("state:surfaces.owed_replies")
 async def owed_replies(ctx: JobContext, event: LegacyPayload, route: str) -> None:
-    del event, route
+    """Deliver each reply owed since the horizon; forget older ones unsent --
+    posting a reply that was due long before the release would be a replay."""
+    del route
+    horizon = _horizon(event)
     from app.modules.agent.contracts import (
         conversation_metadata_records as metadata_records,
     )
@@ -145,7 +148,8 @@ async def owed_replies(ctx: JobContext, event: LegacyPayload, route: str) -> Non
                 limit=_BATCH,
             )
             for record in records:
-                await _owed_to_delivery(uow, record)
+                if _recent(record.value, horizon):
+                    await _owed_to_delivery(uow, record)
                 await metadata_records.forget_conversation_metadata_record(
                     uow,
                     record.conversation_id,
@@ -190,6 +194,22 @@ async def notification_expiry(
         if len(rows) < _BATCH:
             return
         after = rows[-1].id
+
+
+def _horizon(event: LegacyPayload) -> datetime | None:
+    value = event.get("horizon")
+    return datetime.fromisoformat(value) if isinstance(value, str) else None
+
+
+def _recent(value: object, horizon: datetime | None) -> bool:
+    due = value.get("next_at") if isinstance(value, dict) else None
+    if horizon is None or not isinstance(due, str):
+        return True
+    try:
+        moment = datetime.fromisoformat(due)
+    except ValueError:
+        return True
+    return (moment if moment.tzinfo else moment.replace(tzinfo=UTC)) >= horizon
 
 
 def _identity(value: object) -> dict[str, str | None]:

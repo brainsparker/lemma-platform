@@ -11,6 +11,7 @@ from __future__ import annotations
 import pickle  # noqa: S403 - data this application wrote to its own Redis
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from redis.asyncio import Redis
@@ -24,6 +25,8 @@ class QueuedJob:
     function: str
     args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = field(default_factory=dict)
+    #: When it was enqueued (streaq's ``t``, epoch milliseconds), if recorded.
+    enqueued_at: datetime | None = None
 
 
 async def queued_jobs(redis: Redis) -> AsyncIterator[QueuedJob]:
@@ -44,7 +47,14 @@ async def queued_jobs(redis: Redis) -> AsyncIterator[QueuedJob]:
             function=str(data.get("f") or "<unknown>"),
             args=tuple(data.get("a") or ()),
             kwargs=dict(data.get("k") or {}),
+            enqueued_at=_enqueued_at(data.get("t")),
         )
+
+
+def _enqueued_at(value: object) -> datetime | None:
+    if not isinstance(value, int | float) or value <= 0:
+        return None
+    return datetime.fromtimestamp(value / 1000, tz=UTC)
 
 
 async def forget_job(redis: Redis, job: QueuedJob) -> None:

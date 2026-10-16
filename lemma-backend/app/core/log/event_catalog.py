@@ -693,6 +693,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'crypto.keys.unparsable_secret_encryption_keyset.failed': EventSpec('error', frozenset()),
     'crypto.rotation.column_reencrypted': EventSpec('debug', frozenset({'column', 'migrated', 'scanned'})),
     'cutover.legacy_sweep.converted': EventSpec('info', frozenset({'streaq_converted'})),
+    'cutover.legacy_sweep.streaq_stale_skipped': EventSpec('info', frozenset({'skipped'})),
     'cutover.legacy_sweep.streaq_unconverted': EventSpec('warning', frozenset({'functions'})),
     'cutover.legacy_sweep.taken_over': EventSpec('info', frozenset({'other', 'routes'})),
     'datastore.access.files_withheld': EventSpec('warning', frozenset({'actor_type', 'total_candidates', 'withheld_count'})),

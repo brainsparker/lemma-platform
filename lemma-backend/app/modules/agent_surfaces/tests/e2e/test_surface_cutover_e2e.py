@@ -168,6 +168,11 @@ async def test_the_cutover_converts_what_was_owed_once(
     unread = _webhook(
         surface_id, _telegram_payload(text="never read", message_id=903, sender_id=9003)
     )
+    # Never read either, but from hours before the release: answering it now
+    # would reply to a message its sender has long given up on.
+    ancient = _webhook(
+        surface_id, _telegram_payload(text="hours ago", message_id=904, sender_id=9004)
+    )
     async with get_engine().begin() as conn:
         await create_legacy_tables(conn)
         done = await outbox_row(conn, finished, published=True)
@@ -182,6 +187,9 @@ async def test_the_cutover_converts_what_was_owed_once(
             received_at=datetime.now(UTC) - timedelta(minutes=5),
         )
         await outbox_row(conn, unread)
+        await outbox_row(
+            conn, ancient, occurred_at=datetime.now(UTC) - timedelta(hours=2)
+        )
         await outbox_row(
             conn,
             {

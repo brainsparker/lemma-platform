@@ -376,6 +376,10 @@ class ConversationRepository(Protocol):
         conversation_id: UUID,
     ) -> set[str]: ...
 
+    async def tool_call_id_of_message(
+        self, *, conversation_id: UUID, message_id: UUID
+    ) -> str | None: ...
+
     async def get_tool_call(
         self,
         *,

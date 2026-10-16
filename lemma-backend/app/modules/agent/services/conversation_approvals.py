@@ -133,6 +133,8 @@ class ApprovalCoordinator:
         Everything else -- answers, denials, Agent Host permissions -- is
         database work and finishes inline.
         """
+        # The approvals list's `id` is the message's; accept it for the call.
+        approval_id = await self._canonical_approval_id(conversation.id, approval_id)
         decision_row = await self.conversation_repository.get_approval_decision(
             conversation_id=conversation.id,
             approval_id=approval_id,
@@ -478,6 +480,20 @@ class ApprovalCoordinator:
             ),
         )
         return [saved]
+
+    async def _canonical_approval_id(
+        self, conversation_id: UUID, approval_id: str
+    ) -> str:
+        """``approval_id``, or the call's tool_call_id when it names the call's
+        message instead -- what the approvals list hands out as `id`."""
+        try:
+            message_id = UUID(approval_id)
+        except ValueError:
+            return approval_id
+        found = await self.conversation_repository.tool_call_id_of_message(
+            conversation_id=conversation_id, message_id=message_id
+        )
+        return found or approval_id
 
     async def paused_call(
         self,

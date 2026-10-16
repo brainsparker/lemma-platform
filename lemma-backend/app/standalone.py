@@ -18,8 +18,9 @@ teardown closes what its handlers use.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from collections.abc import Iterator
+import asyncio
+import signal
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -49,6 +50,15 @@ def build_standalone_app(
     ``modules`` is the list the worker half registers and runs (the open-source
     list when omitted); it must be the list ``api_app`` was built from.
     """
+    if modules is not None and not isinstance(modules, (list, tuple)):
+        # The second argument used to be the streaq worker. A caller still
+        # passing one (an un-updated lemma-cloud wrapper) gets this rather than
+        # a failure deep in module registration.
+        raise TypeError(
+            "build_standalone_app(api_app, modules): the second argument is the "
+            "module list the work runtime registers (the one api_app was built "
+            f"from), not a worker; got {type(modules).__name__}"
+        )
     api_app.state.embedded_worker = True
     api_app.state.embedded_apps = tuple(item.path for item in embedded_apps)
     api_lifespan = api_app.router.lifespan_context
@@ -71,13 +81,16 @@ def build_standalone_app(
                 await stack.enter_async_context(
                     item.app.router.lifespan_context(item.app)
                 )
-            await stack.enter_async_context(
+            runtime = await stack.enter_async_context(
                 worker_services(
                     OSS_MODULES if modules is None else modules,
                     service_name="lemma-api",
                     embedded=True,
                 )
             )
+            begin_stop = getattr(runtime, "begin_stop", None)
+            if begin_stop is not None:
+                stack.callback(_drain_on_signal(begin_stop))
             yield
 
     api_app.router.lifespan_context = standalone_lifespan
@@ -99,3 +112,35 @@ def _single_process_cutover() -> Iterator[None]:
     finally:
         work_settings.work_cutover_auto_finish = False
         work_settings.model_fields_set.discard("work_cutover_auto_finish")
+
+
+def _drain_on_signal(begin_stop: Callable[[], None]) -> Callable[[], None]:
+    """Start the work runtime's drain the moment SIGTERM/SIGINT arrives.
+
+    uvicorn handles the signal by waiting for open connections -- a chat's
+    event stream among them -- before it runs the lifespan's exit, which is
+    where the runtime stopped. So a turn was never handed back: it finished on
+    the dying process, and shutdown waited on the stream for as long as it
+    stayed open. uvicorn's own handler still runs after this one. Returns the
+    undo, for the lifespan's exit.
+    """
+    loop = asyncio.get_running_loop()
+    previous: dict[int, object] = {}
+
+    def handle(signum: int, frame: object) -> None:
+        loop.call_soon_threadsafe(begin_stop)
+        prior = previous.get(signum)
+        if callable(prior):
+            prior(signum, frame)
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous[signum] = signal.signal(signum, handle)
+        except ValueError:  # not the main thread: no signals to watch here
+            return lambda: None
+
+    def restore() -> None:
+        for signum, prior in previous.items():
+            signal.signal(signum, prior)  # type: ignore[arg-type]
+
+    return restore

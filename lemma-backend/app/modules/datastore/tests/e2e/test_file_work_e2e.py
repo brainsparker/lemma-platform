@@ -774,3 +774,27 @@ async def test_the_release_keeps_old_keys_a_path_layout_file_has_taken_over(
     assert legacy.read_bytes() == replacement
     assert await pod_api.download_file("/reused.pdf") == replacement
     assert await pod_api.download_file("/moved.pdf") != replacement
+
+
+async def test_replacing_a_documents_bytes_replaces_what_search_knows(
+    pod_api: DatastoreApi, file_work: FileWork
+) -> None:
+    """Factory QA AC-PR979-3: words only the old revision had stop being found
+    once the new revision is read, and the new words are found."""
+    first = await pod_api.upload_file("echo-revision.md", b"zanzibar quokka original")
+    await file_work.drain()
+    found = await pod_api.search_files("zanzibar")
+    assert first["id"] in {item["file_id"] for item in found["items"]}
+
+    await pod_api.update_file(
+        first["path"],
+        content=b"kilimanjaro walrus replacement",
+        filename="echo-revision.md",
+    )
+    await file_work.drain()
+
+    assert (await file_work.row(first["id"]))["status"] == "COMPLETED"
+    new = await pod_api.search_files("kilimanjaro")
+    assert first["id"] in {item["file_id"] for item in new["items"]}
+    old = await pod_api.search_files("zanzibar")
+    assert old["items"] == [], "the replaced words are still searchable"

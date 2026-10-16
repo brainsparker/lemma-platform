@@ -55,7 +55,7 @@ CLASS_DEFAULTS: dict[WorkClass, ClassDefaults] = {
     ),
     WorkClass.AUTOMATION: ClassDefaults(timedelta(seconds=60), 64, 32, 3),
     WorkClass.DELIVERY: ClassDefaults(timedelta(seconds=30), 32, 8, 2),
-    WorkClass.INGESTION: ClassDefaults(timedelta(seconds=120), 4, 2, 2),
+    WorkClass.INGESTION: ClassDefaults(timedelta(seconds=120), 4, 4, 2),
     WorkClass.ADMIN: ClassDefaults(timedelta(seconds=60), 4, 1, 1),
     # Perpetual pollers, one per credential, serialised by a concurrency key
     # rather than a namespace cap.

@@ -3,8 +3,11 @@
 The ``file.process`` work item drives processing and owns its retries; the row
 is what a person sees -- PENDING, PROCESSING, COMPLETED, FAILED_PERMANENT -- and
 these are its transitions. Every one after the claim is fenced on the claim's
-token and the bytes it was taken against, so a run that lost its lease cannot
-overwrite a newer run's outcome. Kept together and away from the reads because
+token (``processing_claim``, which only ever moves on) and the bytes it was
+taken against, so a run that lost its lease cannot overwrite a newer run's
+outcome. ``processing_attempts`` is the person's number, as before the work
+runtime: attempts that failed on these bytes -- a claim counts one, an outage
+gives it back, completing or asking again clears it. Kept together and away from the reads because
 they are the only methods here that answer "what is happening to this file".
 
 A mixin rather than a separate repository so callers keep one object, the same
@@ -16,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.datastore.domain.file_entities import (
@@ -56,6 +59,9 @@ class DatastoreFileProcessingStateMixin:
         if request is None:
             return
         entity.clear_processing_request()
+        # New bytes, a retry or search switched on: a fresh count. Only the
+        # count -- the claim token is never reset, so it cannot be reissued.
+        instance.processing_attempts = 0
         await enqueue_file_processing(
             self.session,
             pod_id=instance.pod_id,
@@ -82,6 +88,10 @@ class DatastoreFileProcessingStateMixin:
         run is alive, and a run reaching here holds the item's lease -- so a
         PROCESSING row it finds was left by a run that died. The token moves
         on, which is what fences the dead run if it was only stalled.
+
+        ``processing_attempts`` moves on too, as it always has: an old release
+        still running during the deploy fences on it, and the 0054 seed moved
+        it past every token such a worker holds.
         """
         result = await self.session.execute(
             update(DatastoreFile)
@@ -95,8 +105,9 @@ class DatastoreFileProcessingStateMixin:
             .values(
                 status=FileStatus.PROCESSING.value,
                 processing_attempts=DatastoreFile.processing_attempts + 1,
+                processing_claim=DatastoreFile.processing_claim + 1,
             )
-            .returning(DatastoreFile.processing_attempts)
+            .returning(DatastoreFile.processing_claim)
         )
         return result.scalar_one_or_none()
 
@@ -105,7 +116,7 @@ class DatastoreFileProcessingStateMixin:
         file_id: UUID,
         *,
         content_sha256: str | None,
-        processing_attempt: int,
+        claim: int,
     ) -> bool:
         return bool(
             await self.session.scalar(
@@ -113,7 +124,7 @@ class DatastoreFileProcessingStateMixin:
                     DatastoreFile.id == file_id,
                     DatastoreFile.status == FileStatus.PROCESSING.value,
                     _content_identity_matches(content_sha256),
-                    DatastoreFile.processing_attempts == processing_attempt,
+                    DatastoreFile.processing_claim == claim,
                 )
             )
         )
@@ -123,7 +134,7 @@ class DatastoreFileProcessingStateMixin:
         file_id: UUID,
         *,
         content_sha256: str | None,
-        processing_attempt: int,
+        claim: int,
         file_metadata: dict[str, object],
     ) -> bool:
         """Complete only the exact content identity and processing claim."""
@@ -133,7 +144,7 @@ class DatastoreFileProcessingStateMixin:
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PROCESSING.value,
                 _content_identity_matches(content_sha256),
-                DatastoreFile.processing_attempts == processing_attempt,
+                DatastoreFile.processing_claim == claim,
             )
             .values(
                 status=FileStatus.COMPLETED.value,
@@ -141,6 +152,7 @@ class DatastoreFileProcessingStateMixin:
                 indexed_sha256=content_sha256,
                 last_processing_error=None,
                 file_metadata=file_metadata,
+                processing_attempts=0,
             )
         )
         return result.rowcount > 0
@@ -150,24 +162,34 @@ class DatastoreFileProcessingStateMixin:
         file_id: UUID,
         *,
         content_sha256: str | None,
-        processing_attempt: int,
+        claim: int,
         note: str | None,
+        charged: bool,
     ) -> bool:
         """Back to PENDING, saying why: the work item will run it again.
 
-        Nothing is refunded or charged here -- the work item counts attempts --
-        so this is the same for "the extractor is down" and "it failed on this
-        document"; only ``note`` differs.
+        The work item keeps the retry budget; ``charged`` only keeps the
+        person's count honest. An outage (``charged=False``) gives back the
+        attempt the claim counted, because nothing was learned about these
+        bytes; a failure on the document keeps it.
         """
+        values: dict[str, object] = {
+            "status": FileStatus.PENDING.value,
+            "last_processing_error": note,
+        }
+        if not charged:
+            values["processing_attempts"] = func.greatest(
+                DatastoreFile.processing_attempts - 1, 0
+            )
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PROCESSING.value,
                 _content_identity_matches(content_sha256),
-                DatastoreFile.processing_attempts == processing_attempt,
+                DatastoreFile.processing_claim == claim,
             )
-            .values(status=FileStatus.PENDING.value, last_processing_error=note)
+            .values(values)
         )
         return result.rowcount > 0
 
@@ -177,7 +199,7 @@ class DatastoreFileProcessingStateMixin:
         *,
         content_sha256: str | None,
         error: str,
-        processing_attempt: int | None = None,
+        claim: int | None = None,
     ) -> bool:
         """The terminal failure, for these bytes only.
 
@@ -192,8 +214,8 @@ class DatastoreFileProcessingStateMixin:
             ),
             _content_identity_matches(content_sha256),
         ]
-        if processing_attempt is not None:
-            conditions.append(DatastoreFile.processing_attempts == processing_attempt)
+        if claim is not None:
+            conditions.append(DatastoreFile.processing_claim == claim)
         result = await self.session.execute(
             update(DatastoreFile)
             .where(*conditions)

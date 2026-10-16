@@ -219,7 +219,7 @@ class DatastoreFileProcessingService:
                 completed = await DatastoreFileRepository(uow).mark_completed(
                     file_id,
                     content_sha256=snapshot.content_sha256,
-                    processing_attempt=token,
+                    claim=token,
                     file_metadata=merged_metadata,
                 )
                 if completed:
@@ -238,7 +238,7 @@ class DatastoreFileProcessingService:
                     file_id,
                     content_sha256=snapshot.content_sha256,
                     error=exc.too_large.message,
-                    processing_attempt=token,
+                    claim=token,
                 )
         except (DatastoreObjectNotFoundError, DatastoreObjectIntegrityError) as exc:
             # The original is gone or not what was accepted: no retry can
@@ -248,7 +248,7 @@ class DatastoreFileProcessingService:
                     file_id,
                     content_sha256=snapshot.content_sha256,
                     error=f"missing_original: {sanitize_processing_error(exc)}",
-                    processing_attempt=token,
+                    claim=token,
                 )
         except Exception as exc:
             unavailable = unavailable_for(exc)
@@ -257,8 +257,9 @@ class DatastoreFileProcessingService:
                     await DatastoreFileRepository(uow).release_to_pending(
                         file_id,
                         content_sha256=snapshot.content_sha256,
-                        processing_attempt=token,
+                        claim=token,
                         note=_waiting_note(exc, unavailable),
+                        charged=False,
                     )
                 logger.warning(
                     "datastore.file_processing_service.dependency_unavailable.degraded",
@@ -271,8 +272,9 @@ class DatastoreFileProcessingService:
                 await DatastoreFileRepository(uow).release_to_pending(
                     file_id,
                     content_sha256=snapshot.content_sha256,
-                    processing_attempt=token,
+                    claim=token,
                     note=summary,
+                    charged=True,
                 )
             warn_if_a_facility_is_absent(exc, pod_id=self.pod_id)
             logger.info(
@@ -405,7 +407,7 @@ class DatastoreFileProcessingService:
             current = await DatastoreFileRepository(uow).is_processing_claim_current(
                 snapshot.id,
                 content_sha256=snapshot.content_sha256,
-                processing_attempt=token,
+                claim=token,
             )
         if not current:
             raise _StaleProcessingClaim

@@ -144,7 +144,7 @@ PINNED = [
     {
         "name": "agent",
         "dirs": ["app/modules/agent/tests/e2e"],
-        "workers": 1,
+        "workers": 2,
         "markers": FAST_MARKERS,
         # False now, and derived rather than declared: with the two
         # `fast_workspace` files in their own group above, nothing left in this

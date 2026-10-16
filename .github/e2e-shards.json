@@ -55,7 +55,7 @@
     {
       "name": "agent",
       "args": "app/modules/agent/tests/e2e --ignore=app/modules/agent/tests/e2e/test_agent_hermetic_journeys_e2e.py --ignore=app/modules/agent/tests/e2e/test_long_running_and_research_e2e.py",
-      "workers": 1,
+      "workers": 2,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": false,
       "serial_seconds": 447.2,

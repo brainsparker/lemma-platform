@@ -79,6 +79,9 @@ _START_ALLOWANCE_SECONDS = 60
 
 #: How long a synchronous call waits between looks at a full pod's gate.
 _CAPACITY_POLL_SECONDS = (0.25, 2.0)
+#: A queued run's wait for its sandbox before it hands back its work slot (one
+#: of the pod's automation slots, shared with titles and schedule starts).
+_QUEUED_ENDPOINT_WAIT = timedelta(seconds=60)
 
 POD_AT_CAPACITY_ERROR = (
     "Function never started: its pod was running as many functions as it can "
@@ -207,8 +210,12 @@ class FunctionDispatcher:
         execution_ends_at = self._now() + timedelta(
             seconds=dispatch.execution_seconds + _START_ALLOWANCE_SECONDS
         )
+        bound = min(dispatch.deadline_at, self._now() + _QUEUED_ENDPOINT_WAIT)
+        wait_until = bound if queued else None
         endpoint_task = create_inherited_task(
-            self._runtime_endpoint(dispatch, execution_ends_at=execution_ends_at)
+            self._runtime_endpoint(
+                dispatch, execution_ends_at=execution_ends_at, wait_until=wait_until
+            )
         )
         token_task = create_inherited_task(
             self._function_session_token(dispatch, valid_until=execution_ends_at)
@@ -229,8 +236,8 @@ class FunctionDispatcher:
                         token_task,
                         organization_task,
                     )
-                except SandboxUnavailable as exc:
-                    if not queued:
+                except (SandboxUnavailable, TimeoutError) as exc:
+                    if not queued:  # its item retries; the endpoint keeps loading
                         raise
                     raise SandboxNotReady(str(exc)) from exc
             if before_start is not None:

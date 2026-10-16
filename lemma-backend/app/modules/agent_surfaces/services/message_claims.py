@@ -5,7 +5,8 @@ Two different questions used to share one Redis store:
 * "has this *message* been handled?" -- Slack sends ``message`` and
   ``app_mention`` for one message under two event ids, a native button can be
   tapped twice. That is a record, and a lost one answers somebody twice, so it
-  lives in Postgres now (``surface_message_claims``) with no TTL.
+  lives in Postgres now (``surface_message_claims``), kept 7 days
+  (``CLAIMS_KEPT``) -- longer than any platform redelivers.
 * "may this stranger be nudged again yet?" -- a throttle, which stays in Redis
   (``RedisStrangerReplyWindow``).
 

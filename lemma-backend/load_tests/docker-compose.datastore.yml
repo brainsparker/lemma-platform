@@ -41,7 +41,7 @@ services:
       # Extraction concurrency is the ingestion work class's slots per process;
       # the per-pod cap keeps one tenant's upload from monopolising them.
       WORK_SLOTS_JSON: '{"ingestion": ${DATASTORE_EXTRACTION_CONCURRENCY:-2}}'
-      WORK_MAX_RUNNING_JSON: '{"ingestion": ${DATASTORE_PER_POD_MAX_INFLIGHT:-2}}'
+      WORK_MAX_RUNNING_JSON: '{"ingestion": ${DATASTORE_PER_POD_MAX_INFLIGHT:-4}}'
       DOCUMENT_PROCESSING_MAX_INFLIGHT_BYTES: "${DATASTORE_MAX_INFLIGHT_BYTES:-536870912}"
       KREUZBERG_REQUEST_TIMEOUT_SECONDS: "${DATASTORE_KREUZBERG_TIMEOUT_SECONDS:-600}"
       LOCAL_EMBEDDING_CACHE_DIR: /home/appuser/.cache/lemma/fastembed

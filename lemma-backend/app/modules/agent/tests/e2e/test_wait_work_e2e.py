@@ -357,7 +357,7 @@ async def test_a_deadline_item_fired_early_rearms_for_the_deadline(scenario) -> 
 # -- the cutover -------------------------------------------------------------------
 
 
-def _seed_statements() -> list[str]:
+def _cutover_statements() -> list[str]:
     path = next(
         Path(__file__)
         .resolve()
@@ -369,129 +369,63 @@ def _seed_statements() -> list[str]:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return [*module.park_statements(), *module.agent_wait_seed_statements()]
+    return module.cutover_statements()
 
 
 async def _seed() -> None:
     async with async_session_maker() as session:
-        for statement in _seed_statements():
+        for statement in _cutover_statements():
             await session.execute(text(statement))
         await session.commit()
 
 
-async def test_the_cutover_resumes_only_a_turn_that_was_moving(scenario) -> None:
-    """A turn untouched for hours when the release goes out is not resumed --
-    that would spend a model call on a conversation nobody is in. It fails,
-    saying so; a turn that was moving is carried over."""
-    path = next(
-        Path(__file__)
-        .resolve()
-        .parents[5]
-        .joinpath("migrations", "versions")
-        .glob("*_agent_surface_bundle_work_0056.py")
-    )
-    spec = importlib.util.spec_from_file_location("migration_0056", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+async def _conversation_status(conversation_id: UUID) -> str:
+    async with async_session_maker() as session:
+        return (
+            await session.execute(
+                text("SELECT status FROM agent_conversations WHERE id = :id"),
+                {"id": conversation_id},
+            )
+        ).scalar_one()
 
-    stale = await seeded_conversation(scenario)
-    stale_run = await running_run(stale)
-    moving = await seeded_conversation(scenario)
-    moving_run = await running_run(moving)
+
+async def test_the_cutover_ends_a_running_turn_saying_so(scenario) -> None:
+    """A turn the old workers were driving is not resumed: it fails with a
+    message telling the person to continue, and nothing is queued for it."""
+    seeded = await seeded_conversation(scenario)
+    run_id = await running_run(seeded)
     async with async_session_maker() as session:
         await session.execute(
-            text(
-                "UPDATE agent_runs SET started_at = now() - interval '3 hours', "
-                "updated_at = now() - interval '3 hours' WHERE id = :id"
-            ),
-            {"id": stale_run},
+            text("UPDATE agent_conversations SET status = 'RUNNING' WHERE id = :id"),
+            {"id": seeded.conversation_id},
         )
-        await session.execute(
-            text(
-                "UPDATE agent_conversations SET status = 'RUNNING', "
-                "last_activity_at = now() - interval '3 hours' WHERE id = :id"
-            ),
-            {"id": stale.conversation_id},
-        )
-        for statement in (
-            *module.park_statements(),
-            *module.agent_turn_seed_statements(),
-        ):
-            await session.execute(text(statement))
         await session.commit()
-
-        def one(sql: str, **params: object):
-            return session.execute(text(sql), params)
-
-        run_status, error = (
-            await one(
-                "SELECT status, error FROM agent_runs WHERE id = :id", id=stale_run
-            )
-        ).one()
-        conversation = (
-            await one(
-                "SELECT status FROM agent_conversations WHERE id = :id",
-                id=stale.conversation_id,
-            )
-        ).scalar_one()
-        seeded = {
-            row[0]
-            for row in (
-                await one(
-                    "SELECT payload->>'run_id' FROM work_items "
-                    "WHERE kind LIKE 'agent.turn%'"
-                )
-            ).all()
-        }
-        # Not due yet: an old worker may still be driving it, with no lease
-        # this release can see. Resumed once it has been quiet ten minutes.
-        due_later = (
-            await one(
-                "SELECT run_at > now() + interval '9 minutes' FROM work_items "
-                "WHERE kind LIKE 'agent.turn%' AND payload->>'run_id' = :id",
-                id=str(moving_run),
-            )
-        ).scalar_one()
-        await one("DELETE FROM work_items WHERE kind LIKE 'agent.turn%'")
-        await session.commit()
-    assert (run_status, conversation) == ("FAILED", "FAILED")
-    assert error.startswith("Interrupted before the upgrade")
-    assert str(stale_run) not in seeded
-    assert str(moving_run) in seeded
-    assert due_later, "a turn still moving on the old release was made due at once"
-
-
-async def test_the_cutover_fails_a_wait_long_past_due_instead_of_waking_it(
-    scenario,
-) -> None:
-    """A wake the old poller missed by hours is not delivered at the release:
-    the agent would resume on an old cue. It fails, saying so, and the person
-    continues by sending a message."""
-    seeded, _, stale = await _waiting(
-        scenario, AgentWaitType.TIME, due_in=-timedelta(hours=2), armed=False
-    )
 
     await _seed()
 
-    assert (await _wait(stale.id)).status is AgentWaitStatus.FAILED
-    assert await _items(stale.id) == 0
     async with async_session_maker() as session:
-        status = (
+        run_status, error = (
             await session.execute(
-                text("SELECT status FROM agent_conversations WHERE id = :id"),
-                {"id": seeded.conversation_id},
+                text("SELECT status, error FROM agent_runs WHERE id = :id"),
+                {"id": run_id},
+            )
+        ).one()
+        turns = (
+            await session.execute(
+                text("SELECT count(*) FROM work_items WHERE kind LIKE 'agent.turn%'")
             )
         ).scalar_one()
-    assert status == "FAILED"
+    assert (run_status, turns) == ("FAILED", 0)
+    assert error.startswith("Interrupted by the upgrade")
+    assert await _conversation_status(seeded.conversation_id) == "FAILED"
 
 
-async def test_the_cutover_fails_a_conversation_whose_approval_is_too_old_to_run(
+async def test_the_cutover_fails_a_conversation_whose_decided_approval_never_ran(
     scenario,
 ) -> None:
-    """An approval decided long before the release is not executed -- that
-    would run an old tool call on its own. The conversation paused on it has
-    nothing else to wake it, so it is failed rather than left waiting."""
+    """An approval decided but not yet executed is not run by the new release --
+    nothing replays it -- so the conversation paused on it is failed rather than
+    left waiting forever."""
     seeded = await seeded_conversation(scenario)
     run_id = await running_run(seeded)
     approval_id = await pausing_call(
@@ -509,25 +443,10 @@ async def test_the_cutover_fails_a_conversation_whose_approval_is_too_old_to_run
             resolved_by_user_id=seeded.user_id,
         )
         await uow.commit()
-    async with async_session_maker() as session:
-        await session.execute(
-            text(
-                "UPDATE agent_approval_decisions SET created_at = now() - "
-                "interval '2 hours' WHERE conversation_id = :id"
-            ),
-            {"id": seeded.conversation_id},
-        )
-        await session.commit()
 
     await _seed()
 
     async with async_session_maker() as session:
-        status = (
-            await session.execute(
-                text("SELECT status FROM agent_conversations WHERE id = :id"),
-                {"id": seeded.conversation_id},
-            )
-        ).scalar_one()
         queued = (
             await session.execute(
                 text(
@@ -538,15 +457,14 @@ async def test_the_cutover_fails_a_conversation_whose_approval_is_too_old_to_run
                 {"id": str(seeded.conversation_id)},
             )
         ).scalar_one()
-    assert (status, queued) == ("FAILED", 0)
+    assert queued == 0
+    assert await _conversation_status(seeded.conversation_id) == "FAILED"
 
 
 @pytest.mark.drives_work
-async def test_the_cutover_seeds_each_open_wait_and_approval_once(
-    scenario, monkeypatch
-) -> None:
+async def test_the_cutover_arms_each_open_wait_once(scenario, monkeypatch) -> None:
     """Waits armed by the old poller have no item; the migration writes one each,
-    and each fires once. A second seeding writes nothing for what has ended."""
+    and each fires once. A second run writes nothing for what has ended."""
 
     async def _probe(target) -> TargetOutcome:
         return TargetOutcome(reason=AgentWaitWakeReason.TARGET_FINISHED, exit_code=0)
@@ -559,50 +477,17 @@ async def test_the_cutover_seeds_each_open_wait_and_approval_once(
     _, _, polled = await _waiting(
         scenario, AgentWaitType.PROCESS, target_ref="p", armed=False
     )
-    approved_seeded = await seeded_conversation(scenario)
-    approval_run = await running_run(approved_seeded)
-    approval_id = await pausing_call(
-        approved_seeded,
-        approval_run,
-        tool_name="ask_user",
-        tool_args={"questions": []},
-    )
-    await finish(approval_run, conversation_status=ConversationStatus.WAITING)
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).record_approval_decision(
-            conversation_id=approved_seeded.conversation_id,
-            approval_id=approval_id,
-            agent_run_id=approval_run,
-            tool_name="ask_user",
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            response={"answers": {"q": "yes"}},
-            resolved_by_user_id=approved_seeded.user_id,
-        )
-        await uow.commit()
 
     await _seed()
 
     for wait in (past_due, future, polled):
         assert await _items(wait.id) == 1
-    async with async_session_maker() as session:
-        approvals = (
-            await session.execute(
-                text(
-                    "SELECT count(*) FROM work_items WHERE kind = 'agent.approval.execute'"
-                )
-            )
-        ).scalar_one()
-    assert approvals == 1
-
-    from app.modules.test_support.e2e.agent_work import run_approval_work
 
     await run_wait_work()
-    await run_approval_work()
 
     assert (await _wait(past_due.id)).status is AgentWaitStatus.COMPLETED
     assert (await _wait(polled.id)).status is AgentWaitStatus.COMPLETED
     assert (await _wait(future.id)).status is AgentWaitStatus.ACTIVE
-    assert len(await runs(approved_seeded.conversation_id)) == 2
 
     await _seed()
     assert await _items(past_due.id) == 0

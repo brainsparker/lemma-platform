@@ -74,6 +74,7 @@ from app.modules.agent_surfaces.services.cold_email_thread import (
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.notification_service import (
     NotificationService,
+    expire_one,
 )
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
@@ -263,16 +264,6 @@ class InMemoryNotifications:
             and row.status is NotificationStatus.OPEN
             and row.expects_response
         )
-
-    async def list_past_due(self, *, limit=100, now=None):
-        moment = now or _now()
-        return [
-            row.model_copy(deep=True)
-            for row in self.rows.values()
-            if row.status is NotificationStatus.OPEN
-            and row.expires_at is not None
-            and row.expires_at <= moment
-        ][:limit]
 
 
 class InMemoryLinks:
@@ -951,7 +942,7 @@ async def test_an_ask_nobody_answers_wakes_the_asker_when_it_expires(world):
     assert await world.settle() == []
     world.notifications.rows[ignored.id].expires_at = _now() - timedelta(minutes=1)
 
-    assert await world.service.expire_past_due() == 1
+    assert await expire_one(world.uow, world.notifications, ignored.id, work=world.work)
 
     assert await world.settle() == [world.asker_conversation.id]
 
@@ -961,7 +952,7 @@ async def test_an_fyi_that_expires_wakes_nobody(world):
     fyi = await world.ask(expects_response=False, title="Heads up")
     world.notifications.rows[fyi.id].expires_at = _now() - timedelta(minutes=1)
 
-    assert await world.service.expire_past_due() == 1
+    assert await expire_one(world.uow, world.notifications, fyi.id, work=world.work)
 
     assert await world.settle() == []
 

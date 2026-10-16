@@ -263,7 +263,7 @@ async def _finish(
             )
         else:
             # Runs nothing (an answer, a denial, a host permission): the inline
-            # path, for an item seeded at cutover or written for an adopted one.
+            # path, for an item written for an adopted one.
             await approvals.reconcile_resume(
                 conversation=decided.conversation,
                 approval_id=payload.approval_id,

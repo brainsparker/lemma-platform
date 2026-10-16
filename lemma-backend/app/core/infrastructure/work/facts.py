@@ -10,7 +10,7 @@ nothing.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -94,19 +94,11 @@ class FactBus:
         fact: Fact,
         *,
         writer: WorkWriter | None = None,
-        only: Collection[str] | None = None,
     ) -> int:
-        """Write one item per matching subscriber; returns how many were enqueued.
-
-        ``only`` restricts the fan-out to those subscriber kinds: the cutover
-        replays a fact for one old consumer that still owed it, not for the
-        others that had already done their part.
-        """
+        """Write one item per matching subscriber; returns how many were enqueued."""
         work = writer or WorkWriter(uow.session, registry=self._registry)
         added = 0
         for subscription in self._subscriptions.get(type(fact), ()):
-            if only is not None and subscription.kind not in only:
-                continue
             if not subscription.accepts(fact):
                 continue
             spec = self._registry.get(subscription.kind)

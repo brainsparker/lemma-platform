@@ -96,31 +96,6 @@ def projected_event_types() -> frozenset[str]:
     return frozenset(_projections)
 
 
-async def project_payload(payload: dict[str, Any]) -> int:
-    """Project one event that arrives already as the dict a projection takes.
-
-    For events the old transport still owed at the cutover
-    (``cutover.legacy_event``): they were never offered to this process's sink.
-    Same contract as the sink -- under the event's own origin, an expected
-    failure logged and counted, not raised. Returns the projections run.
-    """
-    handlers = _projections.get(str(payload.get("event_type")), ())
-    for handler in handlers:
-        try:
-            with origin_scope(origin_from_payload(payload)):
-                await asyncio.wait_for(
-                    handler(payload), timeout=_PROJECTION_TIMEOUT_SECONDS
-                )
-        except _PROJECTION_ERRORS:
-            failed_counter.add(1)
-            logger.warning(
-                "analytics.sink.projection_failed",
-                event_type=payload.get("event_type"),
-                exc_info=True,
-            )
-    return len(handlers)
-
-
 class DomainEventSink:
     """Bounded queue + one flusher task, bound to the loop that started it."""
 

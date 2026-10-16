@@ -422,7 +422,6 @@ typecheck-critical:
 		app/core/api/schemas.py \
 		app/core/api/uploads.py \
 		app/core/infrastructure/work \
-		app/core/infrastructure/cutover \
 		app/modules/agent/api/dependencies.py \
 		app/modules/agent/domain/ports.py \
 		app/modules/agent/services \

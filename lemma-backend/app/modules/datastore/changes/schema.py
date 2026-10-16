@@ -73,7 +73,6 @@ async def _present(conn: AsyncConnection, schema: str) -> set[str]:
         await conn.execute(
             text(
                 "SELECT to_regclass(:changes) IS NOT NULL, "
-                "to_regclass(:event_index) IS NOT NULL, "
                 "to_regclass(:subscribers) IS NOT NULL, "
                 "to_regclass(:table_index) IS NOT NULL, "
                 "EXISTS (SELECT 1 FROM information_schema.columns "
@@ -82,7 +81,6 @@ async def _present(conn: AsyncConnection, schema: str) -> set[str]:
             ),
             {
                 "changes": changes_table(schema),
-                "event_index": f'"{schema}".ux_reserved_changes_event',
                 "subscribers": subscribers_table(schema),
                 "table_index": f'"{schema}".ix_reserved_change_subscribers_table',
                 "schema": schema,
@@ -90,7 +88,7 @@ async def _present(conn: AsyncConnection, schema: str) -> set[str]:
             },
         )
     ).one()
-    names = ("changes", "event_index", "subscribers", "table_index", "intents")
+    names = ("changes", "subscribers", "table_index", "intents")
     return {name for name, there in zip(names, row) if there}
 
 
@@ -123,18 +121,10 @@ async def create_change_log(conn: AsyncConnection, schema: str) -> None:
             "intent text NOT NULL DEFAULT 'normal', "
             "owner_user_id uuid, "
             "outside_actor text, "
-            # Set only on rows converted from the old event path, so a
-            # conversion that is repeated appends nothing twice.
-            "event_id uuid, "
             "new_row jsonb, "
             "old_values jsonb, "
             "at timestamptz NOT NULL DEFAULT now(), "
             "PRIMARY KEY (xid, seq))"
-        )
-    if "event_index" not in present:
-        statements.append(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_reserved_changes_event "
-            f"ON {changes} (event_id) WHERE event_id IS NOT NULL"
         )
     if "subscribers" not in present:
         statements.append(

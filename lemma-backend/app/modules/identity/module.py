@@ -100,13 +100,7 @@ async def _configure_supertokens(context):
     yield
 
 
-def _register_periodic_work() -> None:
-    # Worker only: what the old event transport still owed, converted (cutover).
-    import app.modules.identity.events.legacy_cutover  # noqa: F401
-
-
 module = LemmaModule(
-    register_periodic_work=_register_periodic_work,
     name="identity",
     routers=_routers,
     register_work=_register_work,

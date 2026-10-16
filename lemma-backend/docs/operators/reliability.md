@@ -103,48 +103,34 @@ uv run python -m app.core.infrastructure.work.admin retry [--ns NS] [--kind K] [
 Earlier releases moved background work through Redis Streams (FastStream
 consumer groups), streaq queues and a transactional outbox
 (`domain_event_outbox`, `domain_event_inbox`). The release that carries
-migrations `0054` to `0056` stops using them with no operator step, and drops
-nothing, so its image can still be rolled back:
+migrations `0054` to `0056` stops using them. **The cutover replays nothing**:
+what was durable state is armed, what was in flight ends, and whatever the old
+transport still held -- unread stream entries, unpublished outbox rows, queued
+streaq jobs -- is dropped.
 
-1. **Migrations `0054` to `0056`** seed work items from domain state for
-   everything that has state behind it: files to process, TIME schedules,
-   flow waits and function runs, running agent turns, active waits, decided
-   approvals and in-flight bundle jobs.
-2. **Migration `0056_agent_surface_bundle_work`** queues the cutover sweep
-   (`cutover.legacy_sweep`, `app/core/infrastructure/cutover`).
-3. **The sweep runs from the first worker boot.** Every 30 s it takes over
-   what the old transport still owes. A delivery is owed to an old consumer
-   while its outbox row is not dead and that consumer's inbox has no settled
-   row for it; the outbox keeps published rows longer than any group could
-   still deliver them, so Redis holds nothing it does not. Each owed delivery
-   becomes one `cutover.legacy_event` item, run through the converter its
-   module registered (which writes what the new code writes for that event,
-   keyed the same way), and the consumer's inbox row is settled in the same
-   statement so an old worker still running does not do it as well.
-   A separately configured datastore database's outbox is read the same way.
-4. **Once neither table has been written for ten minutes** (the previous
-   release has stopped), the sweep, once, takes over everything still owed,
-   converts the streaq jobs whose work existed only in Redis, and gives owed
-   replies, open notifications and still-dispatched schedule runs their work.
-5. **Then it keeps looking every five minutes** while the tables exist, so a
-   rollback to the previous image that writes them again loses nothing.
+**Deploy it with the previous release's workers stopped.** Scale the old
+workers to zero, run the migrations, then start the new release. An old worker
+left running would keep taking work from Redis that the new release never sees,
+and race the migrations on the rows they end.
+
+What the migrations do:
+
+* **Armed** -- every TIME schedule gets its next fire (one already past due is
+  skipped to its next occurrence, not fired late); flow timers, decisions,
+  expiring waits and parked runs get their items; active agent waits, AGENT
+  workflow waits and open notifications' expiry get theirs.
+* **Ended, saying so** -- a file waiting to be indexed is FAILED ("Retry
+  processing to index this file"); a function run and the workflow on it,
+  a running agent turn, a conversation paused on an approval that was decided
+  but never executed, an unfinished trigger run and an unfinished pod bundle
+  job are FAILED with an "interrupted by the upgrade" message. A person
+  continues by sending a message or starting the job again.
+* **Dropped** -- a trigger event the old consumer had not processed yet, a
+  surface reply the old transport owed, and everything else still in Redis or
+  the outbox.
 
 The tables, the datastore database's outbox and the legacy consumer groups and
-streams are dropped by the next release (`python -m app.cutover_finish` and
-migration `0057_drop_old_transport`), not by this one.
-
-To see where it is:
-
-```bash
-uv run python -m app.cutover_check          # human-readable; --json for JSON
-```
-
-It reports the tables, what each route is still owed, the sweep's state, the
-converted deliveries left per route, streaq leftovers, the legacy groups'
-backlog and the pod schemas the change-log backfill has not reached. It gates
-nothing. A dead sweep (`sweep: dead`) needs its error fixed and
-`python -m app.core.infrastructure.work.admin retry --kind cutover.legacy_sweep`;
-nothing is lost meanwhile, the tables stay.
+streams are dropped by migration `0057_drop_old_transport` in the next release.
 
 Runbooks that counted `domain_event_outbox` rows (backlog, restore checks)
 should read `work_items` instead: queued, running and dead items per class

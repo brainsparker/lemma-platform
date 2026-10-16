@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -11,10 +12,18 @@ from httpx import AsyncClient
 from sqlalchemy import text
 
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.work import WorkClass
+from app.core.infrastructure.work import (
+    WorkClass,
+    install_work_limit_port,
+    reset_work_limit_port,
+)
+from app.core.infrastructure.work.config import default_max_running
+from app.core.infrastructure.work.limits import WorkLimits
+from app.core.infrastructure.work.rates import Rate, default_rates
 from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.schedule.domain.interfaces import FilterVerdict
 from app.modules.schedule.domain.schedule import ScheduleEntity
+from app.modules.schedule.services.fire_cap import DAILY_RATE
 from app.modules.schedule.services.trigger_filter import ScheduleFilter
 from app.modules.schedule.work.kinds import FilterEvent
 
@@ -168,3 +177,36 @@ class CountingFilter(ScheduleFilter):
             proceed=self.proceed,
             output={"should_proceed": self.proceed, "reason_code": "test"},
         )
+
+
+@asynccontextmanager
+async def daily_fire_cap(pod_id: UUID, limit: int) -> AsyncIterator[None]:
+    """A pod's daily trigger ceiling of ``limit``, as the limit port states it.
+
+    Written to the queue row for the fires about to happen, and stated by the
+    port too: a runtime sharing the database refreshes a queue that has work
+    from the port, and a ceiling written only to the row was reset to the
+    default before the trigger reached it -- the trigger then never paused.
+    """
+    ns = f"pod:{pod_id}"
+
+    class _Port:
+        async def limits_for(self, name: str) -> WorkLimits:
+            rates = default_rates()
+            if name == ns:
+                rates[DAILY_RATE] = Rate(limit, 86400)
+            return WorkLimits(
+                max_running={c: default_max_running(c) for c in WorkClass},
+                rates=rates,
+            )
+
+    install_work_limit_port(_Port())
+    try:
+        await execute(
+            "UPDATE work_queues SET rates = rates || CAST(:rate AS jsonb) WHERE ns = :ns",
+            rate=f'{{"{DAILY_RATE}": {{"limit": {limit}, "per_seconds": 86400}}}}',
+            ns=ns,
+        )
+        yield
+    finally:
+        reset_work_limit_port()

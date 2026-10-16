@@ -33,6 +33,7 @@ from app.modules.schedule.services.trigger_delivery import (
     deliver_page,
 )
 from app.modules.schedule.tests.e2e.trigger_work_support import (
+    daily_fire_cap,
     create_pod,
     execute,
     items,
@@ -161,14 +162,8 @@ async def test_a_page_past_the_daily_ceiling_pauses_and_records_the_rest_as_skip
 ):
     pod_id = await create_pod(authenticated_client, fixed_test_org["id"])
     schedule = await _datastore_schedule(pod_id, UUID(fixed_test_user["id"]))
-    await execute(
-        "UPDATE work_queues SET rates = rates || "
-        '\'{"trigger_fire_day": {"limit": 10, "per_seconds": 86400}}\'::jsonb '
-        "WHERE ns = :ns",
-        ns=pod_namespace(pod_id),
-    )
-
-    result = await _deliver(schedule, _changes(1, 25, WriteIntent.NORMAL))
+    async with daily_fire_cap(pod_id, 10):
+        result = await _deliver(schedule, _changes(1, 25, WriteIntent.NORMAL))
 
     assert (result.fired, result.paused, result.skipped) == (10, True, {"fire_cap": 15})
     assert len(await runs(schedule.id)) == 10

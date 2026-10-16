@@ -26,6 +26,7 @@ from app.modules.schedule.services.webhook_schedule_matcher import (
     WebhookScheduleMatcher,
 )
 from app.modules.schedule.tests.e2e.trigger_work_support import (
+    daily_fire_cap,
     EVERY_HALF_HOUR,
     CountingFilter,
     create_pod,
@@ -311,17 +312,11 @@ async def test_the_daily_ceiling_pauses_the_trigger_records_the_skip_and_tells_t
 ):
     pod_id = await create_pod(authenticated_client, fixed_test_org["id"])
     schedule = await _webhook_schedule(pod_id, UUID(fixed_test_user["id"]))
-    # A per-pod override of the ceiling, where the limit port writes it.
-    await execute(
-        "UPDATE work_queues SET rates = rates || "
-        '\'{"trigger_fire_day": {"limit": 3, "per_seconds": 86400}}\'::jsonb '
-        "WHERE ns = :ns",
-        ns=f"pod:{pod_id}",
-    )
-
-    for n in range(4):
-        await _deliver(schedule, f"evt-{n}")
-    assert await _deliver(schedule, "evt-after-pause") == []
+    # A per-pod override of the ceiling, stated by the limit port.
+    async with daily_fire_cap(pod_id, 3):
+        for n in range(4):
+            await _deliver(schedule, f"evt-{n}")
+        assert await _deliver(schedule, "evt-after-pause") == []
 
     fired = [r for r in await runs(schedule.id) if r["status"] == "PROCESSING"]
     assert [r["source_event_id"] for r in fired] == ["evt-0", "evt-1", "evt-2"]

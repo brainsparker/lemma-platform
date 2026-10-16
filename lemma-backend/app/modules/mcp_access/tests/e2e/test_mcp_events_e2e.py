@@ -782,6 +782,13 @@ async def test_a_paused_subscription_holds_none_of_the_pods_log(
         await _run(WorkClass.EVENTS)
         assert await subscribers.get(f"mcp:{sub_id}") is not None
         [after] = await _add_rows(authenticated_client, pod_id, table, 1)
+        # Read below the cluster's oldest open transaction: in a shared CI run
+        # another test's can hold the new row back past one delivery pass.
+        await log_final()
+        from app.core.infrastructure.db.session import async_session_maker
+        from app.core.infrastructure.work.testing import make_due
+
+        await make_due(async_session_maker, kind="changes.deliver")
         await _run(WorkClass.EVENTS)
         owed = [record for record, _ in await _owed(sub_id)]
         assert after in owed and not set(owed) & set(missed)

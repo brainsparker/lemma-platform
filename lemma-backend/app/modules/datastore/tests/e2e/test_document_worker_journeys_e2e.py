@@ -376,6 +376,9 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
             "unavailable:health_check_failing",
         ), "an extractor outage must not spend the file's retry budget"
         assert "Waiting for the document extractor" in released["last_processing_error"]
+        # And the person sees what they saw before the work runtime: an outage
+        # is not an attempt (tests/scenarios' file lifecycle reads this field).
+        assert released["processing_attempts"] == 0, released
         # The upstream body carries a credential; it must never be persisted.
         assert "CANARY_DATASTORE_PROVIDER_SECRET" not in str(released)
         assert "CANARY_DATASTORE_PROVIDER_SECRET" not in str(item.last_error)

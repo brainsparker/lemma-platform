@@ -154,8 +154,17 @@ class DatastoreSettings(DocumentWorkSettings):
         ),
     )
     document_processing_debounce_seconds: int = Field(
-        default=300,
-        description="Debounce window for datastore file content updates before enqueueing document processing.",
+        default=10,
+        description=(
+            "How long a content update waits before it is processed, so a burst "
+            "of writes to one file extracts once. Short on purpose: until the "
+            "new revision is indexed, search still answers with the previous "
+            "one, so a person who replaced a document keeps finding the words "
+            "they replaced for this long plus the processing time (it was 300, "
+            "which read as the replacement not taking). A write superseded "
+            "inside the window costs nothing: its run finds different bytes and "
+            "stops before extracting. Env: ``DOCUMENT_PROCESSING_DEBOUNCE_SECONDS``."
+        ),
     )
     document_processing_max_file_bytes: int = Field(
         default=104_857_600,  # 100 MB

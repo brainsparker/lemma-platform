@@ -37,6 +37,8 @@ class FakeDocumentProcessorServer:
         self._hung: set[asyncio.Event] = set()
         #: While set, every extraction returns a chunk Postgres cannot store.
         self.nul_chunks = False
+        #: The last bytes uploaded under each filename (``echo-*`` returns them).
+        self.bodies: dict[str, bytes] = {}
 
     def forget_traffic(self) -> None:
         """Drop what this server has been asked, keeping it running.
@@ -49,6 +51,7 @@ class FakeDocumentProcessorServer:
         product that did nothing wrong.
         """
         self.requests.clear()
+        self.bodies.clear()
         self._docling_tasks.clear()
         self._docling_polls.clear()
         self.healthy = True
@@ -86,9 +89,10 @@ class FakeDocumentProcessorServer:
         reader = await request.multipart()
         filename = "document.bin"
         async for part in reader:
+            body = await part.read(decode=False)
             if part.name == "files" and part.filename:
                 filename = part.filename
-            await part.read(decode=False)
+                self.bodies[filename] = bytes(body)
         return filename
 
     async def _kreuzberg_health(self, request: web.Request) -> web.Response:
@@ -139,6 +143,10 @@ class FakeDocumentProcessorServer:
             await asyncio.sleep(0.4)
 
         needle = f"Deterministic extracted content for {filename}"
+        if filename.startswith("echo-"):
+            # The words a revision actually carries, so a test can tell two
+            # revisions of one file apart in search.
+            needle = self.bodies.get(filename, b"").decode(errors="replace")
         if self.nul_chunks:
             # Postgres refuses a NUL in text, so indexing this fails inside the
             # transaction that replaces the file's chunks.

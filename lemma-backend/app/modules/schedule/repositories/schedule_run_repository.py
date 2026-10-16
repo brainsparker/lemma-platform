@@ -33,13 +33,17 @@ FILTER_NOT_CONFIGURED = "ScheduleFilterNotConfigured"
 #: ... and when its question was interrupted (a crash, a lost lease, the
 #: database unreachable) every time it was asked.
 FILTER_INTERRUPTED = "ScheduleFilterInterrupted"
-#: Filter failures that belong to the deployment rather than to any schedule:
-#: the breaker passes over them. A spent budget, an event too large to judge
-#: and an invalid filter are the pod's or the schedule's, and are counted.
-DEPLOYMENT_FILTER_FAILURES = (
+#: A fire the release found waiting from before its live window and did not
+#: start (migration 0055): the upgrade's doing, not the schedule's.
+NOT_STARTED_BEFORE_UPGRADE = "ScheduleNotStartedBeforeUpgrade"
+#: Failures that belong to the deployment rather than to any schedule: the
+#: breaker passes over them. A spent budget, an event too large to judge and an
+#: invalid filter are the pod's or the schedule's, and are counted.
+DEPLOYMENT_FAILURES = (
     FILTER_UNAVAILABLE,
     FILTER_NOT_CONFIGURED,
     FILTER_INTERRUPTED,
+    NOT_STARTED_BEFORE_UPGRADE,
 )
 
 
@@ -409,7 +413,8 @@ class ScheduleRunRepository:
         none, is the deployment's failure, not the schedule's: no owner can fix
         it, and counting it would deactivate every filtered schedule at once.
         The operator hears of it instead, from
-        ``schedule.filter.dead_lettered.degraded``.
+        ``schedule.filter.dead_lettered.degraded``. So is a fire the upgrade found
+        waiting too long to start, and failed rather than replayed.
         """
         rows = (
             await self.session.execute(
@@ -420,7 +425,7 @@ class ScheduleRunRepository:
                     ScheduleRun.status != ScheduleRunStatus.FILTERED.value,
                     or_(
                         ScheduleRun.error_type.is_(None),
-                        ScheduleRun.error_type.not_in(DEPLOYMENT_FILTER_FAILURES),
+                        ScheduleRun.error_type.not_in(DEPLOYMENT_FAILURES),
                     ),
                 )
                 .order_by(ScheduleRun.completed_at.desc(), ScheduleRun.id.desc())

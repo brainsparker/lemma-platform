@@ -76,12 +76,16 @@ async def test_every_slot_busy_never_waits_past_the_pool(
         cls=WorkClass.AUTOMATION,
         mode=WorkMode.JOB,
         payload=Demo,
-        lease=timedelta(seconds=0.6),  # a heartbeat every 0.2 s
+        # A heartbeat every second. Tighter (0.6 s) and 64 jobs heartbeating
+        # through two automation connections timed out on a loaded runner:
+        # leases were reaped, re-queued with backoff, and one outlasted the
+        # wait below. Lease loss is not what this test is about.
+        lease=timedelta(seconds=3),
     )
     async def job(ctx: JobContext, payload: Demo) -> None:
         async with ctx.checkpoint() as uow:
             await write_effect(uow.session, "job.start", ctx.item.id)
-        await asyncio.sleep(1.0)  # holds no connection, keeps heartbeating
+        await asyncio.sleep(1.5)  # holds no connection, keeps heartbeating
         async with ctx.complete_work() as uow:
             await write_effect(uow.session, "job.done", ctx.item.id)
 

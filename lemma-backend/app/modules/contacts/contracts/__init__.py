@@ -17,6 +17,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import text
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.contacts.domain.entities import (
@@ -40,23 +41,24 @@ from app.modules.contacts.services.proofs import ContactProofs
 __all__ = [
     "ContactHandle",
     "ContactRef",
-    "ProofTooWeak",
-    "answered_contacts_in_organization",
-    "UnusableHandle",
-    "contact_handles",
-    "unsubscribe_handle",
-    "unsubscribe_by_handle",
-    "note_inbound",
     "IdentityKind",
     "IdentityStrength",
+    "ProofTooWeak",
+    "UnusableHandle",
+    "answered_contacts_in_organization",
     "contact_by_id",
+    "contact_handles",
     "find_contact",
     "is_stop_request",
+    "lock_answered_contacts_count",
     "normalize_handle",
     "note_answered",
+    "note_inbound",
     "open_anonymous_contact",
     "open_contact",
     "prove_handle",
+    "unsubscribe_by_handle",
+    "unsubscribe_handle",
 ]
 
 
@@ -228,6 +230,22 @@ async def unsubscribe_by_handle(
     """The contact wrote "STOP" from this handle; whether the pod knew it."""
     return await ContactRepository(uow.session).unsubscribe_handle(
         pod_id=pod_id, kind=kind, value=value
+    )
+
+
+async def lock_answered_contacts_count(
+    uow: SqlAlchemyUnitOfWork, *, organization_id: UUID
+) -> None:
+    """Serialise counting the organization's answered contacts and marking one
+    more, until this transaction ends.
+
+    Two new contacts writing at once would each count room for one more and
+    each be marked, past the limit. The second waits here, then counts the
+    first.
+    """
+    await uow.session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"contacts-answered:{organization_id}"},
     )
 
 

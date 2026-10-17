@@ -97,6 +97,15 @@ class AgentConversationWaitRepository:
         model = (await self.session.execute(stmt)).scalars().first()
         return model.to_entity() if model else None
 
+    async def has_active(self, conversation_id: UUID) -> bool:
+        """Whether the conversation waits on the agent's own work -- a
+        sub-agent, a process, a timer -- with a run to come when it ends."""
+        stmt = select(AgentConversationWaitModel.id).where(
+            AgentConversationWaitModel.conversation_id == conversation_id,
+            AgentConversationWaitModel.status == AgentWaitStatus.ACTIVE.value,
+        )
+        return (await self.session.execute(stmt.limit(1))).first() is not None
+
     async def claim(self, wait_id: UUID) -> AgentConversationWaitEntity | None:
         """Lock the row and hand it back only if it is still ACTIVE.
 

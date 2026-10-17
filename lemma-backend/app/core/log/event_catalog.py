@@ -70,6 +70,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.conversation_title.generation.failed': EventSpec('error', frozenset({'conversation_id'})),
     'agent.conversation_title.language_mismatch.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent.conversation_title.llm_call.failed': EventSpec('error', frozenset({'conversation_id'})),
+    'agent.conversation_title.reasoning_field_refused': EventSpec('info', frozenset({'status_code'})),
     'agent.executor.approved_tool_r_returning_result.degraded': EventSpec('warning', frozenset()),
     'agent.final_answer.persist_failed.degraded': EventSpec('warning', frozenset()),
     'agent.final_answer.rejection_count_unavailable.degraded': EventSpec('warning', frozenset()),

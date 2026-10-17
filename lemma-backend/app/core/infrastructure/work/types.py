@@ -52,8 +52,15 @@ class WorkMode(StrEnum):
 
 SYSTEM_NAMESPACE = "system"
 _NAMESPACE = re.compile(
-    r"^(system|(pod|org):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+    r"^(system(:[a-z][a-z_]*)?"
+    r"|(pod|org):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
 )
+
+
+def system_namespace(name: str) -> str:
+    """A named system namespace: platform work that should take its own
+    round-robin turn instead of queueing with the ``system`` periodics."""
+    return validate_namespace(f"{SYSTEM_NAMESPACE}:{name}")
 
 
 def pod_namespace(pod_id: UUID) -> str:
@@ -72,7 +79,8 @@ def validate_namespace(ns: str) -> str:
     """
     if not _NAMESPACE.fullmatch(ns):
         raise ValueError(
-            f"work namespace must be 'pod:<uuid>', 'org:<uuid>' or 'system', got {ns!r}"
+            "work namespace must be 'pod:<uuid>', 'org:<uuid>', 'system' or "
+            f"'system:<name>', got {ns!r}"
         )
     return ns
 

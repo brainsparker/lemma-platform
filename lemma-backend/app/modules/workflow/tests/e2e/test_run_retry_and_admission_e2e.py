@@ -10,10 +10,14 @@ e2e tests do, so no model or worker is needed; only creating a function needs
 the sandbox, for schema extraction.
 """
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+
+from app.core.infrastructure.db.session import async_session_maker
+from app.modules.pod.infrastructure.models.pod_models import PodMember
 
 from app.modules.workflow.tests.e2e.test_flow_execution_e2e import (
     _complete_agent_conversation,
@@ -148,15 +152,22 @@ _OK = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
 
 
 async def _form_workflow(
-    client: AsyncClient, pod_id: str, *, limit: int | None
+    client: AsyncClient,
+    pod_id: str,
+    *,
+    limit: int | None,
+    assignee: str | None = None,
 ) -> dict:
+    intake: dict = {"input_schema": _OK}
+    if assignee is not None:
+        intake["assignee_pod_member_id"] = assignee
     workflow = await _create_workflow(
         client,
         pod_id,
         name=f"limited-{uuid4().hex[:6]}",
         start={"type": "MANUAL"},
         nodes=[
-            {"id": "intake", "type": "FORM", "config": {"input_schema": _OK}},
+            {"id": "intake", "type": "FORM", "config": intake},
             {"id": "approve", "type": "FORM", "config": {"input_schema": _OK}},
             {"id": "end", "type": "END"},
         ],
@@ -223,6 +234,32 @@ async def test_an_unsubmitted_entry_form_holds_no_place(
         assert run["status"] == "WAITING", run
         assert run["active_wait"]["wait_type"] == "HUMAN", run["active_wait"]
         assert run["active_wait"]["node_id"] == "intake"
+
+
+@pytest.mark.asyncio
+async def test_a_first_step_assigned_to_a_member_holds_its_place(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+):
+    """Only the starter's own entry form is exempt: an approval assigned to a
+    member is work the run waits on, so the next run past the limit queues."""
+    client = authenticated_client
+    pod_id = await _create_pod(client, fixed_test_org["id"], "Workflow Approval")
+    async with async_session_maker() as session:
+        member_id = (
+            await session.execute(
+                select(PodMember.id).where(PodMember.pod_id == UUID(pod_id)).limit(1)
+            )
+        ).scalar_one()
+    workflow_name = (
+        await _form_workflow(client, pod_id, limit=1, assignee=str(member_id))
+    )["name"]
+
+    first = await _create_run(client, pod_id, workflow_name)
+    second = await _create_run(client, pod_id, workflow_name)
+    assert first["active_wait"]["wait_type"] == "HUMAN", first["active_wait"]
+    assert second["status"] == "RUNNING", second
+    assert second["active_wait"]["wait_type"] == "QUEUED", second["active_wait"]
 
 
 @pytest.mark.asyncio

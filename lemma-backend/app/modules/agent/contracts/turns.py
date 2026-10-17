@@ -123,7 +123,10 @@ async def stage_agent_turn(
         concurrency_key=conversation_key(run.conversation_id),
     )
     # Only while the conversation has none: one indexed read here instead of
-    # a job per turn that finds a title and does nothing.
+    # a job per turn that finds a title and does nothing. The dedup key only
+    # coalesces a *queued* item, so a second turn staged while the first title
+    # is still being generated writes another; the concurrency key runs it
+    # after the first, which has set the title by then, so it calls no model.
     title = await uow.session.scalar(
         select(ConversationModel.title).where(
             ConversationModel.id == run.conversation_id
@@ -135,6 +138,7 @@ async def stage_agent_turn(
             ns,
             ConversationWork(conversation_id=run.conversation_id),
             dedup_key=title_key(run.conversation_id),
+            concurrency_key=title_key(run.conversation_id),
         )
 
 

@@ -10,11 +10,21 @@ transaction commits, so a reader that takes the newest committed rows and moves
 its cursor past them can skip a slower writer's lower ``seq`` that commits a
 moment later. Every row therefore records its writing transaction, and a read
 returns only rows whose transaction is older than every transaction still
-running (``xid < pg_snapshot_xmin``). Below that horizon every transaction has
-committed or aborted and no new one can get a smaller id, so ``(xid, seq)``
-order is final and gap-free there. The cost is that delivery waits for the
-oldest open transaction on the database, which the statement and
-idle-in-transaction timeouts bound.
+running. Below that horizon every transaction has committed or aborted and no
+new one can get a smaller id, so ``(xid, seq)`` order is final and gap-free
+there. The cost is that delivery waits for the oldest open transaction that
+could write here, which the statement and idle-in-transaction timeouts bound.
+
+Transaction ids are the whole Postgres server's, so ``pg_snapshot_xmin`` alone
+would make every pod's delivery wait on a transaction in *another* database on
+the same server -- the main database, an auth service, a psql session -- which
+can never write a change here. ``_HORIZON`` ignores a running xid only when it
+is proven foreign: its holder (the backend with the granted ``ExclusiveLock``
+on it in ``pg_locks``) is connected to a different database. An xid that cannot
+be matched -- its lock not visible yet, a prepared transaction, a backend whose
+database is unknown -- counts as ours, so the rule only ever waits longer than
+it must, never skips a row. New xids are always at least the snapshot's
+``xmax``, the horizon when nothing of ours is running.
 """
 
 from __future__ import annotations
@@ -159,7 +169,7 @@ async def read_after(
     schema = schema_name_for_pod(pod_id)
     where = [
         "(xid, seq) > (CAST(CAST(:xid AS text) AS xid8), :seq)",
-        "xid < pg_snapshot_xmin(pg_current_snapshot())",
+        "xid < CAST(CAST(:horizon AS text) AS xid8)",
     ]
     params: dict[str, object] = {
         "xid": str(after.xid),
@@ -179,6 +189,7 @@ async def read_after(
                 [], encode_cursor(max(after, horizon)), False, encode_cursor(horizon)
             )
         horizon, floor = await _horizon_and_floor(conn, pod_id)
+        params["horizon"] = str(horizon.xid)
         expired = cursor is not None and after < floor
         rows = (
             (
@@ -347,11 +358,35 @@ def fetch_rows_statement(
     )
 
 
-async def _horizon(conn: AsyncConnection) -> ChangePosition:
-    xmin = await conn.scalar(
-        text("SELECT pg_snapshot_xmin(pg_current_snapshot())::text")
+#: The oldest running xid that may be this database's, else the snapshot's
+#: ``xmax``; see the module docstring. A backend's database comes from
+#: ``pg_stat_activity``, whose rows Postgres freezes for the rest of a
+#: transaction at their first read -- ``_horizon`` clears that first, so a
+#: backend that started since is never read with a stale database.
+_HORIZON = """
+    WITH snap AS (SELECT pg_current_snapshot() AS s),
+    running AS (SELECT pg_snapshot_xip(s) AS xid FROM snap),
+    foreign_xids AS (
+        SELECT r.xid FROM running r
+          JOIN pg_locks l
+            ON l.locktype = 'transactionid' AND l.mode = 'ExclusiveLock'
+           AND l.granted
+           AND l.transactionid::text::bigint
+               = (r.xid::text::numeric % 4294967296)::bigint
+          JOIN pg_stat_activity a ON a.pid = l.pid
+         WHERE a.datname IS NOT NULL AND a.datname <> current_database()
     )
-    return ChangePosition(int(xmin or 0), 0)
+    SELECT COALESCE(
+        (SELECT min(xid) FROM running WHERE xid NOT IN (SELECT xid FROM foreign_xids)),
+        (SELECT pg_snapshot_xmax(s) FROM snap)
+    )::text
+"""
+
+
+async def _horizon(conn: AsyncConnection) -> ChangePosition:
+    await conn.execute(text("SELECT pg_stat_clear_snapshot()"))
+    xid = await conn.scalar(text(_HORIZON))
+    return ChangePosition(int(xid or 0), 0)
 
 
 async def _has_log(conn: AsyncConnection, schema: str) -> bool:
@@ -368,21 +403,21 @@ async def _has_log(conn: AsyncConnection, schema: str) -> bool:
 async def _horizon_and_floor(
     conn: AsyncConnection, pod_id: UUID
 ) -> tuple[ChangePosition, ChangePosition]:
-    """One round trip: a pod with a change log has the floors table too."""
+    """The horizon, and the pod's floor: a pod with a change log has the
+    floors table too."""
+    horizon = await _horizon(conn)
     row = (
         await conn.execute(
             text(
-                "SELECT pg_snapshot_xmin(pg_current_snapshot())::text, "
-                f"(SELECT floor_xid::text FROM {FLOORS_TABLE} WHERE pod_id = :pod_id), "
-                f"(SELECT floor_seq FROM {FLOORS_TABLE} WHERE pod_id = :pod_id)"
+                f"SELECT floor_xid::text, floor_seq FROM {FLOORS_TABLE} "
+                "WHERE pod_id = :pod_id"
             ),
             {"pod_id": str(pod_id)},
         )
-    ).one()
-    horizon = ChangePosition(int(row[0] or 0), 0)
-    if row[1] is None:
+    ).one_or_none()
+    if row is None:
         return horizon, ChangePosition.start()
-    return horizon, ChangePosition(int(row[1]), int(row[2]))
+    return horizon, ChangePosition(int(row[0]), int(row[1]))
 
 
 def _change(row: Mapping[str, object]) -> Change:

@@ -991,7 +991,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
 #: whenever the wake reaches it; the poll is what a test waits through when it
 #: does not, and what notices a delayed item coming due. Production's 1 s is
 #: latency every such test pays.
-_E2E_WORKER_POLL_SECONDS = 0.2
+_E2E_WORKER_POLL_SECONDS = 1.0
 
 
 def _shorten_worker_cadences() -> None:

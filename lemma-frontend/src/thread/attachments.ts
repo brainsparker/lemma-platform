@@ -74,21 +74,24 @@ function stampOf(at: Date): string {
 
 /* Two pastes inside one second are two pastes, and the second one has to be
    named as well as the first. The counter is kept across calls rather than
-   per call, because the two arrive as two paste events. */
+   per call, because the two arrive as two paste events, and it counts the
+   files named rather than the pastes: a paste of two then a paste of one in
+   the same second would otherwise give the third the second's name. */
 let lastStamp = "";
-let sameSecond = 0;
+let namedThisSecond = 0;
 
 /** Name pasted files so no two of them collide: `pasted-20261017-064158.png`,
  *  and `…-2.png` for a second one in the same second. */
 export function namePasted(files: readonly File[], at: Date = new Date()): File[] {
     const stamp = stampOf(at);
-    if (stamp === lastStamp) sameSecond += 1;
-    else {
+    if (stamp !== lastStamp) {
         lastStamp = stamp;
-        sameSecond = 0;
+        namedThisSecond = 0;
     }
+    const first = namedThisSecond;
+    namedThisSecond += files.length;
     return files.map((file, index) => {
-        const count = sameSecond + index + 1;
+        const count = first + index + 1;
         const suffix = count === 1 ? "" : "-" + count;
         const name = PASTED_STEM + "-" + stamp + suffix + pastedExtension(file);
         /* A new File rather than a renamed one: the name is the whole of what

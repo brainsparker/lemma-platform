@@ -154,6 +154,19 @@ test("a second paste in the same second is still a different name", () => {
     assert.equal(two.name, "pasted-20261017-064159-2.png");
 });
 
+test("a paste of two then a paste of one in the same second gives three names", () => {
+    // The count is of files named, not of pastes: counting pastes would hand
+    // the third file the second one's name.
+    const at = new Date(2026, 9, 17, 6, 41, 57);
+    const firstPaste = namePasted([file("image.png"), file("image.png")], at);
+    const [third] = namePasted([file("image.png")], at);
+
+    assert.deepEqual(
+        [...firstPaste.map((one) => one.name), third.name],
+        ["pasted-20261017-064157.png", "pasted-20261017-064157-2.png", "pasted-20261017-064157-3.png"],
+    );
+});
+
 test("a pasted file keeps a readable extension, from its name or its type", () => {
     const at = (second: number) => new Date(2026, 9, 17, 6, 42, second);
 

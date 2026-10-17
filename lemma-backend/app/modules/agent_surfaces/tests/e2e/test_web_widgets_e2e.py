@@ -31,6 +31,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.api.dependencies import get_uow_factory
 from app.core.config import settings
 from app.core.public_web import public_web_settings
+from app.modules.datastore.events.contact_merged_work import (
+    register_contact_merged_work as register_datastore_contact_merged_work,
+)
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.events.visitor_retention import sweep_web_visitors
@@ -897,9 +900,25 @@ async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact
     test_pod,
     fixed_test_user,
 ):
-    """One person, one contact: the visitor's chat follows them to the contact
-    the pod already had, and the anonymous one is left pointing there."""
+    """One person, one contact: the visitor's chat and rows follow them to the
+    contact the pod already had, and the anonymous one is left pointing there
+    -- until that person is forgotten, and goes with them."""
     pod_id = test_pod["id"]
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": "orders",
+            "primary_key_column": "id",
+            "enable_rls": False,
+            "contact_owned": True,
+            "contact_columns": ["item"],
+            "columns": [
+                {"name": "id", "type": "UUID", "required": True, "auto": True},
+                {"name": "item", "type": "TEXT", "required": True},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
     widget = await _widget(authenticated_client, pod_id, name="Merge")
     key = widget["public_key"]
     email = f"returning-{widget['id'][:8]}@client.example"
@@ -927,6 +946,12 @@ async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact
     )
     anonymous = await _contact_of(db_session, conversation_id)
     assert anonymous is not None and anonymous != customer.id
+    # A row of theirs, as the visitor they were then.
+    ordered = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables/orders/records",
+        json={"data": {"item": "Blue kettle", "contact_id": str(anonymous)}},
+    )
+    assert ordered.status_code == 201, ordered.text
 
     sent = await authenticated_client.post(
         f"/public/web/{key}/code", json={"email": email}, headers=_as(visitor)
@@ -957,13 +982,20 @@ async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact
     }
     assert await _handles_of(db_session, anonymous) == set()
 
-    # The conversation follows by the work the merge wrote with it.
+    # The conversation and the row follow, by the work the merge wrote with it.
     registry = WorkRegistry()
     register_contact_merged_work(registry)
+    register_datastore_contact_merged_work(registry)
     await run_until_idle(
         async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
     )
     assert await _contact_of(db_session, conversation_id) == customer.id
+    rows = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/orders/records"
+    )
+    assert [(r["item"], r["contact_id"]) for r in rows.json()["items"]] == [
+        ("Blue kettle", str(customer.id))
+    ]
 
     # The pod lists one person, not two; the old id still leads to them.
     listed = await authenticated_client.get(f"/pods/{pod_id}/contacts")
@@ -973,6 +1005,21 @@ async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact
     followed = await authenticated_client.get(f"/pods/{pod_id}/contacts/{anonymous}")
     assert followed.status_code == 200, followed.text
     assert followed.json()["id"] == str(customer.id)
+
+    # Forgetting them forgets the row they wrote as a visitor, and the contact
+    # they were then does not come back as an empty one.
+    forgotten = await authenticated_client.delete(
+        f"/pods/{pod_id}/contacts/{customer.id}"
+    )
+    assert forgotten.status_code in (200, 204), forgotten.text
+    rows = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/orders/records"
+    )
+    assert rows.json()["items"] == []
+    listed = await authenticated_client.get(f"/pods/{pod_id}/contacts")
+    assert str(anonymous) not in {item["id"] for item in listed.json()["items"]}
+    db_session.expire_all()
+    assert await db_session.get(ContactModel, anonymous) is None
 
 
 async def test_hosted_pages_live_on_their_own_origin_when_one_is_set(

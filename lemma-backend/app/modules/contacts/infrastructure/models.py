@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import UUIDAuditBase
@@ -20,6 +20,12 @@ class ContactModel(UUIDAuditBase):
     __table_args__ = (
         Index("ix_contacts_pod_created", "pod_id", "created_at"),
         Index("ix_contacts_merged_into", "merged_into_id"),
+        # What the organization's contact limit counts, before every turn.
+        Index(
+            "ix_contacts_answered",
+            "pod_id",
+            postgresql_where=text("answered_at IS NOT NULL AND merged_into_id IS NULL"),
+        ),
     )
 
     pod_id: Mapped[UUID] = mapped_column(
@@ -27,9 +33,10 @@ class ContactModel(UUIDAuditBase):
     )
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     #: The contact this one turned out to be. Always one hop: merging into a
-    #: contact that was itself merged points at where that one went.
+    #: contact that was itself merged points at where that one went. Forgetting
+    #: the survivor forgets the contacts that became it.
     merged_into_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
     )
     #: When an agent first answered them: what the organization's contact
     #: limit counts, so a crowded group nobody spoke to the bot in costs nothing.

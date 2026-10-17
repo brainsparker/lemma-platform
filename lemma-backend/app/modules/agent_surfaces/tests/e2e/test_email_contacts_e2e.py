@@ -420,6 +420,63 @@ async def test_each_half_of_the_contacts_cap_is_kept_when_the_other_changes(
     assert no_count.json()["monthly_limit_usd"] == 25
 
 
+async def test_two_new_contacts_at_once_cannot_both_take_the_last_place(
+    authenticated_client: AsyncClient, fixed_test_org, test_pod, fixed_test_user
+):
+    """Admission counts and marks under one lock on the organization: the
+    second waits, counts the first, and is held for a person."""
+    import asyncio
+
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.contacts.contracts import (
+        IdentityKind,
+        IdentityStrength,
+        open_contact,
+    )
+
+    org_id, pod_id = fixed_test_org["id"], UUID(test_pod["id"])
+    limited = await authenticated_client.put(
+        f"/usage/organizations/{org_id}/contacts-cap", json={"max_contacts": 1}
+    )
+    assert limited.status_code == 200, limited.text
+
+    async def a_new_contacts_conversation(email: str) -> UUID:
+        async with get_uow_factory()() as uow:
+            contact = await open_contact(
+                uow,
+                pod_id=pod_id,
+                kind=IdentityKind.EMAIL,
+                value=email,
+                strength=IdentityStrength.CHANNEL,
+                display_name=None,
+            )
+            conversation = ConversationModel(
+                user_id=UUID(fixed_test_user["id"]),
+                pod_id=pod_id,
+                contact_id=contact.id,
+            )
+            uow.session.add(conversation)
+            await uow.commit()
+            return conversation.id
+
+    conversations = [
+        await a_new_contacts_conversation(f"racer-{n}@client.example") for n in range(2)
+    ]
+
+    async def admit(conversation_id: UUID) -> bool:
+        async with get_uow_factory()() as uow:
+            held = await held_for_a_person(
+                uow, pod_id=pod_id, conversation_id=conversation_id
+            )
+            await uow.commit()
+            return held
+
+    held = await asyncio.gather(*(admit(c) for c in conversations))
+
+    assert sorted(held) == [False, True], held
+
+
 async def _orders_for(
     client: AsyncClient, pod_id: str, contact_id: str | None, item: str
 ):

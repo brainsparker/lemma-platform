@@ -12,11 +12,18 @@ class DatabaseManager:
         # backends, and without pre-ping the next borrower fails mid-statement
         # with "connection was closed in the middle of operation". pool_recycle
         # proactively retires connections older than the window.
+        #
+        # A small pool: one is built per test, beside the app's own pools and a
+        # worker subprocess on the same server, and SQLAlchemy's default ceiling
+        # of fifteen per manager was most of what ran a shared test server out
+        # of connections under xdist. Tests hold one or two sessions at a time.
         self.engine = create_async_engine(
             database_url,
             echo=False,
             pool_pre_ping=True,
             pool_recycle=300,
+            pool_size=2,
+            max_overflow=3,
         )
         self.session_factory = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False

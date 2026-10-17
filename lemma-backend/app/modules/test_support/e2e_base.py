@@ -963,6 +963,8 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # validation at import and takes the whole app down, not just the setting.
     os.environ["OUTBOX_IDLE_POLL_MAX_SECONDS"] = "0.5"
     os.environ["OUTBOX_LISTEN_FALLBACK_POLL_SECONDS"] = "0.5"
+    _shorten_worker_cadences()
+    _size_worker_subprocess_pools()
 
     # Pool connections instead of opening a fresh one per unit of work.
     #
@@ -984,6 +986,68 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     db_session_module.reset_engine_state()
 
     return settings
+
+
+#: Seconds between the session worker's fallback polls. NOTIFY wakes it sooner
+#: whenever the wake reaches it; the poll is what a test waits through when it
+#: does not, and what notices a delayed item coming due. Production's 1 s is
+#: latency every such test pays.
+_E2E_WORKER_POLL_SECONDS = 0.2
+
+
+def _shorten_worker_cadences() -> None:
+    """Shorten the work dispatcher's and datastore hand-off's fallback polls.
+
+    Both the settings singletons and the environment: this process's own work
+    runtimes (a ``drives_work`` test's dispatcher) read the singletons, which
+    were built at import, and the worker subprocess builds its own from the
+    environment it inherits.
+    """
+    from app.core.infrastructure.work.config import work_settings
+
+    work_settings.work_poll_interval_seconds = _E2E_WORKER_POLL_SECONDS
+    datastore_settings.datastore_change_handoff_poll_seconds = _E2E_WORKER_POLL_SECONDS
+    os.environ["WORK_POLL_INTERVAL_SECONDS"] = str(_E2E_WORKER_POLL_SECONDS)
+    os.environ["DATASTORE_CHANGE_HANDOFF_POLL_SECONDS"] = str(_E2E_WORKER_POLL_SECONDS)
+
+
+#: Ceiling of each pooled engine (primary, datastore) in the worker
+#: subprocess. A pool opens connections lazily, so this bounds a burst rather
+#: than reserving anything. Not lower: resuming an approved
+#: ``request_approval`` holds six primary connections at once, and at five it
+#: waits out the pool timeout and the resume never runs. This process keeps
+#: production's ten: drives_work tests race several in-process dispatchers
+#: through the primary engine on purpose.
+_E2E_WORKER_DB_POOL_SIZE = 8
+
+#: Handler connections per work class in the worker subprocess. Production's
+#: defaults are sized for a replica serving every pod at once; a test drives a
+#: handful of items. The runtime's pool is sized to the sum of these plus one per
+#: class to claim, the control slots and one side connection.
+_E2E_WORK_DB_SLOTS = {
+    "events": 3,
+    "interactive": 3,
+    "automation": 3,
+    "delivery": 2,
+    "ingestion": 2,
+    "admin": 1,
+    "receivers": 1,
+}
+_E2E_WORK_DB_CONTROL_SLOTS = 2
+
+
+def _size_worker_subprocess_pools() -> None:
+    """Pooled, bounded connections for the worker subprocess this process starts.
+
+    Unpooled (the testing default), every fallback poll of every dispatcher in
+    it is a fresh TCP connect and a new backend process, several a second per
+    xdist worker. Environment only: the subprocess builds its settings from the
+    environment it inherits, and this process's own pools are left as they are.
+    """
+    os.environ["DB_POOL_SIZE"] = str(_E2E_WORKER_DB_POOL_SIZE)
+    os.environ["DB_POOL_IN_TESTING"] = "true"
+    os.environ["WORK_DB_SLOTS_JSON"] = json.dumps(_E2E_WORK_DB_SLOTS)
+    os.environ["WORK_DB_CONTROL_SLOTS"] = str(_E2E_WORK_DB_CONTROL_SLOTS)
 
 
 def _import_e2e_models() -> None:

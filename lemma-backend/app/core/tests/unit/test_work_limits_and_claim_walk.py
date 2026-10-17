@@ -171,8 +171,10 @@ def test_enabled_classes_parsing() -> None:
 def test_namespaces_are_validated() -> None:
     assert validate_namespace(f"pod:{POD}") == f"pod:{POD}"
     assert validate_namespace("system") == "system"
+    # A named system namespace takes its own round-robin turn.
+    assert validate_namespace("system:pod_schema") == "system:pod_schema"
     upper = "pod:ABCDEF12-1111-1111-1111-111111111111"
-    for bad in ("pod:abc", f"pods:{POD}", upper, ""):
+    for bad in ("pod:abc", f"pods:{POD}", upper, "", "system:", "system:Pod"):
         with pytest.raises(ValueError):
             validate_namespace(bad)
 

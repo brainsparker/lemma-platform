@@ -18,6 +18,9 @@ from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import BadRequestError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
+from app.modules.agent.infrastructure.wait_repository import (
+    AgentConversationWaitRepository,
+)
 from app.modules.agent.domain.ports import (
     AgentRepository,
     ConversationRepository,
@@ -174,6 +177,10 @@ class ConversationQueries:
                 [conversation.id]
             )
         )
+        if conversation.status == ConversationStatus.WAITING:
+            conversation.waiting_on_work = await AgentConversationWaitRepository(
+                self.uow
+            ).has_active(conversation.id)
         return conversation
 
     async def _authorized(

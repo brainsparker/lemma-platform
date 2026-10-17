@@ -283,7 +283,9 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
         """Runs of a workflow in progress, not counting any still queued to
         start, nor any still on its entry form: nothing has run yet, and an
         abandoned "Run now" form would otherwise hold a place until it expired
-        -- two of them wedged a workflow capped at two."""
+        -- two of them wedged a workflow capped at two. Only the starter's own
+        form: one assigned to a member is work the run is waiting on, and
+        holds its place like any other step."""
         # Its own alias: the outer count reads runs too, and an unaliased inner
         # reference would correlate to that row instead of the wait's run.
         entry = aliased(WorkflowRunModel)
@@ -304,6 +306,7 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
                 WorkflowRunWaitModel.wait_type == WorkflowRunWaitType.QUEUED.value,
                 and_(
                     WorkflowRunWaitModel.wait_type == WorkflowRunWaitType.HUMAN.value,
+                    WorkflowRunWaitModel.assigned_pod_member_id.is_(None),
                     on_entry_form,
                 ),
             ),

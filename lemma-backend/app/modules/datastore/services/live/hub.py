@@ -23,7 +23,6 @@ from uuid import UUID
 
 from opentelemetry import metrics
 from redis.exceptions import RedisError
-from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.domain.realtime import RealtimeChannel, RealtimeSlowConsumerError
 from app.core.log.log import get_logger
@@ -47,6 +46,7 @@ from app.modules.datastore.services.live.connection import (
     LiveConnection,
     LiveSubscription,
 )
+from app.modules.datastore.services.live.hub_start import HubStart, StartAttempt
 from app.modules.datastore.services.live.fanout import (
     HubStats,
     encode_batch,
@@ -113,9 +113,7 @@ class PodHub:
         self._last_read = 0.0
         self._recheck_step = _RECHECK_FIRST
         self._next_poll = 0.0
-        self._task: asyncio.Task[None] | None = None
-        self._started = asyncio.Event()
-        self._start_error: BaseException | None = None
+        self._start = HubStart(f"live-hub-{pod_id}")
         self._idle_since: float | None = None
         self.stats = HubStats()
 
@@ -133,17 +131,13 @@ class PodHub:
         return sum(len(subs) for subs in self._by_table.values())
 
     async def ensure_started(self) -> None:
-        if self._task is None:
-            self._task = create_background_task(
-                self._run(), name=f"live-hub-{self.pod_id}"
-            )
+        """Start the hub if it is not running, and wait for its start."""
+        if self._start.launch(self._run):
             active_hubs.add(1)
-        await self._started.wait()
-        if self._start_error is not None:
-            raise self._start_error
+        await self._start.until_started()
 
     async def stop(self) -> None:
-        task, self._task = self._task, None
+        task = self._start.take()
         if task is None:
             return
         active_hubs.add(-1)
@@ -316,25 +310,28 @@ class PodHub:
 
     # -- the loop ---------------------------------------------------------------
 
-    async def _run(self) -> None:
+    async def _run(self, start: StartAttempt) -> None:
         try:
             self._cursor = await self._feed.horizon(self.pod_id)
             self._position = self._feed.position(self._cursor)
             self._epoch = await self._epoch_of(self.pod_id)
-        except (SQLAlchemyError, OSError, LiveCursorExpired) as exc:
-            self._start_error = exc
-            self._started.set()
+        except BaseException as exc:
+            start.failed(exc)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             logger.error(
                 "datastore.live.hub_start_failed",
                 pod_id=str(self.pod_id),
                 error_type=type(exc).__name__,
                 exc_info=True,
             )
+            if not isinstance(exc, Exception):
+                raise
             return
         self._next_epoch_check = (
             time.monotonic() + self._settings.live_authz_check_seconds
         )
-        self._started.set()
+        start.succeeded()
         pump = create_background_task(
             self._pump_wakes(), name=f"live-wake-{self.pod_id}"
         )

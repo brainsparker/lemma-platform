@@ -230,6 +230,11 @@ class LiveCursorExpired(Exception):
     """A cursor the log can no longer answer from: too old, or not a cursor."""
 
 
+class LiveHubUnavailable(Exception):
+    """The pod's hub did not start: failed unexpectedly, was stopped, or took
+    too long. The socket says so and the client retries."""
+
+
 class LiveAccessDenied(Exception):
     def __init__(self, code: LiveErrorCode, message: str) -> None:
         super().__init__(message)

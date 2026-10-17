@@ -30,6 +30,7 @@ from app.modules.datastore.domain.live import (
     PONG_FRAME,
     LiveCursorExpired,
     LiveErrorCode,
+    LiveHubUnavailable,
     LiveRequestInvalid,
     PingRequest,
     SubscribeRequest,
@@ -165,7 +166,12 @@ async def _receive(
                 await hub.subscribe(
                     connection, request, max_subscriptions=max_subscriptions
                 )
-            except (SQLAlchemyError, OSError, LiveCursorExpired) as exc:
+            except (
+                SQLAlchemyError,
+                OSError,
+                LiveCursorExpired,
+                LiveHubUnavailable,
+            ) as exc:
                 # One subscription failing to start (the database briefly
                 # unreachable) must not take the socket and its others down.
                 logger.error(

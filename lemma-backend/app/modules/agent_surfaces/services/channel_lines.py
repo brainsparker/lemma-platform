@@ -20,15 +20,15 @@ from uuid import UUID
 
 from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.contracts import channel_conversations
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
 from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.surface_route_types import (
     SurfaceEgressTarget,
 )
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent.contracts import channel_conversations
 from app.modules.channels.contracts import (
     ContactsHome,
     Place,
@@ -46,6 +46,20 @@ from app.modules.channels.contracts import (
 #: Delivery metadata naming the member who wrote what is being sent -- a
 #: follow-up -- so its line is theirs, not the agent's.
 WRITTEN_BY_MEMBER = "written_by_member_id"
+
+#: A web chat's platform, as its channel source names it.
+WEB = "WEB"
+
+
+def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
+    """A visitor's chat on one widget: keyed by the widget and their session."""
+    return Place(
+        surface_id=None,
+        platform=WEB,
+        kind=SourceKind.PRIVATE,
+        external_channel_id=str(widget_id),
+        external_user_id=str(session_id),
+    )
 
 
 class ChannelLines(Protocol):
@@ -127,6 +141,41 @@ async def note_heard(
     )
 
 
+async def note_heard_on_web(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    pod_id: UUID,
+    widget_id: UUID,
+    session_id: UUID,
+    contact_id: UUID,
+    conversation_id: UUID,
+    text: str,
+    display_name: str | None,
+) -> None:
+    """A visitor's message, as their line in their contact channel.
+
+    The web chat is one more source of that channel, and the visitor's
+    conversation is placed there with it.
+    """
+    source = await source_for(
+        uow,
+        pod_id=pod_id,
+        place=web_place(widget_id=widget_id, session_id=session_id),
+        home=ContactsHome(contact_id=contact_id),
+    )
+    await channel_conversations.place_in_channel(
+        uow, conversation_id=conversation_id, channel_id=source.channel_id
+    )
+    await post(
+        uow,
+        channel_id=source.channel_id,
+        sender=Sender.contact(contact_id, display_name=display_name),
+        text=text,
+        source_id=source.id,
+        conversation_id=conversation_id,
+    )
+
+
 async def note_said(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -196,56 +245,6 @@ async def note_answered_on(
             effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id),
             on_behalf_of=answered_for(conversation.audience, conversation.user_id),
         ),
-        text=text,
-        source_id=source.id,
-        conversation_id=conversation_id,
-    )
-
-
-#: A web chat's platform, as its channel source names it.
-WEB = "WEB"
-
-
-def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
-    """A visitor's chat on one widget: keyed by the widget and their session."""
-    return Place(
-        surface_id=None,
-        platform=WEB,
-        kind=SourceKind.PRIVATE,
-        external_channel_id=str(widget_id),
-        external_user_id=str(session_id),
-    )
-
-
-async def note_heard_on_web(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    pod_id: UUID,
-    widget_id: UUID,
-    session_id: UUID,
-    contact_id: UUID,
-    conversation_id: UUID,
-    text: str,
-    display_name: str | None,
-) -> None:
-    """A visitor's message, as their line in their contact channel.
-
-    The web chat is one more source of that channel, and the visitor's
-    conversation is placed there with it.
-    """
-    source = await source_for(
-        uow,
-        pod_id=pod_id,
-        place=web_place(widget_id=widget_id, session_id=session_id),
-        home=ContactsHome(contact_id=contact_id),
-    )
-    await channel_conversations.place_in_channel(
-        uow, conversation_id=conversation_id, channel_id=source.channel_id
-    )
-    await post(
-        uow,
-        channel_id=source.channel_id,
-        sender=Sender.contact(contact_id, display_name=display_name),
         text=text,
         source_id=source.id,
         conversation_id=conversation_id,

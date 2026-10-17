@@ -173,7 +173,7 @@ class ChannelRepository:
         pod_id: UUID,
         user_id: UUID,
         kinds: tuple[ChannelKind, ...],
-        before: datetime | None,
+        before: tuple[datetime, UUID] | None,
         limit: int,
     ) -> list[Channel]:
         """The channels a member of the pod sees, most recently active first.
@@ -191,7 +191,10 @@ class ChannelRepository:
         )
         activity = func.coalesce(ChannelModel.last_message_at, ChannelModel.created_at)
         if before is not None:
-            statement = statement.where(activity < before)
+            at, channel_id = before
+            statement = statement.where(
+                or_(activity < at, and_(activity == at, ChannelModel.id < channel_id))
+            )
         rows = await self.session.scalars(
             statement.order_by(activity.desc(), ChannelModel.id.desc()).limit(
                 max(1, min(limit, MAX_LINES))

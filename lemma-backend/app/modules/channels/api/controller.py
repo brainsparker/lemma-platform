@@ -36,6 +36,17 @@ router = APIRouter(prefix="/pods/{pod_id}/channels", tags=["Channels"])
 _ALL_KINDS = (ChannelKind.DIRECT, ChannelKind.CONTACT, ChannelKind.GROUP)
 
 
+def _cursor(before: str | None) -> tuple[datetime, UUID] | None:
+    """A ``time|id`` cursor this API handed out, or a refusal."""
+    if before is None:
+        return None
+    at, _, row_id = before.partition("|")
+    try:
+        return datetime.fromisoformat(at), UUID(row_id)
+    except ValueError:
+        raise _bad_cursor() from None
+
+
 def _bad_cursor() -> HTTPException:
     return HTTPException(
         status.HTTP_400_BAD_REQUEST, detail="That cursor is not one we gave"
@@ -72,25 +83,23 @@ async def list_channels(
     uow: UoWDep,
     kind: ChannelKind | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=MAX_LINES),
-    before: str | None = Query(default=None, max_length=64),
+    before: str | None = Query(default=None, max_length=100),
 ) -> ChannelListResponse:
     """The pod's channels this member sees, most recently active first."""
-    try:
-        until = datetime.fromisoformat(before) if before else None
-    except ValueError:
-        raise _bad_cursor() from None
     channels = await ChannelRepository(uow.session).list_for_member(
         pod_id=pod_id,
         user_id=user.id,
         kinds=(kind,) if kind else _ALL_KINDS,
-        before=until,
+        before=_cursor(before),
         limit=limit,
     )
     last = channels[-1] if len(channels) == limit else None
     return ChannelListResponse(
         items=[channel_response(channel) for channel in channels],
         next_before=(
-            (last.last_message_at or last.created_at).isoformat() if last else None
+            f"{(last.last_message_at or last.created_at).isoformat()}|{last.id}"
+            if last
+            else None
         ),
     )
 
@@ -135,14 +144,7 @@ async def list_channel_messages(
     channel = await _visible(
         channels, pod_id=pod_id, channel_id=channel_id, user_id=user.id
     )
-    cursor = None
-    if before is not None:
-        at, _, message_id = before.partition("|")
-        try:
-            cursor = (datetime.fromisoformat(at), UUID(message_id))
-        except ValueError:
-            raise _bad_cursor() from None
-    lines = await channels.recent(channel.id, limit=limit, before=cursor)
+    lines = await channels.recent(channel.id, limit=limit, before=_cursor(before))
     first = lines[0] if len(lines) == limit else None
     return ChannelMessagesResponse(
         items=[message_response(line) for line in lines],

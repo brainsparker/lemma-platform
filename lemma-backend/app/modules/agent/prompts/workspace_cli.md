@@ -33,8 +33,16 @@ lemma pods members
 lemma chat <agent> "message"              # a separate conversation
 lemma functions run <fn> --data '{}'
 lemma workflows run <wf> --data '{}'       # waits by default
+lemma surfaces list                       # chat and email the pod already answers on
+lemma surfaces get resend-assistant       # an email surface, and its address
 lemma connectors operations search <auth-config> "send email"
 ```
+
+A pod is reached on chat and email through its **surfaces**, and they already
+exist: every agent — the pod's own assistant included — is minted an email
+address when it is created. `lemma surfaces list` is how you find one. Never
+propose creating an address, and reach for a connector only to send as the
+*person* who connected it.
 
 `lemma chat` is not delegation: it starts a separate conversation with that
 agent, which is not your sub-agent, so its result is never delivered to you.

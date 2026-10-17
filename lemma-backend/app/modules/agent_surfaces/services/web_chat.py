@@ -38,6 +38,7 @@ from app.modules.agent_surfaces.services.outside_cap import (
     hand_to_a_person,
     held_for_a_person,
 )
+from app.modules.agent_surfaces.services.contact_keepers import answers
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
 from app.modules.agent_surfaces.services.visitor_access import Visitor
 from app.modules.agent_surfaces.services.widget_directory import widget_by_key
@@ -205,7 +206,7 @@ class WebChat:
         keeps it.
         """
         contact_id = await _visitor_contact_id(uow, session)
-        if session.conversation_id is not None and await _answers(
+        if session.conversation_id is not None and await _session_answers(
             uow, session.conversation_id, contact_id
         ):
             return session.conversation_id
@@ -456,13 +457,15 @@ def _visitor_metadata(name: str | None, client_nonce: str | None) -> dict[str, o
     return metadata
 
 
-async def _answers(
+async def _session_answers(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID, contact_id: UUID
 ) -> bool:
     """Whether the session's conversation answers its visitor's contact.
 
-    One that names nobody -- or another contact -- is not continued: its runs
-    would act with whatever authority it answers, not as this visitor.
+    One that names nobody -- or another person -- is not continued: its runs
+    would act with whatever authority it answers, not as this visitor. One
+    naming the contact the visitor was merged from is theirs: the merge's
+    work moves it over shortly.
     """
     conversation = await agent_conversations.surface_conversation(uow, conversation_id)
-    return conversation is not None and conversation.audience.contact_id == contact_id
+    return conversation is not None and await answers(uow, conversation, contact_id)

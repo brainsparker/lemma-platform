@@ -326,12 +326,8 @@ class ConversationBinder:
         conversation = await agent_conversations.surface_conversation(
             self.uow, link.conversation_id
         )
-        return (
-            conversation is not None
-            and conversation.audience.contact_id == contact_id
-            and await owned_or_moved(
-                self.uow, conversation, user_id, contact_id=contact_id
-            )
+        return conversation is not None and await owned_or_moved(
+            self.uow, conversation, user_id, contact_id=contact_id
         )
 
     async def _starts_new_conversation(

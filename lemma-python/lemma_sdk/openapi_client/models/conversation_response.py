@@ -58,6 +58,9 @@ class ConversationResponse:
         status (ConversationStatus | None | Unset):
         title (None | str | Unset):
         type_ (ConversationType | Unset): User-visible conversation behavior.
+        waiting_on_work (bool | Unset): WAITING on the agent's own work -- a sub-agent, a process or a timer -- rather
+            than on a person: a run will start when it ends, so a viewer can follow the conversation to it. Set when one
+            conversation is read, false in lists. Default: False.
     """
 
     created_at: datetime.datetime
@@ -86,6 +89,7 @@ class ConversationResponse:
     status: ConversationStatus | None | Unset = UNSET
     title: None | str | Unset = UNSET
     type_: ConversationType | Unset = UNSET
+    waiting_on_work: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -220,6 +224,8 @@ class ConversationResponse:
         if not isinstance(self.type_, Unset):
             type_ = self.type_.value
 
+        waiting_on_work = self.waiting_on_work
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -270,6 +276,8 @@ class ConversationResponse:
             field_dict["title"] = title
         if type_ is not UNSET:
             field_dict["type"] = type_
+        if waiting_on_work is not UNSET:
+            field_dict["waiting_on_work"] = waiting_on_work
 
         return field_dict
 
@@ -510,6 +518,8 @@ class ConversationResponse:
         else:
             type_ = ConversationType(_type_)
 
+        waiting_on_work = d.pop("waiting_on_work", UNSET)
+
         conversation_response = cls(
             created_at=created_at,
             id=id,
@@ -537,6 +547,7 @@ class ConversationResponse:
             status=status,
             title=title,
             type_=type_,
+            waiting_on_work=waiting_on_work,
         )
 
         conversation_response.additional_properties = d

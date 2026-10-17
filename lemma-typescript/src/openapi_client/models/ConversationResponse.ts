@@ -39,6 +39,10 @@ export type ConversationResponse = {
     updated_at: string;
     user_id: string;
     /**
+     * WAITING on the agent's own work -- a sub-agent, a process or a timer -- rather than on a person: a run will start when it ends, so a viewer can follow the conversation to it. Set when one conversation is read, false in lists.
+     */
+    waiting_on_work?: boolean;
+    /**
      * The conversation's working directory in the sandbox. This is where the agent's shell starts and where its files land, so it is the directory a file pane should be showing.
      */
     readonly workspace_cwd: string;

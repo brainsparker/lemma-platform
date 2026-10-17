@@ -281,7 +281,8 @@ var LemmaUI = (() => {
     if (eventType === "completed") {
       const conversationStatus = isRecord2(payload) ? normalizeStatus(payload.conversation_status) : void 0;
       const status = (_a = conversationStatus != null ? conversationStatus : extractStatus(payload)) != null ? _a : "COMPLETED";
-      return { status };
+      const waitingOnWork = isRecord2(payload) && payload.waiting_on_work === true;
+      return waitingOnWork ? { status, waitingOnWork } : { status };
     }
     if (eventType === "stopped") {
       return { status: "STOPPED" };

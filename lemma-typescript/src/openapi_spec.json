@@ -4601,6 +4601,12 @@
             "title": "User Id",
             "type": "string"
           },
+          "waiting_on_work": {
+            "default": false,
+            "description": "WAITING on the agent's own work -- a sub-agent, a process or a timer -- rather than on a person: a run will start when it ends, so a viewer can follow the conversation to it. Set when one conversation is read, false in lists.",
+            "title": "Waiting On Work",
+            "type": "boolean"
+          },
           "workspace_cwd": {
             "description": "The conversation's working directory in the sandbox. This is where the agent's shell starts and where its files land, so it is the directory a file pane should be showing.",
             "readOnly": true,
@@ -18234,7 +18240,9 @@
           "bulk_write",
           "import_write",
           "fire_cap",
-          "lag_exceeded"
+          "lag_exceeded",
+          "condition_not_met",
+          "outside_row"
         ],
         "title": "TriggerSkipReason",
         "type": "string"

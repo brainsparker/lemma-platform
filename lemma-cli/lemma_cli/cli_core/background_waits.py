@@ -113,21 +113,32 @@ def _paused_run_end(
 ) -> int:
     """The sequence of the paused run's last message, or of the last message
     before any run's if it wrote none. Not simply the newest message: a quick
-    resumed run may already have written its answer, which must stay after."""
-    listed = to_plain(conversations.messages(conversation_id)) or {}
-    items = listed.get("items") or []
+    resumed run may already have written its answer, which must stay after --
+    and may have written pages of it, so this reads back until it finds the
+    paused run's own messages."""
     run_id = paused.agent_run_id if paused else None
-    own = [
-        m.get("sequence") or 0
-        for m in items
-        if run_id and str(m.get("agent_run_id")) == run_id
-    ]
-    if own:
-        return max(own)
-    return max(
-        (m.get("sequence") or 0 for m in items if not m.get("agent_run_id")),
-        default=0,
-    )
+    token: str | None = None
+    while True:
+        listed = (
+            to_plain(conversations.messages(conversation_id, page_token=token)) or {}
+        )
+        items = listed.get("items") or []
+        own = [
+            m.get("sequence") or 0
+            for m in items
+            if run_id and str(m.get("agent_run_id")) == run_id
+        ]
+        if own:
+            return max(own)
+        # A message no run wrote (the person's) sits before the paused run.
+        before_runs = [
+            m.get("sequence") or 0 for m in items if not m.get("agent_run_id")
+        ]
+        if before_runs:
+            return max(before_runs)
+        token = listed.get("next_page_token")
+        if not token:
+            return 0
 
 
 def _messages_after(conversations: Any, conversation_id: str, after: int) -> list:

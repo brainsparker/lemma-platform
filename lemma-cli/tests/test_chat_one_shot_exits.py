@@ -631,3 +631,34 @@ def test_an_answer_written_before_the_first_look_is_still_shown(
     assert exit_code == 0, output
     assert "SUB: 391" in output
     assert output.count("Asking the sub-agent.") == 1
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Asking the sub-agent."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("COMPLETED", False)],
+            # The resumed run wrote more than a page before the first look:
+            # the paused run's own messages are on an older page.
+            messages=[
+                _message(1, "user", "Reply with exactly: OK", None),
+                _message(2, "assistant", "Asking the sub-agent.", RUN_ID),
+                *(
+                    _message(3 + n, "assistant", f"line {n}", RESUMED_RUN_ID)
+                    for n in range(150)
+                ),
+            ],
+        )
+    ],
+    indirect=True,
+)
+def test_a_paused_run_pages_back_still_bounds_the_replay(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "line 0" in output and "line 149" in output
+    assert output.count("Asking the sub-agent.") == 1, "not replayed"

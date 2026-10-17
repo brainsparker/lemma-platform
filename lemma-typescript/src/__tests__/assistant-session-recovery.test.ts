@@ -566,6 +566,8 @@ describe("opening a conversation whose agent waits on its own work", () => {
 
     expect(harness.result()).toBe(true);
     expect(harness.resumeStream).toHaveBeenCalledOnce();
+    // The wait's result landed while nothing was listening: read once first.
+    expect(harness.messagesList).toHaveBeenCalledOnce();
   });
 
   it("reads the transcript once when the ladder runs out with nothing seen", async () => {

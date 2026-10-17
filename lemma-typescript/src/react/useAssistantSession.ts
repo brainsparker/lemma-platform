@@ -1403,13 +1403,14 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
         }
         return false;
       }
-      if (expectRun === "queued") {
+      if (expectRun === "queued" || expectRun === "background") {
         // The gap this ladder just waited out is a gap in which the server was
-        // writing. A queued decision appends the approved call's tool return
-        // and only then starts the run we are about to attach to, so that
-        // return was published while nothing was subscribed — and the stream we
-        // are opening carries the new run, not the rows that preceded it. One
-        // read, at the only moment we know there is something to catch up on.
+        // writing. A queued decision appends the approved call's tool return,
+        // and a background wait its sub-agent's or process's result, and only
+        // then starts the run we are about to attach to -- so those rows were
+        // published while nothing was subscribed, and the stream we are opening
+        // carries the new run, not what preceded it. One read, at the only
+        // moment we know there is something to catch up on.
         await loadMessages({ conversationId: id, limit: 100 }).catch(() => undefined);
         if (conversationIdRef.current !== id || abortRef.current !== null) return false;
       }

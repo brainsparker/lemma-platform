@@ -190,6 +190,9 @@ class Conversation(Entity):
     #: A pause here is waiting on the owner. Read-side only, like the
     #: diagnostics above: set by the reads that answer a person, not stored.
     has_pending_interaction: bool = False
+    #: WAITING on the agent's own work (a sub-agent, a process, a timer), with
+    #: a run to come. Read-side only, set where one conversation is read.
+    waiting_on_work: bool = False
     messages: list[Message] = Field(default_factory=list)
     agent_runs: list["AgentRun"] = Field(default_factory=list)
 

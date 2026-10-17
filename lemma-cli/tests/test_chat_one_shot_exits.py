@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from typer.testing import CliRunner
 
-from lemma_cli.cli_core import sse
+from lemma_cli.cli_core import background_waits, sse
 from lemma_cli.cli_core.app import app
 from lemma_cli.cli_core.commands import conversations as conversations_command
 
@@ -78,14 +78,33 @@ def _token(text: str) -> bytes:
     )
 
 
-def _completed() -> bytes:
-    return _frame(
-        {
-            "type": "completed",
-            "agent_run_id": RUN_ID,
-            "data": {"conversation_id": CONVERSATION_ID, "status": "COMPLETED"},
-        }
-    )
+def _completed(
+    conversation_status: str | None = None, *, waiting_on_work: bool | None = None
+) -> bytes:
+    data: dict[str, object] = {
+        "conversation_id": CONVERSATION_ID,
+        "status": "COMPLETED",
+    }
+    if conversation_status:
+        data["conversation_status"] = conversation_status
+    if waiting_on_work is not None:
+        data["waiting_on_work"] = waiting_on_work
+    return _frame({"type": "completed", "agent_run_id": RUN_ID, "data": data})
+
+
+def _message(
+    sequence: int, role: str, text: str, run_id: str | None, kind: str = "TEXT"
+) -> dict[str, object]:
+    return {
+        "id": str(uuid.uuid4()),
+        "conversation_id": CONVERSATION_ID,
+        "sequence": sequence,
+        "role": role,
+        "kind": kind,
+        "text": text,
+        "agent_run_id": run_id,
+        "created_at": _NOW,
+    }
 
 
 def _failed(reason: str) -> bytes:
@@ -103,12 +122,40 @@ class Scenario:
     then: str
     reattach: list[bytes] = field(default_factory=list)
     reattached_for: list[str | None] = field(default_factory=list)
+    #: Once the message is sent, each conversation GET answers the next of
+    #: these (status, has_pending_interaction) and then repeats the last.
+    polls: list[tuple[str, bool]] = field(default_factory=list)
+    polled: int = 0
+    #: What a stream attached with no run id -- the resumed run -- carries.
+    resumed: list[bytes] = field(default_factory=list)
+    #: The conversation's persisted messages, as the message list returns them.
+    messages: list[dict[str, object]] = field(default_factory=list)
+    #: Written by the resumed run: listed once a poll has seen the wait end.
+    resumed_messages: list[dict[str, object]] = field(default_factory=list)
+
+
+def _message_page(
+    messages: list[dict[str, object]], query: dict[str, list[str]]
+) -> dict[str, object]:
+    """The message list's paging: newest first by page, oldest first within."""
+    limit = int(query.get("limit", ["100"])[0])
+    after = int(query.get("after_sequence", ["-1"])[0])
+    before = int(query.get("page_token", [str(1 << 62)])[0])
+    newest = sorted(
+        (m for m in messages if after < int(m["sequence"]) < before),  # type: ignore[arg-type]
+        key=lambda m: int(m["sequence"]),  # type: ignore[arg-type]
+        reverse=True,
+    )
+    page = newest[:limit]
+    token = str(page[-1]["sequence"]) if len(newest) > limit else None
+    return {"items": list(reversed(page)), "limit": limit, "next_page_token": token}
 
 
 class _FakeApi:
     def __init__(self, scenario: Scenario) -> None:
         self.scenario = scenario
         self.stopping = threading.Event()
+        self.sent = False
         api = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -116,6 +163,14 @@ class _FakeApi:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
+
+            def _json(self, body: object) -> None:
+                encoded = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
 
             def _hold(self, how: str) -> None:
                 while not api.stopping.is_set():
@@ -130,6 +185,7 @@ class _FakeApi:
                 if not self.path.endswith(f"/conversations/{CONVERSATION_ID}/messages"):
                     self.send_error(404)
                     return
+                api.sent = True
                 self._open_stream()
                 try:
                     for chunk in api.scenario.sent:
@@ -142,6 +198,11 @@ class _FakeApi:
 
             def do_GET(self) -> None:  # noqa: N802
                 url = urlparse(self.path)
+                if url.path.endswith(f"/conversations/{CONVERSATION_ID}/messages"):
+                    self._json(
+                        _message_page(api.scenario.messages, parse_qs(url.query))
+                    )
+                    return
                 lookup = next(
                     (
                         body
@@ -150,22 +211,33 @@ class _FakeApi:
                     ),
                     None,
                 )
+                polls = api.scenario.polls
+                if (
+                    lookup is not None
+                    and api.sent
+                    and polls
+                    and "agents" not in url.path
+                ):
+                    status, pending = polls[min(api.scenario.polled, len(polls) - 1)]
+                    api.scenario.polled += 1
+                    if status != "WAITING" and api.scenario.resumed_messages:
+                        api.scenario.messages.extend(api.scenario.resumed_messages)
+                        api.scenario.resumed_messages = []
+                    lookup = {
+                        **lookup,
+                        "status": status,
+                        "has_pending_interaction": pending,
+                    }
                 if lookup is not None:
-                    encoded = json.dumps(lookup).encode()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(encoded)))
-                    self.end_headers()
-                    self.wfile.write(encoded)
+                    self._json(lookup)
                     return
                 if not url.path.endswith(f"/conversations/{CONVERSATION_ID}/stream"):
                     self.send_error(404)
                     return
-                api.scenario.reattached_for.append(
-                    parse_qs(url.query).get("agent_run_id", [None])[0]
-                )
+                run_id = parse_qs(url.query).get("agent_run_id", [None])[0]
+                api.scenario.reattached_for.append(run_id)
                 self._open_stream()
-                for chunk in api.scenario.reattach:
+                for chunk in api.scenario.reattach if run_id else api.scenario.resumed:
                     self.wfile.write(chunk)
                     self.wfile.flush()
 
@@ -197,7 +269,13 @@ def api(request: pytest.FixtureRequest) -> Iterator[_FakeApi]:
     fake.close()
 
 
-def _one_shot(base_url: str) -> tuple[int | None, str]:
+@pytest.fixture
+def no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Poll a waiting conversation without pausing between polls."""
+    monkeypatch.setattr(background_waits, "FIRST_POLL_SECONDS", 0.0)
+
+
+def _one_shot(base_url: str, *extra: str) -> tuple[int | None, str]:
     """Run `lemma chat -m` against `base_url`; (None, "") if it never returns."""
     outcome: dict[str, object] = {}
 
@@ -218,6 +296,7 @@ def _one_shot(base_url: str) -> tuple[int | None, str]:
                 CONVERSATION_ID,
                 "-m",
                 "Reply with exactly: OK",
+                *extra,
             ],
         )
         outcome["exit_code"] = result.exit_code
@@ -307,3 +386,279 @@ def test_a_dead_connection_to_a_failed_run_is_noticed_and_reported(
     assert exit_code == 1, output
     assert "Agent Host run deadline elapsed" in output
     assert api.scenario.reattached_for == [RUN_ID]
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Asking the sub-agent."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("WAITING", False), ("WAITING", False), ("RUNNING", False)],
+            resumed=[_status(), _token("SUB: 391"), _completed("COMPLETED")],
+        )
+    ],
+    indirect=True,
+)
+def test_a_run_waiting_on_a_sub_agent_is_followed_to_the_answer(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    """The run ends WAITING; the answer arrives in the run the wait resumes."""
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "SUB: 391" in output
+    assert "waiting on the agent's background work" in output
+    assert api.scenario.reattached_for == [None], "the resumed run, by no run id"
+    assert api.scenario.polled == 3, "two polls see WAITING, the third RUNNING"
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Approve?"), _completed("WAITING")],
+            then="keepalive",
+            polls=[("WAITING", True)],
+            resumed=[_token("never streamed")],
+        )
+    ],
+    indirect=True,
+)
+def test_a_run_waiting_on_a_person_returns_without_polling(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "Approve?" in output
+    assert "resume:" in output
+    assert api.scenario.polled == 1, "one look, no polling"
+    assert api.scenario.reattached_for == []
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            # A task agent that ended WAITING for the person's reply holds no
+            # pause, so only the frame can say nobody else will answer.
+            sent=[
+                _status(),
+                _token("Send me the code."),
+                _completed("WAITING", waiting_on_work=False),
+            ],
+            then="keepalive",
+            polls=[("WAITING", False)],
+            resumed=[_token("never streamed")],
+        )
+    ],
+    indirect=True,
+)
+def test_a_server_saying_the_wait_is_the_persons_is_not_polled_at_all(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "resume:" in output
+    assert api.scenario.polled == 0
+    assert api.scenario.reattached_for == []
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Started a timer."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("WAITING", False)],
+        )
+    ],
+    indirect=True,
+)
+def test_a_wait_past_the_timeout_leaves_the_resume_hint(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url, "--wait-timeout", "0")
+
+    assert exit_code == 0, output
+    assert "resume:" in output
+    assert api.scenario.reattached_for == []
+
+
+RESUMED_RUN_ID = str(uuid.uuid4())
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Asking the sub-agent."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("WAITING", False), ("COMPLETED", False)],
+            messages=[
+                _message(1, "user", "Reply with exactly: OK", None),
+                _message(2, "assistant", "Asking the sub-agent.", RUN_ID),
+                _message(3, "assistant", "wait_for", RUN_ID, kind="TOOL_CALL"),
+            ],
+            resumed_messages=[_message(4, "assistant", "SUB: 391", RESUMED_RUN_ID)],
+        )
+    ],
+    indirect=True,
+)
+def test_a_resumed_run_that_ended_between_polls_is_read_from_its_messages(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    """Attaching would replay only the ending; the answer is in the messages."""
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "SUB: 391" in output
+    assert output.count("Asking the sub-agent.") == 1, "the paused run, once"
+    assert "wait_for" not in output
+    assert api.scenario.reattached_for == [], "nothing live to attach to"
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Asking the sub-agent."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("WAITING", False), ("RUNNING", False)],
+            # It finished between the poll and the attach: the stream replays
+            # only its ending.
+            resumed=[_completed("COMPLETED")],
+            messages=[
+                _message(1, "user", "Reply with exactly: OK", None),
+                _message(2, "assistant", "Asking the sub-agent.", RUN_ID),
+            ],
+            resumed_messages=[_message(3, "assistant", "SUB: 391", RESUMED_RUN_ID)],
+        )
+    ],
+    indirect=True,
+)
+def test_an_attach_that_replays_only_the_ending_reads_the_answer(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "SUB: 391" in output
+    assert api.scenario.reattached_for == [None]
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Asking the sub-agent."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("WAITING", False), ("COMPLETED", False)],
+            messages=[
+                _message(1, "user", "Reply with exactly: OK", None),
+                _message(2, "assistant", "Asking the sub-agent.", RUN_ID),
+            ],
+            # More than one page of the message list.
+            resumed_messages=[
+                _message(3 + n, "assistant", f"line {n}", RESUMED_RUN_ID)
+                for n in range(150)
+            ],
+        )
+    ],
+    indirect=True,
+)
+def test_an_answer_longer_than_one_page_is_read_in_full(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "line 0" in output and "line 149" in output
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            # An older server: no waiting_on_work, and nothing will come.
+            sent=[_status(), _token("Send me the code."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("WAITING", False)],
+        )
+    ],
+    indirect=True,
+)
+def test_an_unmarked_wait_is_looked_at_briefly_not_for_the_full_timeout(
+    api: _FakeApi,
+    fast_rechecks: None,
+    no_sleep: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(background_waits, "UNMARKED_WAIT_SECONDS", 0.3)
+    started = time.monotonic()
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "resume:" in output
+    assert time.monotonic() - started < 10, "held for the full wait timeout"
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Asking the sub-agent."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("COMPLETED", False)],
+            # A quick sub-agent: the resumed run wrote its answer before the
+            # CLI's first look, so the newest message is already the answer.
+            messages=[
+                _message(1, "user", "Reply with exactly: OK", None),
+                _message(2, "assistant", "Asking the sub-agent.", RUN_ID),
+                _message(3, "assistant", "SUB: 391", RESUMED_RUN_ID),
+            ],
+        )
+    ],
+    indirect=True,
+)
+def test_an_answer_written_before_the_first_look_is_still_shown(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "SUB: 391" in output
+    assert output.count("Asking the sub-agent.") == 1
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Asking the sub-agent."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("COMPLETED", False)],
+            # The resumed run wrote more than a page before the first look:
+            # the paused run's own messages are on an older page.
+            messages=[
+                _message(1, "user", "Reply with exactly: OK", None),
+                _message(2, "assistant", "Asking the sub-agent.", RUN_ID),
+                *(
+                    _message(3 + n, "assistant", f"line {n}", RESUMED_RUN_ID)
+                    for n in range(150)
+                ),
+            ],
+        )
+    ],
+    indirect=True,
+)
+def test_a_paused_run_pages_back_still_bounds_the_replay(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "line 0" in output and "line 149" in output
+    assert output.count("Asking the sub-agent.") == 1, "not replayed"

@@ -57,6 +57,8 @@ async def test_an_untitled_conversation_gets_its_title_item() -> None:
 
     title = uow.session.item(work_kinds.AGENT_TITLE)
     assert title["dedup_key"] == work_kinds.title_key(run.conversation_id)
+    # One at a time: a second title item waits for the first to set the title.
+    assert title["concurrency_key"] == work_kinds.title_key(run.conversation_id)
     assert title["cls"] == "automation"
 
 

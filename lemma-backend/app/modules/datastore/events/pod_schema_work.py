@@ -4,9 +4,13 @@ A boot hook that walked every pod schema would grow with every pod ever made
 until it owned the boot. Instead a periodic ``pod_schema.backfill``, armed at
 the first worker boot of a release that knows a new version, pages
 through the schemas that are not at the latest version and enqueues one
-``admin`` item per schema, in the schema's pod's namespace, so the admin class's
-per-namespace cap and round robin pace it and no pod waits behind another's
-migration. Each item takes only that schema's advisory lock and is idempotent,
+``admin`` item per schema, all in one namespace of their own
+(``MIGRATE_NAMESPACE``). The claim round-robins namespaces, so one per pod put
+the ``system`` namespace -- every admin periodic -- behind each pod with a
+migrate after a release: housekeeping ran minutes late. In one namespace the
+drain is serial, and that costs no pod anything: a pod that writes or indexes
+first migrates its own schema inline. Each item takes only that schema's
+advisory lock and is idempotent,
 so a duplicate, a retry or a second worker doing the same schema costs a
 version read. Indexing still migrates its own schema inline on first use, and
 a record write only makes sure the change log exists
@@ -25,15 +29,14 @@ from app.core.infrastructure.work import (
     WorkClass,
     WorkMode,
     WorkRegistry,
-    pod_namespace,
     registry as default_registry,
+    system_namespace,
 )
 from app.core.log.log import get_logger
 from app.modules.datastore.infrastructure.pod_schema_migrations import (
     POD_SCHEMA_LATEST,
     list_schemas_below,
     migrate_pod_schema,
-    pod_id_for_schema,
 )
 from app.modules.datastore.infrastructure.query_role import POD_SCHEMA_RE
 from app.modules.datastore.infrastructure.session import get_datastore_engine
@@ -58,6 +61,11 @@ class PodSchemaMigratePayload(BaseModel):
         if not POD_SCHEMA_RE.fullmatch(value):
             raise ValueError(f"not a pod schema: {value!r}")
         return value
+
+
+#: Every ``pod_schema.migrate``, so a backfill shares the admin class with the
+#: periodics as one namespace, not one per pod.
+MIGRATE_NAMESPACE = system_namespace("pod_schema")
 
 
 class PodSchemaBackfillPayload(BaseModel):
@@ -89,7 +97,7 @@ async def run_backfill(ctx: JobContext, payload: PodSchemaBackfillPayload) -> No
         for schema_name in behind:
             await work.add(
                 POD_SCHEMA_MIGRATE,
-                pod_namespace(pod_id_for_schema(schema_name)),
+                MIGRATE_NAMESPACE,
                 PodSchemaMigratePayload(schema_name=schema_name),
                 dedup_key=f"pod_schema:{schema_name}:v{POD_SCHEMA_LATEST}",
             )

@@ -38,6 +38,7 @@ from app.core.infrastructure.work.registry import (
 from app.core.infrastructure.work.retry import DEFAULT_RETRY, Exponential, RetryPolicy
 from app.core.infrastructure.work.types import (
     SYSTEM_NAMESPACE,
+    system_namespace,
     ClaimedItem,
     Defer,
     ItemFailure,
@@ -63,6 +64,7 @@ from app.core.infrastructure.work.writer import (
 __all__ = [
     "DEFAULT_RETRY",
     "SYSTEM_NAMESPACE",
+    "system_namespace",
     "CancelOutcome",
     "ClaimedItem",
     "ConfiguredWorkLimitPort",

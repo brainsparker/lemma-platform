@@ -4400,7 +4400,7 @@
                 "type": "null"
               }
             ],
-            "description": "Null removes the cap: no limit, kept as the owner's choice. Zero stops bots answering contacts.",
+            "description": "Null removes the cap: no limit, kept as the owner's choice. Zero stops bots answering contacts. Leave it out to keep the current cap.",
             "title": "Monthly Limit Usd"
           }
         },

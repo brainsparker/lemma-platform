@@ -182,3 +182,25 @@ async def test_two_visitors_proving_one_new_address_at_once_end_as_one_contact(
         )
     ).scalars()
     assert list(holders) == [survivor]
+
+
+async def test_renaming_a_merged_contact_renames_the_person_it_leads_to(
+    authenticated_client, db_session, test_pod
+):
+    """A link kept from before a merge renames the contact it shows, not the
+    absorbed row nobody sees again."""
+    pod_id = UUID(test_pod["id"])
+    customer = await _customer(pod_id, "renamed@client.example")
+    visitor = await _anonymous(pod_id)
+    await _prove(pod_id, visitor, "renamed@client.example")
+
+    response = await authenticated_client.patch(
+        f"/pods/{pod_id}/contacts/{visitor.id}", json={"display_name": "Dana Ross"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["id"] == str(customer.id)
+    assert response.json()["display_name"] == "Dana Ross"
+    db_session.expire_all()
+    survivor = await db_session.get(ContactModel, customer.id)
+    assert survivor is not None and survivor.display_name == "Dana Ross"

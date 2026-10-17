@@ -243,7 +243,8 @@ class ContactsCapUpdate(BaseModel):
         ge=0,
         description=(
             "Null removes the cap: no limit, kept as the owner's choice. Zero "
-            "stops bots answering contacts."
+            "stops bots answering contacts. Leave it out to keep the current "
+            "cap."
         ),
     )
     max_contacts: int | None = Field(

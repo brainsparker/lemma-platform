@@ -18,7 +18,7 @@ class ContactsCapUpdate:
         max_contacts (int | None | Unset): How many contacts the bots may answer. Leave it out to keep the current
             number; null removes the limit.
         monthly_limit_usd (float | None | Unset): Null removes the cap: no limit, kept as the owner's choice. Zero stops
-            bots answering contacts.
+            bots answering contacts. Leave it out to keep the current cap.
     """
 
     max_contacts: int | None | Unset = UNSET

@@ -8,7 +8,7 @@ export type ContactsCapUpdate = {
      */
     max_contacts?: (number | null);
     /**
-     * Null removes the cap: no limit, kept as the owner's choice. Zero stops bots answering contacts.
+     * Null removes the cap: no limit, kept as the owner's choice. Zero stops bots answering contacts. Leave it out to keep the current cap.
      */
     monthly_limit_usd?: (number | null);
 };

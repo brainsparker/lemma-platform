@@ -67,6 +67,8 @@ LLM_OTEL      ?= 0
 E2E_TEMP_ROOT ?= /tmp/lemma-desktop-e2e
 
 UNIT_MARKERS  ?= not e2e and not local_guest and not local_host and not desktop_e2e and not provider
+# xdist workers for it; lemma-backend/Makefile says why four. 0 is serial.
+UNIT_WORKERS  ?= 4
 
 BACKEND_DIR   := lemma-backend
 FRONTEND_DIR  := lemma-frontend
@@ -1606,7 +1608,7 @@ test-backend:
 
 test-backend-unit:
 	@echo "→ Backend unit tests…"
-	@cd $(BACKEND_DIR) && uv run pytest -m "$(UNIT_MARKERS)" -q
+	@cd $(BACKEND_DIR) && uv run pytest -n $(UNIT_WORKERS) -m "$(UNIT_MARKERS)" -q
 
 test-backend-e2e:
 	@echo "→ Backend e2e tests (workers=$(E2E_WORKERS))…"
@@ -1909,7 +1911,7 @@ coverage-backend: coverage-backend-unit coverage-backend-e2e
 # entries in that script's LANES table.
 coverage-backend-unit:
 	@echo "→ Backend unit coverage…"
-	@cd $(BACKEND_DIR) && uv run pytest -m "$(UNIT_MARKERS)" \
+	@cd $(BACKEND_DIR) && uv run pytest -n $(UNIT_WORKERS) -m "$(UNIT_MARKERS)" \
 		--cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml -q
 
 coverage-backend-e2e:

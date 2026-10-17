@@ -342,6 +342,33 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     e2e_base._close_shared_contexts()
 
 
+@pytest.hookimpl(trylast=True, specname="pytest_sessionfinish")
+def pytest_sessionfinish_save_worker_coverage(session: pytest.Session) -> None:
+    """Write an xdist worker's coverage before the worker says it is done.
+
+    A worker started under `COVERAGE_PROCESS_START` saves its data from an
+    atexit handler. The controller gives a finished worker ten seconds to exit
+    and then kills it, and a worker can take longer than that to shut down --
+    interpreter exit joins any non-daemon thread a test left behind before
+    atexit runs at all. A killed worker's coverage is simply gone, so the
+    parallel unit lane reported a fraction of its real coverage, a different
+    fraction on each run.
+
+    `trylast` puts this after every other session-finish hook, and still inside
+    xdist's wrapper, which sends "workerfinished" only once this returns. The
+    data file is SQLite, so the second save atexit cannot corrupt this one.
+    """
+    if not hasattr(session.config, "workerinput"):
+        return
+    import coverage
+
+    current = coverage.Coverage.current()
+    if current is None:
+        return
+    current.stop()
+    current.save()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _connection_scope_sweep():
     """Optionally watch every connection this session checks out.

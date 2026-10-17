@@ -28,6 +28,14 @@ E2E_PARALLEL := -n $(E2E_WORKERS) --dist loadscope
 # they differ again.
 UNIT_MARKERS ?= not e2e and not local_guest and not local_host and not desktop_e2e and not provider
 
+# xdist workers for the unit lane. Four, not `auto`: a GitHub runner has four
+# vCPUs, so CI gets the same either way, and `auto` on a laptop with twelve
+# cores starves the event loops the timing-sensitive tests wait on. The one
+# suite that shares Postgres gives each worker a database of its own
+# (app/modules/workspace/tests/integration/conftest.py). UNIT_WORKERS=0 runs
+# serially, for bisecting an ordering problem.
+UNIT_WORKERS ?= 4
+
 # The marker filter a CI shard runs under. Defaults to the standard fast-lane
 # exclusions (matches test-e2e-fast); a shard whose module structurally needs
 # real sandbox execution to be covered at all (function -- see e2e.yml) can
@@ -154,7 +162,7 @@ test:
 	uv run pytest
 
 test-unit:
-	uv run pytest -m "$(UNIT_MARKERS)"
+	uv run pytest -n $(UNIT_WORKERS) -m "$(UNIT_MARKERS)"
 
 # Default e2e gate: fast + deterministic. The agent LLM is a mocked
 # FunctionModel and workspace tools hit the in-process fake sandbox, so there
@@ -232,7 +240,7 @@ test-module:
 coverage: coverage-unit coverage-e2e
 
 coverage-unit:
-	uv run pytest -m "$(UNIT_MARKERS)" --cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml
+	uv run pytest -n $(UNIT_WORKERS) -m "$(UNIT_MARKERS)" --cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml
 
 coverage-e2e:
 	uv run pytest -m e2e --cov=app --cov-report=term-missing --cov-report=xml:coverage-e2e.xml
@@ -242,6 +250,7 @@ coverage-backend-unit:
 	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/junit-*.phases.json $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
+		-n $(UNIT_WORKERS) \
 		-m "$(UNIT_MARKERS)" \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-unit.xml
 	$(MAKE) coverage-backend-report COVERAGE_PHASE=unit

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { asksForDestination, rawDestination, safeDestinationIn, authLink, landing, rememberDestination, storedDestination, newOrganizationLink, afterNewOrganizationIn, type Where } from "../src/auth/redirects.ts";
+import { asksForDestination, rawDestination, safeDestinationIn, authLink, landing, rememberDestination, storedDestination, newOrganizationLink, afterNewOrganizationIn, installsTemplate, type Where } from "../src/auth/redirects.ts";
 
 /** Where a sign-in may put somebody down.
  *
@@ -158,4 +158,11 @@ test("a new organization with nowhere to return to opens in the workspace", () =
     assert.equal(afterNewOrganizationIn("org-1", "", HERE), "/t?org=org-1");
     // A destination this app would not honour after sign-in is not honoured here either.
     assert.equal(afterNewOrganizationIn("org-1", "?redirect_uri=https%3A%2F%2Fevil.example%2F", HERE), "/t?org=org-1");
+});
+
+test("a sign-in on its way to an install is told apart from any other", () => {
+    assert.equal(installsTemplate("/import/github/ada-member/ledger-pod"), true);
+    assert.equal(installsTemplate("https://app.example.test/import/github/ada-member/ledger-pod", HERE.origin), true);
+    assert.equal(installsTemplate("/t/marketing"), false);
+    assert.equal(installsTemplate(null), false);
 });

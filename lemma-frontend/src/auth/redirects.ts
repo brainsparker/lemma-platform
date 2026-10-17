@@ -173,6 +173,18 @@ export function afterNewOrganization(orgId: string, search: string): string {
     return afterNewOrganizationIn(orgId, search, { origin: siteOrigin(), appsSuffix: appsDomainSuffix(), apiOrigin: onApi("/") });
 }
 
+/** Whether a sign-in is on its way to install a template. Somebody there has
+ *  usually never been here, so the portal does not greet them with "Welcome
+ *  back". */
+export function installsTemplate(destination: string | null, origin = "http://portal.invalid"): boolean {
+    if (!destination) return false;
+    try {
+        return /^\/import\/github\/[^/]+\/[^/]+\/?$/.test(new URL(destination, origin).pathname);
+    } catch {
+        return false;
+    }
+}
+
 const INVITATION_PATH = /^\/invitations\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/accept\/?$/i;
 
 /** The invitation a sign-up is on its way to accept, read off where it lands.

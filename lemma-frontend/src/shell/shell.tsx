@@ -70,6 +70,7 @@ import { Modal } from "./modal";
 import { SettingsModal, type SettingsSection } from "@/settings/settings-modal";
 import { HiringView, type FirstMove } from "@/stage/hiring";
 import { ArrivalView } from "@/org/arrival-view";
+import { arrivedFromInstall } from "@/site/import/pending-install";
 import { NewOrgDialog } from "@/org/new-org-dialog";
 import { ConversationPane } from "@/thread/conversation";
 import { LiveConversation } from "@/thread/live-conversation";
@@ -1196,6 +1197,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const meCreated = me.data?.created_at;
     useEffect(() => {
         if (preview || source.label !== "live" || !meId) return;
+        /* The visit an install opens is for what was installed; the tour
+           is offered on the next one. */
+        let fromInstall = false;
+        try { fromInstall = arrivedFromInstall(sessionStorage); } catch { /* no storage */ }
+        if (fromInstall) return;
         if (offersTour(meCreated, { seen: readTourSeen(meId) })) setTourWanted((was) => was ?? "offered");
     }, [preview, meId, meCreated]);
     const onHome = atHome(address.tabId, activeTabId);

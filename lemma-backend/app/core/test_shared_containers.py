@@ -35,6 +35,7 @@ from app.core.test_utils import (
     get_kreuzberg_url,
     get_postgres_container,
     get_redis_container,
+    postgres_server_command,
     remove_named_container,
 )
 
@@ -157,12 +158,35 @@ def reused_container_name(role: str) -> str:
 def reused_postgres() -> LemmaPostgresContainer:
     """The checkout's long-lived Postgres, started if it is not already running."""
     name = reused_container_name("postgres")
-    if not container_running(name):
+    if not container_running(name) or _started_with(name) != postgres_server_command():
+        # A container from before the server settings changed would keep the
+        # old ones for as long as it lived, which for a reused one is forever.
+        # The checkout's reused SuperTokens cores built their tables in the
+        # old server's databases, so they go with it.
+        _remove_reused(reused_container_name("supertokens-"))
         start_shared_postgres(name, reuse=True)
     container = LemmaPostgresContainer()
     container.container_id = name
     _wait_for_postgres(container)
     return container
+
+
+def _started_with(name: str) -> list[str] | None:
+    """The command a container was started with, or None if Docker cannot say."""
+    import json
+
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{json .Config.Cmd}}", name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout)
+    except ValueError:
+        return None
 
 
 def reused_redis() -> LemmaDockerContainer:
@@ -177,6 +201,11 @@ def reused_redis() -> LemmaDockerContainer:
 
 def remove_reused_containers() -> list[str]:
     """Stop and remove every reused container of this checkout (``make e2e-reuse-down``)."""
+    return _remove_reused(reused_container_name(""))
+
+
+def _remove_reused(name_prefix: str) -> list[str]:
+    """Remove this checkout's reused containers whose name starts with ``name_prefix``."""
     result = subprocess.run(
         [
             "docker",
@@ -185,7 +214,7 @@ def remove_reused_containers() -> list[str]:
             "--filter",
             f"label={REUSE_LABEL}",
             "--filter",
-            f"name={reused_container_name('')}",
+            f"name={name_prefix}",
         ],
         capture_output=True,
         text=True,

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from app.core.infrastructure.work import WorkClass, registry
 from app.worker import register_worker_modules
+from app.modules.test_support import source_tree
 
 register_worker_modules()
 
@@ -63,10 +64,10 @@ def test_each_periodic_is_one_chain() -> None:
 def test_nothing_registers_a_streaq_cron_any_more() -> None:
     """streaq is gone; a leftover decorator would be a NameError at import."""
     offenders = []
-    for path in APP.rglob("*.py"):
+    for path in source_tree.python_files(APP):
         if "/tests/" in str(path):
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = source_tree.tree(path)
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 func = node.func

@@ -117,6 +117,33 @@ class LemmaDockerContainer:
         return result.stdout + result.stderr
 
 
+#: Server settings for a throwaway test database. Every test Postgres is
+#: discarded at the end of its session, so durability buys nothing: an fsync per
+#: commit is pure latency on a suite that commits thousands of tiny
+#: transactions, and a crash just means a rerun. ``max_connections`` is sized
+#: for xdist: each worker opens the app's pools, a worker subprocess's pools and
+#: SuperTokens' own, and the image's default of 100 was reached at ``-n 3``.
+#: ``jit`` only ever costs time on queries this small.
+TEST_POSTGRES_SERVER_SETTINGS: tuple[str, ...] = (
+    "max_connections=300",
+    "fsync=off",
+    "synchronous_commit=off",
+    "full_page_writes=off",
+    "shared_buffers=256MB",
+    "max_wal_size=4GB",
+    "checkpoint_timeout=30min",
+    "jit=off",
+)
+
+
+def postgres_server_command() -> list[str]:
+    """The ``postgres`` command line every test container is started with."""
+    command = ["postgres"]
+    for setting in TEST_POSTGRES_SERVER_SETTINGS:
+        command += ["-c", setting]
+    return command
+
+
 class LemmaPostgresContainer(LemmaDockerContainer):
     username = POSTGRES_USER
     password = POSTGRES_PASSWORD
@@ -124,6 +151,12 @@ class LemmaPostgresContainer(LemmaDockerContainer):
 
     def __init__(self) -> None:
         super().__init__(POSTGRES_IMAGE, 5432)
+        # Only read by ``__enter__``; a reference built around a running
+        # container's name never starts one, so carrying it there is inert.
+        # Docker's 64 MB /dev/shm is below the shared memory 300 connections
+        # and the bigger buffer pool ask for.
+        self.with_run_args("--shm-size=512m")
+        self.with_command(*postgres_server_command())
 
 
 def _env_int(name: str, default: int) -> int:
@@ -450,6 +483,26 @@ def get_supertokens_container(
     ``get_postgres_uri_from_another_container``) -- required for the
     container-name hostname in that URI to resolve at all.
     """
+    container = _supertokens_container(postgres_connection_uri, network)
+    if reuse_name is not None:
+        if not container_running(reuse_name):
+            remove_named_container(reuse_name)
+            container.label = REUSE_LABEL
+            container.with_run_args("--name", reuse_name)
+            container.__enter__()
+        container.container_id = reuse_name
+        _wait_for_supertokens(container)
+        yield container
+        return
+
+    with container as st:
+        _wait_for_supertokens(st)
+        yield st
+
+
+def _supertokens_container(
+    postgres_connection_uri: Optional[str], network: Optional[str]
+) -> LemmaDockerContainer:
     # Every user signup/signin in the suite pays real bcrypt cost against the
     # default work factor (2^11 rounds). This container is thrown away at the
     # end of the run and never holds anything worth protecting, so drop the
@@ -466,20 +519,7 @@ def get_supertokens_container(
         )
     if network:
         container = container.with_run_args("--network", network)
-    if reuse_name is not None:
-        if not container_running(reuse_name):
-            remove_named_container(reuse_name)
-            container.label = REUSE_LABEL
-            container.with_run_args("--name", reuse_name)
-            container.__enter__()
-        container.container_id = reuse_name
-        _wait_for_supertokens(container)
-        yield container
-        return
-
-    with container as st:
-        _wait_for_supertokens(st)
-        yield st
+    return container
 
 
 def _wait_for_supertokens(st: LemmaDockerContainer) -> None:
@@ -664,7 +704,12 @@ def create_postgres_database(
                 (database_name,),
             )
             if cur.fetchone() is None:
-                cur.execute(f'CREATE DATABASE "{database_name}"')
+                # Two xdist workers can both find a shared database missing;
+                # the one that loses the race finds it made.
+                try:
+                    cur.execute(f'CREATE DATABASE "{database_name}"')
+                except psycopg.errors.UniqueViolation, psycopg.errors.DuplicateDatabase:
+                    pass
 
 
 def get_redis_url(container: LemmaDockerContainer, db: Optional[int] = None) -> str:

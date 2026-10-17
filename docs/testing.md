@@ -68,7 +68,7 @@ way a scenario says, do not edit the scenario.
 
 | Lane | Command | Runs |
 |---|---|---|
-| Backend unit | `make test-backend-unit` | Every push that touches the backend, via `e2e.yml`. **Required**, through `Backend E2E passed`. |
+| Backend unit | `make test-backend-unit` | Every push that touches the backend, via `e2e.yml`. **Required**, through `Backend E2E passed`. Runs on four xdist workers (`UNIT_WORKERS`; `0` is serial), so a unit test may not share mutable state with another process: the one suite that needs Postgres gets a database per worker. |
 | Backend e2e | `make test-e2e-fast` | Every push that touches the backend, via `e2e.yml`. **Required**, as one aggregated check. |
 | Backend + Agent Host | `make desktop-agent-host-e2e` | Backend, frontend, TypeScript SDK or desktop changes, in Desktop contracts CI. **Required.** Builds the Rust host and checks real HTTP streaming and disconnect recovery with a scripted provider, host execution under Seatbelt (macOS only), and chaos: the backend killed, the host killed and the link dropped mid-answer, each run still ending once with every event delivered once. |
 | Chat + Agent Host | `make desktop-agent-host-browser-e2e` | Same required job. Real web chat, streaming, Stop, concurrent approvals, tool approval/denial, provider failure, disconnect, and transcript reload driven by JSON ACP fixtures; no provider account. |

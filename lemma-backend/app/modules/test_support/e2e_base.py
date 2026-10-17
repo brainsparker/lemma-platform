@@ -20,6 +20,7 @@ import sys
 import asyncio
 import logging
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, AsyncGenerator, Any, Callable, Iterator
 from uuid import uuid4
 
@@ -28,7 +29,7 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from app.core.infrastructure.db.base import Base
-from app.core.infrastructure.db.manager import DatabaseManager
+from app.core.infrastructure.db.manager import DatabaseManager, TableSnapshot
 from app.core.test_utils import (
     SHARED_E2E_NETWORK_NAME,
     create_postgres_database,
@@ -482,6 +483,11 @@ def _postgres_worker_datastore_db_name(worker_id: str) -> str:
 
 
 def _postgres_worker_supertokens_db_name(worker_id: str) -> str:
+    # One core and one database per xdist worker. Sharing one core across
+    # workers was tried and measured: it saved a JVM start but made every
+    # worker-driven test wait on it -- the schedule shard's pod-bundle tests
+    # took 257s against 148s with a core each (CI runs 39023294610 and
+    # 39023300378).
     return f"supertokens_{_sanitize_worker_id(worker_id)}"
 
 
@@ -956,6 +962,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # validation at import and takes the whole app down, not just the setting.
     os.environ["OUTBOX_IDLE_POLL_MAX_SECONDS"] = "0.5"
     os.environ["OUTBOX_LISTEN_FALLBACK_POLL_SECONDS"] = "0.5"
+    _shorten_worker_cadences()
 
     # Pool connections instead of opening a fresh one per unit of work.
     #
@@ -977,6 +984,29 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     db_session_module.reset_engine_state()
 
     return settings
+
+
+#: Seconds between the session worker's fallback polls. NOTIFY wakes it sooner
+#: whenever the wake reaches it; the poll is what a test waits through when it
+#: does not, and what notices a delayed item coming due. Production's 1 s is
+#: latency every such test pays.
+_E2E_WORKER_POLL_SECONDS = 0.2
+
+
+def _shorten_worker_cadences() -> None:
+    """Shorten the work dispatcher's and datastore hand-off's fallback polls.
+
+    Both the settings singletons and the environment: this process's own work
+    runtimes (a ``drives_work`` test's dispatcher) read the singletons, which
+    were built at import, and the worker subprocess builds its own from the
+    environment it inherits.
+    """
+    from app.core.infrastructure.work.config import work_settings
+
+    work_settings.work_poll_interval_seconds = _E2E_WORKER_POLL_SECONDS
+    datastore_settings.datastore_change_handoff_poll_seconds = _E2E_WORKER_POLL_SECONDS
+    os.environ["WORK_POLL_INTERVAL_SECONDS"] = str(_E2E_WORKER_POLL_SECONDS)
+    os.environ["DATASTORE_CHANGE_HANDOFF_POLL_SECONDS"] = str(_E2E_WORKER_POLL_SECONDS)
 
 
 def _import_e2e_models() -> None:
@@ -1319,8 +1349,49 @@ async def _ensure_schema_once(database_url: str) -> None:
     known.update(table.name for table in pending)
 
 
+#: Where a module's shared identity rows are kept between its tests. One per
+#: database: modules run one after another in an xdist worker, never together.
+_IDENTITY_SNAPSHOT_SCHEMA = "e2e_module_identity"
+
+#: Queue tables never restored from a snapshot: a work item copied back for
+#: every test would be run again for every test.
+_SNAPSHOT_EXCLUDED_TABLES = ("work_items", "work_queues", "work_rate_buckets")
+
+
+@dataclass(frozen=True, slots=True)
+class _IdentitySnapshot:
+    rows: TableSnapshot
+    #: Ids of the shared user and organization, as they appear in cache keys.
+    ids: tuple[str, ...]
+
+
+#: The snapshot of the module identity currently set up, per database.
+_IDENTITY_SNAPSHOTS: dict[str, _IdentitySnapshot] = {}
+
+
+async def _forget_cached_identity(redis_url: str, ids: tuple[str, ...]) -> None:
+    """Drop every Redis key naming the shared user or organization.
+
+    A test that changes, say, the user's role in the organization leaves a
+    cached role behind, and the row reset does not reach Redis. With a new
+    identity per test no later test could ever look that key up; with a
+    shared one the next test would read it. Only those keys go: the session
+    worker shares this Redis index and keeps state of its own in it.
+    """
+    import redis.asyncio as redis
+
+    client = redis.from_url(redis_url, decode_responses=False)
+    try:
+        for identity_id in ids:
+            stale = [key async for key in client.scan_iter(match=f"*{identity_id}*")]
+            if stale:
+                await client.delete(*stale)
+    finally:
+        await client.aclose()
+
+
 @pytest_asyncio.fixture(scope="function")
-async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
+async def db_manager(e2e_settings, request) -> AsyncGenerator[DatabaseManager, None]:
     # Per-test data isolation only. The schema itself is prepared once per
     # database (_ensure_schema_once) and persists for the whole run, so each test
     # pays a filtered DELETE sweep rather than a drop/create. Keeping the schema
@@ -1358,13 +1429,23 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
             )
         )
 
+    # A test that shares its module's identity starts from that identity's
+    # rows and nothing else; every other test starts from empty tables.
+    identity = (
+        _IDENTITY_SNAPSHOTS.get(e2e_settings.database_url)
+        if "module_identity" in request.fixturenames
+        else None
+    )
+    restore = identity.rows if identity is not None else None
     last_exc: BaseException | None = None
     for _attempt in range(6):
         try:
             # Once per database, not once per test — see _ensure_schema_once.
             await _ensure_schema_once(e2e_settings.database_url)
             # Start each test from a clean slate without dropping the schema.
-            await manager.truncate_all()
+            await manager.truncate_all(restore=restore)
+            if identity is not None:
+                await _forget_cached_identity(e2e_settings.redis_url, identity.ids)
             break
         except (DBAPIError, OSError) as exc:
             if not _is_transient_db_error(exc):
@@ -1498,23 +1579,33 @@ async def async_client(
         yield client
 
 
-@pytest_asyncio.fixture(scope="function")
-async def fixed_test_user(async_client: "AsyncClient"):
+async def _sign_up_verified_user(client: "AsyncClient") -> dict[str, str]:
+    """A new, verified, signed-in user, through the real SuperTokens endpoints."""
     email = f"test+module-e2e-{uuid4().hex[:10]}@example.com"
-    password = "TestPassword@123"
-
-    signup_data = {
-        "formFields": [
-            {"id": "email", "value": email},
-            {"id": "password", "value": password},
-        ]
-    }
-    response = await async_client.post("/st/auth/signup", json=signup_data)
+    response = await client.post("/st/auth/signup", json=_credentials(email))
     data = response.json()
     assert response.status_code == 200 and data.get("status") == "OK", data
 
     await verify_emailpassword_for_tests(data["user"]["id"], email)
-    response = await async_client.post("/st/auth/signin", json=signup_data)
+    return await _sign_in(client, email)
+
+
+def _credentials(email: str) -> dict[str, list[dict[str, str]]]:
+    return {
+        "formFields": [
+            {"id": "email", "value": email},
+            {"id": "password", "value": _E2E_PASSWORD},
+        ]
+    }
+
+
+#: Every e2e user's password. Thrown away with the SuperTokens database.
+_E2E_PASSWORD = "TestPassword@123"
+
+
+async def _sign_in(client: "AsyncClient", email: str) -> dict[str, str]:
+    """A new session for an existing user."""
+    response = await client.post("/st/auth/signin", json=_credentials(email))
     data = response.json()
     assert response.status_code == 200 and data.get("status") == "OK", data
 
@@ -1524,6 +1615,21 @@ async def fixed_test_user(async_client: "AsyncClient"):
     assert access_token
 
     return {"email": email, "token": access_token, "id": data["user"]["id"]}
+
+
+async def _create_org(client: "AsyncClient", token: str) -> dict[str, object]:
+    response = await client.post(
+        "/organizations",
+        json={"name": f"Module Test Org {uuid4().hex[:8]}"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def fixed_test_user(async_client: "AsyncClient"):
+    return await _sign_up_verified_user(async_client)
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -1542,6 +1648,102 @@ async def fixed_test_org(authenticated_client: "AsyncClient"):
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleIdentity:
+    """The user and organization a module's tests share."""
+
+    user: dict[str, str]
+    org: dict[str, object]
+
+
+@pytest_asyncio.fixture(scope="module")
+async def module_identity(e2e_settings) -> AsyncGenerator[ModuleIdentity, None]:
+    """One signed-in user and their organization, shared by a module's tests.
+
+    Signing up through SuperTokens and creating an organization is most of the
+    setup of a short e2e test, and most tests only need *a* user and *an*
+    organization rather than new ones. This builds them once per module and
+    snapshots their rows; ``db_manager`` then resets each test that asks for
+    this fixture to exactly those rows, so a test still cannot see anything an
+    earlier one wrote -- including changes to the user or organization rows.
+
+    Isolate per test with what the test creates, normally a fresh pod. A test
+    that counts users, organizations or members, or that signs the user out
+    or changes their credentials, keeps the function-scoped fixtures.
+    """
+    from httpx import ASGITransport, AsyncClient
+
+    url = e2e_settings.database_url
+    manager = DatabaseManager(url)
+    _import_e2e_models()
+    await _ensure_schema_once(url)
+    await manager.truncate_all()
+    _reset_supertokens_testing_state()
+    app = _test_app_factory() if _test_app_factory is not None else None
+    if app is None:
+        from app.app import create_app
+
+        app = create_app()
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            user = await _sign_up_verified_user(client)
+            org = await _create_org(client, user["token"])
+        snapshot = await manager.snapshot(
+            _IDENTITY_SNAPSHOT_SCHEMA, exclude=_SNAPSHOT_EXCLUDED_TABLES
+        )
+        async with manager.engine.connect() as conn:
+            internal_user_id = await conn.scalar(
+                text("SELECT id::text FROM users WHERE email = :email"),
+                {"email": user["email"]},
+            )
+    finally:
+        await _close_e2e_process_clients()
+    ids = tuple(
+        str(value) for value in (user["id"], internal_user_id, org["id"]) if value
+    )
+    _IDENTITY_SNAPSHOTS[url] = _IdentitySnapshot(rows=snapshot, ids=tuple(set(ids)))
+    try:
+        yield ModuleIdentity(user=user, org=org)
+    finally:
+        _IDENTITY_SNAPSHOTS.pop(url, None)
+        await manager.drop_snapshot(snapshot)
+        await manager.close()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def module_test_user(module_identity, db_manager) -> dict[str, str]:
+    """The module's shared user, in place of ``fixed_test_user``.
+
+    Depends on ``db_manager`` so the reset that restores the user's rows has
+    run before anything uses them.
+    """
+    del db_manager  # ordering only
+    return module_identity.user
+
+
+@pytest_asyncio.fixture(scope="function")
+async def module_test_user_own_session(
+    module_identity, db_manager, async_client: "AsyncClient"
+) -> dict[str, str]:
+    """The module's shared user, signed in afresh for this test alone.
+
+    For a module whose tests revoke, expire or inspect the session itself: a
+    sign-in is a fraction of a sign-up, and what one test does to its session
+    cannot reach the next.
+    """
+    del db_manager  # ordering only
+    return await _sign_in(async_client, module_identity.user["email"])
+
+
+@pytest_asyncio.fixture(scope="function")
+async def module_test_org(module_identity, db_manager) -> dict[str, object]:
+    """The module's shared organization, in place of ``fixed_test_org``."""
+    del db_manager  # ordering only
+    return module_identity.org
 
 
 @pytest.fixture

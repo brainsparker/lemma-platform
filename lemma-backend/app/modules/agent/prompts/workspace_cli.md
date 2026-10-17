@@ -30,7 +30,7 @@ the resources those tools do not reach:
 lemma pods describe                       # inventory except apps
 lemma apps list
 lemma pods members
-lemma chat <agent> "message"
+lemma chat <agent> "message"              # a separate conversation
 lemma functions run <fn> --data '{}'
 lemma workflows run <wf> --data '{}'       # waits by default
 lemma surfaces list                       # chat and email the pod already answers on
@@ -43,6 +43,10 @@ exist: every agent — the pod's own assistant included — is minted an email
 address when it is created. `lemma surfaces list` is how you find one. Never
 propose creating an address, and reach for a connector only to send as the
 *person* who connected it.
+
+`lemma chat` is not delegation: it starts a separate conversation with that
+agent, which is not your sub-agent, so its result is never delivered to you.
+Delegate with `spawn_subagent` where you have it.
 
 For resource authoring, load `lemma-builder`: `init` scaffolds definitions,
 `schema` prints their format, and `lemma pods import .` applies a bundle.

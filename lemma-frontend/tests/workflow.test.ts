@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-    byNewest, byStuckLongest, millisOf, readAssignments, readRun, readRunDetail, readSteps,
+    byNewest, byStuckLongest, canRetryFrom, millisOf, readAssignments, readRun, readRunDetail, readSteps,
     readWait, readWorkflow, readWorkflows, runMillis, runTone, sayCancelRefusal,
-    sayFor, sayRefusal, sayStatus, sayStuckFor, sayWhen, stillGoing, waitTypeOf,
+    sayFor, sayRefusal, sayRetryRefusal, sayStatus, sayStuckFor, sayWhen, stillGoing, waitTypeOf,
 } from "../src/workflow/runs.ts";
 import { readFlowStep, readShape, switchOf, tidy, type FlowItem } from "../src/workflow/shape.ts";
 
@@ -322,6 +322,15 @@ test("a refused submission is a sentence, not a status code", () => {
     assert.equal(sayRefusal(500, "That did not go through."), "That did not go through.");
     assert.match(sayCancelRefusal(409, "x"), /already finished/);
     assert.equal(sayCancelRefusal(undefined, "That did not go through."), "That did not go through.");
+    assert.match(sayRetryRefusal(409, "x"), /can’t be retried/);
+    assert.equal(sayRetryRefusal(undefined, "That did not go through."), "That did not go through.");
+});
+
+test("a failed run offers a retry only where redoing the step repeats no paid or human work", () => {
+    // Mirrors RETRYABLE_NODE_TYPES in app/modules/workflow/execution/engine.py.
+    for (const kind of ["FUNCTION", "DECISION", "LOOP", "WAIT_UNTIL"]) assert.equal(canRetryFrom(kind), true, kind);
+    for (const kind of ["AGENT", "FORM", "END"]) assert.equal(canRetryFrom(kind), false, kind);
+    assert.equal(canRetryFrom(null), false, "no graph yet: no button rather than a refused click");
 });
 
 /* ── the shape: what it runs, in the order it runs it ──────────────── */

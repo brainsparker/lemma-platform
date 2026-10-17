@@ -98,6 +98,7 @@ async def create_workflow(
         requester_user_id=user.id,
         ctx=ctx,
         run_title=data.run_title,
+        max_concurrent_runs=data.max_concurrent_runs,
     )
     workflow = await service.get_workflow_by_name(
         pod_id,

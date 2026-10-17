@@ -11,6 +11,7 @@ remaining context, and told the user that task was the one they had requested.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from pydantic_ai.messages import (
@@ -230,9 +231,25 @@ class TestIdempotence:
         compactor = _compactor(sink, trigger_tokens=200, keep_messages=4)
         once = await compactor(_ctx(), _history())
 
-        await compactor(_ctx(), list(once))
+        # The run carries on, and its history grows past the trigger again.
+        more = [*once, *_work("later-1", "more " * 100), *_work("later-2", "x " * 100)]
+        await compactor(_ctx(), more)
 
         assert any(SUMMARY_MARKER in transcript for transcript in sink[1:])
+
+    async def test_a_summary_with_nothing_new_behind_it_is_not_rewritten(
+        self,
+    ) -> None:
+        """Re-summarizing a summary alone only paraphrases it, a little lossier
+        each pass, for the price of a model call."""
+        sink: list[str] = []
+        compactor = _compactor(sink, trigger_tokens=200, keep_messages=4)
+        once = await compactor(_ctx(), _history())
+
+        again = await compactor(_ctx(), list(once))
+
+        assert len(sink) == 1
+        assert _texts(again) == _texts(once)
 
 
 class TestTheCeilingGuardRespectsIt:
@@ -333,17 +350,94 @@ class TestTheSummaryIsNotTheUserSpeaking:
         assert "Only the user sets the goal" in str(seen[0])
 
 
-class TestFailureIsVisible:
-    async def test_a_failed_summary_says_so_instead_of_passing_through(self) -> None:
+def _explode_once_then(reply: str, calls: list[int]) -> FunctionModel:
+    def respond(messages, info):
+        del messages, info
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("summarizer briefly unavailable")
+        return ModelResponse(parts=[TextPart(reply)])
+
+    return FunctionModel(respond)
+
+
+def _always_explode(calls: list[int]) -> FunctionModel:
+    def respond(messages, info):
+        del messages, info
+        calls.append(1)
+        raise RuntimeError("summarizer unavailable")
+
+    return FunctionModel(respond)
+
+
+class TestFailureIsHandledByWhereTheHistoryStands:
+    """A failed summary used to replace the head with "could not be summarized"
+    on the first error, however transient, and the run's early work was gone
+    for the rest of it -- even when the history still fitted comfortably."""
+
+    async def test_one_failure_is_retried_and_the_summary_lands(self) -> None:
+        calls: list[int] = []
+        compactor = HistoryCompactor(
+            model=_explode_once_then("the agent was rendering", calls),
+            trigger_tokens=2_000,
+            keep_messages=6,
+            retry_delay_seconds=0,
+        )
+
+        compacted = await compactor(_ctx(), _history())
+
+        assert len(calls) == 2
+        assert any(SUMMARY_MARKER in text for text in _texts(compacted))
+        assert not any(FAILED_MARKER in text for text in _texts(compacted))
+
+    async def test_under_the_ceiling_a_failure_leaves_the_history_alone(self) -> None:
+        calls: list[int] = []
+        compactor = HistoryCompactor(
+            model=_always_explode(calls),
+            trigger_tokens=2_000,
+            keep_messages=6,
+            hard_ceiling_tokens=1_000_000,
+            retry_delay_seconds=0,
+        )
+        history = _history()
+
+        compacted = await compactor(_ctx(), history)
+
+        assert len(calls) == 2, "one retry, not an open-ended loop"
+        assert compacted == history
+
+    async def test_after_a_failure_the_next_step_does_not_pay_for_it_again(
+        self,
+    ) -> None:
+        """Until the history has grown, another attempt is the same request to
+        the same failing provider, made on every step."""
+        calls: list[int] = []
+        compactor = HistoryCompactor(
+            model=_always_explode(calls),
+            trigger_tokens=2_000,
+            keep_messages=6,
+            hard_ceiling_tokens=1_000_000,
+            retry_delay_seconds=0,
+        )
+        history = _history()
+
+        await compactor(_ctx(), history)
+        await compactor(_ctx(), [*history, *_work("next", "ok")])
+
+        assert len(calls) == 2
+
+    async def test_over_the_ceiling_a_failure_says_so_instead_of_passing_through(
+        self,
+    ) -> None:
         """The library caught its own failures and returned the original,
         oversized history -- safe for the data, and fatal for the request that
         followed, which the ceiling guard could only fix by amputation."""
-
-        def explode(messages, info):
-            raise RuntimeError("summarizer unavailable")
-
         compactor = HistoryCompactor(
-            model=FunctionModel(explode), trigger_tokens=2_000, keep_messages=6
+            model=_always_explode([]),
+            trigger_tokens=2_000,
+            keep_messages=6,
+            hard_ceiling_tokens=2_500,
+            retry_delay_seconds=0,
         )
         history = _history()
 
@@ -353,16 +447,138 @@ class TestFailureIsVisible:
         assert any(FAILED_MARKER in text for text in _texts(compacted))
         assert any(THE_REQUEST in text for text in _texts(compacted))
 
+    async def test_a_summarizer_that_never_answers_is_given_up_on(self) -> None:
+        import asyncio
 
-class TestBilling:
-    async def test_the_summarization_call_is_charged_to_the_run(self) -> None:
-        """It was an LLM call Lemma paid for and never saw: the library built
-        its own bare Agent, whose usage never reached the run."""
+        async def hang(messages, info):
+            del messages, info
+            await asyncio.Event().wait()
+
+        compactor = HistoryCompactor(
+            model=FunctionModel(hang),
+            trigger_tokens=2_000,
+            keep_messages=6,
+            hard_ceiling_tokens=1_000_000,
+            timeout_seconds=0.05,
+            retry_delay_seconds=0,
+        )
+        history = _history()
+
+        compacted = await asyncio.wait_for(compactor(_ctx(), history), timeout=5)
+
+        assert compacted == history
+
+
+class TestItDoesNotSummarizeOnEveryStep:
+    async def test_large_recent_results_do_not_trigger_a_summary_per_step(
+        self,
+    ) -> None:
+        """Forty messages of three thousand tokens each are over the trigger on
+        their own; a tail kept by count re-summarized on every step after."""
+        sink: list[str] = []
+        compactor = _compactor(sink, trigger_tokens=60_000, keep_messages=40)
+        history: list[object] = [_user(THE_REQUEST)]
+        for index in range(20):
+            history.extend(_work(f"big{index}", "lorem ipsum " * 1_500))
+
+        for step in range(5):
+            history = await compactor(_ctx(), list(history))
+            history.extend(_work(f"after{step}", "lorem ipsum " * 1_500))
+
+        assert len(sink) == 1
+
+
+class TestModelSettings:
+    async def test_the_summary_call_sends_the_runs_resolved_compaction_settings(
+        self,
+    ) -> None:
+        """The run's own model is sent what `run_generation_settings` resolved
+        for compaction -- one source of truth -- and only when it compacts."""
+        from app.modules.agent.services import summarization_model
+        from app.modules.agent.services.generation_settings import (
+            COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+        )
+
+        async def no_separate_model(*, fallback, **_: object):
+            return fallback
+
+        seen: list[object] = []
+
+        def respond(messages, info):
+            del messages
+            seen.append(info.model_settings)
+            return ModelResponse(parts=[TextPart("the brief")])
+
+        resolved: list[int] = []
+        target = summarization_model.lazy_compaction_target(
+            organization_id=None,
+            user_id=uuid4(),
+            run_model=FunctionModel(respond),
+            run_compaction_settings={
+                "openai_reasoning_effort": "low",
+                "max_tokens": COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+            },
+            meter=lambda model: model,
+            resolve_model=no_separate_model,
+        )
+
+        async def resolve() -> summarization_model.CompactionTarget:
+            resolved.append(1)
+            return await target.get()
+
+        compactor = HistoryCompactor(
+            model=summarization_model.LazyCompactionTarget(resolve),
+            trigger_tokens=2_000,
+            keep_messages=6,
+        )
+        await compactor(_ctx(), [_user("short")])
+        assert resolved == [], "a run that never compacts never resolves a model"
+
+        await compactor(_ctx(), _history())
+
+        (settings,) = seen
+        assert settings["max_tokens"] == COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS
+        assert settings["openai_reasoning_effort"] == "low"
+
+    async def test_a_separate_summarization_model_gets_only_the_cap(self) -> None:
+        """Nothing says which of the run's parameters another model accepts."""
+        from app.modules.agent.services import summarization_model
+        from app.modules.agent.services.run_input_settings import (
+            summary_only_settings,
+        )
+
+        other = FunctionModel(lambda messages, info: ModelResponse(parts=[]))
+
+        async def configured(**_: object) -> FunctionModel:
+            return other
+
+        target = summarization_model.lazy_compaction_target(
+            organization_id=None,
+            user_id=uuid4(),
+            run_model=FunctionModel(lambda messages, info: ModelResponse(parts=[])),
+            run_compaction_settings={"openai_reasoning_effort": "low", "top_p": 0.5},
+            meter=lambda model: model,
+            resolve_model=configured,
+        )
+
+        resolved = await target.get()
+
+        assert resolved.model is other
+        assert resolved.model_settings == summary_only_settings()
+
+
+class TestNotCountedAgainstTheRun:
+    async def test_the_summarization_call_is_not_added_to_the_runs_requests(
+        self,
+    ) -> None:
+        """It is metered on its own, against the run that caused it. Folded
+        into the run's usage as well, it spent the agent's request allowance on
+        harness bookkeeping -- and was counted twice."""
         ctx = _ctx()
 
         await _compactor([])(ctx, _history())
 
-        assert ctx.usage.requests >= 1
+        assert ctx.usage.requests == 0
 
 
 class TestStaleImagesAreDetached:

@@ -141,6 +141,19 @@ class SurfaceSettings(BaseSettings):
         default=None,
         description="Meta app secret for verifying WhatsApp webhook signatures",
     )
+    whatsapp_reengage_template: str | None = Field(
+        default=None,
+        description=(
+            "An approved message template on the shared WhatsApp number's "
+            "business account, sent to a member whose 24-hour window has closed "
+            "on a surface with no template of its own. Unset, such a message is "
+            "refused."
+        ),
+    )
+    whatsapp_reengage_template_language: str = Field(
+        default="en_US",
+        description="The language code of WHATSAPP_REENGAGE_TEMPLATE.",
+    )
     whatsapp_display_phone_number: Optional[str] = Field(
         default=None,
         description=(

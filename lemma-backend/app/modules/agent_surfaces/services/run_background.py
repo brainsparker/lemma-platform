@@ -10,6 +10,8 @@ holds no connection across them.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -82,7 +84,7 @@ async def run_background(
     context: SurfaceChatContext,
     *,
     adapter: SurfacePlatformAdapterPort,
-    credentials: dict[str, object],
+    credentials: SurfaceCredentials,
     roster_reads: RosterReads = roster_reads,
 ) -> RunBackground:
     """What this run is shown of the group, and who outside the pod reads it.

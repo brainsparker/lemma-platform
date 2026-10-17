@@ -13,26 +13,15 @@ from __future__ import annotations
 
 from redis.exceptions import RedisError
 
-from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import WHATSAPP_SENT_MESSAGES, surface_caches
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-_SENT_MESSAGE_TTL_SECONDS = 7 * 24 * 60 * 60
-
-_cache: RedisJsonCache | None = None
-
 
 def _store() -> RedisJsonCache:
-    global _cache
-    if _cache is None or _cache._redis_url != settings.redis_url:
-        _cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:whatsapp-sent",
-            ttl_seconds=_SENT_MESSAGE_TTL_SECONDS,
-        )
-    return _cache
+    return surface_caches.get(WHATSAPP_SENT_MESSAGES)
 
 
 async def remember_sent(notification_id: object, message_id: str | None) -> None:

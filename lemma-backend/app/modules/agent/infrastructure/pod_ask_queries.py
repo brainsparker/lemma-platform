@@ -13,6 +13,7 @@ same answer, and neither has to take a lock to know.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import source_of
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
@@ -163,8 +164,7 @@ class PodAskQueries:
             .order_by(MessageModel.sequence.desc())
             .limit(1)
         )
-        source = metadata.get("source") if isinstance(metadata, dict) else None
-        return source if isinstance(source, str) else None
+        return source_of(metadata)
 
     async def claim_delivery(self, *, conversation_id: UUID, run_id: UUID) -> bool:
         """Mark this run's answer delivered; ``False`` if it already was."""

@@ -17,6 +17,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.services.usage_preflight import assert_usage_preflight_allowed
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
@@ -25,9 +26,6 @@ from app.modules.agent.domain.private_notes import (
     run_metadata_for,
 )
 from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
-from app.modules.agent.domain.events import (
-    AgentRunStartedEvent,
-)
 from app.modules.agent.domain.ports import (
     AgentRepository,
     ConversationRepository,
@@ -39,9 +37,6 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     MessageDraft,
     MessageRole,
-)
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
 )
 from app.modules.agent.services.conversation_access import (
     require_agent_action,
@@ -74,6 +69,7 @@ from app.modules.agent.services.realtime import (
     message_payload,
     publish_conversation_event,
 )
+from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.services.run_dispatch import run_enqueue_suppressed
 from app.modules.agent.services.turn_admission import (
     HeldTurn,
@@ -226,9 +222,7 @@ class TurnCoordinator:
         answering_run_id = active_run.id if active_run is not None else None
         if held is not None:
             answering_run_id = held.agent_run_id
-            await hold_behind(
-                self.uow, self.conversation_repository, conversation, held
-            )
+            await hold_behind(self.conversation_repository, conversation)
         assert answering_run_id is not None
 
         saved_user_message = await self.conversation_repository.append_message(
@@ -246,17 +240,16 @@ class TurnCoordinator:
             ),
         )
 
-        if started_new_run and not run_enqueue_suppressed():
-            self.uow.collect_events(
-                [
-                    AgentRunStartedEvent(
-                        conversation_id=conversation.id,
-                        agent_run_id=answering_run_id,
-                        user_id=user_id,
-                        pod_id=pod_id,
-                        agent_name=agent_name,
-                    )
-                ]
+        if started_new_run:
+            # The turn commits with the run and its message, or not at all.
+            await stage_agent_turn(
+                self.uow,
+                turn_for(
+                    conversation,
+                    run_id=answering_run_id,
+                    user_id=user_id,
+                    agent_name=agent_name,
+                ),
             )
 
         # Streaming endpoints need the message/run and its outbox event committed
@@ -295,11 +288,7 @@ class TurnCoordinator:
         user_id: UUID,
         message_metadata: dict[str, object] | None,
     ) -> AgentRun:
-        selected_agent_runtime = (
-            conversation.agent_runtime
-            or agent.agent_runtime
-            or await default_agent_runtime_for_pod(self.uow, pod_id=conversation.pod_id)
-        )
+        selected_agent_runtime = await turn_runtime(self.uow, conversation, agent)
         await self.runtime_check(
             self.uow,
             selected_agent_runtime,
@@ -440,18 +429,13 @@ class TurnCoordinator:
             notes=notes,
             after_sequence=stopped_after,
         )
-        self.uow.collect_events(
-            [
-                AgentRunStartedEvent(
-                    conversation_id=conversation.id,
-                    agent_run_id=followup_run.id,
-                    user_id=conversation.user_id,
-                    pod_id=conversation.pod_id,
-                    # Resolved from the conversation, as it is for every run
-                    # nobody named an agent for.
-                    agent_name=None,
-                )
-            ]
+        # Resolved from the conversation, as it is for every run nobody named
+        # an agent for.
+        await stage_agent_turn(
+            self.uow,
+            turn_for(
+                conversation, run_id=followup_run.id, user_id=conversation.user_id
+            ),
         )
         await self.uow.commit()
         return followup_run.id, [*superseded_returns, *claimed]
@@ -471,10 +455,6 @@ class TurnCoordinator:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-
-    @property
-    def wait_repository(self) -> AgentConversationWaitRepository:
-        return self.stops.wait_repository
 
     async def withdraw_queued_message(
         self,

@@ -154,7 +154,7 @@ async def test_a_refusal_reaches_the_model_instead_of_ending_the_run():
         OpenNotificationsCapability,
     )
 
-    toolset = OpenNotificationsCapability("anything").get_toolset()
+    toolset = OpenNotificationsCapability().get_toolset()
 
     @dataclass
     class _Boom:

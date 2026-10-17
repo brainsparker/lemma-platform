@@ -12,8 +12,11 @@ private by spelling.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from dataclasses import dataclass, replace
-from typing import Any
+
+from app.modules.agent_surfaces.domain.reply_targets import copied_on_reply
 from uuid import UUID
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -58,7 +61,7 @@ class SurfaceEgressTarget:
     pod_id: UUID
     adapter: SurfacePlatformAdapterPort
     event: ParsedInboundSurfaceEvent
-    credentials: dict[str, Any]
+    credentials: SurfaceCredentials
     #: Whose conversation this is: the member a group answer was made for.
     conversation_user_id: UUID | None = None
 
@@ -66,7 +69,7 @@ class SurfaceEgressTarget:
     def copies_others(self) -> bool:
         """Whether what goes out here also reaches people besides the one it
         answers -- an email thread's reply-all, which copies everybody on it."""
-        return bool(self.event.reply_target.get("cc"))
+        return bool(copied_on_reply(self.event))
 
     def to_sender_only(self) -> SurfaceEgressTarget:
         """The same thread, reaching only the person it answers."""

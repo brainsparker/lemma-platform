@@ -33,9 +33,7 @@ from app.modules.agent_surfaces.platforms.common import (
     payload_text,
 )
 from app.modules.agent_surfaces.platforms.teams import client
-from app.modules.agent_surfaces.platforms.teams.credentials import (
-    tenant_id_from_credentials,
-)
+from app.modules.agent_surfaces.domain.credentials import TeamsCredentials
 from app.modules.agent_surfaces.platforms.teams.models import (
     TeamsChannelMessageSnapshot,
     TeamsGetRecentMessagesParams,
@@ -185,6 +183,9 @@ def _message_snapshot_from_graph_item(
 class TeamsChannelHistoryMixin:
     """The channel-history half of :class:`TeamsPlatformService`."""
 
+    #: Supplied by `TeamsPlatformService`.
+    credentials: TeamsCredentials
+
     async def get_recent_channel_messages(
         self,
         *,
@@ -235,7 +236,7 @@ class TeamsChannelHistoryMixin:
                 "This tool is only available in Teams conversations."
             )
 
-        tenant_id = tenant_id_from_credentials(self.credentials)
+        tenant_id = self.credentials.tenant_id
         if not tenant_id:
             logger.debug(
                 "agent_surfaces.service.teams_get_recent_channel_messages.diagnostic"
@@ -326,7 +327,7 @@ class TeamsChannelHistoryMixin:
     ) -> list[SurfaceContextMessage]:
         """Recent channel/thread messages via Graph for background context on a
         mention. Best-effort: missing tenant/team/token or any error → empty."""
-        tenant_id = tenant_id_from_credentials(self.credentials)
+        tenant_id = self.credentials.tenant_id
         channel_id = event.external_channel_id
         if not tenant_id or not channel_id:
             return []

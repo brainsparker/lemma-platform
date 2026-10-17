@@ -86,6 +86,7 @@ def _dispatch(*, user_id: UUID | None, contact_id: UUID | None):
         config=None,
         mode=FunctionDispatchMode.ASYNCHRONOUS,
         deadline_at=datetime.now(timezone.utc) + timedelta(seconds=120),
+        execution_seconds=120,
         revision_hash=_REVISION,
         input_data={"contact_id": str(contact_id) if contact_id else None},
     )
@@ -134,6 +135,7 @@ async def _send(dispatch: FunctionExecutionDispatch, minter):
         runtime_http_client_factory=_Runtime,
         organization_resolver=_organization,
         delegated_tokens_enabled=True,
+        max_running_per_pod=1_000,
     )
     endpoint = FunctionRuntimeEndpoint(
         url="https://sandbox.test/runtime/",
@@ -143,8 +145,10 @@ async def _send(dispatch: FunctionExecutionDispatch, minter):
         profile_digest=f"sha256:{'2' * 64}",
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
     )
-    token = await dispatcher._function_session_token(dispatch)
-    await dispatcher._invoke_runtime(
+    token = await dispatcher._function_session_token(
+        dispatch, valid_until=dispatch.deadline_at
+    )
+    await dispatcher._invoker.post(
         dispatch,
         context=_context(dispatch),
         endpoint=endpoint,

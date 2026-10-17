@@ -7,6 +7,7 @@ see the exact same tools for a given (agent, conversation).
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import source_of
 from typing import Literal, cast
 
 from pydantic_ai.toolsets import AbstractToolset
@@ -307,6 +308,5 @@ def _add_view_image(
 def _on_a_web_page(conversation: Conversation | None) -> bool:
     """A visitor chatting on a web page, where a form may sit beside the chat."""
     return bool(
-        conversation is not None
-        and (conversation.metadata or {}).get("source") == "web_widget"
+        conversation is not None and source_of(conversation.metadata) == "web_widget"
     )

@@ -30,6 +30,7 @@ from app.modules.agent.domain.entities import (
     Conversation as ConversationEntity,
     Message as MessageEntity,
 )
+from app.modules.agent.domain.conversation_lifecycle import conversation_status_for
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
@@ -81,6 +82,15 @@ class ConversationModel(UUIDAuditBase):
             unique=True,
             postgresql_where=text("origin_id IS NOT NULL"),
         ),
+        # One child per spawning call: a resumed turn re-runs an interrupted
+        # `spawn_subagent` under its recorded call id and gets the same child.
+        Index(
+            "uq_agent_conv_spawn_call",
+            "parent_id",
+            "spawn_tool_call_id",
+            unique=True,
+            postgresql_where=text("spawn_tool_call_id IS NOT NULL"),
+        ),
     )
 
     user_id: Mapped[UUID] = mapped_column(
@@ -122,6 +132,9 @@ class ConversationModel(UUIDAuditBase):
         index=True,
     )
     conversation_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: ``<parent run id>:<tool call id>`` of the ``spawn_subagent`` call that
+    #: created this child; unique per parent (``uq_agent_conv_spawn_call``).
+    spawn_tool_call_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
     #: Put away, not deleted: the row stays, the listing skips it, and a new
     #: message clears it (`append_message`).
     is_archived: Mapped[bool] = mapped_column(
@@ -178,6 +191,39 @@ class ConversationModel(UUIDAuditBase):
     def __str__(self) -> str:
         return self.title or f"conversation {str(self.id)[:8]}"
 
+    @staticmethod
+    def values_from(conversation: ConversationEntity) -> dict[str, object]:
+        """The row a new conversation entity is inserted as.
+
+        One mapping for every insert path -- the ORM add, and the upsert a
+        caller-reserved id goes through -- so a column added to one cannot be
+        forgotten in the other.
+        """
+        return {
+            "id": conversation.id,
+            "created_at": conversation.created_at,
+            "updated_at": conversation.updated_at,
+            "user_id": conversation.user_id,
+            "pod_id": conversation.pod_id,
+            "organization_id": conversation.organization_id,
+            "agent_id": conversation.agent_id,
+            "title": conversation.title,
+            "instructions": conversation.instructions,
+            "agent_runtime": (
+                conversation.agent_runtime.model_dump(mode="json")
+                if conversation.agent_runtime
+                else None
+            ),
+            "origin_type": conversation.origin_type,
+            "origin_id": conversation.origin_id,
+            "conversation_type": conversation.type.value,
+            "status": conversation.status.value if conversation.status else None,
+            "output_data": conversation.output,
+            "parent_id": conversation.parent_id,
+            "conversation_metadata": conversation.metadata,
+            "is_archived": conversation.is_archived,
+        }
+
     def to_entity(self) -> ConversationEntity:
         loaded_messages = self.__dict__.get("messages", [])
         loaded_runs = self.__dict__.get("agent_runs", [])
@@ -201,7 +247,7 @@ class ConversationModel(UUIDAuditBase):
             ),
             status=ConversationStatus(self.status)
             if self.status
-            else ConversationStatus(latest_run.status)
+            else conversation_status_for(AgentRunStatus(latest_run.status))
             if latest_run
             else None,
             output=self.output_data,

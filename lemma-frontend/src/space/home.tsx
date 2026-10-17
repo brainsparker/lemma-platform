@@ -5,7 +5,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type ConversationRef, type Pod } from "@/data";
 import { AskBox } from "@/chat/ask-box";
 import { gather } from "@/workflow/waiting-inbox";
-import { byAge, gatherAsked, sayAsked, type AskedRow } from "@/thread/waiting-on-you";
+import { byAge, CONVERSATION_ASKS, sayAsked, type AskedRow } from "@/thread/waiting-on-you";
+import { useConversationAsks } from "@/thread/use-conversation-asks";
 import { refreshConversationLists } from "@/thread/conversation-list";
 import { lemma } from "@/session/client";
 import { agoOf } from "@/schedule/schedules";
@@ -61,12 +62,7 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
     const owed = (waiting.data?.rows ?? []).filter(row => row.podId === pod.id);
     /* And the conversations here that stopped to ask you something, under the
        key the rail reads. */
-    const asking = useQuery({
-        queryKey: ["conversation-asks", pods.map(each => each.id).join(",")],
-        queryFn: () => gatherAsked(pods, source.label === "sample"),
-        enabled: pods.length > 0,
-        staleTime: 60_000,
-    });
+    const asking = useConversationAsks(pods);
     const { fresh: asked, quiet } = byAge((asking.data ?? []).filter(row => row.podId === pod.id));
     const [showQuiet, setShowQuiet] = useState(false);
     const [putAway, setPutAway] = useState<ReadonlySet<string>>(new Set());
@@ -80,7 +76,7 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
         } catch {
             setPutAway(was => { const next = new Set(was); next.delete(row.conversationId); return next; });
         } finally {
-            void cache.invalidateQueries({ queryKey: ["conversation-asks"] });
+            void cache.invalidateQueries({ queryKey: [CONVERSATION_ASKS] });
             void refreshConversationLists(cache, row.podId);
         }
     };

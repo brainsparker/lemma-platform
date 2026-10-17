@@ -161,7 +161,8 @@
       "workspace_cwd",
       "context",
       "run_deadline",
-      "system_prompt_delivery"
+      "system_prompt_delivery",
+      "pre_approvals"
     ],
     "added_on_delivery": {
       "mcp": "Run-scoped Lemma MCP configuration, decrypted from `encrypted_mcp` by AgentHostDispatchRepository._wire_command when the command is delivered."

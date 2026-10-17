@@ -133,10 +133,19 @@ class AgentContextBriefRepository:
                     ResourcePermissionGrantModel.resource_type,
                     ResourcePermissionGrantModel.resource_id,
                     ResourcePermissionGrantModel.permission_id,
-                ).where(
+                )
+                .where(
                     ResourcePermissionGrantModel.pod_id == pod_id,
                     ResourcePermissionGrantModel.grantee_type == "AGENT",
                     ResourcePermissionGrantModel.grantee_id == agent_id,
+                )
+                # Ordered: these render into a brief that sits in the system
+                # prompt, and an unordered read can return the same grants in a
+                # different order -- different bytes -- on the next rebuild.
+                .order_by(
+                    ResourcePermissionGrantModel.resource_type,
+                    ResourcePermissionGrantModel.resource_id,
+                    ResourcePermissionGrantModel.permission_id,
                 )
             )
         ).all()

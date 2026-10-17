@@ -20,8 +20,8 @@ from uuid import UUID
 
 from redis.exceptions import RedisError
 
-from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import INGESTED_ATTACHMENTS, surface_caches
 from app.core.log.log import get_logger
 from app.modules.agent.contracts.speech import VoiceTranscript
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
@@ -29,7 +29,7 @@ from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 logger = get_logger(__name__)
 
 # Long enough to cover a job's retries, including a worker restart between them.
-_MEMO_TTL_SECONDS = 24 * 3600
+_MEMO_TTL_SECONDS = INGESTED_ATTACHMENTS.ttl_seconds
 _REDIS_FAILURES = (RedisError, OSError, TimeoutError, ValueError, TypeError)
 
 
@@ -70,13 +70,7 @@ class AttachmentIngestMemo:
         self._cache = cache
 
     def _get_cache(self) -> RedisJsonCache:
-        if self._cache is None or self._cache._redis_url != settings.redis_url:
-            self._cache = RedisJsonCache(
-                redis_url=settings.redis_url,
-                key_prefix="surface:ingested",
-                ttl_seconds=_MEMO_TTL_SECONDS,
-            )
-        return self._cache
+        return self._cache or surface_caches.get(INGESTED_ATTACHMENTS)
 
     async def recall(self, key: str | None) -> RememberedAttachment | None:
         entry = await self._read(f"file:{key}") if key else None

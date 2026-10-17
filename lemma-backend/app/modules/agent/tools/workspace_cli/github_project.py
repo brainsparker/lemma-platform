@@ -98,8 +98,8 @@ async def ensure_project_checkout(
         return None
 
     await redis.set(marker_key, "failed", ex=_FAILED_TTL_SECONDS)
-    logger.debug(
-        "agent.workspace_cli.github_project_clone_failed.diagnostic",
+    logger.warning(
+        "agent.workspace_cli.github_project_clone_failed.degraded",
         repo=repo.full_name,
         exit_code=result.get("exit_code"),
     )

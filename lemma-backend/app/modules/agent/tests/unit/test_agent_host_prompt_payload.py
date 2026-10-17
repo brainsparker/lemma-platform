@@ -29,10 +29,18 @@ from app.modules.agent.domain.value_objects import (
     AgentToolset,
     ConversationStatus,
     ConversationType,
+    JsonObject,
     MessageKind,
     MessageRole,
 )
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
+from app.modules.agent.domain.run_context_prompt import render_run_context
+from app.modules.agent.infrastructure.agent_host.session_memory import (
+    instructions_digest,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+    json_object,
+)
 from app.modules.agent.infrastructure.harnesses.remote_payload import (
     _exported_tool_names,
     run_start_payload,
@@ -851,6 +859,12 @@ class TestTheAgentsOwnCli:
         assert "lemma_cli" not in payload
 
 
+def _with_run_context(*sections: str) -> BaseAgentContext:
+    ctx = _ctx()
+    ctx.run_context = render_run_context(sections=sections)
+    return ctx
+
+
 def test_what_is_owed_rides_in_the_turn_not_the_system_prompt() -> None:
     """Open notifications change the moment somebody answers, and the system
     prompt is delivered once per provider session -- so they go with the turn,
@@ -859,12 +873,65 @@ def test_what_is_owed_rides_in_the_turn_not_the_system_prompt() -> None:
         agent=_agent(),
         conversation=_conversation(),
         messages=_transcript(),
-        ctx=_ctx(),
+        ctx=_with_run_context(
+            "# Open notifications\nAnswer with `respond_to_notification`."
+        ),
         agent_run_id=uuid7(),
         runtime_instructions="",
         carries_history=True,
-        open_notifications="# Open notifications\nAnswer with `respond_to_notification`.",
     )
     prompt = payload["prompt"]
     assert "respond_to_notification" in str(prompt["user_prompt"])
     assert "respond_to_notification" not in str(prompt["system_prompt"])
+
+
+def test_a_task_list_change_does_not_re_deliver_the_instructions() -> None:
+    """The digest decides whether a session is sent the system prompt again,
+    and a resent prompt is another copy of it in the provider's transcript. So
+    nothing that changes turn to turn may be in it: the task list rides in the
+    user prompt, and two turns that differ only there share one digest."""
+
+    def dispatched(todo: str) -> JsonObject:
+        return json_object(
+            run_start_payload(
+                agent=_agent(),
+                conversation=_conversation(),
+                messages=_transcript(),
+                ctx=_with_run_context(f"# Your current task list\n- [ ] {todo}"),
+                agent_run_id=uuid7(),
+                runtime_instructions="",
+                carries_history=False,
+            )["prompt"]
+        )
+
+    before, after = dispatched("Draft the reply"), dispatched("Send the reply")
+
+    assert instructions_digest(str(before["system_prompt"])) == instructions_digest(
+        str(after["system_prompt"])
+    )
+    assert "Send the reply" in str(after["user_prompt"])
+    assert "Send the reply" not in str(after["system_prompt"])
+
+
+def test_a_host_execution_run_is_not_told_it_has_a_vm_home() -> None:
+    """With host execution on, an Agent Host run has no Lemma command tools and
+    works on the person's Mac; the VM workspace contract would contradict the
+    runtime section that says so."""
+    ctx = _ctx()
+    ctx.host_runs_native_commands = True
+    ctx.run_toolsets = [AgentToolset.WORKSPACE_CLI, AgentToolset.TODO]
+
+    system_prompt = str(
+        run_start_payload(
+            agent=_agent(),
+            conversation=_conversation(),
+            messages=_transcript(),
+            ctx=ctx,
+            agent_run_id=uuid7(),
+            runtime_instructions=load_agent_host_runtime_prompt(host_execution=True),
+            carries_history=False,
+        )["prompt"]["system_prompt"]
+    )
+
+    assert "Your whole home directory persists" not in system_prompt
+    assert "Your native tools are the only command and file tools" in system_prompt

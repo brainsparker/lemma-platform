@@ -58,19 +58,79 @@ from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
-    AgentRunUsage,
+    JsonObject,
     MessageDraft,
     MessageKind,
+    MessageRole,
     to_json_value,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
     ModelRequestStreamer,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
-    usage_totals,
+    warn_if_implausible_usage,
 )
+from app.modules.agent.services.run_input_settings import shorter_answer_settings
 
 logger = get_logger(__name__)
+
+#: Fraction of the run's wall-clock budget past which an answer that ran out of
+#: time is not tried again.
+_LATE_IN_THE_RUN = 0.9
+
+
+def _is_open_answer(event: AgentEvent) -> bool:
+    """Assistant text nobody has yet said is, or is not, the final answer."""
+    draft = event.data
+    return (
+        event.type is AgentEventType.MESSAGE
+        and isinstance(draft, MessageDraft)
+        and draft.role is MessageRole.ASSISTANT
+        and draft.kind is MessageKind.TEXT
+        and "is_final_answer" not in (draft.metadata or {})
+    )
+
+
+def _not_final(event: AgentEvent) -> AgentEvent:
+    draft = event.data
+    assert isinstance(draft, MessageDraft)
+    metadata = {**(draft.metadata or {}), "is_final_answer": False}
+    return event.model_copy(
+        update={"data": draft.model_copy(update={"metadata": metadata})}
+    )
+
+
+def settle_response_answers(
+    messages: list[AgentEvent],
+) -> tuple[list[AgentEvent], list[AgentEvent]]:
+    """One finished response's messages: those settled, and those still open.
+
+    Unmarked assistant text is stored as the final answer, and a text part is
+    written before the rest of its response arrives -- so a preamble before a
+    tool call, and a run that answered and then went on working, each stored a
+    final answer the run did not end on. Only the text a run ends on is final:
+
+    - a response that calls a tool goes on, so none of its text is final;
+    - otherwise every text but the last is not, and the last -- with whatever
+      follows it, so the order holds -- waits for the next node to say whether
+      the run ends here.
+    """
+    open_at = [index for index, event in enumerate(messages) if _is_open_answer(event)]
+    if not open_at:
+        return messages, []
+    calls_a_tool = any(
+        isinstance(event.data, MessageDraft)
+        and event.data.kind is MessageKind.TOOL_CALL
+        for event in messages
+    )
+    last = None if calls_a_tool else open_at[-1]
+    settled = [
+        _not_final(event) if index in open_at and index != last else event
+        for index, event in enumerate(messages)
+    ]
+    if last is None:
+        return settled, []
+    return settled[:last], settled[last:]
 
 
 class FinalOutputWriter(Protocol):
@@ -87,7 +147,7 @@ class NodeLoop[DepsT]:
         self,
         *,
         run_context: Callable[
-            [list[ModelMessage] | None],
+            [list[ModelMessage] | None, JsonObject | None],
             AbstractAsyncContextManager[AgentRun[DepsT, object]],
         ],
         queue: asyncio.Queue[tuple[str, object]],
@@ -108,41 +168,72 @@ class NodeLoop[DepsT]:
         # already reported must not be reported again after a retry.
         self.malformed_tool_call_ids: set[str] = set()
         self.emitted_tool_response_ids: set[str] = set()
-        # Set per attempt by `drive_once`, so a terminal branch can bill without
-        # the run being threaded down into every pump method.
-        self._run: AgentRun[DepsT, object] | None = None
-        self._carried_usage: dict[str, int] = {}
-        self._usage_emitted = False
         # The run's own clock, not the attempt's: a retry that re-enters the
         # graph is the same run to the person waiting for it.
         self._started_at = time.monotonic()
+        # The model settings the current attempt runs under, when a retry
+        # changed them; None means the run's own.
+        self._attempt_settings: JsonObject | None = None
+        # A text-only response's closing text, held until the next node says
+        # whether the run ends on it (`settle_response_answers`).
+        self._undecided: list[AgentEvent] = []
+
+    def shorter_answer_settings(self) -> JsonObject | None:
+        """Settings for one more try at an answer that ran out of time, or None.
+
+        None once the run is nearly out of wall clock: another exchange as long
+        as the one that just expired would carry it past its budget, and the
+        pause that budget promises cannot interrupt a request in flight.
+        """
+        spend = self.options.spend
+        wall_clock = spend.budget.wall_clock_seconds if spend is not None else 0
+        elapsed = time.monotonic() - self._started_at
+        if wall_clock > 0 and elapsed >= _LATE_IN_THE_RUN * wall_clock:
+            return None
+        return shorter_answer_settings(
+            self._attempt_settings
+            if self._attempt_settings is not None
+            else self.options.model_settings,
+            lighter_reasoning=self.options.lighter_reasoning_settings,
+        )
 
     async def drive_once(
         self,
         resume_history: list[ModelMessage] | None,
         state: dict[str, object],
-        carried_usage: dict[str, int],
+        *,
+        model_settings: JsonObject | None = None,
     ) -> None:
-        async with self.run_context(resume_history) as run:
-            # Published before the node loop so the retry handler can read
-            # usage off the run that just failed.
+        if model_settings is not None:
+            self._attempt_settings = model_settings
+        async with self.run_context(resume_history, self._attempt_settings) as run:
+            # Published before the node loop: the retry handler only re-enters
+            # an attempt that actually got as far as starting a run.
             state["run"] = run
-            self._run, self._carried_usage = run, carried_usage
-            self._usage_emitted = False
+            # A resumed attempt opens by re-asking the request that dropped.
+            # That request was counted when it was first made; counting it
+            # again would let a flaky connection spend the run's allowance.
+            already_counted = resume_history is not None
             try:
                 async for node in run:
                     if PydanticAIAgent.is_model_request_node(node):
+                        # Another request: the run went on past that answer.
+                        await self._release_undecided(final=False)
                         # Counted before the request, not after: the ceiling is
                         # on what the run is about to spend, and a check that
                         # only ran afterwards would always allow one call past
                         # it.
-                        await self._spend_a_model_request()
+                        if already_counted:
+                            already_counted = False
+                        else:
+                            await self._spend_a_model_request()
                         if await self._pump_model_request(node, run, state):
                             return
                     elif PydanticAIAgent.is_call_tools_node(node):
                         if await self._pump_tool_calls(node, run):
                             return
                     elif PydanticAIAgent.is_end_node(node):
+                        await self._release_undecided(final=True)
                         if await self._pump_end_node(node):
                             return
             except AgentInputRequired:
@@ -159,12 +250,22 @@ class NodeLoop[DepsT]:
                 # failure -- so only the pause is excused here.
                 trace.get_current_span().set_status(Status(StatusCode.OK))
                 raise
+            finally:
+                # However the attempt ended, what the model said is kept, and
+                # nothing came after it.
+                await self._release_undecided(final=True)
+                # Billing is the metered model's, per request; this only says
+                # so when a provider reports a count that cannot be true.
+                warn_if_implausible_usage(getattr(run, "usage", None))
 
-            # The run finished on its own. The other exits bill for themselves:
-            # a terminal event bills before queueing it (the pump finalizes on
-            # sight of one and drops whatever follows), and a fatal exception
-            # bills in `drive_with_retry` before it re-raises.
-            await self.emit_usage()
+    async def _release_undecided(self, *, final: bool) -> None:
+        """Hand on the held closing text, final or not as the run turned out."""
+        held, self._undecided = self._undecided, []
+        for event in held:
+            settled = (
+                event if final or not _is_open_answer(event) else _not_final(event)
+            )
+            await self.queue.put(("event", settled))
 
     async def _spend_a_model_request(self) -> None:
         """Count this step, and stop the run if it has spent its allowance.
@@ -214,52 +315,6 @@ class NodeLoop[DepsT]:
             dimension=exhausted.dimension.value,
         )
         raise AgentInputRequired(tool_call_id, "request_approval")
-
-    async def emit_usage(self) -> None:
-        """Report what this attempt spent, including attempts already abandoned.
-
-        Must reach the queue BEFORE any terminal event. `RunEventPump` finalizes
-        the run the moment it sees one and drops everything after it, so usage
-        queued afterwards is read by nobody and the run bills zero.
-
-        Idempotent per attempt: the terminal branches call it explicitly, and
-        `drive_with_retry` calls it again for the paths that raise instead of
-        ending.
-
-        Awaited, because the queue is bounded: a consumer that fell behind a
-        long streamed answer leaves it full, and `put_nowait` then raised
-        `QueueFull` -- after marking usage emitted, so the fallback was a no-op
-        and a finished answer was reported as a provider failure. The mark is
-        set only once the event is on the queue, so a put cancelled while
-        waiting leaves the caller free to try again.
-        """
-        if self._usage_emitted or self._run is None:
-            return
-        totals = usage_totals(self._run.usage, self._carried_usage)
-        await self.queue.put(
-            (
-                "event",
-                AgentEvent(
-                    type=AgentEventType.USAGE,
-                    data=AgentRunUsage(
-                        model_name=self.options.model_name,
-                        usage_kind="llm",
-                        input_tokens=totals["input_tokens"],
-                        output_tokens=totals["output_tokens"],
-                        request_count=totals["requests"],
-                        tool_call_count=totals["tool_calls"],
-                        metadata={
-                            "cache_write_tokens": totals["cache_write_tokens"],
-                            "cache_read_tokens": totals["cache_read_tokens"],
-                            "input_audio_tokens": totals["input_audio_tokens"],
-                            "output_audio_tokens": totals["output_audio_tokens"],
-                        },
-                    ),
-                    agent_run_id=self.agent_run_id,
-                ),
-            )
-        )
-        self._usage_emitted = True
 
     async def _pump_model_request(
         self,
@@ -315,11 +370,11 @@ class NodeLoop[DepsT]:
                 # the terminal event so the user keeps it.
                 for held in buffered:
                     await self.queue.put(("event", held))
-                await self.emit_usage()
                 await self.queue.put(("event", event))
                 return True
             await self.queue.put(("event", event))
-        for held in buffered:
+        settled, self._undecided = settle_response_answers(buffered)
+        for held in settled:
             await self.queue.put(("event", held))
         return False
 
@@ -334,13 +389,15 @@ class NodeLoop[DepsT]:
             malformed_tool_call_ids=self.malformed_tool_call_ids,
             emitted_tool_response_ids=self.emitted_tool_response_ids,
         ):
+            if event.type is AgentEventType.MESSAGE:
+                # Tools ran after a response with none to call: a retry, so
+                # the run goes on and that response's text was not its answer.
+                await self._release_undecided(final=False)
             self._record_tool_outcome(event)
             terminal = event.type in {
                 AgentEventType.ERROR,
                 AgentEventType.STOPPED,
             }
-            if terminal:
-                await self.emit_usage()
             await self.queue.put(("event", event))
             if terminal:
                 return True
@@ -389,7 +446,6 @@ class NodeLoop[DepsT]:
                     )
                 )
                 if await self.streamer.stop_requested():
-                    await self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
             final_message = self.final_output_message(
@@ -409,7 +465,6 @@ class NodeLoop[DepsT]:
                     )
                 )
                 if await self.streamer.stop_requested():
-                    await self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
 
@@ -431,7 +486,6 @@ class NodeLoop[DepsT]:
                     )
                 )
                 if await self.streamer.stop_requested():
-                    await self.emit_usage()
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
         return False

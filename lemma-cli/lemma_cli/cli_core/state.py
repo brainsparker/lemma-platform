@@ -230,6 +230,26 @@ def refresh_and_retry(state: CliState, fn: Callable[[], Any]) -> Any:
         return fn()
 
 
+def _with_in_memory_keys[V](
+    current: dict[str, V], replacement: dict[str, V]
+) -> dict[str, V]:
+    """Carry the in-memory-only keys of ``current`` onto ``replacement``.
+
+    ``_runtime`` holds this invocation's --org/--pod/--conversation overrides and
+    ``_sources`` where settings came from; neither is on disk. A config reloaded
+    from disk (or rebuilt from one) lacks them, so swapping it into
+    ``state.config`` without this silently dropped ``--pod`` after a token
+    refresh and the retried call ran against the saved default pod, or none.
+    ``save_config`` strips every ``_``-prefixed key, so carrying them here never
+    persists them.
+    """
+    merged = dict(replacement)
+    for key, value in current.items():
+        if key.startswith("_"):
+            merged[key] = value
+    return merged
+
+
 def refresh_auth_session(state: CliState) -> bool:
     if state.server_source == "env" or state.token:
         return False
@@ -257,7 +277,7 @@ def refresh_auth_session(state: CliState) -> bool:
             and latest_access_token
             and latest_access_token != original_access_token
         ):
-            state.config = latest_config
+            state.config = _with_in_memory_keys(state.config, latest_config)
             if latest_root is not None:
                 state.root_config = latest_root
             return True
@@ -272,14 +292,17 @@ def refresh_auth_session(state: CliState) -> bool:
             verify_ssl=resolve_verify_ssl(state.no_verify_ssl),
             timeout=state.timeout,
         )
-        state.config = upsert_auth_session(latest_config, refreshed)
+        # Persist the config as read from disk plus the new session, then put
+        # this invocation's in-memory keys back on top for the retried call.
+        refreshed_config = upsert_auth_session(latest_config, refreshed)
         if latest_root is not None:
             state.root_config = put_server_config(
-                latest_root, state.server, state.config
+                latest_root, state.server, refreshed_config
             )
             save_config(state.config_path, state.root_config)
         else:
-            save_config(state.config_path, state.config)
+            save_config(state.config_path, refreshed_config)
+        state.config = _with_in_memory_keys(state.config, refreshed_config)
     return True
 
 

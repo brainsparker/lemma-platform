@@ -12,12 +12,13 @@ from typing import Any
 from urllib.parse import quote
 
 import aiohttp
+import httpx
 from redis.exceptions import RedisError
 
 from app.core.config import reveal_secret
 from app.modules.agent_surfaces.config import surface_settings
-from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import TEAMS_TOKENS, surface_caches
 from app.core.log.log import get_logger
 from app.core.net.aiohttp_client import new_aiohttp_session
 from app.core.observability.dependency_incident import DependencyIncident
@@ -52,21 +53,12 @@ _GUID_RE = re.compile(
     r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
 
-# Shared Redis cache of OAuth tokens: "tenant:scope" → token, with the Redis TTL
-# set to the token's remaining lifetime — so tokens are reused across replicas, not
-# refetched per process. Redis unavailable -> refetch (never fails).
-_token_cache: RedisJsonCache | None = None
-
 
 def _get_token_cache() -> RedisJsonCache:
-    global _token_cache
-    if _token_cache is None or _token_cache._redis_url != settings.redis_url:
-        _token_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:teams-token",
-            ttl_seconds=3600,
-        )
-    return _token_cache
+    """OAuth tokens by "tenant:scope", each kept for its remaining lifetime, so
+    replicas reuse a token rather than each fetching its own. Redis down ->
+    refetch (never fails)."""
+    return surface_caches.get(TEAMS_TOKENS)
 
 
 def auth_headers(token: str) -> dict[str, str]:
@@ -271,12 +263,13 @@ async def resolve_graph_team_id(
 def classify_teams_error(exc: Exception) -> DeliveryClassification:
     """Transient for 429 / 5xx / network errors; permanent for other 4xx.
 
-    The Bot Framework Connector is posted to with raw ``aiohttp``, so a
-    throttled reply arrives as ``ClientResponseError`` from
+    The Bot Framework Connector is posted to over the shared ``httpx`` client,
+    so a throttled reply arrives as ``HTTPStatusError`` from
     ``raise_for_status()``. Same classification as the other three platforms.
     """
-    if isinstance(exc, aiohttp.ClientResponseError):
-        if exc.status == 429 or exc.status >= 500:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status == 429 or status >= 500:
             return DeliveryClassification.TRANSIENT
         return DeliveryClassification.PERMANENT
     # A posted activity is not idempotent: a timeout after it went out may
@@ -286,11 +279,13 @@ def classify_teams_error(exc: Exception) -> DeliveryClassification:
 
 def teams_retry_after(exc: Exception) -> float | None:
     """Seconds the Bot Framework asked us to wait, from ``Retry-After``."""
-    if not isinstance(exc, aiohttp.ClientResponseError):
+    if not isinstance(exc, httpx.HTTPStatusError):
         return None
-    raw = (exc.headers or {}).get("Retry-After")
+    raw = exc.response.headers.get("Retry-After")
+    if raw is None:
+        return None
     try:
-        seconds = float(raw)  # type: ignore[arg-type]
-    except TypeError, ValueError:
+        seconds = float(raw)
+    except ValueError:
         return None
     return seconds if seconds > 0 else None

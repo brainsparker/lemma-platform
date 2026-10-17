@@ -4,13 +4,13 @@ Each case is a way an answer used to go missing or arrive doubled: a Retry-After
 longer than the retry budget, a read timeout retried as if nothing had posted,
 emoji counted as one character where Telegram counts two, a Slack overflow part
 whose failure deleted and resent the whole answer, and held files released with
-a reply that did not carry them.
+a reply that did not carry them. (A rate limit the inline retry cannot wait
+out is now the destination pump's: ``test_surface_deliveries_e2e``.)
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -23,6 +23,10 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import (
+    PENDING_DISPLAY_PATHS,
+    surface_caches,
+)
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -35,7 +39,6 @@ from app.modules.agent_surfaces.domain.envelope import (
 from app.modules.agent_surfaces.platforms.delivery import (
     DeliveryClassification,
     RetryPolicy,
-    note_partial_delivery,
     track_sends,
     with_retry,
 )
@@ -54,11 +57,11 @@ from app.modules.agent_surfaces.platforms.whatsapp.client import (
 )
 from app.modules.agent_surfaces.services import (
     egress_service,
-    owed_reply,
     pending_envelope,
-    progress_reply,
 )
-from app.modules.agent_surfaces.services.owed_reply import OwedReply
+from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    conversation_operations,  # noqa: F401  (autouse fixture)
+)
 from app.modules.agent_surfaces.services.pending_envelope import RunFiles
 
 
@@ -123,53 +126,6 @@ async def test_a_retry_after_past_a_minute_is_deferred_not_spent():
     assert outcome.retry_after == 120
 
 
-async def _platform_refusing(retry_after: float, *, partial: bool = False) -> bool:
-    """A send through the real retry, reported the way egress reports it.
-
-    The ladder records a refused part as UNDELIVERED and the send comes back
-    False; it does not raise to the caller.
-    """
-    if partial:
-        note_partial_delivery()
-
-    async def refuse() -> None:
-        raise _RateLimited(retry_after)
-
-    try:
-        await with_retry(
-            refuse, policy=RetryPolicy(), classify=_transient, retry_after=_retry_after
-        )
-    except _RateLimited:
-        return False
-    return True
-
-
-class _Queue:
-    def __init__(self) -> None:
-        self.jobs: list[dict[str, Any]] = []
-
-    async def enqueue(self, job_name: str, **kwargs: Any) -> None:
-        self.jobs.append({"name": job_name, **kwargs})
-
-    async def abort(self, job_id: str, *, timeout_seconds: float | None = None) -> bool:
-        return False
-
-
-class _UowFactory:
-    def __call__(self):
-        return self
-
-    async def __aenter__(self):
-        return SimpleNamespace()
-
-    async def __aexit__(self, *_: object) -> None:
-        return None
-
-
-def _egress_factory(send):
-    return lambda _uow: SimpleNamespace(send_agent_message_for_conversation=send)
-
-
 class _Redis(fakeredis.FakeAsyncRedis):
     """fakeredis without Lua: the one script the claims run, compare-and-delete."""
 
@@ -189,102 +145,10 @@ def _fake_store(prefix: str) -> RedisJsonCache:
 
 @pytest.fixture
 def claims() -> Iterator[RedisJsonCache]:
-    """The Redis the owed reply and the held files live in, in memory."""
-    store = _fake_store("test:owed-reply")
-    previous = (owed_reply._claims_cache, pending_envelope._cache)
-    owed_reply._claims_cache = store
-    pending_envelope._cache = _fake_store("test:held-files")
-    yield store
-    owed_reply._claims_cache, pending_envelope._cache = previous
-
-
-async def test_an_answer_the_platform_deferred_is_owed_not_lost(monkeypatch):
-    """The observer's one send gave up on a long rate limit: a job is scheduled."""
-    queue = _Queue()
-    monkeypatch.setattr(
-        "app.core.infrastructure.jobs.streaq_job_queue.get_streaq_job_queue",
-        lambda: queue,
-    )
-
-    async def rate_limited_send(**_: object) -> bool:
-        return await _platform_refusing(300)
-
-    run_id = uuid4()
-    state = SimpleNamespace(
-        _run_files=RunFiles(run_id),
-        _final_delivered=False,
-        _final_send_failed=False,
-        _final_answer_text="the answer",
-        _buffered_text=None,
-        _answer_was_all_reasoning=False,
-        _run_errored=False,
-        _send_agent_message=rate_limited_send,
-    )
-    conversation = SimpleNamespace(id=uuid4())
-
-    before = datetime.now(UTC)
-    await progress_reply.deliver_final_answer(state, conversation)  # type: ignore[arg-type]
-
-    [job] = queue.jobs
-    owed = OwedReply.model_validate(job["payload"])
-    assert (owed.message, owed.agent_run_id) == ("the answer", run_id)
-    assert (job["_defer_until"] - before).total_seconds() >= 300
-    assert state._final_send_failed is True
-
-
-async def test_an_owed_reply_is_sent_once_however_often_its_job_runs(claims):
-    sends: list[dict[str, Any]] = []
-
-    async def send(**kwargs: Any) -> bool:
-        sends.append(kwargs)
-        return True
-
-    owed = OwedReply(conversation_id=uuid4(), agent_run_id=uuid4(), message="hi")
-    for _ in range(2):
-        await owed_reply.deliver_owed_reply(
-            owed, uow_factory=_UowFactory(), egress_factory=_egress_factory(send)
-        )
-
-    assert len(sends) == 1
-    assert sends[0]["attach_files_of"] == RunFiles(owed.agent_run_id)
-
-
-async def test_an_owed_reply_still_refused_waits_as_long_as_asked(claims):
-    queue = _Queue()
-
-    async def send(**_: Any) -> bool:
-        return await _platform_refusing(900)
-
-    owed = OwedReply(conversation_id=uuid4(), agent_run_id=None, message="hi")
-    before = datetime.now(UTC)
-    await owed_reply.deliver_owed_reply(
-        owed,
-        uow_factory=_UowFactory(),
-        egress_factory=_egress_factory(send),
-        job_queue=queue,
-    )
-
-    [job] = queue.jobs
-    assert job["payload"]["attempt"] == 1
-    assert (job["_defer_until"] - before).total_seconds() >= 900
-    # The claim is given back, so the next attempt can take it.
-    assert await claims.get_raw(owed.key) is None
-
-
-async def test_an_owed_reply_that_partly_arrived_is_not_sent_again(claims):
-    queue = _Queue()
-
-    async def send(**_: Any) -> bool:
-        return await _platform_refusing(900, partial=True)
-
-    await owed_reply.deliver_owed_reply(
-        OwedReply(conversation_id=uuid4(), agent_run_id=None, message="hi"),
-        uow_factory=_UowFactory(),
-        egress_factory=_egress_factory(send),
-        job_queue=queue,
-    )
-
-    assert queue.jobs == []
+    """The Redis the held files live in, in memory."""
+    store = _fake_store("test:held-files")
+    with surface_caches.substituted(PENDING_DISPLAY_PATHS, store):
+        yield store
 
 
 # ── a send that may have landed is not sent again ───────────────────────────
@@ -343,6 +207,18 @@ async def test_slack_names_each_message_once_across_its_retries(monkeypatch):
 
     assert len(posts) == 2
     assert posts[0]["client_msg_id"] == posts[1]["client_msg_id"]
+
+
+async def test_a_slack_post_reports_the_ts_it_can_be_edited_by(monkeypatch):
+    async def post(self, **kwargs: Any) -> dict[str, object]:
+        return {"ok": True, "ts": "1700000000.0001"}
+
+    monkeypatch.setattr(AsyncWebClient, "chat_postMessage", post)
+    service = SlackPlatformService(credentials={"access_token": "xoxb-test"})
+
+    ts = await service._post_message(AsyncWebClient(token="x"), {"channel": "C1"})
+
+    assert ts == "1700000000.0001"
 
 
 # ── Telegram counts UTF-16, and "too long" is split, not lost ───────────────

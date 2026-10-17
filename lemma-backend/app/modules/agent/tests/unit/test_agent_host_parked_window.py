@@ -128,6 +128,23 @@ def test_an_approval_after_the_turn_ended_says_to_do_it_again() -> None:
     assert "nothing ran" in message and "do it again" in message
 
 
+def test_an_approval_the_resume_carries_says_it_will_be_allowed() -> None:
+    """A host that honours pre-approvals answers the repeat itself, so the
+    agent is told it will not wait on the person again -- and only for an
+    approval: a denial carried nowhere still says not to."""
+    message = _permission_decision_message(
+        _REQUEST,
+        decision=AgentRunApprovalDecision.APPROVE_ONCE,
+        delivered=False,
+        suspended=True,
+        carried=True,
+    )
+
+    assert message.startswith("Approved.")
+    assert "allowed once without asking the person again" in message
+    assert "asked to allow it once more" not in message
+
+
 def test_a_denial_after_the_turn_ended_says_not_to() -> None:
     message = _permission_decision_message(
         _REQUEST,

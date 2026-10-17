@@ -7273,34 +7273,135 @@ samp,
     font-size: 13px;
     color: var(--bad);
 }
-.aboutpage__section {
-    padding-top: 28px;
-    /* Clear of the sticky row of jumps above it. */
-    scroll-margin-top: 52px;
+/* The overview's parts: two columns of wide tiles, each a mark, a name, one
+   line of what is true there now, and the way in. Quiet surfaces on the
+   page's own paper — identity colour stays on the face above them. */
+.aboutparts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 36px;
 }
-/* The page's sections as a row that stays put while the page scrolls under
-   it. Plain words, the tab look the Files view uses, and it scrolls sideways
-   on a phone rather than wrapping into a block. */
-.aboutpage__jumps {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    display: flex;
-    gap: 2px;
-    margin: 0 -8px;
-    padding: 8px;
+.aboutparts__tile {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) 16px;
+    grid-template-rows: auto auto;
+    align-items: center;
+    column-gap: 14px;
+    row-gap: 1px;
+    min-width: 0;
+    min-height: 72px;
+    padding: 14px 16px 14px 14px;
+    border: 0;
+    border-radius: var(--r-lg);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+.aboutparts__tile:hover {
+    background: var(--wash-b);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.aboutparts__tile:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: 2px;
+}
+.aboutparts__mark {
+    grid-row: span 2;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--r-md);
+    background: var(--wash-b);
+    color: var(--ink-2);
+}
+.aboutparts__tile:hover .aboutparts__mark {
     background: var(--paper);
-    border-bottom: 1px solid var(--line);
-    overflow-x: auto;
-    scrollbar-width: none;
+    color: var(--ink);
 }
-.aboutpage__jumps::-webkit-scrollbar {
-    display: none;
+.aboutparts__label {
+    align-self: end;
+    font-size: 15px;
+    font-weight: 500;
 }
-.aboutpage__jumps button {
+.aboutparts__line {
+    grid-column: 2;
+    align-self: start;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--ink-3);
+}
+.aboutparts__line > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.aboutparts__go {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    color: var(--ink-3);
+}
+.aboutparts__tile:hover .aboutparts__go {
+    color: var(--ink);
+}
+/* Something here is waiting on a person: the dot the sidebar uses for it. */
+.aboutparts__dot {
     flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--wait);
+}
+@media (prefers-reduced-motion: reduce) {
+    .aboutparts__tile {
+        transition: none;
+    }
+}
+/* One column on a phone, and in a pane too narrow for two readable tiles. */
+@media (max-width: 720px) {
+    .aboutparts {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+        margin-top: 28px;
+    }
+    .aboutparts__tile {
+        min-height: 64px;
+        padding: 12px 14px 12px 12px;
+    }
+}
+/* What About no longer carries, and where it went: one quiet line. */
+.aboutpage__elsewhere {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+    margin: 20px 2px 0;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.aboutpage__elsewhere .linkish {
+    font-size: 13px;
+}
+
+/* A part on its own page: the way back to the overview, then its heading
+   and note over the same component it has always been drawn with. */
+.aboutpart__back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     height: 30px;
-    padding: 0 12px;
+    margin: -6px 0 0 -8px;
+    padding: 0 10px 0 6px;
     border: 0;
     border-radius: 999px;
     background: transparent;
@@ -7309,17 +7410,31 @@ samp,
     font-size: 13.5px;
     cursor: pointer;
 }
-.aboutpage__jumps button:hover {
+.aboutpart__back:hover {
     color: var(--ink);
-    background: var(--accent-soft);
+    background: var(--wash-b);
 }
-.aboutpage__jumps button[aria-current="true"] {
-    color: var(--ink);
-    background: var(--line-2);
-}
-.aboutpage__jumps button:focus-visible {
+.aboutpart__back:focus-visible {
     outline: 2px solid var(--info);
     outline-offset: -2px;
+}
+.aboutpart__head {
+    margin: 20px 0 20px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+}
+.aboutpart__head h1 {
+    margin: 0 auto 0 0;
+    font-size: 26px;
+    font-weight: 500;
+    letter-spacing: -0.015em;
+}
+.aboutpart__head p {
+    max-width: 600px;
+    margin: 6px 0 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-3);
 }
 /* A count beside a tab label, quieter than the label. */
 .notes-view__count {
@@ -7330,28 +7445,10 @@ samp,
 .notes-view .all__scope-note {
     margin: 6px 2px 12px;
 }
-.aboutpage__section + .aboutpage__section {
-    margin-top: 12px;
-}
-.aboutpage__section > header {
-    margin-bottom: 16px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--line);
-}
 .aboutpage__heading {
     display: flex;
     align-items: center;
     gap: 12px;
-}
-.aboutpage__heading h2 {
-    margin: 0 auto 0 0;
-    font-size: 18px;
-    font-weight: 500;
-}
-.aboutpage__section header p {
-    margin: 4px 0 0;
-    font-size: 13.5px;
-    color: var(--ink-3);
 }
 .aboutpage__content {
     display: flex;
@@ -7469,7 +7566,26 @@ samp,
    everybody who scrolls to the bottom, and most of them came for something
    else. */
 .aboutpage__delete {
-    margin-top: 40px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+}
+.aboutpage__delete > div {
+    flex: 1;
+    min-width: 0;
+}
+.aboutpage__delete h2 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 500;
+}
+.aboutpage__delete p {
+    margin: 2px 0 0;
+    font-size: 13px;
+    color: var(--ink-3);
 }
 .aboutpage__delete .btn--danger:disabled {
     opacity: 0.45;
@@ -7858,4 +7974,127 @@ samp,
 .msg--guest .message-actions {
     right: auto;
     left: calc(100% + 6px);
+}
+
+/* The default model on a page of its own: every model the organization has,
+   grouped by where it comes from, one row each and the chosen one marked. */
+.modelchoice {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.modelchoice__list {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+.modelchoice__group {
+    display: flex;
+    flex-direction: column;
+    border-radius: var(--r-lg);
+    box-shadow: inset 0 0 0 1px var(--line);
+    overflow: hidden;
+}
+.modelchoice__label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--wash-b);
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.modelchoice__label em {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    font-style: normal;
+    color: var(--wait);
+}
+.modelchoice__row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 52px;
+    padding: 10px 16px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.modelchoice__row + .modelchoice__row {
+    border-top: 1px solid var(--line);
+}
+.modelchoice__row:hover:not(:disabled) {
+    background: var(--wash-b);
+}
+.modelchoice__row:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: -2px;
+}
+.modelchoice__row:disabled {
+    cursor: default;
+}
+/* The default stands on its own, above the groups it chooses among. */
+.modelchoice__row--default {
+    border-radius: var(--r-lg);
+    box-shadow: inset 0 0 0 1px var(--line);
+}
+.modelchoice__row[aria-checked="true"] {
+    background: var(--wash-b);
+}
+.modelchoice__row--default[aria-checked="true"] {
+    box-shadow: inset 0 0 0 1.5px var(--ink-2);
+}
+.modelchoice__radio {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1.5px var(--line-2);
+}
+.modelchoice__row[aria-checked="true"] .modelchoice__radio {
+    box-shadow: inset 0 0 0 5px var(--ink);
+}
+.modelchoice__mark {
+    display: grid;
+    place-items: center;
+    color: var(--ink-3);
+}
+.modelchoice__body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 14.5px;
+}
+.modelchoice__body small {
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+.modelchoice__id {
+    font-family: var(--mono);
+}
+.modelchoice__saving {
+    flex: none;
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+.modelchoice__foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin: 4px 2px 0;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.modelchoice__foot .linkish {
+    font-size: 13px;
 }

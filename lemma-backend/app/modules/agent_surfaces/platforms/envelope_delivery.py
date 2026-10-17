@@ -10,6 +10,8 @@ behaviour rather than a promise each platform keeps separately.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 
 from app.core.log.log import get_logger
@@ -23,7 +25,7 @@ from app.modules.agent_surfaces.domain.envelope import (
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfacePlatformError
 from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 
 logger = get_logger(__name__)
 
@@ -54,7 +56,7 @@ class EnvelopeDeliveryMixin:
     async def deliver(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None = None,
@@ -112,7 +114,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_each_part(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None,
@@ -218,7 +220,7 @@ class EnvelopeDeliveryMixin:
     async def _render_one(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None,
@@ -240,7 +242,7 @@ class EnvelopeDeliveryMixin:
     async def _send_text_fallback(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         text: str,
         metadata: dict[str, Any] | None,
@@ -251,7 +253,7 @@ class EnvelopeDeliveryMixin:
             await self.send_message(
                 credentials=credentials, event=event, message=text, metadata=metadata
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.delivery.part_reached_nobody.degraded",
                 platform=self.platform,
@@ -264,7 +266,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_text(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         text: str,
         metadata: dict[str, Any] | None,
@@ -273,7 +275,7 @@ class EnvelopeDeliveryMixin:
             await self.send_message(
                 credentials=credentials, event=event, message=text, metadata=metadata
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.delivery.part_reached_nobody.degraded",
                 platform=self.platform,
@@ -287,7 +289,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_choices(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None,
@@ -310,7 +312,7 @@ class EnvelopeDeliveryMixin:
                 return PartDelivery.DEGRADED
             if rendered:
                 return PartDelivery.NATIVE
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             # A warning with the traceback: the text fallback below usually
             # serves the person, which is exactly why a native render that keeps
             # failing (a rejected payload, a dead callback store) goes unnoticed
@@ -331,7 +333,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_decision(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None,
@@ -346,7 +348,7 @@ class EnvelopeDeliveryMixin:
                 metadata=metadata,
             ):
                 return PartDelivery.NATIVE
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.delivery.native_decision_unavailable.degraded",
                 platform=self.platform,
@@ -363,7 +365,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_resource(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None,
@@ -375,7 +377,7 @@ class EnvelopeDeliveryMixin:
                 render_plan=render_plan,
                 metadata=metadata,
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.delivery.native_resource_unavailable.degraded",
                 platform=self.platform,
@@ -396,7 +398,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_file(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         attachment: EnvelopeFile,
         metadata: dict[str, Any] | None,
@@ -411,7 +413,7 @@ class EnvelopeDeliveryMixin:
                 caption=attachment.caption,
             ):
                 return PartDelivery.NATIVE
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.debug(
                 "agent_surfaces.delivery.native_attachment_unavailable.diagnostic",
                 platform=self.platform,
@@ -443,7 +445,7 @@ class EnvelopeDeliveryMixin:
     async def _deliver_voice(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         voice: EnvelopeVoice,
         metadata: dict[str, Any] | None,
@@ -458,7 +460,7 @@ class EnvelopeDeliveryMixin:
                 caption=voice.caption,
             ):
                 return PartDelivery.NATIVE
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.debug(
                 "agent_surfaces.delivery.native_voice_unavailable.diagnostic",
                 platform=self.platform,

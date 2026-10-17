@@ -20,8 +20,15 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 
 /** `domain/wait.py:12`. DECISION is a decision node asking its question: a
  *  machine wait like a function's, answered by the decision provider, never
- *  by a person. */
-export const WAIT_TYPES = ["HUMAN", "AGENT", "FUNCTION", "TIME", "DECISION"] as const;
+ *  by a person. QUEUED is a run parked by the workflow's max_concurrent_runs. */
+export const WAIT_TYPES = [
+    "HUMAN",
+    "AGENT",
+    "FUNCTION",
+    "TIME",
+    "DECISION",
+    "QUEUED",
+] as const;
 export type WaitType = (typeof WAIT_TYPES)[number];
 
 /** What a row is for, at a glance. Four tones rather than six statuses,
@@ -69,6 +76,8 @@ export function sayWaitingOn(type: WaitType): string {
         case "FUNCTION": return "Waiting on a function";
         case "TIME": return "Waiting on a timer";
         case "DECISION": return "Weighing a question";
+        // Parked by the workflow's max_concurrent_runs until an earlier run finishes.
+        case "QUEUED": return "Waiting its turn";
     }
 }
 
@@ -504,6 +513,23 @@ export function sayRefusal(status: number | undefined, fallback: string): string
         case 422: return "The run has moved to a different step, so this form can no longer be submitted.";
         default: return fallback;
     }
+}
+
+/** Steps a failed run can be resumed at — the backend's RETRYABLE_NODE_TYPES.
+ *  Redoing any of these repeats no paid or human work; an agent or a form
+ *  would, so a run that failed there can only be run again. */
+const RETRYABLE_KINDS = new Set(["FUNCTION", "DECISION", "LOOP", "WAIT_UNTIL"]);
+
+export function canRetryFrom(kind: string | null | undefined): boolean {
+    return kind != null && RETRYABLE_KINDS.has(kind);
+}
+
+/** Why a retry was refused. Somebody else retrying first is the common one. */
+export function sayRetryRefusal(status: number | undefined, fallback: string): string {
+    if (status === 409) return "This run can’t be retried from where it failed — it may already be running again.";
+    if (status === 403) return "You may not retry this run.";
+    if (status === 404) return "That run is gone.";
+    return fallback;
 }
 
 /** Why a cancel was refused. A terminal run is the only common one. */

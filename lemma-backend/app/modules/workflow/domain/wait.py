@@ -16,6 +16,17 @@ class WorkflowRunWaitType(str, Enum):
     FUNCTION = "FUNCTION"
     TIME = "TIME"
     DECISION = "DECISION"
+    # Waiting for the workflow's max_concurrent_runs to allow another run in.
+    QUEUED = "QUEUED"
+
+
+def wait_expire_key(wait_id: UUID) -> str:
+    """The dedup key of a wait's ``workflow.wait_expire`` item.
+
+    Named here so the item can be written with the wait and dropped when the
+    wait resolves, from either side of the execution package.
+    """
+    return f"workflow-expire:{wait_id}"
 
 
 class WorkflowRunWaitStatus(str, Enum):

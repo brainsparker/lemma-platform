@@ -99,7 +99,7 @@ export function askedHref(row: Pick<AskedRow, "podId" | "conversationId">): stri
  *  be a list of WAITING conversations and then a request per conversation,
  *  which could not see a permission request at all. `allSettled`, so a pod
  *  that refuses does not empty the answer for the others. */
-export async function gatherAsked(pods: readonly Pod[], sample: boolean): Promise<AskedRow[]> {
+export async function gatherAsked(pods: readonly Pick<Pod, "id" | "name">[], sample: boolean): Promise<AskedRow[]> {
     if (sample) {
         /* The landing tour's teammates say what they wait on in their own
            words; a sample conversation asking something would be a second
@@ -115,4 +115,25 @@ export async function gatherAsked(pods: readonly Pod[], sample: boolean): Promis
         return askedRows(pod, (listed.items ?? []) as PendingAsk[]);
     }));
     return byAskedLongest(perPod.flatMap((one) => one.status === "fulfilled" ? one.value : []));
+}
+
+/** The query every "waiting on you" list reads: the inbox beside the bell,
+ *  the rail's badges and Home. One key, so the three share one request.
+ *
+ *  Polled once a minute while it is on screen. Nothing pushes a new ask — a
+ *  run that stops on a question in another conversation tells nobody — so a
+ *  list that only refreshed on navigation could sit on a page for an hour
+ *  saying nothing was owed. React Query does not poll a hidden tab, so the
+ *  poll costs nothing while the window is in the background. */
+export const CONVERSATION_ASKS = "conversation-asks";
+export const ASKS_REFETCH_MS = 60_000;
+
+export function conversationAsksQuery(pods: readonly Pick<Pod, "id" | "name">[], sample: boolean, enabled = true) {
+    return {
+        queryKey: [CONVERSATION_ASKS, pods.map((pod) => pod.id).join(",")],
+        queryFn: () => gatherAsked(pods, sample),
+        enabled: enabled && pods.length > 0,
+        staleTime: ASKS_REFETCH_MS,
+        refetchInterval: ASKS_REFETCH_MS,
+    };
 }

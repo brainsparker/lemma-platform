@@ -6,15 +6,23 @@ adapters only override what their platform actually needs.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
+    ParsedSurfaceLifecycleEvent,
 )
-from app.modules.agent_surfaces.domain.decision_card import DecisionCardHandle
+from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
-from app.modules.agent_surfaces.platforms.chrome import SurfaceChromeMixin
 from app.modules.agent_surfaces.platforms.envelope_delivery import (
     EnvelopeDeliveryMixin,
 )
@@ -28,8 +36,39 @@ from app.modules.agent_surfaces.domain.models import (
 )
 
 
-class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
+class BaseSurfaceAdapter(EnvelopeDeliveryMixin):
     platform: str
+
+    # The app's own furniture -- a thread title, an event about the app, a
+    # group the bot created. None of it is delivery, and a platform with none
+    # of it is not missing a feature, so each has an inert default. The in-chat
+    # set-up flow is not here: it is `InChatSetup`, which only a platform that
+    # has it implements, and callers ask `in_chat_setup(adapter)` for it.
+
+    async def set_thread_title(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        title: str,
+    ) -> bool:
+        """Name the conversation thread on the platform. Default: unsupported."""
+        del credentials, event, title
+        return False
+
+    async def parse_inbound_lifecycle(
+        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> ParsedSurfaceLifecycleEvent | None:
+        """Parse an event about the app itself. Default: not a lifecycle event."""
+        del payload, headers
+        return None
+
+    def parse_group_updates(
+        self, payload: dict[str, object]
+    ) -> list[ParsedGroupUpdate]:
+        """What happened to groups themselves. Default: a bot that creates none."""
+        del payload
+        return []
 
     def split_inbound_payloads(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         """One webhook delivery, as the one-or-more messages it actually carries.
@@ -45,9 +84,26 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
         return [payload]
 
     async def enrich_inbound_event(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
     ) -> ParsedInboundSurfaceEvent | None:
         del credentials
+        return event
+
+    def mention_is_provisional(self, event: ParsedInboundSurfaceEvent) -> bool:
+        """Default: the parser's ``mentioned_agent`` already means this bot."""
+        del event
+        return False
+
+    async def settle_mention(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        bot_user_id: str | None,
+    ) -> ParsedInboundSurfaceEvent:
+        """Default: the parser could already tell when this bot was addressed
+        (a Teams ``<at>`` of the bot, a WhatsApp group's own number)."""
+        del credentials, bot_user_id
         return event
 
     def unresolved_sender_reply(
@@ -70,7 +126,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def _render_resource(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -94,7 +150,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def _render_choices(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -113,7 +169,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def _render_decision(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -126,7 +182,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def _render_voice(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         file_name: str,
         audio_bytes: bytes,
@@ -142,7 +198,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def send_cold_email(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         recipient_email: str,
         subject: str,
         message: str,
@@ -176,7 +232,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def acknowledge_interaction(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         interaction: ParsedSurfaceInteraction,
         text: str | None = None,
         show_alert: bool = False,
@@ -185,17 +241,21 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
         del credentials, interaction, text, show_alert, clear_actions
 
     async def retire_decision_card(
-        self, *, credentials: dict[str, object], handle: DecisionCardHandle
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        handle: DecisionCardHandle,
+        reason: CardRetirement = CardRetirement.SUPERSEDED,
     ) -> None:
-        """Take a superseded approval card's buttons away. Default: the
-        platform keeps no handle to edit by, so a tap on it is answered
-        instead (see `interaction_acks`)."""
-        del credentials, handle
+        """Take a finished pause's card buttons away. Default: the platform
+        keeps no handle to edit by, so a tap on it is answered instead (see
+        `interaction_acks`)."""
+        del credentials, handle, reason
 
     async def fetch_thread_context(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         limit: int = 15,
     ) -> list[SurfaceContextMessage]:
@@ -207,12 +267,12 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def stream_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> ProgressHandle | None:
         """Show live progress text. Default: platform has no editable progress
         message → return None so the caller keeps using typing indicators."""
         del credentials, event, progress_text, progress_handle, metadata
@@ -221,9 +281,9 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def end_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
     ) -> None:
         """Clean up the streaming progress message. Default: no-op."""
         del credentials, event, progress_handle
@@ -231,9 +291,9 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def append_stream_text(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         text: str,
         metadata: dict[str, Any] | None = None,
     ) -> StreamAppendResult:
@@ -244,9 +304,9 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def finish_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         message: str,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
@@ -263,7 +323,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def download_attachment(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         attachment: dict[str, Any],
     ) -> tuple[bytes, str, str] | None:
@@ -277,7 +337,7 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
     async def _render_file(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         file_name: str,
         file_bytes: bytes,

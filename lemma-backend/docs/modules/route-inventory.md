@@ -343,6 +343,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/schedules` | `schedule.list` | List Schedules |
 | GET | `/pods/{pod_id}/schedules/{schedule_id}` | `schedule.get` | Get Schedule |
 | GET | `/pods/{pod_id}/schedules/{schedule_id}/runs` | `schedule.run.list` | List Schedule Runs |
+| GET | `/pods/{pod_id}/schedules/{schedule_id}/skips` | `schedule.skip.list` | List Schedule Skips |
 | PATCH | `/pods/{pod_id}/schedules/{schedule_id}` | `schedule.update` | Update Schedule |
 | POST | `/pods/{pod_id}/schedules` | `schedule.create` | Create Schedule |
 | POST | `/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry` | `schedule.run.retry` | Retry Schedule Run |
@@ -389,6 +390,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PATCH | `/pods/{pod_id}/workflows/{workflow_name}` | `workflow.update` | Update Workflow Metadata |
 | POST | `/pods/{pod_id}/workflow-runs/{run_id}/cancel` | `workflow.run.cancel` | Cancel Workflow Run |
 | POST | `/pods/{pod_id}/workflow-runs/{run_id}/form` | `workflow.run.form.submit` | Submit Workflow Run Form |
+| POST | `/pods/{pod_id}/workflow-runs/{run_id}/retry` | `workflow.run.retry` | Retry Workflow Run |
 | POST | `/pods/{pod_id}/workflows` | `workflow.create` | Create Workflow |
 | POST | `/pods/{pod_id}/workflows/{workflow_name}/runs` | `workflow.run.create` | Create Workflow Run |
 | PUT | `/pods/{pod_id}/workflows/{workflow_name}/graph` | `workflow.graph.update` | Update Workflow Graph |

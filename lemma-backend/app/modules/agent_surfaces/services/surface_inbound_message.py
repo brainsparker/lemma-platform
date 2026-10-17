@@ -7,6 +7,9 @@ transcribed first, recent channel history a group mention needs for context.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
+from dataclasses import dataclass, field
 from typing import Any
 from datetime import datetime, timezone
 
@@ -35,7 +38,8 @@ from app.modules.agent_surfaces.domain.adapter_port import (
 )
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
     ResumeOutcome,
-    maybe_resume_pending_interaction,
+    Resumed,
+    resume_pending_interaction,
 )
 from app.modules.agent_surfaces.services.attachment_ingest_memo import (
     AttachmentIngestMemo,
@@ -138,7 +142,7 @@ async def write_inbound_message(
     message_text: str,
     metadata: dict[str, Any],
     uow: SqlAlchemyUnitOfWork,
-) -> list[str]:
+) -> FinishedPauses:
     """Persist the inbound message, or resume the run it answers.
 
     Free functions rather than a mixin, and the reason is visible in the
@@ -150,9 +154,10 @@ async def write_inbound_message(
     ``self._uow_factory`` and ``self.uow`` and raise ``RuntimeError`` when it had
     neither; the caller opens the scope it wants and hands it over.
 
-    Returns the pauses the new turn cancelled, by tool call id: starting a turn
-    denies every undecided pause on the person's behalf, and their cards are
-    still on screen. Empty when nothing was cancelled.
+    Returns the pauses this message finished, by tool call id, because their
+    cards are still on screen: the ones a new turn cancelled (starting a turn
+    denies every undecided pause on the person's behalf), or the one it
+    answered in words.
     """
     if context.pod_id is None:
         raise ValueError("Surface chat context requires a pod")
@@ -169,7 +174,7 @@ async def write_inbound_message(
         ):
             raise ValueError("The onboarding handoff is unavailable")
         if pending.message_committed_at is not None:
-            return []
+            return FinishedPauses()
         # This marker commits with transcript persistence and the run's outbox
         # event. A queue retry cannot record or execute the request twice.
         pending.message_committed_at = datetime.now(timezone.utc)
@@ -183,7 +188,7 @@ async def write_inbound_message(
             conversation_id=str(context.conversation_id),
             platform=context.platform,
         )
-        return []
+        return FinishedPauses()
     auth_ctx = await create_authorization_data_service(uow).build_user_context(
         user_id=context.user_id,
         pod_id=context.pod_id,
@@ -200,24 +205,37 @@ async def write_inbound_message(
         # decision as theirs -- a stranger typing "approve" would approve as
         # the member, with the member's authority. Their runs never pause, so
         # there is nothing of theirs to answer either.
-        outcome = (
-            await maybe_resume_pending_interaction(context, message_text, uow=uow)
+        resumed = (
+            await resume_pending_interaction(context, message_text, uow=uow)
             if may_answer_a_pause(context)
-            else ResumeOutcome.NOT_A_DECISION
+            else Resumed(ResumeOutcome.NOT_A_DECISION)
         )
-        if outcome is ResumeOutcome.FAILED:
+        if resumed.outcome is ResumeOutcome.FAILED:
             # They decided and we could not write it down. Starting a turn
             # here is what turned an "approve" into a cancellation: it
             # supersedes the pause with an auto-DENY. The pause is still
             # there, so saying so and letting them answer again is the one
             # move that loses nothing.
             await _say_the_decision_was_not_recorded(context, uow)
-            return []
-        if outcome is ResumeOutcome.NOT_A_DECISION:
-            return await _start_turn(context, message_text, metadata, uow)
-        return []
+            return FinishedPauses()
+        if resumed.outcome is ResumeOutcome.NOT_A_DECISION:
+            return FinishedPauses(
+                superseded=await _start_turn(context, message_text, metadata, uow)
+            )
+        return FinishedPauses(answered=[resumed.answered] if resumed.answered else [])
     finally:
         reset_current_context(token)
+
+
+@dataclass(frozen=True, slots=True)
+class FinishedPauses:
+    """Pauses an inbound message finished, whose cards should lose their
+    controls."""
+
+    #: Cancelled by the turn the message started.
+    superseded: list[str] = field(default_factory=list)
+    #: Answered by the message itself, in words.
+    answered: list[str] = field(default_factory=list)
 
 
 async def _start_turn(
@@ -246,7 +264,7 @@ async def fetch_channel_context(
     *,
     adapter: SurfacePlatformAdapterPort,
     context: SurfaceChatContext,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
 ) -> list[dict[str, Any]]:
     """Best-effort recent thread/channel messages for a group mention, as a
     list of ``{author, text, ts}`` dicts. Fetched fresh per run; never raises."""

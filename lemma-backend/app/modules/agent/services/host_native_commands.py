@@ -2,7 +2,10 @@
 
 docs/architecture/desktop-host-execution.md §7: a coding agent on a Mac with
 host execution on already has a shell and file tools there, so Lemma withholds
-its duplicates. The answer shapes three things that have to agree for the whole
+its duplicates -- but only for a run its user started in the app
+(``host_runs_native_commands``): the agent's own shell asks a person before
+each command, so a workflow or schedule run keeps Lemma's tools, which do not.
+The answer shapes three things that have to agree for the whole
 run -- the prompt dispatch writes, the tool names the host is told it may
 auto-allow, and the tools every relayed MCP call is served from.
 
@@ -75,8 +78,11 @@ async def _record(run_id: UUID, value: dict[str, object]) -> None:
 class NativeCommandFacts:
     """Where each answer comes from; injected, so a test can state them."""
 
-    #: Whether host execution applies to this conversation at all.
-    applies: Callable[[Conversation], Awaitable[bool]] = host_runs_native_commands
+    #: Whether host execution applies to this run at all: its user started it,
+    #: and has a usable host.
+    applies: Callable[[Conversation, AgentRun], Awaitable[bool]] = (
+        host_runs_native_commands
+    )
     harness_host: Callable[[UUID], Awaitable[UUID | None]] = _harness_host
     usable_for: Callable[[UUID, UUID], Awaitable[bool]] = _usable_for
     recorded: Callable[[UUID], Awaitable[dict[str, object] | None]] = _recorded
@@ -100,7 +106,7 @@ async def settle_native_commands(
     host_id = await facts.harness_host(harness_id) if harness_id is not None else None
     enabled = (
         host_id is not None
-        and await facts.applies(conversation)
+        and await facts.applies(conversation, agent_run)
         and await facts.usable_for(conversation.user_id, host_id)
     )
     await facts.record(

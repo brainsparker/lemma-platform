@@ -20,7 +20,7 @@ from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.services.subscription_models_provider import (
     resolve_subscription_models,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     ProjectRepo,
     pod_cwd_from_workspace_cwd,
 )
@@ -72,6 +72,11 @@ class BaseAgentContext(AgentContext):
     # agent already runs on the Mac with its own shell and file tools, so
     # Lemma's duplicates are withheld (§7).
     host_runs_native_commands: bool = False
+    # Whether this run has a tool that reads a file saved in the workspace
+    # (`exec_command`). `web_fetch` saves pages there, and hands their text
+    # back inline when nothing could read the file. True unless a builder
+    # knows otherwise, which keeps every other caller's behaviour.
+    workspace_readable: bool = True
 
     # How image-returning tools should answer on this run. Transient (derived
     # from the resolved model each run), never persisted. UNAVAILABLE is the

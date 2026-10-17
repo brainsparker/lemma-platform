@@ -8,7 +8,8 @@ import { source } from "@/data";
 import type { Pod } from "@/data";
 import { CloseIcon, WorkflowIcon } from "@/ui/icons";
 import { PlaceLink } from "@/shell/place-link";
-import { askedHref, byAge, gatherAsked, sayAsked, type AskedRow } from "@/thread/waiting-on-you";
+import { askedHref, byAge, CONVERSATION_ASKS, sayAsked, type AskedRow } from "@/thread/waiting-on-you";
+import { useConversationAsks } from "@/thread/use-conversation-asks";
 import { WaitForm } from "./form";
 import {
     byStuckLongest, readAssignments, readWorkflows, sayFor, sayStuckFor, sayWaitingOn,
@@ -63,18 +64,13 @@ export function WaitingInbox({ pods }: {
         staleTime: 60_000,
     });
     /* Under the key the rail and Home read, so the three share one request. */
-    const asking = useQuery({
-        queryKey: ["conversation-asks", podKey],
-        queryFn: () => gatherAsked(pods, sample),
-        enabled: pods.length > 0,
-        staleTime: 60_000,
-    });
+    const asking = useConversationAsks(pods);
     /* Read again on opening rather than on every return to the window: the
        queue is a request per teammate, and a focus is not somebody asking. */
     useEffect(() => {
         if (!open) return;
         void cache.refetchQueries({ queryKey: ["workflow-waiting", podKey], stale: true });
-        void cache.refetchQueries({ queryKey: ["conversation-asks", podKey], stale: true });
+        void cache.refetchQueries({ queryKey: [CONVERSATION_ASKS, podKey], stale: true });
     }, [open, cache, podKey]);
 
     useEffect(() => {

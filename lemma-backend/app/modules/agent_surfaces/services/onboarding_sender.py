@@ -10,13 +10,20 @@ and this is the half that comes away cleanly.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_identity_repository import (
+    VerifiedSurfaceIdentityRepository,
+)
+
+from app.modules.agent_surfaces.infrastructure.repositories.onboarding_repository import (
+    ChatOnboardingRepository,
+)
+
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from pydantic import JsonValue
-from sqlalchemy import select
 
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -41,7 +48,6 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 )
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
-    VerifiedSurfaceIdentity,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
@@ -84,11 +90,7 @@ def original_request(event: ParsedInboundSurfaceEvent) -> dict[str, JsonValue]:
 
 async def read_state(uows: UnitOfWorkFactory, binding_key: str) -> PendingState | None:
     async with uows() as uow:
-        row = await uow.session.scalar(
-            select(PendingChatOnboarding).where(
-                PendingChatOnboarding.binding_key == binding_key
-            )
-        )
+        row = await ChatOnboardingRepository(uow).pending_by_binding_key(binding_key)
         return PendingState.model_validate(row) if row is not None else None
 
 
@@ -103,11 +105,8 @@ async def verified_sender(
     uows: UnitOfWorkFactory, binding_key: str
 ) -> tuple[UUID | None, bool, PersonalRoute | None]:
     async with uows() as uow:
-        identity = await uow.session.scalar(
-            select(VerifiedSurfaceIdentity).where(
-                VerifiedSurfaceIdentity.binding_key == binding_key
-            )
-        )
+        identities = VerifiedSurfaceIdentityRepository(uow)
+        identity = await identities.by_binding_key(binding_key)
         verified_user_id = (
             identity.user_id
             if identity is not None and identity.revoked_at is None
@@ -126,25 +125,7 @@ async def verified_sender(
             ):
                 verified_user_id = None
                 previously_revoked = True
-        found = (
-            await uow.session.execute(
-                select(
-                    VerifiedSurfaceIdentity.id,
-                    VerifiedSurfaceIdentity.installation_surface_id,
-                ).where(
-                    VerifiedSurfaceIdentity.binding_key == binding_key,
-                    # The whole of `is_routable`, not the pod alone. The
-                    # installation FK is SET NULL on purpose -- deleting a
-                    # company's app leaves the proof of identity and clears the
-                    # destination -- so a row with a pod and no installation is
-                    # a state this query has to read as "no route", or it
-                    # bypasses the workspace choice and fails validation later.
-                    VerifiedSurfaceIdentity.installation_surface_id.is_not(None),
-                    VerifiedSurfaceIdentity.revoked_at.is_(None),
-                    VerifiedSurfaceIdentity.pod_id.is_not(None),
-                )
-            )
-        ).first()
+        found = await identities.personal_route(binding_key)
     route = PersonalRoute(*found) if found is not None else None
     return verified_user_id, previously_revoked, route
 
@@ -155,14 +136,10 @@ async def create_pending(
     event: ParsedInboundSurfaceEvent,
 ) -> PendingState:
     async with uows() as uow:
-        row = await uow.session.scalar(
-            select(PendingChatOnboarding).where(
-                PendingChatOnboarding.binding_key == transport.binding_key
-            )
-        )
+        pending = ChatOnboardingRepository(uow)
+        row = await pending.pending_by_binding_key(transport.binding_key)
         if row is not None:
-            await uow.session.delete(row)
-            await uow.session.flush()
+            await pending.discard_pending(row)
         row = PendingChatOnboarding(
             binding_key=transport.binding_key,
             platform=event.platform.value,

@@ -30,6 +30,11 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse
 
+from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    RecordingNotificationWork,
+)
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.entities import (
     AgentRun,
     Message,
@@ -37,7 +42,6 @@ from app.modules.agent.domain.entities import (
     MessageRole,
     RuntimeHistoryWindow,
 )
-from app.modules.agent.events.notification_settled import on_notification_settled
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
 )
@@ -54,7 +58,9 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.events import NotificationSettledEvent
+from app.modules.agent_surfaces.contracts.notification_facts import (
+    NotificationSettled,
+)
 from app.modules.agent_surfaces.domain.models import ColdEmailSendResult
 from app.modules.agent_surfaces.domain.notification import (
     NotificationDeliveryStatus,
@@ -68,6 +74,7 @@ from app.modules.agent_surfaces.services.cold_email_thread import (
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.notification_service import (
     NotificationService,
+    expire_one,
 )
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
@@ -141,7 +148,11 @@ class AgentSide:
 
     def start_run(self, conversation_id: UUID, text: str) -> AgentRun:
         """A person's message, and the run that answers it."""
-        run = AgentRun(conversation_id=conversation_id, started_at=_now())
+        run = AgentRun(
+            conversation_id=conversation_id,
+            started_at=_now(),
+            agent_runtime=AgentRuntimeConfig(profile_id=SYSTEM_LEMMA_PROFILE_ID),
+        )
         self.runs[conversation_id].append(run)
         self._append(
             conversation_id,
@@ -253,16 +264,6 @@ class InMemoryNotifications:
             and row.status is NotificationStatus.OPEN
             and row.expects_response
         )
-
-    async def list_past_due(self, *, limit=100, now=None):
-        moment = now or _now()
-        return [
-            row.model_copy(deep=True)
-            for row in self.rows.values()
-            if row.status is NotificationStatus.OPEN
-            and row.expires_at is not None
-            and row.expires_at <= moment
-        ][:limit]
 
 
 class InMemoryLinks:
@@ -460,6 +461,9 @@ class World:
             commit=AsyncMock(),
             collect_events=MagicMock(side_effect=self.events.extend),
         )
+        # The settled fact is emitted, and each notification's expiry armed, as
+        # work items on the unit of work; recorded here instead.
+        self.work = RecordingNotificationWork(self.events)
         self.email = "asha@example.com"
         identities = (
             []
@@ -483,6 +487,7 @@ class World:
                 get_user_display_name=AsyncMock(return_value="Priya"),
                 get_user_email=AsyncMock(return_value=self.email),
             ),
+            work=self.work,
         )
         doubles = build_doubles(adapter=AsyncMock(), surfaces=[surface])
         self.binder = ConversationBinder(
@@ -593,7 +598,7 @@ class World:
         return link, created_title
 
     async def settle(self) -> list[UUID]:
-        """Everything the settled events start, as the stream handler runs them."""
+        """Everything the settled events start, as the agent's item runs them."""
         woken: list[UUID] = []
 
         def factory(uow):
@@ -604,29 +609,11 @@ class World:
 
             return deliver
 
-        class _Uow:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *exc):
-                return False
-
-            async def commit(self):
-                return None
-
-        class _Inbox:
-            async def process(self, _key, _event, work):
-                await work()
-
-        for event in [
-            e for e in self.events if isinstance(e, NotificationSettledEvent)
-        ]:
-            await on_notification_settled(
-                event.model_dump(mode="json"),
-                fs_logger=SimpleNamespace(),
-                uow_factory=_Uow,
-                inbox=_Inbox(),
-                deliver_replies=factory,
+        # The agent's `agent.replies_arrived` item does exactly this with the
+        # settled conversation (`agent/events/run_followup_work.deliver_replies`).
+        for event in [e for e in self.events if isinstance(e, NotificationSettled)]:
+            await factory(None)(
+                conversation_id=event.conversation_id, pod_id=event.pod_id
             )
         self.events.clear()
         return woken
@@ -705,7 +692,8 @@ async def test_a_reply_after_a_quiet_day_reaches_the_notification_and_wakes_the_
     # (C) the agent handling the reply can see what was asked ...
     run = world.agent_side.start_run(delivered_into, "yes, the 14th works")
     history, prompt = await world.agent_side.history_for(run)
-    assert prompt == "yes, the 14th works"
+    # Their words, after the note of when they sent them.
+    assert prompt.endswith("</notes>\n\nyes, the 14th works")
     assert isinstance(history[-1], ModelResponse), "the question must precede the reply"
     assert "does the 14th work" in history[-1].parts[0].content
     assert not any(isinstance(message, ModelRequest) for message in history)
@@ -889,7 +877,7 @@ async def test_a_notification_older_than_the_carried_history_stays_out(world):
     history, prompt = await agent_side.history_for(current)
 
     text = " ".join(str(part.content) for message in history for part in message.parts)
-    assert prompt == "yes"
+    assert prompt.endswith("</notes>\n\nyes")
     assert "a recent reminder" in text
     assert "an ancient report" not in text
 
@@ -954,7 +942,7 @@ async def test_an_ask_nobody_answers_wakes_the_asker_when_it_expires(world):
     assert await world.settle() == []
     world.notifications.rows[ignored.id].expires_at = _now() - timedelta(minutes=1)
 
-    assert await world.service.expire_past_due() == 1
+    assert await expire_one(world.uow, world.notifications, ignored.id, work=world.work)
 
     assert await world.settle() == [world.asker_conversation.id]
 
@@ -964,7 +952,7 @@ async def test_an_fyi_that_expires_wakes_nobody(world):
     fyi = await world.ask(expects_response=False, title="Heads up")
     world.notifications.rows[fyi.id].expires_at = _now() - timedelta(minutes=1)
 
-    assert await world.service.expire_past_due() == 1
+    assert await expire_one(world.uow, world.notifications, fyi.id, work=world.work)
 
     assert await world.settle() == []
 

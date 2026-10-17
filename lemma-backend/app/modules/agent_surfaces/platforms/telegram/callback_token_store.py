@@ -25,18 +25,17 @@ from typing import Any
 
 from redis.exceptions import RedisError
 
-from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import (
+    TELEGRAM_CALLBACK_TOKENS,
+    surface_caches,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-_CALLBACK_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60
-
 #: What an unreachable store raises. Anything else is a bug and propagates.
 CALLBACK_STORE_ERRORS = (RedisError, OSError)
-
-_token_store: RedisJsonCache | None = None
 
 
 class CallbackTokenUnreadable(Exception):
@@ -44,14 +43,7 @@ class CallbackTokenUnreadable(Exception):
 
 
 def _store() -> RedisJsonCache:
-    global _token_store
-    if _token_store is None or _token_store._redis_url != settings.redis_url:
-        _token_store = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:telegram-cb",
-            ttl_seconds=_CALLBACK_TOKEN_TTL_SECONDS,
-        )
-    return _token_store
+    return surface_caches.get(TELEGRAM_CALLBACK_TOKENS)
 
 
 async def put_callback_token(payload: dict[str, Any]) -> str:

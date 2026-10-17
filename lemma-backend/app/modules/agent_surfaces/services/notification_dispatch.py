@@ -42,7 +42,6 @@ async def send_on_first_channel(
     channels: list[DeliveryChannel],
     message: str,
     agent_name: str | None,
-    actor_display_name: str | None,
     uow: SqlAlchemyUnitOfWork,
     notifications: NotificationStore,
     egress: NotificationEgress,
@@ -99,12 +98,12 @@ async def send_on_first_channel(
                 conversation_id=conversation_id,
                 notification=notification,
                 message=message,
-                # Both names, unconditionally — wider than the body header. On
-                # email they become the From display name, which is all an
-                # unopened inbox list shows; on chat the agent name is the bot's
-                # username and avatar.
+                # Unconditionally — wider than the body header. On email it
+                # becomes the From display name, which is all an unopened inbox
+                # list shows; on chat it is the bot's username and avatar. The
+                # person it acts for is not sent: the header is theirs, and the
+                # only place a full name can be read.
                 agent_name=agent_name,
-                actor_display_name=actor_display_name,
             )
             if not sent:
                 last_error = (

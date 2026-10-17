@@ -2,10 +2,11 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.core.domain.generation import GenerationSettings
 from app.modules.workflow.domain.workflow import WorkflowEntity
 from app.modules.workflow.domain.run import WorkflowRunEntity
 from app.modules.workflow.domain.wait import (
@@ -125,6 +126,9 @@ class WorkflowRunWaitRepository(ABC):
         wait_types: list[WorkflowRunWaitType],
         created_before: datetime,
         limit: int = 100,
+        after: tuple[datetime, UUID] | None = None,
+        human_created_before: datetime | None = None,
+        timers_due_by: datetime | None = None,
     ) -> list[WorkflowRunWaitEntity]: ...
 
 
@@ -148,12 +152,18 @@ class AgentPort(ABC):
         source: str = "WORKFLOW_RUN",
         conversation_metadata: dict[str, object] | None = None,
         instructions: str | None = None,
+        model_name: str | None = None,
+        generation: GenerationSettings | None = None,
     ) -> UUID:
         """Starts an agent conversation execution and returns the conversation ID.
 
         ``instructions`` is what this particular run is for, as opposed to what
         the agent is for. It becomes the conversation's instructions, which the
         prompt layers after the agent's own.
+
+        ``model_name`` and ``generation`` are a step's narrower choice of model
+        and generation settings, layered over the agent's for this
+        conversation only.
         """
 
     @abstractmethod
@@ -259,44 +269,3 @@ class WorkflowNotificationPort(Protocol):
 
     async def cancel_for_run(self, *, run_id: UUID) -> None:
         """Withdraw every notification this run raised, when it is cancelled."""
-
-
-#: Where the job asking a decision is: still going to ask it (queued, waiting
-#: out a retry, or running), never queued at all, or ended without an answer.
-DecisionJobState = Literal["alive", "missing", "ended"]
-
-
-class DecisionPort(Protocol):
-    """Hands a run's pending decision to whoever asks it.
-
-    Called by the decision executor as the run suspends. The question is asked
-    by a job, outside the run's transaction and after it commits: asking inside
-    it would hold the run-row lock and a pooled connection for as long as a
-    model takes to answer, and a job started before the commit could look for
-    a wait that is not stored yet.
-    """
-
-    def ask_once_committed(self, external_ref: str, *, requeue: int = 0) -> None:
-        """Ask the decision waited on under `external_ref`, once it is stored.
-
-        `requeue` counts the sweep's queueings of a job that was lost.
-        """
-
-    async def job_state(
-        self, external_ref: str, *, requeue: int = 0
-    ) -> DecisionJobState | None:
-        """Where the job asking this decision is; None when the queue cannot
-        say."""
-
-
-class SchedulePort(ABC):
-    """Port for interacting with the scheduler."""
-
-    @abstractmethod
-    async def schedule_workflow_wake(
-        self,
-        run_id: UUID,
-        scheduled_at: str,
-        pod_id: UUID,
-        user_id: UUID,
-    ) -> UUID: ...

@@ -3,11 +3,7 @@
   "tolerance": 50,
   "entrypoints": {
     "app.app": {
-      "modules": 5121,
-      "rss_mib": null
-    },
-    "app.events": {
-      "modules": 5417,
+      "modules": 4611,
       "rss_mib": null
     }
   }

@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    get_platform_capabilities,
+)
+
+from app.modules.agent_surfaces.domain.credentials import WhatsAppCredentials
+
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -102,7 +108,9 @@ class SurfaceWebhookSecurityService:
         return surface_webhook_verification_enabled()
 
     def assert_platform_request_allowed(self, platform: str) -> None:
-        if str(platform).upper() not in {"SLACK", "TEAMS", "WHATSAPP", "TELEGRAM"}:
+        # Every chat platform; mail arrives on its own provider's route.
+        capabilities = get_platform_capabilities(str(platform).upper())
+        if capabilities is None or capabilities.is_email:
             raise SurfaceWebhookAuthenticationError(
                 f"Platform '{platform}' does not support direct webhook ingress",
                 status_code=404,
@@ -362,15 +370,26 @@ class SurfaceWebhookSecurityService:
                 async with self._resolver() as resolver:
                     if resolver is None:
                         return None, None
-                    credentials = await resolver.for_account(surface.account_id)
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.webhook_security_service.could_not_resolve_whatsapp_credentials.diagnostic",
-                    account_id=surface.account_id,
-                    exc_info=True,
+                    credentials = WhatsAppCredentials.of(
+                        await resolver.for_account(
+                            surface.account_id, platform=SurfacePlatform.WHATSAPP
+                        )
+                    )
+            except Exception as exc:
+                # The request is refused as unverifiable either way; this is
+                # what tells a broken connector account apart from a setting
+                # nobody configured.
+                logger.warning(
+                    "agent_surfaces.webhook_security_service.whatsapp_credentials_unavailable.degraded",
+                    account_id=str(surface.account_id),
+                    error_type=type(exc).__name__,
+                    exc_info=exc,
                 )
                 return None, None
-            return credentials.get("app_secret"), credentials.get("verify_token")
+            return (
+                reveal_secret(credentials.app_secret),
+                reveal_secret(credentials.verify_token),
+            )
         return (
             reveal_secret(surface_settings.whatsapp_app_secret),
             reveal_secret(surface_settings.whatsapp_verify_token),

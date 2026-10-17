@@ -262,7 +262,7 @@ class TestPausingToolsBesideFinalAnswer:
         ]
 
         assert captured["end_strategy"] == "graceful"
-        assert [event.type for event in events] == [AgentEventType.USAGE]
+        assert events == []
 
 
 @pytest.mark.asyncio

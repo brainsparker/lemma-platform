@@ -163,6 +163,15 @@ class ConversationResponse(BaseModel):
             "request waits inside a RUNNING one."
         ),
     )
+    waiting_on_work: bool = Field(
+        default=False,
+        description=(
+            "WAITING on the agent's own work -- a sub-agent, a process or a "
+            "timer -- rather than on a person: a run will start when it ends, "
+            "so a viewer can follow the conversation to it. Set when one "
+            "conversation is read, false in lists."
+        ),
+    )
     created_at: datetime
     updated_at: datetime
 

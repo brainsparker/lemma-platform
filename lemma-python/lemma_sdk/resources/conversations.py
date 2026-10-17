@@ -153,13 +153,22 @@ class PodConversations(BoundResource):
         )
 
     def messages(
-        self, conversation_id: str, *, limit: int = 100
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 100,
+        after_sequence: int | None = None,
+        page_token: str | None = None,
     ) -> MessageListResponse:
+        """The newest ``limit`` messages, oldest first; ``after_sequence``
+        keeps only later ones, and ``page_token`` reads the page before."""
         return self._call(
             agent_conversation_message_list,
             self._pod_uuid(),
             as_uuid(conversation_id),
             limit=limit,
+            after_sequence=UNSET if after_sequence is None else after_sequence,
+            page_token=UNSET if page_token is None else page_token,
         )
 
     def send(

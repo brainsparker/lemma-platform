@@ -131,9 +131,11 @@ async def list_teammates(ctx: RunContext[BaseAgentContext]) -> ListTeammatesResp
     """
     teammates = await _teammates(ctx.deps)
     if not teammates:
+        reason = await _service().unreachable_reason(ctx.deps)
         return ListTeammatesResponse(
             success=True,
-            message=(
+            message=reason
+            or (
                 "There is no other pod this conversation can ask: the person "
                 "isn't in one, none is connected to this pod, or other people "
                 "read this thread."
@@ -167,7 +169,10 @@ async def ask_teammate(
     deps = ctx.deps
     service = _service()
     try:
-        target = resolve_teammate(await _teammates(deps), request.teammate)
+        teammates = await _teammates(deps)
+        if not teammates and (reason := await service.unreachable_reason(deps)):
+            raise AskRefused(reason)
+        target = resolve_teammate(teammates, request.teammate)
         mode = await service.ensure_may_ask(deps, teammate=target)
         # Only asking as the person needs their OK: a link was approved by the
         # other pod's people, once, for asks nobody stands behind.

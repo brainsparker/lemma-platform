@@ -548,6 +548,12 @@ def chat(
     ),
     conversation: str | None = typer.Option(None, "--conversation"),
     title: str | None = typer.Option(None, "--title"),
+    wait_timeout: float = typer.Option(
+        900.0,
+        "--wait-timeout",
+        help="Seconds to keep following the agent's background work "
+        "(sub-agents, processes, timers) for its answer.",
+    ),
 ) -> None:
     """Chat with a pod agent, interactively or with a single message."""
     from .commands import conversations
@@ -575,6 +581,7 @@ def chat(
         title=title,
         show_header=True,
         show_user_message=True,
+        wait_timeout=wait_timeout,
     )
 
 

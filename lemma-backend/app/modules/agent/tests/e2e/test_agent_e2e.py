@@ -1947,6 +1947,8 @@ class TestPodAgentLifecycle:
             waiting_events[-1]["data"]["conversation_status"]
             == ConversationStatus.WAITING.value
         )
+        # Waiting on the person, not on its own work: nothing to follow.
+        assert waiting_events[-1]["data"]["waiting_on_work"] is False
 
         waiting_conversation = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}"

@@ -115,11 +115,14 @@ _WORKFLOW_TRIGGERS: dict[ScheduleType, WorkflowTriggerType] = {
 async def _hand_to_workflow(
     uow: SqlAlchemyUnitOfWork, run: ScheduleRun, schedule: ScheduleEntity
 ) -> None:
-    """Queue the workflow's start under the run's reserved id, and call it dispatched.
+    """Queue the workflow's start under the run's reserved id.
 
-    ``workflow.start`` is idempotent on that id and authorizes the owner when
-    it runs; if it cannot start the run at all, ``WorkflowStartRefused`` comes
-    back and dead-letters this one.
+    ``workflow.start`` is idempotent on that id, authorizes the owner when it
+    runs, and marks this run dispatched in the transaction that creates the
+    workflow run: until then the run stays PROCESSING (in flight, for the
+    cap), so a DISPATCHED run's ``target_run_id`` always opens. If it cannot
+    start the run at all, ``WorkflowStartRefused`` comes back and
+    dead-letters this one.
     """
     pod_id = schedule.pod_id
     if pod_id is None or schedule.workflow_id is None:
@@ -152,9 +155,9 @@ async def _hand_to_workflow(
                 metadata=_object(context["metadata"]),
                 llm_output=_object(context["llm_output"]),
             ),
+            dispatches_schedule_run_id=run.id,
         ),
     )
-    await ScheduleRunRepository(uow).mark_dispatched(run.id)
 
 
 def workflow_schedule_event_id(schedule_id: UUID, source_event_id: str) -> str:

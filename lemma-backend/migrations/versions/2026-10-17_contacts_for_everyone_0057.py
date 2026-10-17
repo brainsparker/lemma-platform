@@ -9,7 +9,10 @@ the one it became, and cascades: forgetting a contact forgets the contacts that
 became it. **`contacts.answered_at`** is when an agent first answered them,
 which the organization's contact limit counts.
 **`usage_contacts_caps.max_contacts`** is how many contacts an organization's
-bots may answer at all; null for no limit.
+bots may answer at all; null for no limit. `max_contacts_set` and
+`monthly_limit_set` say which half of the cap an owner chose: a half they did
+not follows the deployment's default. A cap stored before this was an owner's
+spend choice.
 
 Schema only. Groups and web chat were unreleased, so there is nothing of the
 old way to carry over.
@@ -69,6 +72,26 @@ def upgrade() -> None:
         if_not_exists=True,
     )
     op.add_column(
+        "usage_contacts_caps",
+        sa.Column(
+            "max_contacts_set",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
+        if_not_exists=True,
+    )
+    op.add_column(
+        "usage_contacts_caps",
+        sa.Column(
+            "monthly_limit_set",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("true"),
+        ),
+        if_not_exists=True,
+    )
+    op.add_column(
         "agent_conversations",
         sa.Column(
             "contact_id",
@@ -114,6 +137,8 @@ def downgrade() -> None:
             if_exists=True,
         )
     op.drop_column("agent_conversations", "contact_id")
+    op.drop_column("usage_contacts_caps", "monthly_limit_set")
+    op.drop_column("usage_contacts_caps", "max_contacts_set")
     op.drop_column("usage_contacts_caps", "max_contacts")
     op.drop_index("ix_contacts_answered", table_name="contacts", if_exists=True)
     op.drop_index("ix_contacts_merged_into", table_name="contacts", if_exists=True)

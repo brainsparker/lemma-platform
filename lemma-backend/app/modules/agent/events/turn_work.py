@@ -395,6 +395,8 @@ def register_turn_work(
         mode=WorkMode.JOB,
         payload=ConversationWork,
         retry=TITLE_RETRY,
+        # One title at a time per conversation (keyed by ``title_key``).
+        concurrency=1,
     )(generate_title)
 
 

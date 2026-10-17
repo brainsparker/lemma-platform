@@ -183,13 +183,16 @@ async def get_contact(pod_id: UUID, contact_id: UUID, uow: UoWDep) -> ContactRes
 async def update_contact(
     pod_id: UUID, contact_id: UUID, request: ContactUpdateRequest, uow: UoWDep
 ) -> ContactResponse:
+    # The person a merged contact's id now leads to is the one renamed: the
+    # absorbed row is never shown again.
+    contact = await _found(uow, pod_id=pod_id, contact_id=contact_id)
     repository = ContactRepository(uow.session)
     if not await repository.rename(
-        pod_id=pod_id, contact_id=contact_id, display_name=request.display_name
+        pod_id=pod_id, contact_id=contact.id, display_name=request.display_name
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
     await uow.commit()
-    return _response(await _found(uow, pod_id=pod_id, contact_id=contact_id))
+    return _response(await _found(uow, pod_id=pod_id, contact_id=contact.id))
 
 
 @router.get(

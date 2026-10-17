@@ -7,6 +7,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -248,6 +249,14 @@ class UsageContactsCap(UUIDAuditBase):
     monthly_limit_usd: Mapped[Decimal | None] = mapped_column(
         Numeric(24, 9), nullable=True
     )
+    #: Whether an owner chose ``monthly_limit_usd``; otherwise the default holds.
+    monthly_limit_set: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
     #: How many contacts the organization's bots may answer; null for no limit.
     max_contacts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Whether an owner chose ``max_contacts``; otherwise the default holds.
+    max_contacts_set: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     updated_by_user_id: Mapped[UUID | None] = mapped_column(nullable=True)

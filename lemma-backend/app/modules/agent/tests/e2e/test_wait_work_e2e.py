@@ -502,3 +502,27 @@ async def test_the_cutover_arms_each_open_wait_once(scenario, monkeypatch) -> No
         done=lambda w: w.status is AgentWaitStatus.COMPLETED,
         timeout_seconds=5,
     )
+
+
+async def test_a_run_ending_on_its_own_wait_says_so_and_one_asking_a_person_does_not(
+    scenario,
+) -> None:
+    """The completed frame's ``waiting_on_work``: what lets a client follow a
+    conversation to the run that answers it, without reading it back."""
+    from app.modules.agent.services.run_finalizer import waiting_on_work
+
+    waiting, _, _ = await _waiting(scenario, AgentWaitType.SUBAGENT, armed=False)
+    asking = await seeded_conversation(scenario)
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        assert await waiting_on_work(uow, waiting.conversation_id) is True
+        assert await waiting_on_work(uow, asking.conversation_id) is False
+
+    # And a viewer that opens the conversation later reads the same.
+    opened = await scenario.owner_client.get(
+        f"/pods/{waiting.pod_id}/conversations/{waiting.conversation_id}"
+    )
+    assert opened.status_code == 200, opened.text
+    assert (opened.json()["status"], opened.json()["waiting_on_work"]) == (
+        "WAITING",
+        True,
+    )

@@ -394,6 +394,32 @@ async def test_an_organization_owner_sets_and_clears_the_contacts_cap(
     assert refused.status_code == 422
 
 
+async def test_each_half_of_the_contacts_cap_is_kept_when_the_other_changes(
+    authenticated_client: AsyncClient, fixed_test_org, monkeypatch
+):
+    """An owner setting only a count keeps the spend cap they had; one who set
+    only a spend still gets the deployment's count until they choose one."""
+    from app.modules.usage.config import usage_settings
+
+    monkeypatch.setattr(usage_settings, "usage_contacts_max_default", 200)
+    org_id = fixed_test_org["id"]
+    cap = f"/usage/organizations/{org_id}/contacts-cap"
+
+    spend_only = await authenticated_client.put(cap, json={"monthly_limit_usd": 25})
+    assert spend_only.status_code == 200, spend_only.text
+    assert spend_only.json()["max_contacts"] == 200
+
+    count_too = await authenticated_client.put(cap, json={"max_contacts": 10})
+    assert count_too.status_code == 200, count_too.text
+    assert count_too.json()["monthly_limit_usd"] == 25
+    assert count_too.json()["max_contacts"] == 10
+
+    no_count = await authenticated_client.put(cap, json={"max_contacts": None})
+    assert no_count.status_code == 200, no_count.text
+    assert no_count.json()["max_contacts"] is None
+    assert no_count.json()["monthly_limit_usd"] == 25
+
+
 async def _orders_for(
     client: AsyncClient, pod_id: str, contact_id: str | None, item: str
 ):

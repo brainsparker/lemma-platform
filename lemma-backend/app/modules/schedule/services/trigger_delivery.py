@@ -5,8 +5,11 @@ change log's ``changes.deliver``) hands each trigger a page of changes already
 narrowed to its table and past its cursor, and this decides, in the caller's
 main-database transaction, what the trigger does with each:
 
-* not matching (operation, ``when``, an outside row the trigger does not take)
-  → nothing;
+* not one of the trigger's operations → nothing (its subscription never asked
+  for it);
+* a row the ``when`` condition does not hold for, or an outside row the trigger
+  does not take → one aggregated ``trigger_skips`` row per page and reason, so
+  "why didn't it run" has an answer;
 * a ``bulk`` or ``import`` write → the trigger's write mode for it
   (``bulk_writes`` / ``import_writes``, else the pod's
   ``triggers.bulk_writes_default`` for bulk, else ``skip``):
@@ -55,6 +58,8 @@ from app.modules.schedule.services.trigger_fire import (
 
 BULK_WRITE = "bulk_write"
 IMPORT_WRITE = "import_write"
+CONDITION_NOT_MET = "condition_not_met"
+OUTSIDE_ROW = "outside_row"
 #: The trigger fell further behind its table than the change log keeps a
 #: subscriber waiting, and was moved past what it had not read.
 LAG_EXCEEDED = "lag_exceeded"
@@ -120,22 +125,22 @@ def write_mode(
     return TriggerWriteMode.EACH
 
 
-def matches(
+def skip_reason(
     schedule: ScheduleEntity, config: DatastoreScheduleConfig, change: TriggerChange
-) -> bool:
+) -> str | None:
+    """Why the trigger lets a change of one of its operations pass, or ``None``."""
     if change.from_outside and not schedule.include_outside_rows:
-        return False
-    if config.operations and change.operation not in config.operations:
-        return False
+        return OUTSIDE_ROW
     if not config.when:
-        return True
-    return evaluate_match_conditions(
+        return None
+    held = evaluate_match_conditions(
         config.when,
         operation=change.operation,
         payload=dict(change.row),
         changed=list(change.changed) if change.changed is not None else None,
         previous=dict(change.previous) if change.previous is not None else None,
     )
+    return None if held else CONDITION_NOT_MET
 
 
 @dataclass(slots=True)
@@ -154,7 +159,10 @@ def _sort(
     """The page's matching changes, by what the trigger does with each."""
     sorted_page = _Sorted()
     for change in sorted(changes, key=lambda c: c.position):
-        if not matches(schedule, config, change):
+        if config.operations and change.operation not in config.operations:
+            continue
+        if (reason := skip_reason(schedule, config, change)) is not None:
+            sorted_page.skips.setdefault(reason, []).append(change)
             continue
         mode = write_mode(config, change.intent, pod_bulk_default=pod_bulk_default)
         if mode is TriggerWriteMode.SKIP:
@@ -344,13 +352,15 @@ def _event(change: TriggerChange) -> TriggerEvent:
 
 __all__ = [
     "BULK_WRITE",
+    "CONDITION_NOT_MET",
     "IMPORT_WRITE",
     "LAG_EXCEEDED",
+    "OUTSIDE_ROW",
     "ChangePosition",
     "PageResult",
     "TriggerChange",
     "WriteIntent",
     "deliver_page",
-    "matches",
+    "skip_reason",
     "write_mode",
 ]

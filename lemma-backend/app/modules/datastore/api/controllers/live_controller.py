@@ -26,7 +26,11 @@ from app.modules.datastore.api.live_socket import (
     close_code_for,
     serve,
 )
-from app.modules.datastore.domain.live import LiveCursorExpired, ready_frame
+from app.modules.datastore.domain.live import (
+    LiveCursorExpired,
+    LiveHubUnavailable,
+    ready_frame,
+)
 from app.modules.datastore.services.live import live_hubs
 from app.modules.datastore.services.live.connection import LiveConnection
 from app.modules.datastore.services.live.limits import (
@@ -84,7 +88,7 @@ async def pod_live_ws(websocket: WebSocket, pod_id: UUID) -> None:
         hub.attach(connection)
         try:
             await hub.ensure_started()
-        except SQLAlchemyError, OSError, LiveCursorExpired:
+        except SQLAlchemyError, OSError, LiveCursorExpired, LiveHubUnavailable:
             hub.detach(connection)
             logger.error(
                 "datastore.live.socket_rejected", pod_id=str(pod_id), exc_info=True

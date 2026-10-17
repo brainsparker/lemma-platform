@@ -112,6 +112,46 @@ async def test_a_fire_reserves_its_run_advances_and_starts_the_target_once(
     assert detail.json()["last_run_id"] == started["target_run_id"]
 
 
+async def test_a_workflow_target_is_dispatched_only_once_its_run_exists(
+    authenticated_client: AsyncClient, fixed_test_org
+):
+    """DISPATCHED means the target run exists: a client following
+    ``target_run_id`` from a dispatched run must find it, not a 404 while the
+    start waits on another lane."""
+    from app.modules.schedule.tests.e2e.test_schedule_e2e import (
+        _create_schedule,
+        _create_workflow,
+    )
+
+    pod_id = await create_pod(authenticated_client, fixed_test_org["id"])
+    workflow = await _create_workflow(
+        authenticated_client,
+        str(pod_id),
+        start={"type": "SCHEDULED", "config": {"schedule_type": "CRON"}},
+        name_prefix="dispatched-workflow",
+    )
+    schedule = await _create_schedule(
+        authenticated_client,
+        str(pod_id),
+        schedule_type="TIME",
+        workflow_name=workflow["name"],
+        config={"cron": EVERY_HALF_HOUR},
+    )
+    await fire_due()
+
+    await run(WorkClass.AUTOMATION)
+    [handed] = await runs(schedule["id"])
+    assert handed["status"] == "PROCESSING", "dispatched before its run existed"
+
+    await run(WorkClass.EVENTS)
+    [started] = await runs(schedule["id"])
+    assert started["status"] in {"DISPATCHED", "COMPLETED"}, started
+    opened = await authenticated_client.get(
+        f"/pods/{pod_id}/workflow-runs/{started['target_run_id']}"
+    )
+    assert opened.status_code == 200, opened.text
+
+
 async def test_editing_pausing_or_deleting_turns_the_pending_fire_into_a_no_op(
     authenticated_client: AsyncClient, fixed_test_org
 ):

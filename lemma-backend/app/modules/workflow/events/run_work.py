@@ -46,7 +46,10 @@ from app.core.infrastructure.work import (
 )
 from app.core.log.log import get_logger
 from app.modules.function.contracts.run_facts import FunctionRunFinished
-from app.modules.schedule.contracts.dispatch import mark_run_failed
+from app.modules.schedule.contracts.dispatch import (
+    mark_run_dispatched,
+    mark_run_failed,
+)
 from app.modules.schedule.contracts.reserved_runs import load_reserved_run
 from app.modules.workflow.api.dependencies import build_workflow_engine
 from app.modules.workflow.contracts.run_work import (
@@ -285,6 +288,8 @@ async def _start_requested(
         )
     finally:
         reset_current_context(token)
+    if payload.dispatches_schedule_run_id is not None:
+        await mark_run_dispatched(engine.uow, payload.dispatches_schedule_run_id)
 
 
 async def on_start_dead(ctx: DeadContext) -> None:

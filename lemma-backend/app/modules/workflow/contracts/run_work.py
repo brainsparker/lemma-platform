@@ -60,6 +60,10 @@ class WorkflowStartRequest(BaseModel):
     #: The source's event id, recorded on the run (unique per flow and user).
     schedule_event_id: str | None = None
     trigger: WorkflowTrigger | None = None
+    #: The schedule run that handed this start over, marked dispatched in the
+    #: transaction that creates the run -- so a dispatched run's
+    #: ``target_run_id`` always opens.
+    dispatches_schedule_run_id: UUID | None = None
 
     @model_validator(mode="after")
     def _names_a_start(self) -> WorkflowStartRequest:

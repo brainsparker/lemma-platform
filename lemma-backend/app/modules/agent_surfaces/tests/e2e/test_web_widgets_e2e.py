@@ -62,8 +62,15 @@ from app.modules.contacts.infrastructure.visitor_sessions import (
     VisitorSessionModel,
 )
 from app.modules.test_support.e2e.scripted_model import script_thinking
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = pytest.mark.e2e
+
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
 
 SHOP = "https://shop.example"
 
@@ -930,6 +937,7 @@ class _Merged:
     anonymous: UUID
     conversation_id: UUID
     visitor: dict
+    key: str
 
 
 async def _visitor_merged_into_a_customer(
@@ -999,7 +1007,7 @@ async def _visitor_merged_into_a_customer(
     assert verified.json()["is_contact"] is True
     assert verified.json()["display_name"] == "Dana"
 
-    return _Merged(customer.id, anonymous, conversation_id, visitor)
+    return _Merged(customer.id, anonymous, conversation_id, visitor, key)
 
 
 @pytest.mark.drives_work
@@ -1164,6 +1172,101 @@ async def test_a_session_whose_conversation_names_nobody_is_given_its_own(
 
     assert again != first
     assert await _contact_of(db_session, again) == contact
+
+
+async def test_a_visitor_writing_right_after_proving_who_they_are_keeps_their_chat(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """Their conversation still names the contact they were until the merge's
+    queued work moves it; it is theirs all the same, and is continued."""
+    pod_id = test_pod["id"]
+    owner = UUID(fixed_test_user["id"])
+    proved = await _visitor_merged_into_a_customer(
+        authenticated_client, db_session, pod_id=pod_id, owner=owner
+    )
+    again = await _say(
+        authenticated_client,
+        db_session,
+        key=proved.key,
+        visitor=proved.visitor,
+        text="And the blue one?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Shipped too.")],
+    )
+
+    assert again == proved.conversation_id
+
+
+@pytest.mark.drives_work
+async def test_forgetting_a_person_reaches_every_contact_merged_into_them(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    monkeypatch,
+):
+    """However many contacts became this one, each one's rows go: they are
+    read a page at a time, and none is left for the cascade to strand."""
+    from app.modules.contacts.infrastructure import repository as contacts_repo
+    from app.modules.contacts.services import forget as forget_service
+
+    monkeypatch.setattr(contacts_repo, "ABSORBED_PAGE", 1)
+    monkeypatch.setattr(forget_service, "ABSORBED_PAGE", 1)
+    pod_id = test_pod["id"]
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": "orders",
+            "primary_key_column": "id",
+            "enable_rls": False,
+            "contact_owned": True,
+            "contact_columns": ["item"],
+            "columns": [
+                {"name": "id", "type": "UUID", "required": True, "auto": True},
+                {"name": "item", "type": "TEXT", "required": True},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    async with get_uow_factory()() as uow:
+        people = [
+            await open_contact(
+                uow,
+                pod_id=UUID(pod_id),
+                kind=IdentityKind.EMAIL,
+                value=f"many-{n}@client.example",
+                strength=IdentityStrength.CHANNEL,
+                display_name=None,
+            )
+            for n in range(4)
+        ]
+        await uow.commit()
+    survivor, absorbed = people[0], people[1:]
+    for contact in absorbed:
+        await db_session.execute(
+            update(ContactModel)
+            .where(ContactModel.id == contact.id)
+            .values(merged_into_id=survivor.id)
+        )
+        ordered = await authenticated_client.post(
+            f"/pods/{pod_id}/datastore/tables/orders/records",
+            json={"data": {"item": "kettle", "contact_id": str(contact.id)}},
+        )
+        assert ordered.status_code == 201, ordered.text
+    await db_session.commit()
+
+    forgotten = await authenticated_client.delete(
+        f"/pods/{pod_id}/contacts/{survivor.id}"
+    )
+
+    assert forgotten.status_code in (200, 204), forgotten.text
+    rows = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/orders/records"
+    )
+    assert rows.json()["items"] == []
 
 
 async def test_hosted_pages_live_on_their_own_origin_when_one_is_set(

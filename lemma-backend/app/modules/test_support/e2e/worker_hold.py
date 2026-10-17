@@ -26,8 +26,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import psycopg
-
-from app.modules.test_support.e2e.waiters import eventually
+import pytest
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +69,22 @@ def _database_names(database_url: str) -> list[str]:
     return sorted({url.rsplit("/", 1)[1].split("?", 1)[0] for url in urls if url})
 
 
-async def _anyone_in_transaction(database_url: str) -> bool:
+_BUSY_BACKENDS = (
+    "SELECT count(*) FROM pg_stat_activity "
+    "WHERE datname = ANY(%s) AND pid <> pg_backend_pid() "
+    "AND backend_type = 'client backend' AND (state <> 'idle' "
+    "OR backend_xid IS NOT NULL OR backend_xmin IS NOT NULL)"
+)
+
+#: How long a hold may take before the test fails, and how often a running
+#: worker is looked at while the hold waits for it to finish a transaction.
+_HOLD_TIMEOUT_SECONDS = 30.0
+_RUNNING_POLL_SECONDS = 0.005
+
+
+async def _anyone_in_transaction(
+    connection: psycopg.AsyncConnection, databases: list[str]
+) -> bool:
     """Whether any client of this process's databases is mid-statement or mid-transaction.
 
     Asked of the databases, not of the worker's sockets: Docker rewrites the
@@ -80,17 +94,8 @@ async def _anyone_in_transaction(database_url: str) -> bool:
     busy backend here is the worker's -- or something about to finish, which
     the retry waits out.
     """
-    async with await psycopg.AsyncConnection.connect(
-        _libpq_url(database_url), autocommit=True
-    ) as connection:
-        cursor = await connection.execute(
-            "SELECT count(*) FROM pg_stat_activity "
-            "WHERE datname = ANY(%s) AND pid <> pg_backend_pid() "
-            "AND backend_type = 'client backend' AND (state <> 'idle' "
-            "OR backend_xid IS NOT NULL OR backend_xmin IS NOT NULL)",
-            (_database_names(database_url),),
-        )
-        row = await cursor.fetchone()
+    cursor = await connection.execute(_BUSY_BACKENDS, (databases,))
+    row = await cursor.fetchone()
     return bool(row and row[0])
 
 
@@ -99,6 +104,12 @@ async def _stop_between_transactions(workers: list[_Worker]) -> None:
 
     All at once: the probe sees every client of the databases, so one worker
     left running could keep it busy while another stays stopped mid-way.
+
+    A worker caught inside a transaction is resumed and *left running until it
+    is seen between transactions* before the next stop. Retrying the stop on a
+    fixed short interval instead gave it a few milliseconds of every cycle to
+    finish -- on a loaded machine, less than it needed to be scheduled at all --
+    so a hold could spend seconds re-stopping a worker in the same transaction.
     """
 
     def signal_all(sig: signal.Signals) -> None:
@@ -106,25 +117,34 @@ async def _stop_between_transactions(workers: list[_Worker]) -> None:
             if _alive(worker.pid):
                 os.kill(worker.pid, sig)
 
-    async def stopped() -> bool:
-        signal_all(signal.SIGSTOP)
-        # A statement a worker wrote just before it stopped may still be in
-        # the socket, unread: the backend shows ``idle`` now and opens the
-        # transaction a moment later, held for as long as the worker is. Look
-        # once that has had time to land.
-        await asyncio.sleep(_SETTLE_SECONDS)
-        if not await _anyone_in_transaction(workers[0].database_url):
-            return True
-        signal_all(signal.SIGCONT)
-        return False
-
-    await eventually(
-        label=f"session workers {[w.pid for w in workers]} idle between transactions",
-        probe=stopped,
-        done=bool,
-        timeout_seconds=30,
-        interval_seconds=0.02,
-    )
+    databases = _database_names(workers[0].database_url)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _HOLD_TIMEOUT_SECONDS
+    async with await psycopg.AsyncConnection.connect(
+        _libpq_url(workers[0].database_url), autocommit=True
+    ) as connection:
+        while True:
+            signal_all(signal.SIGSTOP)
+            # A statement a worker wrote just before it stopped may still be in
+            # the socket, unread: the backend shows ``idle`` now and opens the
+            # transaction a moment later, held for as long as the worker is.
+            # Look once that has had time to land.
+            await asyncio.sleep(_SETTLE_SECONDS)
+            if not await _anyone_in_transaction(connection, databases):
+                return
+            signal_all(signal.SIGCONT)
+            while await _anyone_in_transaction(connection, databases):
+                if loop.time() >= deadline:
+                    pytest.fail(
+                        f"session workers {[w.pid for w in workers]} never went "
+                        f"{_HOLD_TIMEOUT_SECONDS:.0f}s without a transaction open"
+                    )
+                await asyncio.sleep(_RUNNING_POLL_SECONDS)
+            if loop.time() >= deadline:
+                pytest.fail(
+                    f"session workers {[w.pid for w in workers]} could not be "
+                    f"stopped between transactions in {_HOLD_TIMEOUT_SECONDS:.0f}s"
+                )
 
 
 @asynccontextmanager

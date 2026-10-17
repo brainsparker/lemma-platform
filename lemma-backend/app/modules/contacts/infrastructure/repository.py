@@ -27,9 +27,8 @@ from app.modules.contacts.infrastructure.models import (
 MAX_PAGE = 200
 
 
-#: The most contacts one person was ever merged from that forgetting them
-#: reaches. A person proves a handle a handful of times, not hundreds.
-_MAX_ABSORBED = 500
+#: Contacts merged into one, read a page at a time.
+ABSORBED_PAGE = 500
 
 
 class UnusableHandle(ValueError):
@@ -198,17 +197,20 @@ class ContactRepository:
         )
         return bool(result.rowcount)
 
-    async def absorbed_by(self, *, pod_id: UUID, contact_id: UUID) -> list[UUID]:
-        """The contacts merged into this one -- every one of them, since a
-        merge points them all at the survivor directly."""
+    async def absorbed_by(
+        self, *, pod_id: UUID, contact_id: UUID, after: UUID | None = None
+    ) -> list[UUID]:
+        """A page of the contacts merged into this one, after ``after`` -- every
+        one of them across the pages, since a merge points them all at the
+        survivor directly."""
+        statement = select(ContactModel.id).where(
+            ContactModel.pod_id == pod_id,
+            ContactModel.merged_into_id == contact_id,
+        )
+        if after is not None:
+            statement = statement.where(ContactModel.id > after)
         rows = await self.session.scalars(
-            select(ContactModel.id)
-            .where(
-                ContactModel.pod_id == pod_id,
-                ContactModel.merged_into_id == contact_id,
-            )
-            .order_by(ContactModel.id)
-            .limit(_MAX_ABSORBED)
+            statement.order_by(ContactModel.id).limit(ABSORBED_PAGE)
         )
         return list(rows)
 

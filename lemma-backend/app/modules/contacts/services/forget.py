@@ -36,7 +36,10 @@ from app.modules.contacts.contracts.visitor_sessions import (
     forget_contact_visitor_sessions,
     forget_session_liveness,
 )
-from app.modules.contacts.infrastructure.repository import ContactRepository
+from app.modules.contacts.infrastructure.repository import (
+    ABSORBED_PAGE,
+    ContactRepository,
+)
 from app.modules.datastore.contracts.contact_rows import delete_contact_rows
 
 logger = get_logger(__name__)
@@ -59,6 +62,25 @@ async def _redact_their_questions(
         if len(page) < _REDACT_PAGE:
             return redacted
         after = page[-1]
+
+
+async def _absorbed_by(
+    uow_factory: UnitOfWorkFactory, pod_id: UUID, contact_id: UUID
+) -> list[UUID]:
+    """Every contact merged into this one, a page at a time: each must be
+    forgotten before the cascade takes its row."""
+    absorbed: list[UUID] = []
+    async with uow_factory() as uow:
+        contacts = ContactRepository(uow.session)
+        while True:
+            page = await contacts.absorbed_by(
+                pod_id=pod_id,
+                contact_id=contact_id,
+                after=absorbed[-1] if absorbed else None,
+            )
+            absorbed += page
+            if len(page) < ABSORBED_PAGE:
+                return absorbed
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,11 +106,7 @@ async def forget_contact(
         )
     if contact is None:
         return None
-    async with uow_factory() as uow:
-        absorbed = await ContactRepository(uow.session).absorbed_by(
-            pod_id=pod_id, contact_id=contact_id
-        )
-    everyone = [contact_id, *absorbed]
+    everyone = [contact_id, *await _absorbed_by(uow_factory, pod_id, contact_id)]
     rows = 0
     for one in everyone:
         rows += await delete_contact_rows(uow_factory, pod_id=pod_id, contact_id=one)

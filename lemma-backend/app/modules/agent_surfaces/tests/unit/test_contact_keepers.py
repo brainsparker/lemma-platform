@@ -9,6 +9,8 @@ that continued a contact's would run as the contact.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -59,8 +61,13 @@ async def test_a_contacts_turn_does_not_continue_one_that_names_nobody():
 
 
 async def test_a_contacts_turn_does_not_continue_another_contacts():
+    """Unless the contact it names became this one -- asked of the contacts,
+    which here know of nobody."""
+    nobody = SimpleNamespace(
+        session=SimpleNamespace(scalar=AsyncMock(return_value=None))
+    )
     assert not await owned_or_moved(
-        None,  # type: ignore[arg-type]
+        nobody,  # type: ignore[arg-type]
         _conversation(Audience.contact(uuid4())),
         KEEPER,
         contact_id=uuid4(),

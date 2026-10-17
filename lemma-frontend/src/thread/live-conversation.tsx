@@ -296,6 +296,10 @@ export function LiveConversation({
        stored until there is a conversation, so it waits here and goes up with
        the one the first send creates. */
     const [pickedModel, setPickedModel] = useState<Choice | null>(null);
+    /* The sentence for an upload that failed, kept for the note under the box:
+       the send that was carrying it fails too, and "that did not send" is the
+       wrong half of what happened. */
+    const uploadFailure = useRef<string | null>(null);
     const [pending, setPending] = useState<readonly PendingSend[]>([]);
     /* Steers whose request is still in the air. */
     const steering = useRef<Set<string>>(new Set());
@@ -537,9 +541,14 @@ export function LiveConversation({
                     landed.push({ name: written.name ?? one.file.name, path: written.path });
                     settled.push({ ...one, status: "uploaded", path: written.path, error: undefined });
                 } catch (problem) {
+                    const sentence = saidAboutSending(problem, "Couldn’t upload " + one.file.name + ".");
+                    /* Named, because "upload failed" with two files attached
+                       leaves the reader to guess which one, and the chip that
+                       does say it is a title nobody hovers. */
+                    uploadFailure.current = sentence;
                     setAttachments(was => markAttachment(was, one.key, {
                         status: "failed",
-                        error: saidAboutSending(problem, "Upload failed"),
+                        error: sentence,
                     }));
                     throw problem;
                 }
@@ -582,7 +591,7 @@ export function LiveConversation({
                         ...settled,
                         ...was.filter(one => !settled.some(back => back.key === one.key)),
                     ]),
-                    report: message => { if (mounted.current) setSendError(message); },
+                    report: message => { if (mounted.current) setSendError(uploadFailure.current ?? message); },
                 });
             } catch (problem) {
                 /* The composer puts the words back; the tray lets them go. */
@@ -751,7 +760,8 @@ export function LiveConversation({
                 void refreshConversationLists(queryClient, pod.id);
             } catch (problem) {
                 if (mounted.current) {
-                    setSendError(saidAboutSending(problem, "That did not send."));
+                    setSendError(uploadFailure.current ?? saidAboutSending(problem, "That did not send."));
+                    uploadFailure.current = null;
                     setSendProblem(problem);
                     /* Kept where it was written, marked as not sent, with Retry
                        and Edit under it. Not thrown back to the composer: the

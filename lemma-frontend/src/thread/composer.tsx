@@ -3,6 +3,7 @@ import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type DragEve
 import {
     canSend,
     describeSize,
+    namePasted,
     offered,
     type Attachment,
 } from "./attachments";
@@ -372,7 +373,11 @@ export const Composer = memo(function Composer({
                             const files = Array.from(event.clipboardData.files);
                             if (files.length === 0) return;
                             event.preventDefault();
-                            offer(files);
+                            /* Named here: every clipboard image is called
+                               `image.png`, so two of them in one message would
+                               be one name, and a folder already holding one
+                               would have nowhere to put either. */
+                            offer(namePasted(files));
                         } : undefined}
                         onKeyDown={(event) => {
                             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {

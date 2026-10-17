@@ -39,11 +39,6 @@ from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pod_asks import linked_asker_in
 from app.modules.agent.domain.value_objects import AgentToolset
 
-#: Marks one of the old shared strangers' threads, from before every outsider
-#: was a contact (migration ``0057``). It holds strangers' words and belongs to
-#: a member, so it is kept for reading and nothing runs in it again. Written by
-#: the server only; a client can neither set nor drop it (``server_metadata``).
-RETIRED_KEY = "retired_outsiders_thread"
 
 #: The toolsets a stranger's run keeps, when its agent has them. A first cut:
 #: inside them, only the tools named in ``tools/outsider_tools`` survive.
@@ -176,25 +171,6 @@ class OutsiderRunRefused(DomainError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message, code="outsider_run_refused", status_code=409)
-
-
-class RetiredConversation(DomainError):
-    """A message sent to a retired strangers' thread, which runs nothing now."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            "This conversation answered people outside the pod before each of "
-            "them had a conversation of their own. It is kept for reading; start "
-            "a new conversation to ask the agent something.",
-            code="conversation_retired",
-            status_code=409,
-        )
-
-
-def refuse_retired(conversation: Conversation) -> None:
-    """Raise if ``conversation`` is a retired strangers' thread."""
-    if (conversation.metadata or {}).get(RETIRED_KEY) is True:
-        raise RetiredConversation()
 
 
 def refuse_owner_workspace(deps: object) -> None:

@@ -313,8 +313,7 @@ is answered *for the pod*, in a group the pod has opened to them.
   thread. The agent module runs every turn in it as that contact: a context
   pinned to the pod that reads what the pod marked Public. The column is the
   server's alone, so nothing a client writes to the conversation changes whom
-  it answers. The old shared `~outsiders` threads were retired by migration
-  `0057`: archived, unrouted, and refused any new turn (`retired_outsiders_thread`).
+  it answers.
   What such a run may do:
   - **Tools, by name.** Toolsets are cut to pod reads, web search and
     messaging, and then each tool is allow-listed one by one

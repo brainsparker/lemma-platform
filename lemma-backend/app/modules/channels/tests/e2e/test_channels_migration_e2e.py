@@ -380,7 +380,8 @@ def test_every_place_lands_in_its_channel_and_the_group_log_is_its_timeline() ->
                 )
             }
             assert {priya, tom[2]} <= seats
-            assert one("SELECT to_regclass('agent_surface_group_messages')") == (None,)
+            # The old log is kept for one release, for pods on the old image.
+            assert one("SELECT count(*) FROM agent_surface_group_messages") == (3,)
 
         migrate("downgrade", BEFORE)
         with psycopg.connect(plain_url) as connection:

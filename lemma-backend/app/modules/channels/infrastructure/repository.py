@@ -368,14 +368,23 @@ class ChannelRepository:
             for row in rows
         ]
 
-    async def mark_read(self, *, channel_id: UUID, user_id: UUID) -> None:
+    async def mark_read(self, *, channel: Channel, user_id: UUID) -> None:
+        """The member has read the channel up to now -- joining it if they only
+        ever read it, so the mark has a row to live on."""
+        read_at = _now()
         await self.session.execute(
-            update(ChannelParticipantModel)
-            .where(
-                ChannelParticipantModel.channel_id == channel_id,
-                ChannelParticipantModel.user_id == user_id,
+            insert(ChannelParticipantModel)
+            .values(
+                channel_id=channel.id,
+                pod_id=channel.pod_id,
+                user_id=user_id,
+                last_read_at=read_at,
             )
-            .values(last_read_at=_now())
+            .on_conflict_do_update(
+                index_elements=["channel_id", "user_id"],
+                index_where=ChannelParticipantModel.user_id.is_not(None),
+                set_={"last_read_at": read_at},
+            )
         )
 
     # -- the timeline ---------------------------------------------------------

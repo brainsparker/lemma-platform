@@ -20,8 +20,12 @@ DIRECT channel or its contact's CONTACT channel, a group or a shared channel
 in a GROUP channel of its own. Every group the pod knows gets its channel,
 and its log becomes that channel's timeline -- each line said by the member
 it resolves to, else by the contact its handle names, made if there is none.
-A web visitor's conversation is placed in their CONTACT channel. Then
-**`agent_surface_group_messages`** goes: the timeline holds what it held.
+A web visitor's conversation is placed in their CONTACT channel.
+
+**`agent_surface_group_messages`** stays, for one release: nothing in this
+version reads or writes it, but a pod still running the previous image writes
+every group message there, and dropping it under that pod would fail the
+message's ingest. A later migration drops it once no pod runs the old image.
 
 Revision ID: 0058_channels
 Revises: 0057_contacts_for_everyone
@@ -630,7 +634,6 @@ def upgrade() -> None:
         "agent_surface_conversation_links",
         ["source_id"],
     )
-    op.drop_table("agent_surface_group_messages")
     # Concurrently, outside the transaction: conversations are written on
     # every turn, and a plain build would block those writers.
     with op.get_context().autocommit_block():
@@ -651,46 +654,9 @@ def downgrade() -> None:
             postgresql_concurrently=True,
             if_exists=True,
         )
-    op.create_table(
-        "agent_surface_group_messages",
-        *_audit(),
-        sa.Column(
-            "group_id",
-            UUID(as_uuid=True),
-            sa.ForeignKey("agent_surface_groups.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column("external_message_id", sa.String(255), nullable=True),
-        sa.Column("author_external_id", sa.String(255), nullable=True),
-        sa.Column("author_name", sa.String(255), nullable=True),
-        sa.Column("from_agent", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column("body", sa.Text(), nullable=False),
-        sa.Column("answered_name", sa.String(255), nullable=True),
-        sa.Column(
-            "answered_from_public",
-            sa.Boolean(),
-            nullable=False,
-            server_default="false",
-        ),
-        sa.Column(
-            "answered_user_id",
-            UUID(as_uuid=True),
-            sa.ForeignKey("users.id", ondelete="SET NULL"),
-            nullable=True,
-        ),
-    )
-    op.execute(
-        "CREATE INDEX ix_agent_surface_group_message_recent "
-        "ON agent_surface_group_messages (group_id, created_at DESC)"
-    )
-    op.create_index(
-        "ix_agent_surface_group_message_external",
-        "agent_surface_group_messages",
-        ["group_id", "external_message_id"],
-        unique=True,
-        postgresql_where=sa.text("external_message_id IS NOT NULL"),
-    )
-    # A group's timeline goes back to being its log.
+    # The log was kept; what the timeline heard since joins it. A line copied
+    # in by the upgrade kept its id, and one an old pod logged as well keeps
+    # its message id, so neither is written twice.
     op.execute(
         sa.text(
             """
@@ -710,6 +676,7 @@ def downgrade() -> None:
               ON grp.surface_id = source.surface_id
              AND grp.external_channel_id = source.external_channel_id
             WHERE source.kind = 'SHARED'
+            ON CONFLICT DO NOTHING
             """
         )
     )

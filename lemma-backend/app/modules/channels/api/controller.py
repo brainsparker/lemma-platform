@@ -166,7 +166,7 @@ async def mark_channel_read(
     channel = await _visible(
         channels, pod_id=pod_id, channel_id=channel_id, user_id=user.id
     )
-    await channels.mark_read(channel_id=channel.id, user_id=user.id)
+    await channels.mark_read(channel=channel, user_id=user.id)
     await uow.commit()
 
 

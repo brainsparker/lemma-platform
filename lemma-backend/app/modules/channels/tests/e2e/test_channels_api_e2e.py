@@ -194,15 +194,17 @@ async def test_the_list_pages_without_skipping_or_repeating(pod):
 
 
 async def test_reading_a_channel_marks_the_reader_alone(pod):
-    owner = pod.scenario.owner_client
+    """Including a member who only ever reads it, and has said nothing there."""
+    client = pod.scenario.async_client
     channel = f"{_base(pod)}/{pod.group.channel_id}"
 
-    marked = await owner.post(f"{channel}/read")
+    marked = await client.post(f"{channel}/read", headers=auth_headers(pod.editor))
     assert marked.status_code == 204, marked.text
 
-    participants = (await owner.get(channel)).json()["participants"]
-    [me] = [p for p in participants if p["user_id"] == pod.scenario.owner_user["id"]]
-    assert me["last_read_at"] is not None
+    participants = (await pod.scenario.owner_client.get(channel)).json()["participants"]
+    reads = {p["user_id"]: p["last_read_at"] for p in participants if p["user_id"]}
+    assert reads[pod.editor["id"]] is not None
+    assert reads[pod.scenario.owner_user["id"]] is None
 
 
 async def test_a_channel_of_another_pod_is_missing(pod, scenario):

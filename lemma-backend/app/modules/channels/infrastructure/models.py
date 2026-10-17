@@ -192,7 +192,8 @@ class ChannelMessageModel(UUIDAuditBase):
             unique=True,
             postgresql_where=text("external_message_id IS NOT NULL"),
         ),
-        Index("ix_channel_messages_conversation", "conversation_id"),
+        # A conversation's latest line, for the source it is answering.
+        Index("ix_channel_messages_conversation", "conversation_id", "created_at"),
         Index(
             "ix_channel_messages_search",
             text("to_tsvector('simple', body)"),

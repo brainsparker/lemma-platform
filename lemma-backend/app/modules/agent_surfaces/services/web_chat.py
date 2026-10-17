@@ -33,6 +33,7 @@ from app.modules.agent_surfaces.domain.web_widgets import (
     WidgetAnswer,
     refused,
 )
+from app.modules.agent_surfaces.services.channel_lines import note_heard_on_web
 from app.modules.agent_surfaces.services.outside_cap import (
     first_word_today,
     hand_to_a_person,
@@ -131,8 +132,18 @@ class WebChat:
             if owner is None or await pod_member_id(uow, widget.pod_id, owner) is None:
                 raise refused("Nobody is answering this chat", 503, "unattended")
             session = await self._visitor_session(uow, visitor)
-            conversation_id = await self._visitor_conversation(
+            conversation_id, contact_id = await self._visitor_conversation(
                 uow, widget, session, owner=owner
+            )
+            await note_heard_on_web(
+                uow,
+                pod_id=widget.pod_id,
+                widget_id=widget.id,
+                session_id=session.id,
+                contact_id=contact_id,
+                conversation_id=conversation_id,
+                text=message,
+                display_name=await self._display_name(uow, session),
             )
             held = await held_for_a_person(
                 uow, pod_id=widget.pod_id, conversation_id=conversation_id
@@ -197,16 +208,16 @@ class WebChat:
         session: VisitorSession,
         *,
         owner: UUID,
-    ) -> UUID:
-        """The visitor's conversation, opened on their first word.
+    ) -> tuple[UUID, UUID]:
+        """The visitor's conversation, opened on their first word, and their contact.
 
         Theirs: it names the contact their browser is -- opened now if this is
         the first thing they wrote -- and the member looking after the widget
         keeps it.
         """
-        if session.conversation_id is not None:
-            return session.conversation_id
         contact_id = await _visitor_contact_id(uow, session)
+        if session.conversation_id is not None:
+            return session.conversation_id, contact_id
         agent_name = await agent_name_for_id(uow.session, widget.agent_id)
         name = await self._display_name(uow, session)
         context_token = set_current_context(
@@ -215,7 +226,7 @@ class WebChat:
             )
         )
         try:
-            return await self._open_visitor_conversation(
+            opened = await self._open_visitor_conversation(
                 uow,
                 widget,
                 session,
@@ -226,6 +237,7 @@ class WebChat:
             )
         finally:
             reset_current_context(context_token)
+        return opened, contact_id
 
     async def _start_visitor_turn(
         self,

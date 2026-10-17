@@ -25,12 +25,27 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.surface_route_types import (
     SurfaceEgressTarget,
 )
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
+from app.modules.agent.contracts import channel_conversations
 from app.modules.channels.contracts import (
+    ContactsHome,
+    Place,
     Principal,
     Sender,
+    Source,
+    SourceKind,
+    answering_source,
     post,
     source_by_id,
+    source_for,
 )
+
+
+#: Delivery metadata naming the member who wrote what is being sent -- a
+#: follow-up -- so its line is theirs, not the agent's.
+WRITTEN_BY_MEMBER = "written_by_member_id"
 
 
 class ChannelLines(Protocol):
@@ -45,6 +60,7 @@ class ChannelLines(Protocol):
         conversation_id: UUID,
         text: str,
         agent_display_name: str | None = None,
+        written_by: UUID | None = None,
     ) -> None: ...
 
 
@@ -64,6 +80,7 @@ class ChannelLinesInDatabase:
         conversation_id: UUID,
         text: str,
         agent_display_name: str | None = None,
+        written_by: UUID | None = None,
     ) -> None:
         await note_said(
             self.uow,
@@ -71,6 +88,7 @@ class ChannelLinesInDatabase:
             conversation_id=conversation_id,
             text=text,
             agent_display_name=agent_display_name,
+            written_by=written_by,
         )
 
 
@@ -116,10 +134,13 @@ async def note_said(
     conversation_id: UUID,
     text: str,
     agent_display_name: str | None = None,
+    written_by: UUID | None = None,
 ) -> None:
-    """What the agent delivered, as its line in the channel, said for whom.
+    """What was delivered, as its line in the channel.
 
-    After the platform took it, so the timeline never holds a line nobody saw.
+    The agent's, said for the person it answered -- or, for what a member
+    wrote (``written_by``), that member's. After the platform took it, so the
+    timeline never holds a line nobody saw.
     """
     source_id = target.link.source_id
     if source_id is None or target.conversation_user_id is None:
@@ -133,10 +154,14 @@ async def note_said(
     await post(
         uow,
         channel_id=source.channel_id,
-        sender=Sender.agent(
-            agent_id,
-            on_behalf_of=answered_for(target.audience, target.conversation_user_id),
-            display_name=agent_display_name,
+        sender=(
+            Sender.member(written_by)
+            if written_by is not None
+            else Sender.agent(
+                agent_id,
+                on_behalf_of=answered_for(target.audience, target.conversation_user_id),
+                display_name=agent_display_name,
+            )
         ),
         text=text,
         source_id=source.id,
@@ -154,3 +179,92 @@ def answered_for(audience: Audience, user_id: UUID) -> Principal:
     if audience.contact_id is not None:
         return Principal.contact(audience.contact_id)
     return Principal.member(user_id)
+
+
+async def note_answered_on(
+    uow: SqlAlchemyUnitOfWork, *, source: Source, conversation_id: UUID, text: str
+) -> None:
+    """An answer given where no platform delivers it -- the web chat -- as the
+    agent's line, said for the person the conversation answers."""
+    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
+    if conversation is None:
+        return
+    await post(
+        uow,
+        channel_id=source.channel_id,
+        sender=Sender.agent(
+            effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id),
+            on_behalf_of=answered_for(conversation.audience, conversation.user_id),
+        ),
+        text=text,
+        source_id=source.id,
+        conversation_id=conversation_id,
+    )
+
+
+#: A web chat's platform, as its channel source names it.
+WEB = "WEB"
+
+
+def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
+    """A visitor's chat on one widget: keyed by the widget and their session."""
+    return Place(
+        surface_id=None,
+        platform=WEB,
+        kind=SourceKind.PRIVATE,
+        external_channel_id=str(widget_id),
+        external_user_id=str(session_id),
+    )
+
+
+async def note_heard_on_web(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    pod_id: UUID,
+    widget_id: UUID,
+    session_id: UUID,
+    contact_id: UUID,
+    conversation_id: UUID,
+    text: str,
+    display_name: str | None,
+) -> None:
+    """A visitor's message, as their line in their contact channel.
+
+    The web chat is one more source of that channel, and the visitor's
+    conversation is placed there with it.
+    """
+    source = await source_for(
+        uow,
+        pod_id=pod_id,
+        place=web_place(widget_id=widget_id, session_id=session_id),
+        home=ContactsHome(contact_id=contact_id),
+    )
+    await channel_conversations.place_in_channel(
+        uow, conversation_id=conversation_id, channel_id=source.channel_id
+    )
+    await post(
+        uow,
+        channel_id=source.channel_id,
+        sender=Sender.contact(contact_id, display_name=display_name),
+        text=text,
+        source_id=source.id,
+        conversation_id=conversation_id,
+    )
+
+
+async def note_written_by_member(
+    uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, user_id: UUID, text: str
+) -> None:
+    """What a member wrote to the conversation's person where no platform
+    delivers it -- a web chat, read on their next visit -- as the member's line."""
+    source = await answering_source(uow, conversation_id)
+    if source is None:
+        return
+    await post(
+        uow,
+        channel_id=source.channel_id,
+        sender=Sender.member(user_id),
+        text=text,
+        source_id=source.id,
+        conversation_id=conversation_id,
+    )

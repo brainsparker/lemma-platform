@@ -381,7 +381,11 @@ class SurfaceTurnStarter:
         if context.pod_id is None:
             return
         tell = await first_word_today(context.conversation_id)
+        text = context.message_text.strip() or "[a message with no text]"
         async with self.uow_factory() as uow:
+            # On the channel's timeline whether or not a run answers it: the
+            # member answering by hand reads it there.
+            await self.channel_lines(uow).heard(context, text=text)
             held = await hand_to_a_person(
                 uow,
                 tell=tell,
@@ -390,7 +394,7 @@ class SurfaceTurnStarter:
                 owner_id=context.user_id,
                 # Not transcribed or saved: no run will read it, and an
                 # outsider's files are never saved (see `_ingest_files`).
-                text=context.message_text.strip() or "[a message with no text]",
+                text=text,
                 metadata=_message_metadata(context, AttachmentIngest()),
             )
         if held.reply is None:

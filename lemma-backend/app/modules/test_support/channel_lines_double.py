@@ -53,5 +53,6 @@ class RecordingChannelLines:
         conversation_id: UUID,
         text: str,
         agent_display_name: str | None = None,
+        written_by: UUID | None = None,
     ) -> None:
         self.said_lines.append(SaidLine(conversation_id, target.link.source_id, text))

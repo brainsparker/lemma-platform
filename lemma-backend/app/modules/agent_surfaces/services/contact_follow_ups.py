@@ -44,6 +44,10 @@ from app.modules.agent_surfaces.infrastructure.repositories.outside_links import
     latest_contact_thread,
 )
 from app.modules.agent_surfaces.platforms.common import platform_transport_errors
+from app.modules.agent_surfaces.services.channel_lines import (
+    WRITTEN_BY_MEMBER,
+    note_written_by_member,
+)
 from app.modules.agent_surfaces.services.contact_email_follow_ups import (
     ContactsMailbox,
     contacts_mailbox,
@@ -229,7 +233,9 @@ async def send_follow_up(
     delivered = (
         None
         if platform == WEB_PLATFORM
-        else await _send(uow_factory, conversation_id, text, platform)
+        else await _send(
+            uow_factory, conversation_id, text, platform, written_by=sent_by_user_id
+        )
     )
     async with uow_factory() as uow:
         await append_follow_up(
@@ -239,6 +245,15 @@ async def send_follow_up(
             sent_by_user_id=sent_by_user_id,
             delivered=delivered,
         )
+        if delivered is None:
+            # Waiting in their web chat: on the channel's timeline now, where
+            # a sent one is put once its platform took it.
+            await note_written_by_member(
+                uow,
+                conversation_id=conversation_id,
+                user_id=sent_by_user_id,
+                text=text,
+            )
     if delivered is False:
         raise FollowUpRefused(
             "The message could not be delivered. Try again later.",
@@ -318,15 +333,25 @@ async def _within_the_days_follow_ups(
 
 
 async def _send(
-    uow_factory: UnitOfWorkFactory, conversation_id: UUID, text: str, platform: str
+    uow_factory: UnitOfWorkFactory,
+    conversation_id: UUID,
+    text: str,
+    platform: str,
+    *,
+    written_by: UUID,
 ) -> bool:
-    """Hand the follow-up to the platform; whether it took it."""
+    """Hand the follow-up to the platform; whether it took it.
+
+    Named as the member's, so its line on the channel is theirs.
+    """
     try:
         async with uow_factory() as uow:
             delivered = await build_surface_egress(
                 uow
             ).send_agent_message_for_conversation(
-                conversation_id=conversation_id, message=text
+                conversation_id=conversation_id,
+                message=text,
+                metadata={WRITTEN_BY_MEMBER: str(written_by)},
             )
     except platform_transport_errors() as exc:
         logger.warning(

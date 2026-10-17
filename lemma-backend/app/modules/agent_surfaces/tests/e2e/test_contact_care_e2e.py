@@ -32,7 +32,6 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.work import WorkClass
 from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.agent.contracts import contact_conversations
-from app.modules.agent.domain.outsiders import HANDED_TO_KEY
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.infrastructure.models.conversation import (
     AgentRunModel,
@@ -513,11 +512,78 @@ async def test_past_the_cap_no_run_starts_and_a_person_takes_over(
     ).all()
     assert len(notes) == 1
     assert "Hello again?" in notes[0].body and "Anyone there?" not in notes[0].body
+    # And both are on Dana's channel, where a member answers them by hand.
     conversation = await db_session.get(ConversationModel, first.conversation_id)
-    assert conversation is not None
-    assert (conversation.conversation_metadata or {})[HANDED_TO_KEY]["user_id"] == str(
-        owner
+    assert conversation is not None and conversation.channel_id is not None
+    timeline = await authenticated_client.get(
+        f"/pods/{pod_id}/channels/{conversation.channel_id}/messages"
     )
+    heard = [
+        line["text"]
+        for line in timeline.json()["items"]
+        if line["sender_kind"] == "CONTACT"
+    ]
+    assert {"Hello again?", "Anyone there?"} <= set(heard)
+
+
+async def test_a_member_who_steps_in_answers_alone_until_they_hand_back(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """Taking a contact's channel quiets its agents; releasing it wakes them."""
+    pod_id = test_pod["id"]
+    _surface, address = await _email_bot(
+        authenticated_client,
+        db_session,
+        pod_id=pod_id,
+        user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+        answer="anyone",
+    )
+    first = await _dana_writes(db_session, address, "step-1")
+    conversation = await db_session.get(ConversationModel, first.conversation_id)
+    assert conversation is not None and conversation.channel_id is not None
+    channel = f"/pods/{pod_id}/channels/{conversation.channel_id}"
+    starter = build_surface_turn_starter(SessionUnitOfWorkFactory(async_session_maker))
+
+    async def write(message_id: str, text: str) -> None:
+        context = await _prepare(
+            db_session,
+            _resend_payload(
+                sender_email=CUSTOMER,
+                assistant_address=address,
+                message_id=message_id,
+                text=text,
+                in_reply_to="<step-1@resend-e2e.test>",
+                references=["<step-1@resend-e2e.test>"],
+            ),
+        )
+        assert isinstance(context, SurfaceChatContext)
+        await starter.execute_chat(context)
+
+    taken = await authenticated_client.put(f"{channel}/handler")
+    assert taken.status_code == 200, taken.text
+    assert taken.json()["handler_user_id"] == fixed_test_user["id"]
+    runs_before = await _runs(db_session, first.conversation_id)
+
+    await write("step-2", "Can a person look at this?")
+
+    db_session.expire_all()
+    assert await _runs(db_session, first.conversation_id) == runs_before
+
+    released = await authenticated_client.delete(f"{channel}/handler")
+    assert released.status_code == 200, released.text
+    assert released.json()["handler_user_id"] is None
+
+    await write("step-3", "Thanks, back to the bot.")
+
+    db_session.expire_all()
+    assert await _runs(db_session, first.conversation_id) == runs_before + 1
 
 
 async def _runs(db_session: AsyncSession, conversation_id: UUID) -> int:
@@ -665,6 +731,21 @@ async def test_writing_first_to_a_contact_takes_an_editor_and_is_rate_limited(
         json={"message": "Your order shipped today."},
     )
     assert sent.status_code == 200, sent.text
+    # On Dana's channel as the member's line, not the agent's.
+    listed = await authenticated_client.get(
+        f"/pods/{pod_id}/channels", params={"kind": "CONTACT"}
+    )
+    [channel] = [c for c in listed.json()["items"] if c["contact_id"] == dana]
+    timeline = await authenticated_client.get(
+        f"/pods/{pod_id}/channels/{channel['id']}/messages"
+    )
+    [written] = [
+        line
+        for line in timeline.json()["items"]
+        if line["text"].startswith("Your order shipped today.")
+    ]
+    assert written["sender_kind"] == "MEMBER"
+    assert written["sender_user_id"] == fixed_test_user["id"]
     limited = await authenticated_client.post(
         f"/pods/{pod_id}/contacts/{dana}/messages",
         json={"message": "And another thing."},

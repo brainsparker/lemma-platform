@@ -309,7 +309,9 @@ def _create_tables() -> None:
         postgresql_where=sa.text("external_message_id IS NOT NULL"),
     )
     op.create_index(
-        "ix_channel_messages_conversation", "channel_messages", ["conversation_id"]
+        "ix_channel_messages_conversation",
+        "channel_messages",
+        ["conversation_id", "created_at"],
     )
     op.execute(
         "CREATE INDEX ix_channel_messages_search ON channel_messages "

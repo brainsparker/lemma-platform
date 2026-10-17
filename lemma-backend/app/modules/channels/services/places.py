@@ -48,9 +48,13 @@ type Home = MembersHome | ContactsHome | GroupHome
 
 @dataclass(frozen=True, slots=True)
 class Place:
-    """An outside place, as the surface that hears it names it."""
+    """An outside place, as the surface that hears it names it.
 
-    surface_id: UUID
+    ``surface_id`` is ``None`` for a web chat, which no surface carries: it is
+    keyed by its widget and the visitor's session instead.
+    """
+
+    surface_id: UUID | None
     platform: str
     kind: SourceKind
     external_channel_id: str | None

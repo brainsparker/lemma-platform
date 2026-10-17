@@ -468,9 +468,14 @@ message that is only "STOP" as an unsubscribe. What it says or notes without a
 model -- a refusal, a parked-mail note, "a person will reply" -- is windowed in
 Redis by `services/contact_windows.py`, failing closed. Before a run for
 somebody outside the pod starts, `services/outside_cap.py` asks whether the
-organization's contacts cap is reached or a member has the conversation; if so
-the message is kept, no run starts, the member is told, and the person hears
-once a day that a person will reply. `SurfaceTurnStarter` calls it for chat and
+organization's contacts cap is reached or a member is answering the contact's
+channel by hand (its handler, set and cleared at `/pods/{pod_id}/channels/{id}/handler`);
+if so the message is kept -- in the conversation and on the channel's
+timeline -- no run starts, the member is told, and the person hears once a day
+that a person will reply. A web chat's answers go on the channel's timeline
+rather than to any platform thread the same conversation has
+(`events/reply_for_run_work.py`), and a member's follow-up is the member's
+line there, not the agent's. `SurfaceTurnStarter` calls it for chat and
 email surfaces, before the typing indicator and any file handling. Writing first to a
 contact takes `contact.message`.
 

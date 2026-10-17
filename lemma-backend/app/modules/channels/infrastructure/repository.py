@@ -274,14 +274,14 @@ class ChannelRepository:
     async def find_source(
         self,
         *,
-        surface_id: UUID,
+        surface_id: UUID | None,
         platform: str,
         external_channel_id: str | None,
         external_user_id: str | None,
     ) -> Source | None:
         row = await self.session.scalar(
             select(ChannelSourceModel).where(
-                ChannelSourceModel.surface_id == surface_id,
+                ChannelSourceModel.surface_id.is_not_distinct_from(surface_id),
                 ChannelSourceModel.platform == platform,
                 func.coalesce(ChannelSourceModel.external_channel_id, "")
                 == (external_channel_id or ""),
@@ -295,7 +295,7 @@ class ChannelRepository:
         self,
         *,
         channel: Channel,
-        surface_id: UUID,
+        surface_id: UUID | None,
         platform: str,
         kind: SourceKind,
         external_channel_id: str | None,
@@ -442,6 +442,23 @@ class ChannelRepository:
                 .values(last_inbound_at=inserted.created_at)
             )
         return _message(inserted), True
+
+    async def latest_heard(self, conversation_id: UUID) -> Source | None:
+        """The source of the newest line a person said in this conversation."""
+        row = await self.session.scalar(
+            select(ChannelSourceModel)
+            .join(
+                ChannelMessageModel,
+                ChannelMessageModel.source_id == ChannelSourceModel.id,
+            )
+            .where(
+                ChannelMessageModel.conversation_id == conversation_id,
+                ChannelMessageModel.sender_kind != SenderKind.AGENT.value,
+            )
+            .order_by(ChannelMessageModel.created_at.desc())
+            .limit(1)
+        )
+        return source_entity(row) if row else None
 
     async def recent(
         self,

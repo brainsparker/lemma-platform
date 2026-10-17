@@ -58,6 +58,7 @@ __all__ = [
     "Source",
     "SourceKind",
     "Speaker",
+    "answering_source",
     "background",
     "channel_by_id",
     "contact_channel",
@@ -134,6 +135,17 @@ async def background(
 ) -> list[ChannelMessage]:
     """The recent lines a run reading as ``reader`` may be shown, oldest first."""
     return await Timeline(uow).background(channel_id, reader=reader, limit=limit)
+
+
+async def answering_source(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+) -> Source | None:
+    """Where the conversation's answer goes: the source its person last spoke on.
+
+    A conversation spans every source of its channel, and an answer goes back
+    only to the one it answers -- never mirrored to the others.
+    """
+    return await ChannelRepository(uow.session).latest_heard(conversation_id)
 
 
 async def sources_of(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> list[Source]:

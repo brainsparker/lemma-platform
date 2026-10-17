@@ -374,6 +374,44 @@ where `check_messages` reads the replies. Nothing sleeps and nothing polls.
 To answer the person you are *already* talking to, just reply — `ask_user` is for
 a question that must block this turn, and neither is `message_user`.
 
+## Surfaces — the pod is already reachable
+
+A **surface** is one pod agent exposed where people already are: Slack, Teams,
+Telegram, WhatsApp, or **email**. They are plumbing the pod already has, not
+something to stand up from scratch — and *"set this pod up to send email"* sounds
+like it wants a mailbox, which is the mistake to avoid.
+
+**Every agent is minted an email surface when it is created**, the pod's own
+assistant included. Find and configure that surface instead of making one:
+
+```bash
+lemma surfaces list                       # what the pod answers on, with status
+lemma surfaces get resend-assistant       # surface_identity_email — the pod's own address
+lemma surfaces setup resend-assistant     # anything still outstanding (nothing, for email)
+lemma surfaces enable resend-assistant    # on; disable = off, delete = gone entirely
+```
+
+Names are derived, not chosen: a surface defaults to the lowercased platform
+(`slack`, `resend`), and an email surface is named for its agent —
+`resend-<agent>`, and `resend-assistant` for the pod's own. A pod may hold
+several surfaces of one platform (a mailbox per agent), so list before you name
+one. Only `ACTIVE` answers inbound, and `lemma surfaces setup <name>` says what
+is still missing.
+
+Two different things get called "sending email", and a request usually means one:
+
+- **As the pod** — `lemma surfaces upsert resend-assistant --data '{"config":
+  {"send_policy": {"allow_send": true}}}'` exposes that surface's own
+  `surface_send_message` tool, so its agent can send from the pod's address
+  mid-task. No account to connect and no address to create.
+- **As the person** — a **connector** account (Gmail, Outlook) sends as whoever
+  connected it (*Connectors*, below). A different identity, and never a stand-in
+  for the pod having an address of its own.
+
+`upsert` is also the edit path for a surface that exists: only the fields you
+pass change. Creating a surface, or moving one to another agent, is *structure* —
+the `lemma-builder` skill's job (`lemma-builder/references/surfaces.md`).
+
 ## Connectors
 
 Two ways in, and which one you have depends on how the agent was granted:

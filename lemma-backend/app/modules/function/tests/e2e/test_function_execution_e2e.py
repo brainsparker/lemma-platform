@@ -410,6 +410,9 @@ async def test_api_function_timeout_marks_run_failed_and_stops_execution(
     suffix = uuid4().hex[:8]
     function_name = f"api_timeout_{suffix}"
     table_name = f"timeout_records_{suffix}"
+    # Past the 2 s deadline set below, so the write only happens if the
+    # timeout failed to stop the execution.
+    write_after_seconds = 3
 
     await create_table(authenticated_client, pod_id, table_name)
 
@@ -428,7 +431,7 @@ class TimeoutResult(BaseModel):
     record_id: str
 
 async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutResult:
-    await asyncio.sleep(5)
+    await asyncio.sleep({write_after_seconds})
     pod = Pod.from_env()
     record = pod.table("{table_name}").create(
         {{
@@ -456,6 +459,7 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
     # attribute nothing reads while the real deadline stayed at its default --
     # the run would not time out and the test would fail for the wrong reason.
     monkeypatch.setattr(function_settings, "function_api_deadline_seconds", 2)
+    started = time.monotonic()
     response = await authenticated_client.post(
         f"/pods/{pod_id}/functions/{function_name}/runs",
         json={"input_data": {"title": "should-not-write"}},
@@ -475,7 +479,13 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
     assert final_run["error"]
     assert "timed out" in final_run["error"].lower()
 
-    await asyncio.sleep(4)
+    # The write the function would have made, had it kept running, lands
+    # `write_after_seconds` after it started -- which is no earlier than the
+    # request. Absence is only evidence once that moment, plus a margin for the
+    # write itself, has passed.
+    await asyncio.sleep(
+        max(0.0, started + write_after_seconds + 2.0 - time.monotonic())
+    )
 
     rerun_response = await authenticated_client.get(
         f"/pods/{pod_id}/functions/{function_name}/runs/{run_id}"
@@ -516,7 +526,7 @@ class JobResult(BaseModel):
     result: str
 
 async def {function_name}(ctx: FunctionContext, data: JobInput) -> JobResult:
-    await asyncio.sleep(1)
+    await asyncio.sleep(0.1)
     return JobResult(result=data.text.upper())"""
 
     await create_function(
@@ -776,7 +786,7 @@ class ConcResult(BaseModel):
     doubled: int
 
 async def {function_name}(ctx: FunctionContext, data: ConcInput) -> ConcResult:
-    await asyncio.sleep(2)
+    await asyncio.sleep(0.5)
     return ConcResult(doubled=data.n * 2)"""
 
     await create_function(
@@ -825,7 +835,7 @@ class ConcResult(BaseModel):
     doubled: int
 
 async def {function_name}(ctx: FunctionContext, data: ConcInput) -> ConcResult:
-    await asyncio.sleep(3)
+    await asyncio.sleep(0.5)
     return ConcResult(doubled=data.n * 2)"""
 
     await create_function(

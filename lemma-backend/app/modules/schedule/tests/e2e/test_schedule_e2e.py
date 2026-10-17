@@ -1,4 +1,3 @@
-import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +18,12 @@ from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.test_support.e2e.schedule_binding import bind_schedule_to_account
-from app.modules.test_support.e2e.waiters import eventually, wait_for_status
+from app.modules.datastore.config import datastore_settings
+from app.modules.test_support.e2e.waiters import (
+    eventually,
+    wait_for_status,
+    wait_for_work_to_settle,
+)
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
     auth_headers,
@@ -1528,7 +1532,11 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
         },
     )
     assert sixth.status_code == 201, sixth.text
-    await asyncio.sleep(2)
+    await wait_for_work_to_settle(
+        label="the sixth row's change",
+        database_url=e2e_settings.database_url,
+        datastore_database_url=datastore_settings.datastore_database_url,
+    )
 
     schedule_runs = await authenticated_client.get(
         f"/pods/{pod_id}/schedules/{schedule['id']}/runs"

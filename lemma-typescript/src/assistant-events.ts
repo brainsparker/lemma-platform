@@ -58,6 +58,12 @@ export interface ParsedAssistantStreamEvent {
    */
   noticeKind?: string;
   /**
+   * The run ended with its conversation WAITING on the agent's own work -- a
+   * sub-agent, a process, a timer -- not on a person. A run will follow when
+   * that work resolves, so a viewer should follow the conversation to it.
+   */
+  waitingOnWork?: boolean;
+  /**
    * The transport gave up, not the run. Carries no status on purpose: the run
    * is still going, and a consumer that treats this as an ending stops reading
    * a conversation the server is still writing to.
@@ -230,7 +236,8 @@ export function parseAssistantStreamEvent(value: unknown): ParsedAssistantStream
       ? normalizeStatus(payload.conversation_status)
       : undefined;
     const status = conversationStatus ?? extractStatus(payload) ?? "COMPLETED";
-    return { status };
+    const waitingOnWork = isRecord(payload) && payload.waiting_on_work === true;
+    return waitingOnWork ? { status, waitingOnWork } : { status };
   }
 
   if (eventType === "stopped") {

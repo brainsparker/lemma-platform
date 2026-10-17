@@ -78,10 +78,17 @@ def _token(text: str) -> bytes:
     )
 
 
-def _completed(conversation_status: str | None = None) -> bytes:
-    data = {"conversation_id": CONVERSATION_ID, "status": "COMPLETED"}
+def _completed(
+    conversation_status: str | None = None, *, waiting_on_work: bool | None = None
+) -> bytes:
+    data: dict[str, object] = {
+        "conversation_id": CONVERSATION_ID,
+        "status": "COMPLETED",
+    }
     if conversation_status:
         data["conversation_status"] = conversation_status
+    if waiting_on_work is not None:
+        data["waiting_on_work"] = waiting_on_work
     return _frame({"type": "completed", "agent_run_id": RUN_ID, "data": data})
 
 
@@ -403,6 +410,35 @@ def test_a_run_waiting_on_a_person_returns_without_polling(
     assert "Approve?" in output
     assert "resume:" in output
     assert api.scenario.polled == 1, "one look, no polling"
+    assert api.scenario.reattached_for == []
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            # A task agent that ended WAITING for the person's reply holds no
+            # pause, so only the frame can say nobody else will answer.
+            sent=[
+                _status(),
+                _token("Send me the code."),
+                _completed("WAITING", waiting_on_work=False),
+            ],
+            then="keepalive",
+            polls=[("WAITING", False)],
+            resumed=[_token("never streamed")],
+        )
+    ],
+    indirect=True,
+)
+def test_a_server_saying_the_wait_is_the_persons_is_not_polled_at_all(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "resume:" in output
+    assert api.scenario.polled == 0
     assert api.scenario.reattached_for == []
 
 

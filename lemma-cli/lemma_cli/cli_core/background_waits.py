@@ -28,11 +28,18 @@ MAX_POLL_SECONDS = 5.0
 
 
 def waits_in_background(terminal: StreamEvent | None) -> bool:
-    """Whether a run ended by leaving its conversation WAITING."""
+    """Whether a run ended leaving its conversation WAITING on the agent's own
+    work -- a sub-agent, a process, a timer -- with a run to come.
+
+    The server says which in ``waiting_on_work``. Without it (an older server)
+    any WAITING ending is a candidate, and the conversation read decides.
+    """
     if terminal is None or terminal.type.lower() != "completed":
         return False
     data = terminal.data if isinstance(terminal.data, dict) else {}
-    return str(data.get("conversation_status") or "").upper() == "WAITING"
+    if str(data.get("conversation_status") or "").upper() != "WAITING":
+        return False
+    return data.get("waiting_on_work") is not False
 
 
 def follow_background_waits(

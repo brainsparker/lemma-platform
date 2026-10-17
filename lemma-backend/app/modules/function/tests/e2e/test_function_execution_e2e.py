@@ -458,8 +458,10 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
     # `FunctionSettings`, and patching it on core's object would create an
     # attribute nothing reads while the real deadline stayed at its default --
     # the run would not time out and the test would fail for the wrong reason.
-    monkeypatch.setattr(function_settings, "function_api_deadline_seconds", 2)
-    started = time.monotonic()
+    deadline_seconds = 2
+    monkeypatch.setattr(
+        function_settings, "function_api_deadline_seconds", deadline_seconds
+    )
     response = await authenticated_client.post(
         f"/pods/{pod_id}/functions/{function_name}/runs",
         json={"input_data": {"title": "should-not-write"}},
@@ -480,12 +482,13 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
     assert "timed out" in final_run["error"].lower()
 
     # The write the function would have made, had it kept running, lands
-    # `write_after_seconds` after it started -- which is no earlier than the
-    # request. Absence is only evidence once that moment, plus a margin for the
-    # write itself, has passed.
-    await asyncio.sleep(
-        max(0.0, started + write_after_seconds + 2.0 - time.monotonic())
-    )
+    # `write_after_seconds` after its execution started. The run failed one
+    # deadline after that start, so the write would land no later than
+    # `write_after_seconds - deadline_seconds` after the failure was seen --
+    # measured from here rather than from the request, which a late sandbox
+    # start would put too early. Absence is evidence once that moment, plus a
+    # margin for the write itself, has passed.
+    await asyncio.sleep(max(0.0, write_after_seconds - deadline_seconds) + 2.0)
 
     rerun_response = await authenticated_client.get(
         f"/pods/{pod_id}/functions/{function_name}/runs/{run_id}"

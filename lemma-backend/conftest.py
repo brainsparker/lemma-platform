@@ -273,6 +273,7 @@ _PHASE_DURATIONS: dict[str, dict[str, float]] = {}
 _SESSION_SETUP_CARRIERS: set[str] = set()
 _WORKERS_SEEN: set[str] = set()
 _RERUNS: set[str] = set()
+_FINAL_FAILURES: set[str] = set()
 
 
 def _junit_case_id(report) -> str:
@@ -302,6 +303,10 @@ def pytest_runtest_logreport(report) -> None:
         # pytest-rerunfailures retried it. Noted so a test that only passes on
         # its second try is reported as a flake rather than read as green.
         _RERUNS.add(report.nodeid)
+    elif report.failed:
+        # Failed its retry too: a red test, not a flake, and the sidecar below
+        # must not annotate it as "passed on retry".
+        _FINAL_FAILURES.add(report.nodeid)
     case = _junit_case_id(report)
     phases = _PHASE_DURATIONS.setdefault(case, {})
     phases[report.when] = phases.get(report.when, 0.0) + report.duration
@@ -350,7 +355,7 @@ def _write_rerun_sidecar(session: pytest.Session) -> None:
     from pathlib import Path
 
     Path(junit).with_suffix(".reruns.txt").write_text(
-        "".join(f"{nodeid}\n" for nodeid in sorted(_RERUNS))
+        "".join(f"{nodeid}\n" for nodeid in sorted(_RERUNS - _FINAL_FAILURES))
     )
 
 

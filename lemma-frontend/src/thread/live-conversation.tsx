@@ -570,6 +570,8 @@ export function LiveConversation({
     const steer = useCallback(
         async (text: string, id: string) => {
             setSendError(null);
+            /* A failure from an earlier attempt is not this one's to report. */
+            uploadFailure.current = null;
             /* In the tray at once, as "sending…", until the server's copy
                takes its place there or in the transcript. */
             const going = pendingSend(text, "steer", session.messages);
@@ -591,7 +593,10 @@ export function LiveConversation({
                         ...settled,
                         ...was.filter(one => !settled.some(back => back.key === one.key)),
                     ]),
-                    report: message => { if (mounted.current) setSendError(uploadFailure.current ?? message); },
+                    report: message => {
+                        if (mounted.current) setSendError(uploadFailure.current ?? message);
+                        uploadFailure.current = null;
+                    },
                 });
             } catch (problem) {
                 /* The composer puts the words back; the tray lets them go. */
@@ -647,6 +652,7 @@ export function LiveConversation({
             setSending(true);
             setSendError(null);
             setSendProblem(null);
+            uploadFailure.current = null;
             /* On screen now, before the conversation exists or the server has
                heard a word of it. Its id rides along in the metadata, which is
                how the server's copy is known to be this one. */

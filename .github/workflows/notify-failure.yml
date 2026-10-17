@@ -46,6 +46,7 @@ on:
       - Release Lemma Terminal CLI
       - Announce a release
       - Announce development release
+      - Delete a closed pull request's caches
     types: [completed]
   workflow_dispatch:
     inputs:

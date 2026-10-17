@@ -27,6 +27,11 @@ from app.modules.contacts.infrastructure.models import (
 MAX_PAGE = 200
 
 
+#: The most contacts one person was ever merged from that forgetting them
+#: reaches. A person proves a handle a handful of times, not hundreds.
+_MAX_ABSORBED = 500
+
+
 class UnusableHandle(ValueError):
     """A handle with nothing left once it is spelled the one way handles are.
 
@@ -192,6 +197,20 @@ class ContactRepository:
             .values(display_name=_clean_name(display_name))
         )
         return bool(result.rowcount)
+
+    async def absorbed_by(self, *, pod_id: UUID, contact_id: UUID) -> list[UUID]:
+        """The contacts merged into this one -- every one of them, since a
+        merge points them all at the survivor directly."""
+        rows = await self.session.scalars(
+            select(ContactModel.id)
+            .where(
+                ContactModel.pod_id == pod_id,
+                ContactModel.merged_into_id == contact_id,
+            )
+            .order_by(ContactModel.id)
+            .limit(_MAX_ABSORBED)
+        )
+        return list(rows)
 
     async def delete(self, *, pod_id: UUID, contact_id: UUID) -> bool:
         result = await self.session.execute(

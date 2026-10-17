@@ -58,6 +58,7 @@ from app.modules.pod.contracts.members import (
 )
 from app.modules.usage.contracts.contacts_cap import (
     contacts_cap_reached,
+    counts_contacts,
     room_for_another_contact,
     this_month,
 )
@@ -124,12 +125,16 @@ async def _admitted(
     The contact a merged id leads to is the one counted and marked. A contact
     not yet answered is admitted under a lock on the organization's count, so
     two arriving together cannot both take its last place, and two turns of one
-    contact take one; one answered before takes no lock.
+    contact take one. One answered before takes no lock, and neither does any
+    contact where the cap keeps no count: there is no place to take.
     """
     contact = await contact_by_id(uow, pod_id=pod_id, contact_id=contact_id)
     if contact is not None and contact.answered:
         return True
     counted = contact.id if contact is not None else contact_id
+    if not await counts_contacts(uow, organization_id=organization_id):
+        await note_answered(uow, pod_id=pod_id, contact_id=counted)
+        return True
     await lock_answered_contacts_count(uow, organization_id=organization_id)
     # Another turn of theirs may have taken their place while this one waited.
     now = await contact_by_id(uow, pod_id=pod_id, contact_id=counted)

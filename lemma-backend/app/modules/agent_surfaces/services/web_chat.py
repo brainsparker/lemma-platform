@@ -204,9 +204,11 @@ class WebChat:
         the first thing they wrote -- and the member looking after the widget
         keeps it.
         """
-        if session.conversation_id is not None:
-            return session.conversation_id
         contact_id = await _visitor_contact_id(uow, session)
+        if session.conversation_id is not None and await _answers(
+            uow, session.conversation_id, contact_id
+        ):
+            return session.conversation_id
         agent_name = await agent_name_for_id(uow.session, widget.agent_id)
         name = await self._display_name(uow, session)
         context_token = set_current_context(
@@ -452,3 +454,15 @@ def _visitor_metadata(name: str | None, client_nonce: str | None) -> dict[str, o
     if client_nonce:
         metadata[CLIENT_NONCE_KEY] = client_nonce
     return metadata
+
+
+async def _answers(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, contact_id: UUID
+) -> bool:
+    """Whether the session's conversation answers its visitor's contact.
+
+    One that names nobody -- or another contact -- is not continued: its runs
+    would act with whatever authority it answers, not as this visitor.
+    """
+    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
+    return conversation is not None and conversation.audience.contact_id == contact_id

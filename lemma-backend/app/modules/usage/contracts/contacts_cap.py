@@ -17,7 +17,12 @@ from app.modules.usage.services.contacts_cap import (
     this_month,
 )
 
-__all__ = ["contacts_cap_reached", "room_for_another_contact", "this_month"]
+__all__ = [
+    "contacts_cap_reached",
+    "counts_contacts",
+    "room_for_another_contact",
+    "this_month",
+]
 
 
 async def contacts_cap_reached(
@@ -25,6 +30,12 @@ async def contacts_cap_reached(
 ) -> bool:
     """Whether this month's spend answering outsiders has reached the cap."""
     return (await contacts_cap_status(uow, organization_id)).reached
+
+
+async def counts_contacts(uow: SqlAlchemyUnitOfWork, *, organization_id: UUID) -> bool:
+    """Whether the organization's cap limits how many contacts may be answered."""
+    cap = await applicable_contacts_cap(uow, organization_id)
+    return cap.max_contacts is not None
 
 
 async def room_for_another_contact(

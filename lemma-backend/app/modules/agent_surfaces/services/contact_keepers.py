@@ -133,10 +133,17 @@ async def owned_or_moved(
     contact's, whoever looks after contacts now: when that member changes, it
     moves to the new one with its history rather than being left behind for a
     fresh one. Every other conversation is only ever its owner's.
+
+    Whom it answers comes first: a contact's turn continues only a
+    conversation naming that contact, and a member's only one naming nobody.
+    Found by a key alone, a conversation answering someone else would hand
+    this turn their authority.
     """
+    if conversation.audience.contact_id != contact_id:
+        return False
     if conversation.user_id == user_id:
         return True
-    if contact_id is None or conversation.audience.contact_id != contact_id:
+    if contact_id is None:
         return False
     moved = await move_contact_conversation(
         uow,

@@ -477,6 +477,63 @@ async def test_two_new_contacts_at_once_cannot_both_take_the_last_place(
     assert sorted(held) == [False, True], held
 
 
+async def test_with_no_count_kept_new_contacts_are_marked_without_waiting(
+    authenticated_client: AsyncClient, fixed_test_org, test_pod, fixed_test_user
+):
+    """No number of contacts to keep: nothing to queue behind, and each is
+    still marked answered, so a count set later starts from the truth."""
+    import asyncio
+
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.contacts.contracts import (
+        IdentityKind,
+        IdentityStrength,
+        contact_by_id,
+        open_contact,
+    )
+
+    org_id, pod_id = fixed_test_org["id"], UUID(test_pod["id"])
+    unlimited = await authenticated_client.put(
+        f"/usage/organizations/{org_id}/contacts-cap", json={"max_contacts": None}
+    )
+    assert unlimited.status_code == 200, unlimited.text
+    contacts, conversations = [], []
+    for n in range(2):
+        async with get_uow_factory()() as uow:
+            contact = await open_contact(
+                uow,
+                pod_id=pod_id,
+                kind=IdentityKind.EMAIL,
+                value=f"open-{n}@client.example",
+                strength=IdentityStrength.CHANNEL,
+                display_name=None,
+            )
+            conversation = ConversationModel(
+                user_id=UUID(fixed_test_user["id"]),
+                pod_id=pod_id,
+                contact_id=contact.id,
+            )
+            uow.session.add(conversation)
+            await uow.commit()
+            contacts.append(contact.id)
+            conversations.append(conversation.id)
+
+    async def admit(conversation_id: UUID) -> bool:
+        async with get_uow_factory()() as uow:
+            held = await held_for_a_person(
+                uow, pod_id=pod_id, conversation_id=conversation_id
+            )
+            await uow.commit()
+            return held
+
+    assert await asyncio.gather(*(admit(c) for c in conversations)) == [False, False]
+    async with get_uow_factory()() as uow:
+        for contact_id in contacts:
+            found = await contact_by_id(uow, pod_id=pod_id, contact_id=contact_id)
+            assert found is not None and found.answered
+
+
 async def test_two_turns_of_one_new_contact_at_once_both_run(
     authenticated_client: AsyncClient, fixed_test_org, test_pod, fixed_test_user
 ):

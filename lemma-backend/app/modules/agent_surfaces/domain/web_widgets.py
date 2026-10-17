@@ -73,6 +73,18 @@ class WebChatRefused(DomainError):
         super().__init__(message, code=code, status_code=status_code)
 
 
+class WidgetNameTaken(DomainError):
+    """The pod already has a widget by this name. Names tell a pod's widgets
+    apart on its contacts page, so one name is one widget."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"This pod already has a widget called {name!r}",
+            code="widget_name_taken",
+            status_code=409,
+        )
+
+
 def refused(message: str, status_code: int, code: str) -> WebChatRefused:
     return WebChatRefused(message, status_code=status_code, code=code)
 

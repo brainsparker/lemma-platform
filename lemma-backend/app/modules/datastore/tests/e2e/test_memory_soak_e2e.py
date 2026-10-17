@@ -66,7 +66,13 @@ async def test_bulk_writes_of_varying_size_retain_nothing(
     pod_api: DatastoreApi,
 ) -> None:
     await _soak_table(pod_api)
-    await pod_api.bulk_create("soak", [_row(0)])  # warm every code path once
+    # Warm every code path once. The query path imports sqlglot lazily, and the
+    # first call of each path loads modules; that is ~10 MiB of one-time code
+    # objects that a run with no earlier datastore traffic would count as kept.
+    await pod_api.bulk_create("soak", [_row(0)])
+    warm_id = (await pod_api.query('SELECT id FROM "soak"'))["items"][0]["id"]
+    await pod_api.bulk_update("soak", [{"id": warm_id, "c0": "warm"}])
+    await pod_api.bulk_delete("soak", [warm_id])
 
     tracemalloc.start(1)
     try:

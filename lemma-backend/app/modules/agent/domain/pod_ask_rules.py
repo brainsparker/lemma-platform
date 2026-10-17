@@ -134,6 +134,14 @@ def open_modes(run: AskingRun) -> OpenModes:
     )
 
 
+def closed_reason(run: AskingRun) -> str | None:
+    """Why this run can ask no pod at all, by either way -- so an empty list of
+    pods says that, not "there is no other pod", which sends the agent and the
+    person looking for a pod that would not help."""
+    refusal = _audience_refusal(run) or _handed_back_refusal(run)
+    return refusal.message if refusal is not None else None
+
+
 def _raise(refusal: AskRefused | None) -> None:
     if refusal is not None:
         raise refusal

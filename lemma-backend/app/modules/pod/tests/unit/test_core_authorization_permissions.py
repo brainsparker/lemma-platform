@@ -33,6 +33,24 @@ from app.core.authorization.permissions import (
 from app.core.authorization.resource_actions import owner_actions_for_resource
 from app.core.authorization.authorizer import Authorizer
 from app.core.domain.errors import BadRequestError
+from app.core.registry.assembly import configure_resource_names
+from app.core.registry.installed import OSS_MODULES
+
+
+@pytest.fixture(autouse=True)
+def _resource_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assemble the resource-name registry these grant tests resolve against.
+
+    Assembly is what fills it in a running process, and nothing in this module
+    ran it: the tests passed only when some earlier test in the same process
+    had, and failed with "registry is empty" when the pod unit tests ran alone.
+    A fresh table per test, so nothing here depends on, or leaks into, another
+    test's registry either.
+    """
+    monkeypatch.setattr(
+        "app.core.authorization.resource_names._NAME_REGISTRY", {}, raising=True
+    )
+    configure_resource_names(OSS_MODULES)
 
 
 class CountingAuthorizer:

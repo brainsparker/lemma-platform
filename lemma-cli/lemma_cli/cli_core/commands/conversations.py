@@ -12,7 +12,13 @@ from ..chat import (
     render_chat_stream,
     render_user_message,
 )
-from ..sse import STREAM_READ_TIMEOUT_SECONDS, SseResponse, iter_sse_events
+from ..background_waits import DEFAULT_WAIT_TIMEOUT_SECONDS, follow_background_waits
+from ..sse import (
+    STREAM_READ_TIMEOUT_SECONDS,
+    SseResponse,
+    StreamEvent,
+    iter_sse_events,
+)
 from lemma_sdk.errors import LemmaAPIError
 from lemma_sdk.openapi_client.models.resolve_user_approval_request import (
     ResolveUserApprovalRequest,
@@ -136,6 +142,7 @@ def chat_once(
     show_user_message: bool = False,
     verbose: bool = False,
     check_owner: bool = True,
+    wait_timeout: float = DEFAULT_WAIT_TIMEOUT_SECONDS,
 ) -> None:
     state = state_from_ctx(ctx)
     pod_id = selected_pod(state, pod) or ""
@@ -174,12 +181,25 @@ def chat_once(
                 read_timeout=STREAM_READ_TIMEOUT_SECONDS,
             )
 
-        render_chat_stream(
-            state=s,
-            response=response,
-            agent=agent,
-            verbose=verbose,
-            reattach=reattach,
+        def render(response: SseResponse) -> StreamEvent | None:
+            return render_chat_stream(
+                state=s,
+                response=response,
+                agent=agent,
+                verbose=verbose,
+                reattach=reattach,
+            )
+
+        follow_background_waits(
+            s,
+            conversations,
+            conversation_id,
+            render(response),
+            render=render,
+            open_stream=lambda: conversations.stream(
+                conversation_id, read_timeout=STREAM_READ_TIMEOUT_SECONDS
+            ),
+            wait_timeout=wait_timeout,
         )
         return True
 

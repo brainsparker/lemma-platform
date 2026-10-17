@@ -241,6 +241,7 @@ async def test_only_the_recipient_can_see_their_notifications(
     assert created["id"]
 
 
+@pytest.mark.drives_work
 async def test_a_workflow_form_assignment_notifies_and_closes_on_submit(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -321,6 +322,9 @@ async def test_a_workflow_form_assignment_notifies_and_closes_on_submit(
     )
     assert run.status_code == 201, run.text
     run_id = run.json()["id"]
+    # The run executes as workflow work items (admit, then the FORM step that
+    # notifies the assignee); this test has no worker, so it runs them.
+    await _run_workflow_work()
 
     inbox = await authenticated_client.get(f"/pods/{pod_id}/notifications")
     assert inbox.status_code == 200, inbox.text
@@ -773,3 +777,20 @@ async def test_the_agent_is_only_told_about_asks_it_can_actually_answer(
     open_asks = await open_notifications_for_conversation(UUID(conversation_id))
 
     assert [item["notification_id"] for item in open_asks] == [asking["id"]]
+
+
+async def _run_workflow_work() -> None:
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.work import WorkClass, WorkRegistry
+    from app.core.infrastructure.work.testing import run_until_idle
+    from app.modules.workflow.events.run_work import register_run_work
+    from app.modules.workflow.events.step_jobs import register_step_jobs
+
+    registry = WorkRegistry()
+    register_run_work(registry)
+    register_step_jobs(registry)
+    await run_until_idle(
+        async_session_maker,
+        registry=registry,
+        classes=[WorkClass.EVENTS, WorkClass.AUTOMATION, WorkClass.DELIVERY],
+    )

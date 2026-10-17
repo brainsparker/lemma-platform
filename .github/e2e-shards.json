@@ -66,7 +66,7 @@
     {
       "name": "surfaces",
       "args": "app/modules app/core --ignore=app/core/tests/e2e --ignore=app/modules/agent/tests/e2e --ignore=app/modules/apps/tests/e2e --ignore=app/modules/connectors/tests/e2e --ignore=app/modules/datastore/tests/e2e --ignore=app/modules/decisions/tests/e2e --ignore=app/modules/function/tests/e2e --ignore=app/modules/identity/tests/e2e --ignore=app/modules/mcp_access/tests/e2e --ignore=app/modules/pod/tests/e2e --ignore=app/modules/pod_bundle/tests/e2e --ignore=app/modules/schedule/tests/e2e --ignore=app/modules/workflow/tests/e2e --ignore=app/modules/workspace/tests/e2e",
-      "workers": 2,
+      "workers": 4,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": false,
       "serial_seconds": 605.2,
@@ -77,7 +77,7 @@
     {
       "name": "datastore",
       "args": "app/modules/apps/tests/e2e app/modules/datastore/tests/e2e app/modules/decisions/tests/e2e app/modules/identity/tests/e2e app/modules/mcp_access/tests/e2e",
-      "workers": 2,
+      "workers": 4,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": false,
       "serial_seconds": 609.9,
@@ -88,7 +88,7 @@
     {
       "name": "schedule",
       "args": "app/core/tests/e2e app/modules/connectors/tests/e2e app/modules/pod/tests/e2e app/modules/pod_bundle/tests/e2e app/modules/schedule/tests/e2e app/modules/workflow/tests/e2e",
-      "workers": 2,
+      "workers": 4,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": false,
       "serial_seconds": 626.7,

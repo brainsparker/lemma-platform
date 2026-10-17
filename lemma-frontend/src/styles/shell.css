@@ -613,6 +613,13 @@
     outline: none;
     border-color: var(--accent-line);
 }
+.modelpick__error {
+    flex: none;
+    margin-inline-start: 4px;
+    font-size: 12px;
+    color: var(--bad);
+    white-space: nowrap;
+}
 .modelpick--set {
     font-size: 12px;
     color: var(--ink-3);

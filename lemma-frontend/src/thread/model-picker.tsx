@@ -1,9 +1,20 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import { shortModel, type Choice } from "@/data/runtimes";
 import { useRunsOn } from "@/shell/runs-on";
+
+/* The save of a conversation's model, by a key the pane can watch: a first
+   message sent while it is still in the air would start a run on the model
+   the conversation had before. */
+const SAVING_MODEL = ["conversation-runtime", "save"];
+
+/** Whether a model change is still being saved, so the pane can hold the
+ *  send until the conversation runs on what was picked. */
+export function useSavingModel(): boolean {
+    return useIsMutating({ mutationKey: SAVING_MODEL }) > 0;
+}
 
 /** The model this conversation answers on, beside the paperclip.
  *
@@ -51,6 +62,7 @@ export function ModelPicker({
     });
 
     const set = useMutation({
+        mutationKey: SAVING_MODEL,
         mutationFn: (next: Choice | null) =>
             source.setConversationRuntime(podId, conversationId as string, next),
         onSuccess: (_answer, next) => {
@@ -81,24 +93,27 @@ export function ModelPicker({
         ? models.find((model) => model.name === chosen.model)?.label ?? chosen.model
         : "";
 
-    /* Nothing to choose between: one model, or none at all. The row would be a
-       control that cannot change anything, and the missing-model case is
-       already said, louder, by the run that fails. */
-    if (models.length < 2) return null;
-
-    const choose = (model: string) => {
-        const next = model ? { runtimeId: runtime?.id ?? "", model } : null;
-        if (conversationId) set.mutate(next);
-        else onPicked(next);
-    };
-
-    if (locked) {
+    /* Answered: a label, not a control. Shown for a saved pin even when the
+       teammate's runtime no longer offers a choice, because that pin is still
+       what every later turn of this conversation copies. */
+    if (locked && (chosen || models.length >= 2)) {
         return (
             <span className="modelpick modelpick--set" title={chosen ? "This conversation runs on " + chosenLabel : defaultLabel}>
                 {chosen ? chosenLabel : defaultLabel}
             </span>
         );
     }
+
+    /* Nothing to choose between: one model, or none at all. The row would be a
+       control that cannot change anything, and the missing-model case is
+       already said, louder, by the run that fails. */
+    if (locked || models.length < 2) return null;
+
+    const choose = (model: string) => {
+        const next = model ? { runtimeId: runtime?.id ?? "", model } : null;
+        if (conversationId) set.mutate(next);
+        else onPicked(next);
+    };
 
     return (
         <label className="modelpick" title="Which model this conversation answers on">
@@ -114,6 +129,14 @@ export function ModelPicker({
                     <option key={model.name} value={model.name}>{model.label}</option>
                 ))}
             </select>
+            {/* The select snaps back to what was saved, which on its own reads
+                as the click not having landed. Cleared by the next choice,
+                which starts a fresh save. */}
+            {set.isError ? (
+                <span className="modelpick__error" role="alert" title={set.error instanceof Error ? set.error.message : undefined}>
+                    Not saved
+                </span>
+            ) : null}
         </label>
     );
 }

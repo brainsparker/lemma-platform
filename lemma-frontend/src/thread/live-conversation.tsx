@@ -15,7 +15,7 @@ import { allConversationsKey, applyTitle, insertConversation, patchConversationL
 import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
-import { ModelPicker } from "./model-picker";
+import { ModelPicker, useSavingModel } from "./model-picker";
 import { useChannelReply } from "./use-channel-reply";
 import { splitQueued, withdrawFailure, withoutSent } from "./queued";
 import { sendToConversation, steerConversation } from "./send-message";
@@ -441,6 +441,7 @@ export function LiveConversation({
     /* Memoised, because the box around it is: the pane redraws for every few
        tokens of a reply, and a node made fresh each time would redraw the box
        with it. */
+    const savingModel = useSavingModel();
     const modelPicker = useMemo(
         () => (bot?.pinnedRuntime ? null : (
             <ModelPicker
@@ -1043,7 +1044,7 @@ export function LiveConversation({
                 /* `sending` lasts as long as the stream this pane opened, which
                    is the whole run -- so it only holds the box before the run
                    is visibly going. After that, sending again is steering. */
-                busy={(sending && !running) || historyLoading || Boolean(loadError)}
+                busy={(sending && !running) || historyLoading || Boolean(loadError) || savingModel}
                 canStop={running && !winding}
                 queued={queued}
                 queuedNote={

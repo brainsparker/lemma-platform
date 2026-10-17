@@ -13,6 +13,7 @@ import { asksFirstProfile, canDismissFirstProfile, firstProfileNeeds, needsTimez
 import { Code, Countdown, OpenWhatsApp } from "./mobile-verification";
 import { changes, draftOf, localTimezone, timezones } from "./profile-edit";
 import { useWhatsAppMobileVerification, useWhatsAppVerificationConfig } from "./use-mobile-verification";
+import { arrivedFromInstall } from "@/site/import/pending-install";
 
 function readSettled(userId: string): boolean {
     try {
@@ -37,6 +38,14 @@ function writeSettled(userId: string) {
  *  can supply; otherwise, for a new account still missing a timezone, writes
  *  the browser's zone in the background so OAuth sign-ups are never left
  *  without one. */
+function arrivedFromInstallHere(): boolean {
+    try {
+        return arrivedFromInstall(sessionStorage);
+    } catch {
+        return false;
+    }
+}
+
 export function FirstProfileStep() {
     const live = source.label !== "sample" && !isLandingPreview();
     const queryClient = useQueryClient();
@@ -58,7 +67,9 @@ export function FirstProfileStep() {
     if (decision === null && ready && user.data) {
         const canWhatsApp = whatsApp.data?.available === true;
         setDecision({
-            open: asksFirstProfile(user.data, { whatsApp: canWhatsApp, settled: readSettled(user.data.id) }),
+            /* Not on the visit an install opens: that person came to use what
+               they installed, and is asked on their next visit instead. */
+            open: !arrivedFromInstallHere() && asksFirstProfile(user.data, { whatsApp: canWhatsApp, settled: readSettled(user.data.id) }),
             askPhone: firstProfileNeeds(user.data, { whatsApp: canWhatsApp }).phone,
         });
     }

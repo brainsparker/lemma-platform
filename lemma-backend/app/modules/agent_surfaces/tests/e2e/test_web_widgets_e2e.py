@@ -12,6 +12,8 @@ counted however fast they come, and a deployment with public web switched off.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import asyncio
 import base64
 import hashlib
@@ -922,18 +924,20 @@ async def test_the_sweep_clears_ended_sessions_and_keeps_what_visitors_said(
     assert await _contact_of(db_session, idle_conversation) is not None
 
 
-@pytest.mark.drives_work
-async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-):
-    """One person, one contact: the visitor's chat and rows follow them to the
-    contact the pod already had, and the anonymous one is left pointing there
-    -- until that person is forgotten, and goes with them."""
-    pod_id = test_pod["id"]
-    created = await authenticated_client.post(
+@dataclass(frozen=True)
+class _Merged:
+    customer: UUID
+    anonymous: UUID
+    conversation_id: UUID
+    visitor: dict
+
+
+async def _visitor_merged_into_a_customer(
+    client: AsyncClient, db_session: AsyncSession, *, pod_id: str, owner: UUID
+) -> _Merged:
+    """A visitor who chatted and wrote a row as who they were then, and then
+    proved the email of a contact the pod already had."""
+    created = await client.post(
         f"/pods/{pod_id}/datastore/tables",
         json={
             "name": "orders",
@@ -948,7 +952,7 @@ async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact
         },
     )
     assert created.status_code == 201, created.text
-    widget = await _widget(authenticated_client, pod_id, name="Merge")
+    widget = await _widget(client, pod_id, name="Merge")
     key = widget["public_key"]
     email = f"returning-{widget['id'][:8]}@client.example"
     async with get_uow_factory()() as uow:
@@ -962,31 +966,31 @@ async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact
         )
         await uow.commit()
 
-    visitor = await _session(authenticated_client, key)
+    visitor = await _session(client, key)
     conversation_id = await _say(
-        authenticated_client,
+        client,
         db_session,
         key=key,
         visitor=visitor,
         text="Is my order shipped?",
-        owner=UUID(fixed_test_user["id"]),
+        owner=owner,
         pod_id=pod_id,
         script=[script_text("Let me look.")],
     )
     anonymous = await _contact_of(db_session, conversation_id)
     assert anonymous is not None and anonymous != customer.id
     # A row of theirs, as the visitor they were then.
-    ordered = await authenticated_client.post(
+    ordered = await client.post(
         f"/pods/{pod_id}/datastore/tables/orders/records",
         json={"data": {"item": "Blue kettle", "contact_id": str(anonymous)}},
     )
     assert ordered.status_code == 201, ordered.text
 
-    sent = await authenticated_client.post(
+    sent = await client.post(
         f"/public/web/{key}/code", json={"email": email}, headers=_as(visitor)
     )
     assert sent.status_code == 200, sent.text
-    verified = await authenticated_client.post(
+    verified = await client.post(
         f"/public/web/{key}/code/verify",
         json={"email": email, "code": _latest_code(email)},
         headers=_as(visitor),
@@ -995,17 +999,39 @@ async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact
     assert verified.json()["is_contact"] is True
     assert verified.json()["display_name"] == "Dana"
 
+    return _Merged(customer.id, anonymous, conversation_id, visitor)
+
+
+@pytest.mark.drives_work
+async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """One person, one contact: the visitor's chat and rows follow them to the
+    contact the pod already had, and the anonymous one is left pointing there
+    -- until that person is forgotten, and goes with them."""
+    pod_id = test_pod["id"]
+    proved = await _visitor_merged_into_a_customer(
+        authenticated_client,
+        db_session,
+        pod_id=pod_id,
+        owner=UUID(fixed_test_user["id"]),
+    )
+    customer_id, anonymous = proved.customer, proved.anonymous
+    conversation_id, visitor = proved.conversation_id, proved.visitor
     db_session.expire_all()
     merged = await db_session.get(ContactModel, anonymous)
-    assert merged is not None and merged.merged_into_id == customer.id
+    assert merged is not None and merged.merged_into_id == customer_id
     session_contact = await db_session.scalar(
         select(VisitorSessionModel.contact_id).where(
             VisitorSessionModel.id == _session_id(visitor)
         )
     )
-    assert session_contact == customer.id
+    assert session_contact == customer_id
     # The browser's handle moved with them; the old contact holds nothing.
-    assert await _handles_of(db_session, customer.id) == {
+    assert await _handles_of(db_session, customer_id) == {
         ("EMAIL", "CHANNEL"),
         ("WEB", "SESSION"),
     }
@@ -1018,27 +1044,27 @@ async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact
     await run_until_idle(
         async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
     )
-    assert await _contact_of(db_session, conversation_id) == customer.id
+    assert await _contact_of(db_session, conversation_id) == customer_id
     rows = await authenticated_client.get(
         f"/pods/{pod_id}/datastore/tables/orders/records"
     )
     assert [(r["item"], r["contact_id"]) for r in rows.json()["items"]] == [
-        ("Blue kettle", str(customer.id))
+        ("Blue kettle", str(customer_id))
     ]
 
     # The pod lists one person, not two; the old id still leads to them.
     listed = await authenticated_client.get(f"/pods/{pod_id}/contacts")
     assert listed.status_code == 200, listed.text
     ids = {item["id"] for item in listed.json()["items"]}
-    assert str(customer.id) in ids and str(anonymous) not in ids
+    assert str(customer_id) in ids and str(anonymous) not in ids
     followed = await authenticated_client.get(f"/pods/{pod_id}/contacts/{anonymous}")
     assert followed.status_code == 200, followed.text
-    assert followed.json()["id"] == str(customer.id)
+    assert followed.json()["id"] == str(customer_id)
 
     # Forgetting them forgets the row they wrote as a visitor, and the contact
     # they were then does not come back as an empty one.
     forgotten = await authenticated_client.delete(
-        f"/pods/{pod_id}/contacts/{customer.id}"
+        f"/pods/{pod_id}/contacts/{customer_id}"
     )
     assert forgotten.status_code in (200, 204), forgotten.text
     rows = await authenticated_client.get(
@@ -1049,6 +1075,95 @@ async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact
     assert str(anonymous) not in {item["id"] for item in listed.json()["items"]}
     db_session.expire_all()
     assert await db_session.get(ContactModel, anonymous) is None
+
+
+@pytest.mark.drives_work
+async def test_forgetting_a_person_before_their_merge_is_carried_out_takes_it_all(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """The row and the chat move to the person in queued work after the merge.
+    Forgotten before that work runs, they go anyway: under the visitor's old
+    id, which forgetting the person reaches too."""
+    pod_id = test_pod["id"]
+    proved = await _visitor_merged_into_a_customer(
+        authenticated_client,
+        db_session,
+        pod_id=pod_id,
+        owner=UUID(fixed_test_user["id"]),
+    )
+
+    forgotten = await authenticated_client.delete(
+        f"/pods/{pod_id}/contacts/{proved.customer}"
+    )
+
+    assert forgotten.status_code in (200, 204), forgotten.text
+    rows = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/orders/records"
+    )
+    assert rows.json()["items"] == []
+    db_session.expire_all()
+    assert await db_session.get(ConversationModel, proved.conversation_id) is None
+    assert await db_session.get(ContactModel, proved.anonymous) is None
+    # The work the merge queued then finds nothing to move, and fails nothing.
+    registry = WorkRegistry()
+    register_contact_merged_work(registry)
+    register_datastore_contact_merged_work(registry)
+    await run_until_idle(
+        async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
+    )
+    rows = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/orders/records"
+    )
+    assert rows.json()["items"] == []
+
+
+async def test_a_session_whose_conversation_names_nobody_is_given_its_own(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """A session's conversation is continued only while it answers the
+    visitor. One that names nobody -- as a conversation from before contacts
+    were a column does -- would answer them with the keeper's authority."""
+    pod_id = test_pod["id"]
+    owner = UUID(fixed_test_user["id"])
+    key = (await _widget(authenticated_client, pod_id, name="Older"))["public_key"]
+    visitor = await _session(authenticated_client, key)
+    first = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Hello?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Hi.")],
+    )
+    contact = await _contact_of(db_session, first)
+    await db_session.execute(
+        update(ConversationModel)
+        .where(ConversationModel.id == first)
+        .values(contact_id=None)
+    )
+    await db_session.commit()
+
+    again = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Still there?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Yes.")],
+    )
+
+    assert again != first
+    assert await _contact_of(db_session, again) == contact
 
 
 async def test_hosted_pages_live_on_their_own_origin_when_one_is_set(

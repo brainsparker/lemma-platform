@@ -69,7 +69,10 @@ class _Binder:
 
     async def bind_conversation(self, **kwargs):
         self.seen = kwargs
-        return SimpleNamespace(conversation_id=uuid4()), "Where is my order?"
+        return (
+            SimpleNamespace(conversation_id=uuid4(), source_id=uuid4()),
+            "Where is my order?",
+        )
 
 
 class _Limiter:

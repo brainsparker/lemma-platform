@@ -8,10 +8,9 @@ that file inside the line ceiling.
 from __future__ import annotations
 
 from collections.abc import Collection
-from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceConversationLink
@@ -81,43 +80,3 @@ class DmLinkQueries:
         )
         models = (await self.session.execute(stmt)).scalars().all()
         return [model.to_entity() for model in models]
-
-    async def rebind_thread_address(
-        self,
-        *,
-        link: AgentSurfaceConversationLink,
-        surface_id: UUID,
-        external_channel_id: str | None,
-        external_thread_id: str,
-    ) -> AgentSurfaceConversationLink | None:
-        """Point an existing link at the address its chat is now delivered on.
-
-        The conversation, the person and the agent are untouched: only where the
-        chat is reached changes. The caller holds the thread lock for the *new*
-        address, which does not stop another message adopting the same link from
-        a third address -- so the move compares the address it read, and the
-        loser gets None and opens its own conversation instead of stealing the
-        link back.
-        """
-        model = AgentSurfaceConversationLinkModel
-        stmt = (
-            update(model)
-            .where(
-                model.id == link.id,
-                model.surface_id == link.surface_id,
-                model.external_channel_id.is_not_distinct_from(
-                    link.external_channel_id
-                ),
-                model.external_thread_id == link.external_thread_id,
-            )
-            .values(
-                surface_id=surface_id,
-                external_channel_id=external_channel_id,
-                external_thread_id=external_thread_id,
-                updated_at=datetime.now(timezone.utc),
-            )
-            .returning(model)
-            .execution_options(populate_existing=True)
-        )
-        moved = (await self.session.execute(stmt)).scalar_one_or_none()
-        return moved.to_entity() if moved else None

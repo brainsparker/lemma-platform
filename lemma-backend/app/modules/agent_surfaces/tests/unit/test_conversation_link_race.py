@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from sqlalchemy.dialects import postgresql
 
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
@@ -58,6 +59,7 @@ def _binder(surface, *, existing_link=None):
         uow=doubles.uow,
         surface_repository=doubles.surface_repository,
         conversation_link_repository=doubles.conversation_link_repository,
+        seats=InMemoryChannelSeats(),
     )
     return binder, doubles.conversation_link_repository
 

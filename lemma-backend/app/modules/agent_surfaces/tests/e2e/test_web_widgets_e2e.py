@@ -871,6 +871,7 @@ async def test_the_sweep_clears_ended_sessions_and_keeps_what_visitors_said(
     assert await _contact_of(db_session, idle_conversation) is not None
 
 
+@pytest.mark.drives_work
 async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,

@@ -58,7 +58,7 @@ def _channel(row: ChannelModel) -> Channel:
     )
 
 
-def _source(row: ChannelSourceModel) -> Source:
+def source_entity(row: ChannelSourceModel) -> Source:
     return Source(
         id=row.id,
         channel_id=row.channel_id,
@@ -289,7 +289,7 @@ class ChannelRepository:
                 == (external_user_id or ""),
             )
         )
-        return _source(row) if row else None
+        return source_entity(row) if row else None
 
     async def add_source(
         self,
@@ -317,13 +317,13 @@ class ChannelRepository:
                 )
                 self.session.add(row)
                 await self.session.flush()
-                return _source(row)
+                return source_entity(row)
         except IntegrityError:
             return None
 
     async def get_source(self, source_id: UUID) -> Source | None:
         row = await self.session.get(ChannelSourceModel, source_id)
-        return _source(row) if row else None
+        return source_entity(row) if row else None
 
     async def sources_of(self, channel_id: UUID) -> list[Source]:
         rows = await self.session.scalars(
@@ -332,7 +332,7 @@ class ChannelRepository:
             .order_by(ChannelSourceModel.created_at)
             .limit(MAX_LINES)
         )
-        return [_source(row) for row in rows]
+        return [source_entity(row) for row in rows]
 
     # -- people ---------------------------------------------------------------
 
@@ -388,12 +388,12 @@ class ChannelRepository:
         conversation_id: UUID | None,
         external_message_id: str | None,
         external_thread_id: str | None,
-    ) -> ChannelMessage:
+    ) -> tuple[ChannelMessage, bool]:
         """Add a line, or return the one this platform message already made.
 
         A platform that delivers a message twice -- a retried webhook, a
         replayed poll -- names it the same both times, and the second writes
-        nothing.
+        nothing. Says which: ``True`` only for a line written now.
         """
         behalf = sender.on_behalf_of
         values = {
@@ -429,7 +429,7 @@ class ChannelRepository:
             )
             if existing is None:  # pragma: no cover - the conflict named it
                 raise LookupError("A duplicate line vanished")
-            return _message(existing)
+            return _message(existing), False
         await self.session.execute(
             update(ChannelModel)
             .where(ChannelModel.id == channel.id)
@@ -441,7 +441,7 @@ class ChannelRepository:
                 .where(ChannelSourceModel.id == source_id)
                 .values(last_inbound_at=inserted.created_at)
             )
-        return _message(inserted)
+        return _message(inserted), True
 
     async def recent(
         self,

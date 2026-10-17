@@ -70,6 +70,7 @@ def test_the_group_tables_upgrade_and_roll_back_cleanly() -> None:
         assert tables() == (None, None)
         assert origin_columns() == set()
 
+        # At head the group's log is its channel's timeline (0058_channels).
         migrate("upgrade", "head")
-        assert tables() == ("agent_surface_groups", "agent_surface_group_messages")
+        assert tables() == ("agent_surface_groups", None)
         assert origin_columns() == everything

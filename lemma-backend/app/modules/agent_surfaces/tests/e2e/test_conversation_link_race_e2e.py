@@ -103,15 +103,15 @@ async def test_a_second_link_for_a_chat_with_no_channel_or_user_is_not_created(
         assert found is not None and found.id == first.id
 
 
-async def test_a_burst_on_a_cold_dm_opens_one_conversation_not_one_each(
+async def test_a_burst_after_a_quiet_day_continues_the_one_conversation(
     authenticated_client, db_session, test_pod, fixed_test_user
 ) -> None:
-    """A quiet day, then two messages at once: one fresh conversation, both in it.
+    """A quiet day, then two messages at once: both continue the conversation.
 
-    The link exists but is past the reset window, so each message decides to
-    open a fresh conversation. Only a missing link used to be locked, so both
-    did, each repointed the link, and the person got two answers from two
-    contexts with the first conversation orphaned.
+    A person has one conversation with the agent in their direct channel,
+    however long they were away. When a quiet day still cut it, two messages
+    arriving together each opened a fresh one, each repointed the link, and the
+    person got two answers from two contexts. Now neither opens anything.
     """
     from app.modules.agent_surfaces.composition import build_conversation_binder
     from app.modules.agent_surfaces.domain.entities import (
@@ -202,8 +202,7 @@ async def test_a_burst_on_a_cold_dm_opens_one_conversation_not_one_each(
         one_message("are you there?"), one_message("hello again")
     )
 
-    assert first == second, "both messages must land in the one fresh conversation"
-    assert first != yesterdays.id
+    assert first == second == yesterdays.id
     async with sessions() as session:
         opened = await session.scalar(
             select(func.count()).where(
@@ -216,7 +215,7 @@ async def test_a_burst_on_a_cold_dm_opens_one_conversation_not_one_each(
                 == chat_id,
             )
         )
-    assert opened == 1
+    assert opened == 0
 
 
 async def test_repointing_a_link_another_writer_moved_first_changes_nothing(
@@ -274,57 +273,3 @@ async def test_repointing_a_link_another_writer_moved_first_changes_nothing(
 
     assert lost is None
     assert won is not None and won.conversation_id == fresh.id
-
-
-async def test_two_new_addresses_adopting_one_link_move_it_once(
-    authenticated_client, db_session, test_pod, fixed_test_user
-) -> None:
-    """Each adopter holds the lock for its own new address, not for the link."""
-    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    pod_id = UUID(test_pod["id"])
-    async with sessions() as session:
-        surface = AgentSurface(
-            pod_id=pod_id,
-            organization_id=UUID(test_pod["organization_id"]),
-            agent_id=pod_id,
-            name=f"whatsapp-{uuid4().hex[:6]}",
-            surface_type="WHATSAPP",
-            event_mode="WEBHOOK",
-            credential_mode="SYSTEM",
-            config={},
-        )
-        conversation = ConversationModel(user_id=fixed_test_user["id"], pod_id=pod_id)
-        session.add_all([surface, conversation])
-        await session.flush()
-        model = AgentSurfaceConversationLinkModel(
-            surface_id=surface.id,
-            conversation_id=conversation.id,
-            platform="WHATSAPP",
-            external_channel_id="pn-old",
-            external_thread_id=f"{uuid4().hex}@pn-old",
-            external_user_id="15550100",
-            conversation_kind="DM",
-            last_event={},
-        )
-        session.add(model)
-        await session.commit()
-        read = model.to_entity()
-
-    async with sessions() as session:
-        repository = SurfaceConversationLinkRepository(SqlAlchemyUnitOfWork(session))
-        first = await repository.rebind_thread_address(
-            link=read,
-            surface_id=read.surface_id,
-            external_channel_id="pn-a",
-            external_thread_id="15550100@pn-a",
-        )
-        second = await repository.rebind_thread_address(
-            link=read,
-            surface_id=read.surface_id,
-            external_channel_id="pn-b",
-            external_thread_id="15550100@pn-b",
-        )
-        await session.commit()
-
-    assert first is not None and first.external_channel_id == "pn-a"
-    assert second is None, "the second adopter read an address that has moved"

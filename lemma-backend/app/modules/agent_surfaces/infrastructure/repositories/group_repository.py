@@ -1,31 +1,23 @@
-"""Reading and writing the groups a pod's bots are in, and their log.
+"""Reading and writing the groups a pod's bots are in.
 
 Every read is bounded. A group is found by its key (surface, chat) or listed a
-page at a time for its surface's settings, and the log is only ever read as
-"the last N lines", newest first -- which is what the index serves and all that
-a run's background context can use.
+page at a time for its surface's settings. What is said in a group is its
+channel's timeline (``app.modules.channels``), not this row's.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent_surfaces.domain.groups import (
-    GROUP_LOG_RETENTION,
-    GroupLine,
-    SurfaceGroup,
-)
+from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.agent_surfaces.infrastructure.group_models import (
-    AgentSurfaceGroupMessageModel,
     AgentSurfaceGroupModel,
 )
-from app.modules.agent_surfaces.infrastructure.models import AgentSurfaceExternalUser
 
 #: The settings page's ceiling. A bot in more groups than this has outgrown a
 #: list, and the read has to stop somewhere.
@@ -34,10 +26,6 @@ _MAX_GROUPS_PAGE = 200
 #: How many pods' bots one chat is looked up for. A WhatsApp group has one; a
 #: Telegram group could hold a few pods' surfaces on the shared bot.
 _MAX_SURFACES_PER_CHAT = 20
-
-#: Longest line kept. The log is background for a model, not an archive, and one
-#: pasted document should not crowd out everything said around it.
-MAX_LINE_CHARS = 2000
 
 
 class SurfaceGroupRepository:
@@ -86,22 +74,6 @@ class SurfaceGroupRepository:
         )
         models = (await self.session.execute(stmt)).scalars().all()
         return [model.to_entity() for model in models]
-
-    async def latest_line_at(self, group_ids: Sequence[UUID]) -> dict[UUID, datetime]:
-        """When each of these groups last had something said in it."""
-        if not group_ids:
-            return {}
-        stmt = (
-            select(
-                AgentSurfaceGroupMessageModel.group_id,
-                func.max(AgentSurfaceGroupMessageModel.created_at),
-            )
-            .where(AgentSurfaceGroupMessageModel.group_id.in_(list(group_ids)))
-            .group_by(AgentSurfaceGroupMessageModel.group_id)
-            .limit(len(group_ids))
-        )
-        rows = (await self.session.execute(stmt)).all()
-        return {group_id: at for group_id, at in rows if at is not None}
 
     async def ensure(
         self,
@@ -264,7 +236,10 @@ class SurfaceGroupRepository:
         )
 
     async def forget_channel(self, *, platform: str, external_channel_id: str) -> None:
-        """A group the platform deleted, with its log: nobody can speak there."""
+        """A group the platform deleted: nobody can speak there.
+
+        Its channel stays, with everything said in it.
+        """
         await self.session.execute(
             delete(AgentSurfaceGroupModel).where(
                 AgentSurfaceGroupModel.platform == platform,
@@ -289,116 +264,3 @@ class SurfaceGroupRepository:
             .where(AgentSurfaceGroupModel.id == group_id)
             .values(**values)
         )
-
-    async def append_line(
-        self,
-        *,
-        group_id: UUID,
-        body: str,
-        external_message_id: str | None = None,
-        author_external_id: str | None = None,
-        author_name: str | None = None,
-        from_agent: bool = False,
-        answered_name: str | None = None,
-        answered_from_public: bool = False,
-        answered_user_id: UUID | None = None,
-    ) -> None:
-        """Add one line; a message already logged is left as it was.
-
-        Lines past the log's retention go as each new one arrives: one indexed
-        range per group, which finds nothing almost every time.
-        """
-        text = body.strip()
-        if not text:
-            return
-        await self.session.execute(
-            delete(AgentSurfaceGroupMessageModel).where(
-                AgentSurfaceGroupMessageModel.group_id == group_id,
-                AgentSurfaceGroupMessageModel.created_at
-                < datetime.now(timezone.utc) - GROUP_LOG_RETENTION,
-            )
-        )
-        await self.session.execute(
-            insert(AgentSurfaceGroupMessageModel)
-            .values(
-                group_id=group_id,
-                body=text[:MAX_LINE_CHARS],
-                external_message_id=external_message_id,
-                author_external_id=author_external_id,
-                author_name=author_name,
-                from_agent=from_agent,
-                answered_name=(answered_name or "")[:255] or None,
-                answered_from_public=answered_from_public,
-                answered_user_id=answered_user_id,
-            )
-            .on_conflict_do_nothing(
-                index_elements=["group_id", "external_message_id"],
-                index_where=AgentSurfaceGroupMessageModel.external_message_id.is_not(
-                    None
-                ),
-            )
-        )
-
-    async def recent_lines(self, *, group: SurfaceGroup, limit: int) -> list[GroupLine]:
-        """The last ``limit`` lines, oldest first, with who each author proved to be.
-
-        The author's Lemma user comes from ``agent_surface_external_users`` --
-        the same proof routing uses -- read at the moment the lines are read, so
-        a stranger who has since signed up and verified reads as who they are
-        now. One more bounded read rather than a join: a join would repeat a
-        line for every tenant an id appears under.
-        """
-        stmt = (
-            select(AgentSurfaceGroupMessageModel)
-            .where(AgentSurfaceGroupMessageModel.group_id == group.id)
-            .order_by(AgentSurfaceGroupMessageModel.created_at.desc())
-            .limit(limit)
-        )
-        models = list((await self.session.execute(stmt)).scalars().all())
-        models.reverse()
-        authors = {
-            model.author_external_id
-            for model in models
-            if model.author_external_id and not model.from_agent
-        }
-        proven = await self._proven_users(platform=group.platform, ids=authors)
-        return [
-            GroupLine(
-                author_external_id=model.author_external_id,
-                author_name=model.author_name,
-                author_user_id=(
-                    proven.get(model.author_external_id)
-                    if model.author_external_id
-                    else None
-                ),
-                from_agent=model.from_agent,
-                text=model.body,
-                created_at=model.created_at,
-                answered_name=model.answered_name,
-                answered_from_public=model.answered_from_public,
-                answered_user_id=model.answered_user_id,
-            )
-            for model in models
-        ]
-
-    async def _proven_users(self, *, platform: str, ids: set[str]) -> dict[str, UUID]:
-        if not ids:
-            return {}
-        stmt = (
-            select(
-                AgentSurfaceExternalUser.external_user_id,
-                AgentSurfaceExternalUser.resolved_user_id,
-            )
-            .where(
-                AgentSurfaceExternalUser.platform == platform,
-                AgentSurfaceExternalUser.external_user_id.in_(sorted(ids)),
-                AgentSurfaceExternalUser.resolved_user_id.is_not(None),
-            )
-            .limit(len(ids) * 4)
-        )
-        rows = (await self.session.execute(stmt)).all()
-        return {
-            external_id: user_id
-            for external_id, user_id in rows
-            if external_id and user_id is not None
-        }

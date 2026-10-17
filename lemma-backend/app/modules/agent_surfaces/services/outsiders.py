@@ -250,6 +250,7 @@ class OutsiderDoor:
             user_id=owner,
             route=route,
             conversation_id=link.conversation_id,
+            source_id=link.source_id,
             created_conversation_title=created_title,
             audience=Audience.contact(contact.id),
         )

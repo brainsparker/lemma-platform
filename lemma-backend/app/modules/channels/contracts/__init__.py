@@ -8,6 +8,7 @@ lists a pod's channels -- that is a member's, through this module's API.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -22,8 +23,13 @@ from app.modules.channels.domain.entities import (
     Source,
     SourceKind,
 )
-from app.modules.channels.domain.projection import Reader
+from app.modules.channels.domain.projection import Reader, may_read
 from app.modules.channels.infrastructure.repository import ChannelRepository
+from app.modules.channels.infrastructure.speakers import (
+    MAX_SPEAKERS,
+    Speaker,
+    SpeakerReads,
+)
 from app.modules.channels.services.places import (
     ChannelPlaces,
     ContactsHome,
@@ -51,15 +57,19 @@ __all__ = [
     "SenderKind",
     "Source",
     "SourceKind",
+    "Speaker",
     "background",
     "channel_by_id",
     "contact_channel",
     "handler_of",
+    "may_read",
     "participants_of",
     "post",
+    "shared_sources",
     "source_by_id",
     "source_for",
     "sources_of",
+    "speakers_in",
 ]
 
 
@@ -98,10 +108,11 @@ async def post(
     conversation_id: UUID | None = None,
     external_message_id: str | None = None,
     external_thread_id: str | None = None,
-) -> ChannelMessage:
+) -> ChannelMessage | None:
     """Add a line to the channel's timeline; the same platform message once.
 
-    Raises ``ChannelNotFound`` when the channel is gone.
+    ``None`` for a line with nothing in it. Raises ``ChannelNotFound`` when the
+    channel is gone.
     """
     channel = await ChannelRepository(uow.session).get(channel_id)
     if channel is None:
@@ -139,3 +150,20 @@ async def handler_of(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> UUID | None
     """The member answering this channel by hand, or ``None`` for its agents."""
     channel = await ChannelRepository(uow.session).get(channel_id)
     return channel.handler_user_id if channel else None
+
+
+async def speakers_in(
+    uow: SqlAlchemyUnitOfWork,
+    channel_ids: Collection[UUID],
+    *,
+    limit: int = MAX_SPEAKERS,
+) -> list[Speaker]:
+    """Who spoke in these channels, once per channel, most recent first."""
+    return await SpeakerReads(uow.session).speakers(channel_ids, limit=limit)
+
+
+async def shared_sources(
+    uow: SqlAlchemyUnitOfWork, places: Collection[tuple[UUID, str]]
+) -> dict[tuple[UUID, str], Source]:
+    """The source each ``(surface_id, chat id)`` is, for those heard so far."""
+    return await SpeakerReads(uow.session).shared_sources(places)

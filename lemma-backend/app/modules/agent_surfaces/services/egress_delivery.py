@@ -60,9 +60,9 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 from app.modules.agent_surfaces.services.free_text_answer import (
     remember_a_prompt_that_arrived_as_words,
 )
-from app.modules.agent_surfaces.services.group_log import (
-    GroupLog,
-    answered_in_group,
+from app.modules.agent_surfaces.services.channel_lines import (
+    ChannelLines,
+    ChannelLinesInDatabase,
 )
 from app.modules.agent_surfaces.services.group_names import sender_name_for
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
@@ -87,6 +87,7 @@ class SurfaceDelivery:
         conversation_link_repository: SurfaceConversationLinkRepository,
         adapter_registry: SurfacePlatformAdapterRegistry,
         credential_resolver: SurfaceCredentialResolver,
+        channel_lines: ChannelLines | None = None,
     ) -> None:
         # Every one of these is required, and `uow` most of all. The service
         # this was carved out of took either a unit of work or a factory and
@@ -98,6 +99,7 @@ class SurfaceDelivery:
         self.conversation_link_repository = conversation_link_repository
         self.adapter_registry = adapter_registry
         self.credential_resolver = credential_resolver
+        self.channel_lines = channel_lines or ChannelLinesInDatabase(uow)
 
     async def egress_credentials(
         self,
@@ -247,6 +249,7 @@ class SurfaceDelivery:
             event=parsed_event,
             credentials=await self.egress_credentials(surface, event=parsed_event),
             conversation_user_id=conversation.user_id,
+            audience=conversation.audience,
         )
 
     async def private_thread_for(
@@ -441,13 +444,12 @@ class SurfaceDelivery:
             envelope=envelope,
             receipt=receipt,
         )
-        # What the bot said in a group, for the pod's log of it. After the
-        # delivery, so the log never holds a line the group did not see.
-        if target.link.conversation_kind == "CHANNEL" and envelope.text:
-            await GroupLog(self.uow).note_agent_answer(
-                surface=target.surface,
-                external_channel_id=target.link.external_channel_id,
+        if envelope.text:
+            name = metadata.get("agent_display_name")
+            await self.channel_lines.said(
+                target=target,
+                conversation_id=conversation_id,
                 text=envelope.text,
-                answered=answered_in_group(target.link, target.conversation_user_id),
+                agent_display_name=name if isinstance(name, str) else None,
             )
         return receipt

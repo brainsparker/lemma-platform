@@ -13,7 +13,6 @@ from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (  # 
     WhatsAppNumber,
 )
 from app.modules.agent_surfaces.infrastructure.group_models import (  # noqa: F401
-    AgentSurfaceGroupMessageModel,
     AgentSurfaceGroupModel,
 )
 from app.modules.agent_surfaces.infrastructure.notification_models import (  # noqa: F401

@@ -8,7 +8,6 @@ came before built an eight-mixin ingress service and then reassigned
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -57,6 +56,7 @@ from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     _slack_surface,
     _teams_surface,
     build_egress,
+    surface_conversation,
     conversation_operations,  # noqa: F401  (autouse fixture)
 )
 
@@ -276,8 +276,8 @@ async def test_a_newer_private_chat_in_another_pod_does_not_hide_this_pods():
         here: surface.pod_id,
     }
     agent_conversations.surface_conversation.side_effect = (
-        lambda _uow, conversation_id: SimpleNamespace(
-            id=conversation_id, user_id=uuid4(), pod_id=pods[conversation_id]
+        lambda _uow, conversation_id: surface_conversation(
+            conversation_id=conversation_id, pod_id=pods[conversation_id]
         )
     )
 
@@ -1014,8 +1014,8 @@ async def test_a_file_that_cannot_be_read_is_not_replaced_by_a_link_card():
     """
     adapter = _delivering_adapter()
     egress, conversation_id = await _approval_egress(adapter)
-    agent_conversations.surface_conversation.return_value = SimpleNamespace(
-        id=conversation_id, user_id=uuid4(), pod_id=uuid4()
+    agent_conversations.surface_conversation.return_value = surface_conversation(
+        conversation_id=conversation_id
     )
 
     sent = await egress.send_display_resource_for_conversation(

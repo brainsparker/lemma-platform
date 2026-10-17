@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from app.modules.test_support.channel_lines_double import RecordingChannelLines
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 from app.core.infrastructure.db.session_uow import SESSION_UOW_KEY
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
@@ -119,15 +121,31 @@ def _pending(kind: str, *, tool_call_id: str, tool_args: dict | None = None):
     )
 
 
-def _surface_conversation(surface, *, conversation_id: UUID | None = None):
-    """A conversation as the published lookup returns it."""
-    return SimpleNamespace(
+def surface_conversation(
+    *,
+    conversation_id: UUID | None = None,
+    user_id: UUID | None = None,
+    pod_id: UUID | None = None,
+    agent_id: UUID | None = None,
+    title: str | None = None,
+) -> agent_conversations.SurfaceConversation:
+    """A conversation as the published lookup returns it: a member's."""
+    return agent_conversations.SurfaceConversation(
         id=conversation_id or uuid4(),
-        user_id=uuid4(),
+        user_id=user_id or uuid4(),
+        pod_id=pod_id or uuid4(),
+        agent_id=agent_id,
+        title=title,
+        updated_at=datetime.now(timezone.utc),
+    )
+
+
+def _surface_conversation(surface, *, conversation_id: UUID | None = None):
+    """A conversation on this surface's pod, with its agent."""
+    return surface_conversation(
+        conversation_id=conversation_id,
         pod_id=surface.pod_id,
         agent_id=surface.agent_id,
-        title=None,
-        updated_at=datetime.now(timezone.utc),
     )
 
 
@@ -444,6 +462,7 @@ def build_ingress_service(
         uow=doubles.uow,
         surface_repository=doubles.surface_repository,
         conversation_link_repository=doubles.conversation_link_repository,
+        seats=InMemoryChannelSeats(),
     )
     return AgentSurfaceIngressService(
         uow=doubles.uow,
@@ -492,6 +511,7 @@ def build_egress(
             for_surface=AsyncMock(return_value={}),
             for_platform=AsyncMock(return_value={}),
         ),
+        channel_lines=RecordingChannelLines(),
     )
     return SurfaceEgress(
         uow=doubles.uow,
@@ -699,6 +719,7 @@ def build_turn_starter(
             ingest_attachments=AsyncMock(return_value=AttachmentIngest())
         ),
         pooled_numbers=pooled_numbers,
+        channel_lines=RecordingChannelLines(),
         **({"roster_reads": roster_reads} if roster_reads is not None else {}),
     )
 

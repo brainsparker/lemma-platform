@@ -407,12 +407,15 @@ class SurfaceConversationLinkRepository(DmLinkQueries):
         link_id: UUID,
         last_event: dict[str, Any],
         last_message_id: str | None,
+        source_id: UUID | None = None,
     ) -> AgentSurfaceConversationLink | None:
         model = await self.session.get(AgentSurfaceConversationLinkModel, link_id)
         if model is None:
             return None
         model.last_event = last_event
         model.last_message_id = last_message_id
+        if source_id is not None:
+            model.source_id = source_id
         # Unconditional: this method exists to record an inbound event, and its
         # only caller is the ingress path. An outbound send that needs to repoint
         # a link uses ``repoint_conversation_for_outbound`` precisely so it can
@@ -512,6 +515,7 @@ class SurfaceConversationLinkRepository(DmLinkQueries):
         routed_agent_id: UUID | None = None,
         conversation_kind: str | None = None,
         route_key: str | None = None,
+        source_id: UUID | None = None,
     ) -> AgentSurfaceConversationLink | None:
         """Point the link at a fresh conversation, if it still names the old one.
 
@@ -533,6 +537,8 @@ class SurfaceConversationLinkRepository(DmLinkQueries):
         }
         if conversation_kind is not None:
             values["conversation_kind"] = conversation_kind
+        if source_id is not None:
+            values["source_id"] = source_id
         stmt = (
             update(AgentSurfaceConversationLinkModel)
             .where(

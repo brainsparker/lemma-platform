@@ -27,6 +27,7 @@ from app.modules.agent_surfaces.platforms.telegram.message_experience import (
     reply_parameters,
 )
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
+from app.modules.agent_surfaces.tests.unit.surface_doubles import surface_conversation
 
 pytestmark = pytest.mark.unit
 
@@ -52,7 +53,7 @@ def conversation(monkeypatch):
     """The conversation's owner, doubled on `agent`'s contract: it reads a row."""
     monkeypatch.setattr(
         f"{_CONVERSATIONS}.surface_conversation",
-        AsyncMock(return_value=SimpleNamespace(user_id=uuid4(), pod_id=uuid4())),
+        AsyncMock(return_value=surface_conversation()),
     )
 
 

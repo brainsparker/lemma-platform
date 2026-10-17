@@ -115,6 +115,7 @@ class ConversationService(ConversationPauses):
         metadata: dict[str, object] | None = None,
         require_execute_grant: bool = True,
         contact_id: UUID | None = None,
+        channel_id: UUID | None = None,
     ) -> Conversation:
         """A new conversation in the pod.
 
@@ -177,6 +178,7 @@ class ConversationService(ConversationPauses):
             user_id=user_id,
             pod_id=pod_id,
             contact_id=contact_id,
+            channel_id=channel_id,
             organization_id=organization_id,
             agent_id=agent.id if agent else None,
             title=title,

@@ -24,6 +24,11 @@ from app.modules.channels.domain.projection import Reader, readable
 from app.modules.channels.infrastructure.repository import ChannelRepository
 
 
+#: The longest line a timeline keeps. A message is what people saw, so this is
+#: generous -- a pasted document is cut, not refused.
+MAX_TEXT_CHARS = 20_000
+
+
 class ChannelNotFound(LookupError):
     """The channel is gone, or was never this pod's."""
 
@@ -44,17 +49,27 @@ class Timeline:
         conversation_id: UUID | None = None,
         external_message_id: str | None = None,
         external_thread_id: str | None = None,
-    ) -> ChannelMessage:
-        message = await self.channels.append(
+    ) -> ChannelMessage | None:
+        """The line, posted; ``None`` when there was nothing to say.
+
+        A platform message heard before is the line it already made, and is
+        not announced again.
+        """
+        body = text.strip()[:MAX_TEXT_CHARS]
+        if not body:
+            return None
+        message, written = await self.channels.append(
             channel=channel,
             sender=sender,
-            text=text,
+            text=body,
             source_id=source_id,
             members_only=members_only,
             conversation_id=conversation_id,
             external_message_id=external_message_id,
             external_thread_id=external_thread_id,
         )
+        if not written:
+            return message
         speaker = _principal_of(sender)
         if speaker is not None:
             await self.channels.join(channel=channel, principal=speaker)

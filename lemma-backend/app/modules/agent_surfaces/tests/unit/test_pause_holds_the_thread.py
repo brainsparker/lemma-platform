@@ -1,8 +1,8 @@
 """A run paused on the person keeps the thread it paused in.
 
 The approval card and the typed answer both reach only the conversation that
-paused. A notification sent half an hour later, or the DM reset a day later,
-used to move the thread to a fresh conversation anyway -- the card's buttons
+paused. A notification sent half an hour later used to move the thread to a
+fresh conversation anyway -- the card's buttons
 then did nothing, and "approve" went to an agent with nothing to approve.
 
 Driven through the same journey harness as the notification tests, over the
@@ -21,7 +21,6 @@ from app.modules.agent_surfaces.tests.unit.test_notification_journey import (
     AgentSide,
     World,
     _now,
-    _reset_window,  # noqa: F401  (autouse fixture)
     _telegram_surface,
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (

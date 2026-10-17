@@ -499,6 +499,7 @@ class SurfaceInboundMixin:
             user_id=user_id,
             route=route,
             conversation_id=link.conversation_id,
+            source_id=link.source_id,
             created_conversation_title=created_conversation_title,
         )
 

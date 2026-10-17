@@ -18,6 +18,10 @@ from app.modules.channels.domain.entities import Channel, Source, SourceKind
 from app.modules.channels.infrastructure.repository import ChannelRepository
 
 
+class _LostTheRace(Exception):
+    """Another writer added the group's source first; this channel goes back."""
+
+
 @dataclass(frozen=True, slots=True)
 class MembersHome:
     """A member's private chat: their DIRECT channel."""
@@ -101,9 +105,9 @@ class ChannelPlaces:
                     title=place.title,
                 )
                 if added is None:
-                    raise IntegrityError("lost the group's source", None, None)
+                    raise _LostTheRace
                 return added
-        except IntegrityError:
+        except IntegrityError, _LostTheRace:
             return await self._winner(place)
 
     async def _home(self, pod_id: UUID, home: MembersHome | ContactsHome) -> Channel:

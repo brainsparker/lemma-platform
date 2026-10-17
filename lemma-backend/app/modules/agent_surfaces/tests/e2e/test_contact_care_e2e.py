@@ -384,7 +384,7 @@ async def test_an_export_carries_their_rows_and_pages_through_everything(
         answer="anyone",
     )
     await _contact_owned_orders(authenticated_client, pod_id)
-    # Two separate emails: two conversations.
+    # Two separate emails: one conversation, Dana's with the pod's agent.
     await _dana_writes(db_session, address, "export-1", "First question")
     await _dana_writes(db_session, address, "export-2", "Second question")
     dana = await _dana(authenticated_client, pod_id)
@@ -393,7 +393,7 @@ async def test_an_export_carries_their_rows_and_pages_through_everything(
     await _order(authenticated_client, pod_id, str(uuid4()), "Somebody else's")
     # One of each to a page, so the export has to be followed to the end.
     monkeypatch.setattr(contact_conversations, "MAX_EXPORTED_CONVERSATIONS", 1)
-    monkeypatch.setattr(contact_rows, "MAX_CONTACT_ROWS", 2)
+    monkeypatch.setattr(contact_rows, "MAX_CONTACT_ROWS", 1)
 
     conversations, rows, pages = [], [], 0
     cursor: str | None = None
@@ -416,7 +416,7 @@ async def test_an_export_carries_their_rows_and_pages_through_everything(
     assert pages >= 3
     said = {m["text"] for c in conversations for m in c["messages"]}
     assert {"First question", "Second question"} <= said
-    assert len(conversations) == 2
+    assert len(conversations) == 1
     assert sorted(row["values"]["item"] for row in rows) == [
         "Blue kettle",
         "Saucer",

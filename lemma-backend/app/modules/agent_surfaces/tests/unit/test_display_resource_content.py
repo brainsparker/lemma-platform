@@ -17,6 +17,7 @@ import pytest
 
 from datetime import datetime, timezone
 
+from app.modules.agent_surfaces.tests.unit.surface_doubles import surface_conversation
 from app.modules.agent.contracts import DisplayResourceRequest, DisplayResourceType
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
@@ -408,8 +409,8 @@ async def test_a_personal_dm_resolves_against_the_conversations_pod(
     """The installation is the transport; the conversation is the destination."""
     company_pod, personal_pod = uuid4(), uuid4()
     installation = _installation(company_pod)
-    conversation_owner.return_value = SimpleNamespace(
-        id=CONVERSATION_ID, user_id=uuid4(), pod_id=personal_pod
+    conversation_owner.return_value = surface_conversation(
+        conversation_id=CONVERSATION_ID, pod_id=personal_pod
     )
 
     target = await _delivery(installation, CONVERSATION_ID).resolve_egress_target(

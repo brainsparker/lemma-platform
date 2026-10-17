@@ -19,6 +19,8 @@ from dataclasses import dataclass, replace
 from app.modules.agent_surfaces.domain.reply_targets import copied_on_reply
 from uuid import UUID
 
+from app.modules.agent.contracts.audience import Audience
+
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
@@ -64,6 +66,8 @@ class SurfaceEgressTarget:
     credentials: SurfaceCredentials
     #: Whose conversation this is: the member a group answer was made for.
     conversation_user_id: UUID | None = None
+    #: Whom the conversation answers: that member, or a contact they look after.
+    audience: Audience = Audience()
 
     @property
     def copies_others(self) -> bool:

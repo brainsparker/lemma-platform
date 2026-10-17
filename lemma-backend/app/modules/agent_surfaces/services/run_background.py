@@ -44,6 +44,7 @@ from app.modules.agent_surfaces.services.group_log import (
     RosterReads,
     for_member_run,
     group_background,
+    group_source,
     keeps_group_log,
     live_participants,
     roster_reads,
@@ -51,6 +52,7 @@ from app.modules.agent_surfaces.services.group_log import (
 from app.modules.agent_surfaces.services.surface_inbound_message import (
     fetch_channel_context,
 )
+from app.modules.channels.contracts import Principal, Reader, Source
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,15 +185,31 @@ async def _group_background(
         )
         if group is None:
             return None, None
+        source = await group_source(uow, group)
         logged = await group_background(
             uow,
             group=group,
+            source=source,
             membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
             agent_display_name=context.agent_display_name,
-            for_stranger=context.audience.answers_outsiders,
-            asker_external_id=context.message_external_user_id,
+            reader=_reader(context, source),
+            asker=_asker(context),
         )
     return group, logged
+
+
+def _reader(context: SurfaceChatContext, source: Source) -> Reader | None:
+    """Whom this run reads the group as: its contact, a member, or nobody."""
+    audience = context.audience
+    if audience.contact_id is not None:
+        return Reader.contact(audience.contact_id, source_id=source.id)
+    return None if audience.answers_outsiders else Reader.member()
+
+
+def _asker(context: SurfaceChatContext) -> Principal:
+    if context.audience.contact_id is not None:
+        return Principal.contact(context.audience.contact_id)
+    return Principal.member(context.message_user_id)
 
 
 async def reply_all_audience(

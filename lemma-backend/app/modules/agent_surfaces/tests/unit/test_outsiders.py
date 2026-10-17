@@ -17,9 +17,10 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent_surfaces.services.channel_lines import answered_for
+from app.modules.channels.contracts import Principal
 from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     ConversationType,
     SurfaceConfig,
     ParsedInboundSurfaceEvent,
@@ -40,7 +41,6 @@ from app.modules.agent_surfaces.services.surface_inbound_message import (
     may_answer_a_pause,
 )
 from app.modules.agent_surfaces.services.group_log import (
-    answered_in_group,
     keeps_group_log,
 )
 from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
@@ -312,7 +312,10 @@ class _Binder:
 
     async def bind_conversation(self, **kwargs):
         self.seen = kwargs
-        return SimpleNamespace(conversation_id=uuid4()), "when are proofs due?"
+        return (
+            SimpleNamespace(conversation_id=uuid4(), source_id=uuid4()),
+            "when are proofs due?",
+        )
 
 
 def _surface_entity():
@@ -435,36 +438,19 @@ def test_a_stranger_typing_approve_resolves_nothing():
 # ---------------------------------------------------------- whom it answered
 
 
-def _thread(external_user_id: str, *, last_sender: str | None):
-    return AgentSurfaceConversationLink(
-        surface_id=uuid4(),
-        conversation_id=uuid4(),
-        platform="TELEGRAM",
-        external_channel_id=CHAT,
-        external_thread_id=CHAT,
-        external_user_id=external_user_id,
-        conversation_kind="CHANNEL",
-        last_event={"sender_display_name": last_sender} if last_sender else {},
-    )
+def test_an_answer_to_a_contact_is_for_the_contact():
+    """Made from what the pod made Public, never with the keeper's access."""
+    contact_id = uuid4()
 
+    answered = answered_for(Audience.contact(contact_id), uuid4())
 
-def test_an_answer_to_a_stranger_says_it_came_from_what_is_public():
-    """The group's page shows it; the owner reads what their pod said, and why."""
-    answered = answered_in_group(_thread(contact_link_user(uuid4()), last_sender="Tom"))
-
-    assert (answered.name, answered.from_public) == ("Tom", True)
+    assert answered == Principal.contact(contact_id)
 
 
 def test_an_answer_to_a_member_was_on_their_own_access():
-    answered = answered_in_group(_thread("900100", last_sender="Arjun"))
+    member = uuid4()
 
-    assert (answered.name, answered.from_public) == ("Arjun", False)
-
-
-def test_an_answer_whose_asker_went_unnamed_names_nobody():
-    answered = answered_in_group(_thread(contact_link_user(uuid4()), last_sender=None))
-
-    assert answered.name is None
+    assert answered_for(Audience.member(), member) == Principal.member(member)
 
 
 # ------------------------------------------------------------- how often

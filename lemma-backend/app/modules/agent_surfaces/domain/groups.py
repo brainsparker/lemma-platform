@@ -15,7 +15,7 @@ passes on what it cannot answer, and whose name is on it. With no owner there is
 nobody to answer for a stranger's turn, so outsiders are not answered at all --
 members still are.
 
-The log beside it (``GroupLine``) is what the bot has heard in the group. Each
+What is said in it is its channel's timeline (``app.modules.channels``). Each
 member's turn runs in their own conversation, so without it the bot would know
 only what was said to it; on platforms whose history cannot be fetched --
 Telegram, WhatsApp -- it is the only record there is.
@@ -23,7 +23,6 @@ Telegram, WhatsApp -- it is the only record there is.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 
@@ -50,12 +49,6 @@ def is_contact_link_user(external_user_id: str | None) -> bool:
     return bool(external_user_id) and str(external_user_id).startswith(
         CONTACT_LINK_USER_PREFIX
     )
-
-
-#: How long the pod keeps what was said in a group. A group's page and the
-#: bot's background read only the recent past, and the people in a group --
-#: some of them strangers -- are told the log exists and how long it lasts.
-GROUP_LOG_RETENTION = timedelta(days=90)
 
 
 class SurfaceGroup(Entity):
@@ -93,39 +86,6 @@ class SurfaceGroup(Entity):
         pod wants it, the owner is who answers for it.
         """
         return self.answers_outsiders and self.owner_user_id is not None
-
-
-class GroupLine(BaseModel):
-    """One thing said in a group, as the pod's log recorded it."""
-
-    author_external_id: str | None = None
-    author_name: str | None = None
-    #: The Lemma user the author proved to be, when they have; None for a
-    #: stranger and for the bot itself.
-    author_user_id: UUID | None = None
-    from_agent: bool = False
-    text: str
-    created_at: datetime
-    #: On a line the bot wrote: whom it answered, and whether from what is
-    #: Public (somebody outside the pod) or with the asker's own access --
-    #: whose, in ``answered_user_id``, the one member a group's page shows
-    #: that answer to.
-    answered_name: str | None = None
-    answered_from_public: bool = False
-    answered_user_id: UUID | None = None
-
-
-def answer_withheld_from(line: GroupLine, viewer_id: UUID | None) -> bool:
-    """Whether this line is an answer made with somebody else's access.
-
-    An answer from what is Public is anybody's to read; so is anything a person
-    said. An answer the bot made with a member's own access is that member's --
-    withheld from every other member on the group's page, and from a stranger's
-    run (``viewer_id`` None) in the background it is handed.
-    """
-    if not line.from_agent or line.answered_from_public:
-        return False
-    return viewer_id is None or line.answered_user_id != viewer_id
 
 
 class GroupUpdateKind(StrEnum):

@@ -209,6 +209,7 @@ async def open_surface_conversation(
     metadata: dict[str, object] | None = None,
     require_execute_grant: bool = True,
     contact_id: UUID | None = None,
+    channel_id: UUID | None = None,
 ) -> SurfaceConversation:
     """Start the conversation behind a surface thread.
 
@@ -217,6 +218,7 @@ async def open_surface_conversation(
     permission to run the agent that is writing to them. Every inbound path
     leaves it on.
 
+    ``channel_id`` is the channel it works in (``channel_conversations``).
     ``contact_id`` opens a contact's conversation -- in a private chat, a group
     or a web page. ``user_id`` is then the member who looks after it, and every
     run in it authorizes as that contact (see ``domain/outsiders``).
@@ -233,6 +235,7 @@ async def open_surface_conversation(
         metadata=metadata,
         require_execute_grant=require_execute_grant,
         contact_id=contact_id,
+        channel_id=channel_id,
     )
     return _conversation(conversation)
 

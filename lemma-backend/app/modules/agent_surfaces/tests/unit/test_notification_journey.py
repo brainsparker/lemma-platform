@@ -2,8 +2,8 @@
 
 The requirement is one sentence: the reply to a notification lands in the same
 conversation the notification was written into, and the agent that asked is woken
-in *its* conversation when the answer is recorded. Nothing in between -- the DM
-reset, a second notification, an agent change, the history trim -- may break it.
+in *its* conversation when the answer is recorded. Nothing in between -- a quiet
+day, a second notification, an agent change, the history trim -- may break it.
 
 Each of those was fixed in the place it lives and tested there, which is exactly
 how the journey between them came to have a hole no test could see. So these
@@ -30,6 +30,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse
 
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     RecordingNotificationWork,
 )
@@ -49,7 +50,6 @@ from app.modules.agent.services.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
 )
-from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
@@ -91,7 +91,6 @@ async def _no_outside_origin(_conversation_id):
 
 pytestmark = pytest.mark.asyncio
 
-_RESET_HOURS = 24
 _CHAT = "777"
 
 
@@ -344,10 +343,13 @@ class InMemoryLinks:
         self.rows[link.id] = link.model_copy(deep=True)
         return link
 
-    async def update_last_event(self, *, link_id, last_event, last_message_id):
+    async def update_last_event(
+        self, *, link_id, last_event, last_message_id, source_id=None
+    ):
         row = self.rows[link_id]
         row.last_event, row.last_message_id = last_event, last_message_id
         row.last_inbound_at = _now()
+        row.source_id = source_id or row.source_id
         return row.model_copy(deep=True)
 
     async def update_conversation(
@@ -361,11 +363,13 @@ class InMemoryLinks:
         routed_agent_id=None,
         conversation_kind=None,
         route_key=None,
+        source_id=None,
     ):
         row = self.rows[link_id]
         if row.conversation_id != expected_conversation_id:
             return None
         row.conversation_id = conversation_id
+        row.source_id = source_id or row.source_id
         row.last_event, row.last_message_id = last_event, last_message_id
         row.routed_agent_id = routed_agent_id
         row.route_key = route_key
@@ -494,6 +498,7 @@ class World:
             uow=doubles.uow,
             surface_repository=doubles.surface_repository,
             conversation_link_repository=self.links,
+            seats=InMemoryChannelSeats(),
         )
         self.router = SurfaceRouter(
             uow=doubles.uow,
@@ -632,14 +637,6 @@ def _telegram_surface(agent_id: UUID) -> AgentSurfaceEntity:
     )
 
 
-@pytest.fixture(autouse=True)
-def _reset_window():
-    original = surface_settings.surface_dm_conversation_reset_after_hours
-    surface_settings.surface_dm_conversation_reset_after_hours = _RESET_HOURS
-    yield
-    surface_settings.surface_dm_conversation_reset_after_hours = original
-
-
 @pytest.fixture
 def world(monkeypatch) -> World:
     agent_id = uuid4()
@@ -657,10 +654,8 @@ async def test_a_reply_after_a_quiet_day_reaches_the_notification_and_wakes_the_
 ):
     """The whole path, with the person silent for over a day before it starts.
 
-    They last wrote 30 hours ago -- past the 24 hour DM reset -- the agent asks
-    them something, and they answer a few minutes later. The reset is about
-    yesterday's context leaking into today; it was never meant to fire on the
-    answer to a question asked minutes ago.
+    They last wrote 30 hours ago, the agent asks them something, and they
+    answer a few minutes later: the answer lands with the question.
     """
     ordinary_chat = world.had_chatted(hours_ago=30)
 
@@ -720,32 +715,6 @@ async def test_a_reply_after_a_quiet_day_reaches_the_notification_and_wakes_the_
     assert len(world.agent_side.conversations) == 3, "the wake opened a conversation"
 
 
-async def test_a_chat_with_nothing_owed_still_resets_after_a_quiet_day(world):
-    """The control: the reset is kept for a genuinely idle chat."""
-    ordinary_chat = world.had_chatted(hours_ago=30)
-
-    bound, created_title = await world.reply("hello again")
-
-    assert bound.conversation_id != ordinary_chat.conversation_id
-    assert created_title is not None
-
-
-async def test_an_outbound_alone_does_not_keep_an_ordinary_chat_alive(world):
-    """A message *about* nothing to answer does not defeat the reset forever.
-
-    An FYI that nobody has to answer holds the conversation only for the reset
-    window; sent a day and a half ago it is history, like any other message.
-    """
-    world.had_chatted(hours_ago=60)
-    notification = await world.ask(expects_response=False)
-    row = world.notifications.rows[notification.id]
-    row.delivered_at = _now() - timedelta(hours=40)
-
-    bound, _ = await world.reply("hello again")
-
-    assert bound.conversation_id != notification.delivery_conversation_id
-
-
 async def test_a_report_is_still_read_against_when_it_was_delivered_recently(world):
     """ "Yes" to a reminder, a day after the person last spoke, is an answer."""
     world.had_chatted(hours_ago=30)
@@ -771,14 +740,6 @@ async def test_an_unanswered_question_holds_its_conversation_until_it_expires(wo
     bound, _ = await world.reply("sorry, only just saw this: yes")
 
     assert bound.conversation_id == notification.delivery_conversation_id
-
-    # Once it has expired nothing is owed, and the reset applies as before.
-    world.notifications.rows[notification.id].status = NotificationStatus.EXPIRED
-    world.links.only().last_inbound_at = _now() - timedelta(hours=90)
-
-    later, _ = await world.reply("hello")
-
-    assert later.conversation_id != notification.delivery_conversation_id
 
 
 async def test_a_second_notification_joins_the_conversation_of_an_unanswered_first(

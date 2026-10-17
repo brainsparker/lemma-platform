@@ -106,10 +106,7 @@ async def waiting_on_work(uow: Any, conversation_id: UUID) -> bool:
     Said on the ``completed`` frame so a client can tell the two apart without
     reading back: only this one has a run coming that it should follow.
     """
-    wait = await AgentConversationWaitRepository(uow).find_active_for_conversation(
-        conversation_id
-    )
-    return wait is not None
+    return await AgentConversationWaitRepository(uow).has_active(conversation_id)
 
 
 class RunFinalizer:

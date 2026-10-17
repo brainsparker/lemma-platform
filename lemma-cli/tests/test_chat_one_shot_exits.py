@@ -576,3 +576,30 @@ def test_an_answer_longer_than_one_page_is_read_in_full(
 
     assert exit_code == 0, output
     assert "line 0" in output and "line 149" in output
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            # An older server: no waiting_on_work, and nothing will come.
+            sent=[_status(), _token("Send me the code."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("WAITING", False)],
+        )
+    ],
+    indirect=True,
+)
+def test_an_unmarked_wait_is_looked_at_briefly_not_for_the_full_timeout(
+    api: _FakeApi,
+    fast_rechecks: None,
+    no_sleep: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(background_waits, "UNMARKED_WAIT_SECONDS", 0.3)
+    started = time.monotonic()
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "resume:" in output
+    assert time.monotonic() - started < 10, "held for the full wait timeout"

@@ -516,3 +516,13 @@ async def test_a_run_ending_on_its_own_wait_says_so_and_one_asking_a_person_does
     async with create_uow_from_session_maker(async_session_maker) as uow:
         assert await waiting_on_work(uow, waiting.conversation_id) is True
         assert await waiting_on_work(uow, asking.conversation_id) is False
+
+    # And a viewer that opens the conversation later reads the same.
+    opened = await scenario.owner_client.get(
+        f"/pods/{waiting.pod_id}/conversations/{waiting.conversation_id}"
+    )
+    assert opened.status_code == 200, opened.text
+    assert (opened.json()["status"], opened.json()["waiting_on_work"]) == (
+        "WAITING",
+        True,
+    )

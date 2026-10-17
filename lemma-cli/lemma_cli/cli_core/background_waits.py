@@ -25,6 +25,10 @@ DEFAULT_WAIT_TIMEOUT_SECONDS = 900.0
 #: cap: a sub-agent often answers in seconds, a timer may take minutes.
 FIRST_POLL_SECONDS = 0.5
 MAX_POLL_SECONDS = 5.0
+#: How long to look when the server does not say what the wait is on (an
+#: older server): long enough for a quick sub-agent, short enough that a wait
+#: on a person -- with no run to come -- does not hold the command.
+UNMARKED_WAIT_SECONDS = 30.0
 
 
 def waits_in_background(terminal: StreamEvent | None) -> bool:
@@ -58,9 +62,18 @@ def follow_background_waits(
     waits on a person -- a question or an approval nobody here will answer --
     or when ``wait_timeout`` passes with it still waiting.
     """
-    deadline = time.monotonic() + wait_timeout
+    overall = time.monotonic() + wait_timeout
     announced = False
     while waits_in_background(terminal):
+        marked = (
+            terminal is not None
+            and isinstance(terminal.data, dict)
+            and (terminal.data.get("waiting_on_work") is True)
+        )
+        deadline = min(
+            overall,
+            time.monotonic() + (wait_timeout if marked else UNMARKED_WAIT_SECONDS),
+        )
         # Everything the paused run wrote is at or below this; whatever a
         # resumed run writes comes after it.
         after = _newest_sequence(conversations, conversation_id)

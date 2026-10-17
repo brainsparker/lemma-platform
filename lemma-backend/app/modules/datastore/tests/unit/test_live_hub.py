@@ -18,6 +18,7 @@ import pytest
 
 from app.modules.datastore.config_live import LiveSettings
 from app.modules.datastore.domain.live import (
+    LiveHubUnavailable,
     ChangePosition,
     LiveAccessDenied,
     LiveChange,
@@ -31,6 +32,7 @@ from app.modules.datastore.domain.live import (
     UnsubscribedReason,
 )
 from app.modules.datastore.services.live.connection import LiveConnection
+from app.modules.datastore.services.live import hub_start
 from app.modules.datastore.services.live.hub import PodHub
 from app.modules.datastore.services.live.registry import LiveHubRegistry
 
@@ -538,3 +540,50 @@ async def test_legacy_connection_frames_one_change_per_frame(rig: Rig) -> None:
     assert change["operation"] == "INSERT"
     assert change["payload"] == {"id": "r1", "body": "b"}
     assert change["stream_id"] == change["cursor"]
+
+
+async def test_an_unexpected_start_failure_refuses_the_socket_and_the_next_one_starts(
+    rig: Rig, monkeypatch
+) -> None:
+    """A start that fails in a way nobody planned for must still release the
+    sockets waiting on it, and must not refuse the pod until the hub is reaped."""
+    hub = await rig.hub()
+    real_horizon = hub._feed.horizon
+    calls = 0
+
+    async def flaky_horizon(pod_id: UUID) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("not one of the start errors anyone expected")
+        return await real_horizon(pod_id)
+
+    monkeypatch.setattr(hub._feed, "horizon", flaky_horizon)
+
+    with pytest.raises(LiveHubUnavailable):
+        await asyncio.wait_for(hub.ensure_started(), timeout=2)
+    await asyncio.wait_for(hub.ensure_started(), timeout=2)
+    assert hub.cursor is not None
+
+
+async def test_a_start_that_never_finishes_or_is_stopped_does_not_hang_the_socket(
+    rig: Rig, monkeypatch
+) -> None:
+    hub = await rig.hub()
+    stuck = asyncio.Event()
+
+    async def stuck_horizon(pod_id: UUID) -> str:
+        await stuck.wait()
+        return ""
+
+    monkeypatch.setattr(hub._feed, "horizon", stuck_horizon)
+    monkeypatch.setattr(hub_start, "START_TIMEOUT", 0.2)
+    with pytest.raises(LiveHubUnavailable):
+        await asyncio.wait_for(hub.ensure_started(), timeout=2)
+
+    # Stopped mid-start (the reaper, a shutdown): the waiter hears at once.
+    waiting = asyncio.create_task(hub.ensure_started())
+    await asyncio.sleep(0.05)
+    await hub.stop()
+    with pytest.raises(LiveHubUnavailable):
+        await asyncio.wait_for(waiting, timeout=2)

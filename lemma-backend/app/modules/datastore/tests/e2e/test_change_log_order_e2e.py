@@ -317,3 +317,44 @@ async def test_positions_order_by_number_not_by_their_text(pod_api: DatastoreApi
         seen.extend(change.record_id for change in page.changes)
         cursor = page.cursor
     assert seen == ["earliest", "earlier", "later"]
+
+
+async def test_a_transaction_in_another_database_does_not_hold_the_log_back(
+    pod_api: DatastoreApi,
+):
+    """Transaction ids are the server's, not the database's: a transaction left
+    open in another database on the same server (the main database, an auth
+    service, a psql session) can never write a change here, so it must not
+    keep every pod's changes from being read."""
+    import asyncpg
+
+    pod_id = UUID(pod_api.pod_id)
+    table_id = await orders_table(pod_api)
+    engine = get_datastore_engine()
+    dsn = engine.url.set(drivername="postgresql").render_as_string(hide_password=False)
+    other_name = f"other_{uuid4().hex[:8]}"
+    admin = await asyncpg.connect(dsn)
+    try:
+        await admin.execute(f'CREATE DATABASE "{other_name}"')
+        other = await asyncpg.connect(dsn.rsplit("/", 1)[0] + f"/{other_name}")
+        try:
+            held = other.transaction()
+            await held.start()
+            await other.execute("CREATE TABLE held (x int)")  # takes an xid
+            async with engine.begin() as conn:
+                await _append(conn, pod_id, table_id, "while-elsewhere-open")
+
+            page = await eventually(
+                label="the change is read while the other database's transaction is open",
+                probe=lambda: read_after(pod_id, None),
+                done=lambda read: bool(read.changes),
+                timeout_seconds=15,
+                interval_seconds=0.1,
+            )
+            assert [c.record_id for c in page.changes] == ["while-elsewhere-open"]
+            await held.rollback()
+        finally:
+            await other.close()
+    finally:
+        await admin.execute(f'DROP DATABASE IF EXISTS "{other_name}"')
+        await admin.close()

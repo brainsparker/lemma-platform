@@ -18234,7 +18234,9 @@
           "bulk_write",
           "import_write",
           "fire_cap",
-          "lag_exceeded"
+          "lag_exceeded",
+          "condition_not_met",
+          "outside_row"
         ],
         "title": "TriggerSkipReason",
         "type": "string"

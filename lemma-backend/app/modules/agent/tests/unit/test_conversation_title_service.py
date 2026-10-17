@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError
 
 from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
 from app.modules.agent.domain.runtime_profiles import (
@@ -522,9 +523,10 @@ def _generator(
     output: str = "A nice title",
     raise_on_run: bool = False,
     reasons: bool = True,
+    refuses_effort: bool = False,
 ) -> tuple[ConversationTitleGenerator, dict]:
     """The real generator with only the model boundary faked."""
-    capture: dict[str, object] = {"run_calls": 0, "usage": []}
+    capture: dict[str, object] = {"run_calls": 0, "usage": [], "settings_seen": []}
 
     class _FakeLLMAgent:
         def __init__(self, model, system_prompt=None):
@@ -536,8 +538,11 @@ def _generator(
             capture["prompt"] = prompt
             capture["usage_limits"] = usage_limits
             capture["model_settings"] = model_settings
+            capture["settings_seen"].append(dict(model_settings or {}))
             if raise_on_run:
                 raise RuntimeError("llm boom")
+            if refuses_effort and "openai_reasoning_effort" in (model_settings or {}):
+                raise ModelHTTPError(400, "a-model", {"error": "unknown field"})
             return SimpleNamespace(output=output)
 
     profiles = _FakeProfileService(reasons=reasons)
@@ -587,18 +592,34 @@ async def test_generator_does_not_pay_for_a_hidden_reasoning_trace() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_title_on_a_model_that_does_not_reason_asks_for_no_effort() -> None:
-    """A non-reasoning OpenAI-compatible model rejects `reasoning_effort`.
-
-    The title used to send `none` to whatever resolved -- the workspace
-    fallback included -- and a strict endpoint's 400 fell back, silently, to
-    the first message as the title.
-    """
+async def test_an_undeclared_model_is_asked_for_no_effort_too() -> None:
+    """A reasoning model nobody declared would otherwise think at its default
+    for a few words."""
     generator, capture = _generator(reasons=False)
 
     await _ask(generator, user_text="Plan a trip to Japan")
 
-    assert "openai_reasoning_effort" not in (capture["model_settings"] or {})
+    assert capture["settings_seen"] == [{"openai_reasoning_effort": "none"}]
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_refuses_the_effort_field_is_asked_again_without_it() -> (
+    None
+):
+    """A strict endpoint's 400 used to fall back, silently, to the first
+    message as the title. Now it is asked once more, plainly."""
+    generator, capture = _generator(reasons=False, refuses_effort=True)
+
+    title = await _ask(generator, user_text="Plan a trip to Japan")
+
+    assert title == "A nice title"
+    assert capture["settings_seen"] == [{"openai_reasoning_effort": "none"}, {}]
+
+
+def test_a_title_reasoned_at_length_is_kept_not_discarded() -> None:
+    """The output cap is checked after the response: at 256, a model that
+    reasoned anyway had its finished title thrown away every time."""
+    assert (cts._TITLE_USAGE_LIMITS.output_tokens_limit or 0) >= 4_096
 
 
 @pytest.mark.asyncio

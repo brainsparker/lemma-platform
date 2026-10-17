@@ -156,7 +156,9 @@ def upgrade() -> None:
         sa.Column(
             "merged_into_id",
             UUID(as_uuid=True),
-            sa.ForeignKey("contacts.id", ondelete="SET NULL"),
+            # Forgetting a contact forgets the contacts that became it: set to
+            # null instead, they would come back as empty contacts.
+            sa.ForeignKey("contacts.id", ondelete="CASCADE"),
             nullable=True,
         ),
         if_not_exists=True,
@@ -187,6 +189,14 @@ def upgrade() -> None:
         "ix_contacts_merged_into",
         "contacts",
         ["merged_into_id"],
+        if_not_exists=True,
+    )
+    # The organization's contact limit counts these before every outside turn.
+    op.create_index(
+        "ix_contacts_answered",
+        "contacts",
+        ["pod_id"],
+        postgresql_where=sa.text("answered_at IS NOT NULL AND merged_into_id IS NULL"),
         if_not_exists=True,
     )
     # Concurrently, outside the transaction: conversations are written on
@@ -225,6 +235,7 @@ def downgrade() -> None:
     )
     op.drop_column("agent_conversations", "contact_id")
     op.drop_column("usage_contacts_caps", "max_contacts")
+    op.drop_index("ix_contacts_answered", table_name="contacts", if_exists=True)
     op.drop_index("ix_contacts_merged_into", table_name="contacts", if_exists=True)
     op.drop_column("contacts", "answered_at")
     op.drop_column("contacts", "merged_into_id")

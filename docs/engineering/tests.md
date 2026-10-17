@@ -206,6 +206,28 @@ and never emits partial JSON tool arguments — so the accounting, dedup and
 parsing paths that depend on those are unexercised by every test that uses it.
 When you add a behaviour that depends on the model's shape, extend the double.
 
+### TST-17 — a module e2e file shares one identity and isolates each test with a fresh pod
+
+Signing a user up and creating an organization is most of a short e2e test's
+setup. A file whose tests need *a* user and *an* organization, not new ones,
+takes them once per module:
+
+```python
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
+```
+
+`db_manager` resets each of its tests to exactly those rows (and drops the
+Redis keys that name them), so isolation comes from what the test creates —
+normally its own pod. Use `module_test_user_own_session` when the tests revoke
+or inspect the session. A test that counts users, organizations or members
+across the deployment, or changes the user's credentials, keeps the
+function-scoped fixtures.
+
+*Check:* none; `app/modules/apps/tests/e2e/test_app_access_security.py` is the
+worked example
+
 ---
 
 ## The scenario suite

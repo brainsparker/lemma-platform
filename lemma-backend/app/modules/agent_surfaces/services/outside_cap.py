@@ -123,14 +123,18 @@ async def _admitted(
 
     The contact a merged id leads to is the one counted and marked. A contact
     not yet answered is admitted under a lock on the organization's count, so
-    two arriving together cannot both take its last place; one answered before
-    takes no lock.
+    two arriving together cannot both take its last place, and two turns of one
+    contact take one; one answered before takes no lock.
     """
     contact = await contact_by_id(uow, pod_id=pod_id, contact_id=contact_id)
     if contact is not None and contact.answered:
         return True
     counted = contact.id if contact is not None else contact_id
     await lock_answered_contacts_count(uow, organization_id=organization_id)
+    # Another turn of theirs may have taken their place while this one waited.
+    now = await contact_by_id(uow, pod_id=pod_id, contact_id=counted)
+    if now is not None and now.answered:
+        return True
     answered = await answered_contacts_in_organization(
         uow, organization_id=organization_id
     )

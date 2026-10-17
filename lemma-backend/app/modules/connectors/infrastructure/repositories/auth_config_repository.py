@@ -1,21 +1,30 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Sequence
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.modules.connectors.infrastructure.repositories.catalog_rows import (
     aconvert_valid_rows,
 )
+from app.core.infrastructure.db.integrity import violated_constraint
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigStatus,
 )
+from app.modules.connectors.domain.errors import ConnectorConflictError
 from app.modules.connectors.domain.ports import SecretEncryptionPort
 from app.modules.connectors.infrastructure.models import AuthConfig
+
+#: One active install per name in an organization: the name is how a pod, an
+#: agent's toolset and the API ask for it.
+_NAME_TAKEN = "ix_auth_configs_unique_active_org_name"
 
 
 class AuthConfigRepository(
@@ -47,9 +56,12 @@ class AuthConfigRepository(
         return entity
 
     async def create(self, entity: AuthConfigEntity) -> AuthConfigEntity:
+        """The new install. Raises ``ConnectorConflictError`` for a name an
+        active install of the organization already has."""
         instance = await self._to_model(entity)
-        self.session.add(instance)
-        await self.session.flush()
+        async with self._name_must_be_free(entity.name):
+            self.session.add(instance)
+            await self.session.flush()
         return await self._to_entity(instance)
 
     async def update(self, entity: AuthConfigEntity) -> AuthConfigEntity:
@@ -75,8 +87,30 @@ class AuthConfigRepository(
         instance.is_default = entity.is_default
         instance.metadata_ = entity.metadata
         instance.updated_by_user_id = entity.updated_by_user_id
-        await self.session.flush()
+        # A rename onto a taken name, or reactivating an install whose name
+        # another has since taken, is refused the same way as a create.
+        async with self._name_must_be_free(entity.name):
+            await self.session.flush()
         return await self._to_entity(instance)
+
+    @asynccontextmanager
+    async def _name_must_be_free(self, name: str) -> AsyncIterator[None]:
+        """Write inside a savepoint; a clash on the install name is a conflict.
+
+        Left to the unique index rather than looked up first: two requests
+        naming the same install at once both find the name free.
+        """
+        try:
+            async with self.session.begin_nested():
+                yield
+        except IntegrityError as error:
+            if violated_constraint(error) != _NAME_TAKEN:
+                raise
+            raise ConnectorConflictError(
+                f"An active connector install is already called {name!r}. "
+                "Give this one a different name.",
+                details={"name": name},
+            ) from None
 
     async def get(self, id: UUID) -> AuthConfigEntity | None:
         stmt = select(AuthConfig).where(AuthConfig.id == id)

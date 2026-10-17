@@ -36,7 +36,11 @@ from app.modules.datastore.api.live_socket import (
     close_code_for,
     serve,
 )
-from app.modules.datastore.domain.live import LiveCursorExpired, SubscribeRequest
+from app.modules.datastore.domain.live import (
+    LiveCursorExpired,
+    LiveHubUnavailable,
+    SubscribeRequest,
+)
 from app.modules.datastore.services.live import live_hubs
 from app.modules.datastore.services.live.connection import LiveConnection
 from app.modules.datastore.services.wiring import build_table_service
@@ -120,7 +124,7 @@ async def datastore_changes_ws(
             ),
             max_subscriptions=1,
         )
-    except SQLAlchemyError, OSError, LiveCursorExpired:
+    except SQLAlchemyError, OSError, LiveCursorExpired, LiveHubUnavailable:
         hub.detach(connection)
         logger.error(
             "datastore.live.socket_rejected", pod_id=str(pod_id), exc_info=True

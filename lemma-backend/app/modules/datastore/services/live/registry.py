@@ -73,7 +73,13 @@ class LiveHubRegistry:
                 if hub.idle_since is not None and now - hub.idle_since >= linger
             ]
             for hub in idle:
-                self._hubs.pop(hub.pod_id, None)
+                # Re-checked here: an earlier stop yielded, and a socket may
+                # have attached to this hub meanwhile.
+                since = hub.idle_since
+                if since is None or time.monotonic() - since < linger:
+                    continue
+                if self._hubs.get(hub.pod_id) is hub:
+                    self._hubs.pop(hub.pod_id)
                 await hub.stop()
             if not any(hub.idle_since is not None for hub in self._hubs.values()):
                 return

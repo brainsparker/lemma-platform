@@ -35,6 +35,9 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     JsonValue,
 )
+from app.modules.agent.infrastructure.wait_repository import (
+    AgentConversationWaitRepository,
+)
 from app.modules.agent.infrastructure.repositories import (
     ConversationRepository,
 )
@@ -96,6 +99,16 @@ def rejected_run_error_message(data: object) -> str:
     return "The Agent Host rejected this run before dispatch. Try again."
 
 
+async def waiting_on_work(uow: Any, conversation_id: UUID) -> bool:
+    """Whether a WAITING conversation waits on the agent's own work -- a
+    sub-agent, a process, a timer -- rather than on a person.
+
+    Said on the ``completed`` frame so a client can tell the two apart without
+    reading back: only this one has a run coming that it should follow.
+    """
+    return await AgentConversationWaitRepository(uow).has_active(conversation_id)
+
+
 class RunFinalizer:
     """Terminal writes for one runner's runs."""
 
@@ -152,6 +165,10 @@ class RunFinalizer:
                     if output_data is not None:
                         event_data["output_data"] = output_data
                     event_data["conversation_status"] = conversation_status.value
+                    if conversation_status is ConversationStatus.WAITING:
+                        event_data["waiting_on_work"] = await waiting_on_work(
+                            uow, run.conversation_id
+                        )
                     event = AgentRunCompletedEvent(
                         conversation_id=run.conversation_id,
                         agent_run_id=run.agent_run_id,

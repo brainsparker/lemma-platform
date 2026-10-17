@@ -20,7 +20,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import jwt
 import pytest
@@ -641,6 +641,35 @@ async def test_a_new_widget_answers_nobody_and_names_only_real_origins(
         "http://localhost:5173",
         "https://shop.example:8443",
     ]
+
+
+async def test_a_widget_name_the_pod_already_has_is_refused_not_a_server_error(
+    authenticated_client: AsyncClient, test_pod, fixed_test_org
+):
+    """One name is one widget in a pod; another pod may use it."""
+    pod_id = test_pod["id"]
+    first = await _widget(authenticated_client, pod_id, name="Shop chat")
+
+    again = await authenticated_client.post(
+        f"/pods/{pod_id}/web-widgets", json={"name": "  Shop chat "}
+    )
+
+    assert again.status_code == 409, again.text
+    assert again.json()["code"] == "widget_name_taken"
+    assert "INSERT" not in again.text and "lsenc" not in again.text
+    listed = (await authenticated_client.get(f"/pods/{pod_id}/web-widgets")).json()
+    assert [w["id"] for w in listed["items"] if w["name"] == "Shop chat"] == [
+        first["id"]
+    ]
+    other = await authenticated_client.post(
+        "/pods",
+        json={
+            "organization_id": fixed_test_org["id"],
+            "name": f"Other shop {uuid4().hex[:6]}",
+        },
+    )
+    assert other.status_code == 201, other.text
+    await _widget(authenticated_client, other.json()["id"], name="Shop chat")
 
 
 async def test_nothing_is_served_while_public_web_is_switched_off(

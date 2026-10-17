@@ -67,9 +67,7 @@ class _Relay:
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         # serve_forever polls for shutdown every 0.5s by default, which
         # is most of what each test here costs.
-        Thread(
-            target=self._server.serve_forever, args=(0.01,), daemon=True
-        ).start()
+        Thread(target=self._server.serve_forever, args=(0.01,), daemon=True).start()
 
     @property
     def url(self) -> str:
@@ -203,9 +201,7 @@ class _ResizeRelay:
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         # serve_forever polls for shutdown every 0.5s by default, which
         # is most of what each test here costs.
-        Thread(
-            target=self._server.serve_forever, args=(0.01,), daemon=True
-        ).start()
+        Thread(target=self._server.serve_forever, args=(0.01,), daemon=True).start()
 
     @property
     def url(self) -> str:

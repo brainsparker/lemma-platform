@@ -483,7 +483,7 @@ def _postgres_worker_datastore_db_name(worker_id: str) -> str:
 
 def _supertokens_core_is_shared(worker_id: str) -> bool:
     """xdist workers share one core (``shared_supertokens``) unless reusing containers."""
-    return worker_id != "master" and not e2e_reuse_requested()
+    return False
 
 
 def _postgres_worker_supertokens_db_name(worker_id: str) -> str:

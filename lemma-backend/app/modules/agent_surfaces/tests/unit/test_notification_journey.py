@@ -25,6 +25,8 @@ answers, because a canned answer certifies only that the caller asked. The SQL b
 
 from __future__ import annotations
 
+from app.modules.agent.domain.outsiders import Audience
+
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -135,6 +137,7 @@ class AgentSide:
             agent_id=self.agent_id_for(agent_name),
             title=title,
             updated_at=_now(),
+            audience=Audience.member(),
         )
         self.conversations[conversation.id] = conversation
         self.messages[conversation.id] = []

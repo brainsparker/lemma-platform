@@ -546,8 +546,13 @@ _TENANT_KEY: dict[SurfacePlatform, Callable[[AgentSurfaceEntity], str | None]] =
 
 
 class AgentSurfaceConversationLink(Entity):
+    """One person's thread on one channel source: the conversation it maps to,
+    and the last thing they sent there, which is where to answer them."""
+
     surface_id: UUID
     conversation_id: UUID
+    #: The channel source this thread is on, once the binder has placed it.
+    source_id: UUID | None = None
     platform: str
     external_channel_id: str | None = None
     external_thread_id: str

@@ -110,6 +110,13 @@ class ConversationModel(UUIDAuditBase):
         index=True,
         nullable=True,
     )
+    #: The channel this conversation's agent works in, when it lives on one.
+    #: A conversation started in Lemma, and an agent's own task, have none.
+    channel_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("channels.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
     organization_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"),
         index=True,
@@ -213,6 +220,7 @@ class ConversationModel(UUIDAuditBase):
             "user_id": conversation.user_id,
             "pod_id": conversation.pod_id,
             "contact_id": conversation.contact_id,
+            "channel_id": conversation.channel_id,
             "organization_id": conversation.organization_id,
             "agent_id": conversation.agent_id,
             "title": conversation.title,
@@ -243,6 +251,7 @@ class ConversationModel(UUIDAuditBase):
             user_id=self.user_id,
             pod_id=self.pod_id,
             contact_id=self.contact_id,
+            channel_id=self.channel_id,
             organization_id=self.organization_id,
             agent_id=self.agent_id,
             title=self.title,

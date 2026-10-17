@@ -411,6 +411,13 @@ class AgentSurfaceConversationLinkModel(UUIDAuditBase):
 
     # No index of its own: leading column of `ix_agent_surface_link_external_thread`,
     # and paired with the member in `ix_agent_surface_link_surface_member`.
+    #: The channel source this thread is on: the place, while this row is one
+    #: person's thread there and where to answer them.
+    source_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("channel_sources.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     surface_id: Mapped[UUID] = mapped_column(
         ForeignKey("agent_surfaces.id", ondelete="CASCADE"),
         nullable=False,
@@ -453,6 +460,7 @@ class AgentSurfaceConversationLinkModel(UUIDAuditBase):
             updated_at=self.updated_at,
             surface_id=self.surface_id,
             conversation_id=self.conversation_id,
+            source_id=self.source_id,
             platform=self.platform,
             external_channel_id=self.external_channel_id,
             external_thread_id=self.external_thread_id,

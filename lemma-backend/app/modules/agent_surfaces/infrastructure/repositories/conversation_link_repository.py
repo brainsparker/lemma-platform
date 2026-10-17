@@ -370,6 +370,7 @@ class SurfaceConversationLinkRepository(DmLinkQueries):
                 updated_at=link.updated_at,
                 surface_id=link.surface_id,
                 conversation_id=link.conversation_id,
+                source_id=link.source_id,
                 platform=link.platform,
                 external_channel_id=link.external_channel_id,
                 external_thread_id=link.external_thread_id,

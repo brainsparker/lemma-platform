@@ -31,10 +31,12 @@ from sqlalchemy import text
 from app.core.infrastructure.db.base import Base
 from app.core.infrastructure.db.manager import DatabaseManager, TableSnapshot
 from app.core.test_utils import (
+    SHARED_E2E_NETWORK_NAME,
     create_postgres_database,
     get_postgres_uri_from_another_container,
     get_postgres_url,
     get_redis_url,
+    get_supertokens_container,
     get_supertokens_url,
 )
 from app.core.test_shared_containers import (
@@ -45,7 +47,6 @@ from app.core.test_shared_containers import (
     reused_container_name,
     shared_postgres,
     shared_redis,
-    shared_supertokens,
 )
 
 if TYPE_CHECKING:
@@ -481,14 +482,12 @@ def _postgres_worker_datastore_db_name(worker_id: str) -> str:
     return f"datastore_{_sanitize_worker_id(worker_id)}"
 
 
-def _supertokens_core_is_shared(worker_id: str) -> bool:
-    """xdist workers share one core (``shared_supertokens``) unless reusing containers."""
-    return worker_id != "master" and not e2e_reuse_requested()
-
-
 def _postgres_worker_supertokens_db_name(worker_id: str) -> str:
-    if _supertokens_core_is_shared(worker_id):
-        return "supertokens_shared"
+    # One core and one database per xdist worker. Sharing one core across
+    # workers was tried and measured: it saved a JVM start but made every
+    # worker-driven test wait on it -- the schedule shard's pod-bundle tests
+    # took 257s against 148s with a core each (CI runs 39023294610 and
+    # 39023300378).
     return f"supertokens_{_sanitize_worker_id(worker_id)}"
 
 
@@ -646,8 +645,8 @@ def _start_supertokens(worker_id: str, basetemp_parent) -> None:
     )
 
     def _factory():
-        return shared_supertokens(
-            basetemp_parent, worker_id, postgres_uri, reuse_name=reuse_name
+        return get_supertokens_container(
+            postgres_uri, network=SHARED_E2E_NETWORK_NAME, reuse_name=reuse_name
         )
 
     _shared_context_resource("supertokens", _factory)

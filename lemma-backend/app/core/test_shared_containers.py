@@ -35,9 +35,6 @@ from app.core.test_utils import (
     get_kreuzberg_url,
     get_postgres_container,
     get_redis_container,
-    get_supertokens_container,
-    start_named_supertokens,
-    SUPERTOKENS_IMAGE,
     postgres_server_command,
     remove_named_container,
 )
@@ -439,65 +436,6 @@ def shared_redis(
     container = LemmaDockerContainer(REDIS_IMAGE, 6379)
     container.container_id = name
 
-    try:
-        yield container
-    finally:
-        with lock:
-            refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
-            refs_file.write_text(str(refs))
-            if refs <= 0:
-                remove_named_container(name)
-                refs_file.unlink(missing_ok=True)
-
-
-SHARED_SUPERTOKENS_NAME = "lemma-e2e-supertokens-shared"
-
-
-@contextmanager
-def shared_supertokens(
-    basetemp_parent,
-    worker_id: str,
-    postgres_connection_uri: str,
-    *,
-    reuse_name: str | None = None,
-) -> Generator[LemmaDockerContainer, None, None]:
-    """One SuperTokens core for every xdist worker of a run.
-
-    A core is a JVM: a few seconds of startup and a few hundred megabytes each,
-    and with one per worker four of them started at once on a runner already
-    booting four worker subprocesses. They need nothing of their own -- every
-    e2e user has a unique email -- so they share one core and one database,
-    refcounted like ``shared_postgres``. Serially, or with a reused container,
-    it is the plain single core it always was.
-    """
-    if reuse_name is not None or worker_id == "master":
-        with get_supertokens_container(
-            postgres_connection_uri,
-            network=SHARED_E2E_NETWORK_NAME,
-            reuse_name=reuse_name,
-        ) as core:
-            yield core
-        return
-
-    from pathlib import Path
-
-    from filelock import FileLock
-
-    root = Path(basetemp_parent)
-    name = _session_scoped_container_name(SHARED_SUPERTOKENS_NAME, basetemp_parent)
-    lock = FileLock(str(root / "supertokens.lock"))
-    refs_file = root / "supertokens_refs.txt"
-
-    with lock:
-        refs = int(refs_file.read_text()) if refs_file.exists() else 0
-        if refs == 0:
-            start_named_supertokens(
-                name, postgres_connection_uri, network=SHARED_E2E_NETWORK_NAME
-            )
-        refs_file.write_text(str(refs + 1))
-
-    container = LemmaDockerContainer(SUPERTOKENS_IMAGE, 3567)
-    container.container_id = name
     try:
         yield container
     finally:

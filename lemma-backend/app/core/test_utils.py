@@ -522,28 +522,6 @@ def _supertokens_container(
     return container
 
 
-def start_named_supertokens(
-    name: str, postgres_connection_uri: str, *, network: str, label: str = DOCKER_LABEL
-) -> LemmaDockerContainer:
-    """Start ONE named SuperTokens core, detached, and wait until it answers.
-
-    For a core several pytest-xdist workers share: they all sign users up in
-    one database, which is safe because every e2e user has a unique email.
-    Its connection pool is raised from the image's ten to serve them all.
-    """
-    remove_named_container(name)
-    container = (
-        _supertokens_container(postgres_connection_uri, network)
-        .with_env("POSTGRESQL_CONNECTION_POOL_SIZE", "20")
-        .with_run_args("--name", name)
-    )
-    container.label = label
-    container.__enter__()  # detached; whoever started it removes it by name
-    container.container_id = name
-    _wait_for_supertokens(container)
-    return container
-
-
 def _wait_for_supertokens(st: LemmaDockerContainer) -> None:
     """Poll SuperTokens' health endpoint until it answers."""
     import time

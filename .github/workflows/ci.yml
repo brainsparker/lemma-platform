@@ -77,6 +77,7 @@ jobs:
             workspace:
               - 'lemma-frontend/**'
               - 'lemma-typescript/**'
+              - 'tests/scenarios/journeys/public_website/**'
               - '.nvmrc'
               - '.github/workflows/ci.yml'
             codegen:
@@ -147,8 +148,22 @@ jobs:
             #
             # This one is cheap enough to list ci.yml, so a change to the
             # desktop CI steps finally runs something desktop-shaped.
+            #
+            # Only the backend half this job exercises: the Agent Host seam
+            # (`make desktop-agent-host-e2e` runs four agent-host e2e files)
+            # and the dependency lock the host pack installs. It used to list
+            # all of `lemma-backend/**`, which made a 7-minute job and one of
+            # the 20 shared runner slots a cost of every backend pull request
+            # -- 79 of 80 runs -- for a seam a handful of files define. The
+            # backend's own e2e lane covers the rest of the backend.
             desktop_contract:
-              - 'lemma-backend/**'
+              - 'lemma-backend/app/modules/**/*agent_host*'
+              - 'lemma-backend/app/modules/**/*agent_host*/**'
+              - 'lemma-backend/app/modules/**/*host_execution*'
+              - 'lemma-backend/app/modules/agent/tests/e2e/test_agent_host_*'
+              - 'lemma-backend/app/modules/agent/tests/e2e/test_host_execution_*'
+              - 'lemma-backend/pyproject.toml'
+              - 'lemma-backend/uv.lock'
               - 'lemma-frontend/**'
               - 'lemma-typescript/**'
               - 'desktop/runtime/frontend-launcher.mjs'
@@ -165,11 +180,17 @@ jobs:
             # and the backend half of the Agent Host. Like `desktop`, ci.yml is
             # left out -- this is a macOS job -- so validate a change to the job
             # itself with Actions -> CI -> Run workflow.
+            #
+            # The backend half is the Agent Host seam only, as for
+            # `desktop_contract` above; all of `agent/**` started a macOS
+            # runner on most backend pull requests for an exempt check.
             desktop_launch:
               - 'desktop/**'
               - 'lemma-frontend/**'
               - 'lemma-typescript/**'
-              - 'lemma-backend/app/modules/agent/**'
+              - 'lemma-backend/app/modules/**/*agent_host*'
+              - 'lemma-backend/app/modules/**/*agent_host*/**'
+              - 'lemma-backend/app/modules/**/*host_execution*'
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
@@ -553,6 +574,20 @@ jobs:
         env:
           NEXT_PUBLIC_DATA: sample
       - run: git diff --exit-code -- lemma-typescript/public/lemma-client.js lemma-typescript/public/lemma-ui.js
+      # The public website journey from the product scenarios. It ran in a
+      # job of its own on every pull request -- backend-only ones included --
+      # repeating both `npm ci`s this job has already done. Here it runs when
+      # the frontend changes, on the install above; nightly it still runs in
+      # the scenarios workflow.
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: tests/scenarios/uv.lock
+      - name: Public website journey
+        working-directory: tests/scenarios
+        run: |
+          uv sync
+          uv run pytest journeys/public_website -q
 
   # The dev-workflow tests assert on the env `make dev` hands the backend. They
   # had drifted badly enough to reference deleted targets, because nothing ran
@@ -593,6 +628,17 @@ jobs:
       # access. Each was green on its own terms.
       - name: Both DMG pipelines verify the same things
         run: uv run --no-project --with pyyaml python scripts/check_release_parity.py
+
+      # The scenario suite's own guards: no backend imports, no mocking, no
+      # sleeping. Seconds; it used to be a job of its own in the scenarios
+      # workflow, started by every pull request whatever it touched. (The
+      # traceability gate it sat beside runs in `make quality`, in the
+      # backend quality job, on every pull request.)
+      - name: Scenario suite guards
+        working-directory: tests/scenarios
+        run: |
+          uv sync
+          uv run pytest journeys/test_harness_contract.py -q
 
   windows-cli:
     name: Windows CLI smoke test

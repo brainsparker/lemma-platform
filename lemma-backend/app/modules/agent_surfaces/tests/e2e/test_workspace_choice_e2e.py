@@ -359,7 +359,12 @@ async def test_a_thread_on_a_pod_you_left_is_not_somewhere_to_talk(
     from app.modules.agent_surfaces.services.onboarding_pod_choice import (
         has_somewhere_to_talk,
     )
-    from app.modules.channels.contracts import MembersHome, Place, SourceKind, source_for
+    from app.modules.channels.contracts import (
+        MembersHome,
+        Place,
+        SourceKind,
+        source_for,
+    )
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
     sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)

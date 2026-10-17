@@ -50,9 +50,7 @@ async def _tap(*, sender: str | None = None, decision: str = "APPROVE_ONCE"):
     parsed_event = _slack_event()
     link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
-    service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], answered=link
-    )
+    service = build_ingress_service(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.surface_conversation.return_value = _surface_conversation(
         surface, conversation_id=conversation_id
     )

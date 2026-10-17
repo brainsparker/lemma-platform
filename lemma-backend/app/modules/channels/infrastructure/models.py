@@ -194,9 +194,7 @@ class ChannelSourceModel(UUIDAuditBase):
     #: What the surface last heard here, as its adapter reads it: how to write
     #: into this place when nothing is being answered (a notification, a
     #: follow-up). The surface's own shape; nothing else reads inside it.
-    delivery_ref: Mapped[dict[str, object] | None] = mapped_column(
-        JSONB, nullable=True
-    )
+    delivery_ref: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     # -- a shared place the pod's bot is in: a group, a shared channel --------
     #: The member who answers for the people here from outside the pod.
     owner_user_id: Mapped[UUID | None] = mapped_column(
@@ -287,6 +285,4 @@ class ChannelMessageModel(UUIDAuditBase):
     #: On a line a person said on a platform: what its surface needs to answer
     #: it in place -- its thread, the message replied to, the number it came
     #: to. The surface's own shape; nothing else reads inside it.
-    reply_ref: Mapped[dict[str, object] | None] = mapped_column(
-        JSONB, nullable=True
-    )
+    reply_ref: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)

@@ -94,7 +94,10 @@ async def test_what_was_heard_is_kept_as_how_to_answer_the_place():
     event = _slack_event()
 
     await binder.bind_conversation(
-        surface=surface, parsed=event, resolved_user=_member(user_id), route=_route(surface)
+        surface=surface,
+        parsed=event,
+        resolved_user=_member(user_id),
+        route=_route(surface),
     )
 
     [source] = seats.sources.values()
@@ -153,7 +156,10 @@ async def test_a_new_thread_from_the_same_person_continues_their_conversation():
         surface, user_id
     )
     bound = await binder.bind_conversation(
-        surface=surface, parsed=first, resolved_user=_member(user_id), route=_route(surface)
+        surface=surface,
+        parsed=first,
+        resolved_user=_member(user_id),
+        route=_route(surface),
     )
     [source] = seats.sources.values()
     seats.seat(
@@ -175,7 +181,10 @@ async def test_a_new_thread_from_the_same_person_continues_their_conversation():
     )
 
     again = await binder.bind_conversation(
-        surface=surface, parsed=later, resolved_user=_member(user_id), route=_route(surface)
+        surface=surface,
+        parsed=later,
+        resolved_user=_member(user_id),
+        route=_route(surface),
     )
 
     assert again.conversation_id == bound.conversation_id
@@ -193,7 +202,10 @@ async def test_another_agent_opens_a_conversation_of_its_own():
         surface, user_id
     )
     bound = await binder.bind_conversation(
-        surface=surface, parsed=event, resolved_user=_member(user_id), route=_route(surface)
+        surface=surface,
+        parsed=event,
+        resolved_user=_member(user_id),
+        route=_route(surface),
     )
     [source] = seats.sources.values()
     seats.seat(

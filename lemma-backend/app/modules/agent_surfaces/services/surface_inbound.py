@@ -180,9 +180,7 @@ class SurfaceInboundMixin:
             parsed=parsed,
         )
 
-        candidates = await admitted_surfaces(
-            surfaces, parsed, seats=self.router.seats
-        )
+        candidates = await admitted_surfaces(surfaces, parsed, seats=self.router.seats)
         if not candidates:
             return await self._prepare_unrouted_platform_context(
                 platform=platform,

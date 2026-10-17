@@ -113,11 +113,14 @@ async def test_two_first_messages_at_once_open_one_conversation(
     )
 
     assert first == second
-    assert await _count(
-        sessions,
-        ChannelSourceModel.surface_id == surface.id,
-        ChannelSourceModel.external_user_id == person,
-    ) == 1, "the person's chat is one place"
+    assert (
+        await _count(
+            sessions,
+            ChannelSourceModel.surface_id == surface.id,
+            ChannelSourceModel.external_user_id == person,
+        )
+        == 1
+    ), "the person's chat is one place"
 
 
 async def test_a_burst_after_a_quiet_day_continues_the_one_conversation(
@@ -148,11 +151,14 @@ async def test_a_burst_after_a_quiet_day_continues_the_one_conversation(
     )
 
     assert first == second == yesterdays
-    assert await _count(
-        sessions,
-        ConversationModel.pod_id == UUID(test_pod["id"]),
-        ConversationModel.user_id == user_id,
-        ConversationModel.channel_id.is_not(None),
-        ConversationModel.created_at
-        >= datetime.now(timezone.utc) - timedelta(minutes=5),
-    ) >= 1
+    assert (
+        await _count(
+            sessions,
+            ConversationModel.pod_id == UUID(test_pod["id"]),
+            ConversationModel.user_id == user_id,
+            ConversationModel.channel_id.is_not(None),
+            ConversationModel.created_at
+            >= datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+        >= 1
+    )

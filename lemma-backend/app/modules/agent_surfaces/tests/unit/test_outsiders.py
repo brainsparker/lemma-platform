@@ -122,7 +122,10 @@ def test_the_pod_keeps_a_log_only_where_the_platform_keeps_no_history():
 def test_a_group_welcomes_outsiders_only_with_somebody_answering_for_them():
     group = SurfaceGroup(
         channel_id=uuid4(),
-        pod_id=POD, surface_id=uuid4(), platform="TELEGRAM", external_channel_id=CHAT
+        pod_id=POD,
+        surface_id=uuid4(),
+        platform="TELEGRAM",
+        external_channel_id=CHAT,
     )
 
     assert not group.welcomes_outsiders

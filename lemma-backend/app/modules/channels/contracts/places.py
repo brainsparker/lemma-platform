@@ -146,7 +146,9 @@ async def people_places(
     )
 
 
-async def private_places_of(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> list[Source]:
+async def private_places_of(
+    uow: SqlAlchemyUnitOfWork, channel_id: UUID
+) -> list[Source]:
     """A channel's private places -- its person's chats -- freshest first."""
     return await SourceRepository(uow.session).of_channel(
         channel_id, kind=SourceKind.PRIVATE

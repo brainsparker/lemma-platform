@@ -60,9 +60,7 @@ def test_channels_replace_links_and_groups_and_roll_back_cleanly() -> None:
                 return {
                     table
                     for table in tables
-                    if connection.execute(
-                        "SELECT to_regclass(%s)", [table]
-                    ).fetchone()
+                    if connection.execute("SELECT to_regclass(%s)", [table]).fetchone()
                     != (None,)
                 }
 

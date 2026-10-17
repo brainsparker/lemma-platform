@@ -126,7 +126,9 @@ class ChannelSeatsInDatabase:
     async def source_for(self, *, pod_id: UUID, place: Place, home: Home) -> Source:
         return await source_for(self.uow, pod_id=pod_id, place=place, home=home)
 
-    async def heard_at(self, source_id: UUID, delivery_ref: Mapping[str, object]) -> None:
+    async def heard_at(
+        self, source_id: UUID, delivery_ref: Mapping[str, object]
+    ) -> None:
         await places.heard_at(self.uow, source_id, delivery_ref)
 
     async def addressed_at(

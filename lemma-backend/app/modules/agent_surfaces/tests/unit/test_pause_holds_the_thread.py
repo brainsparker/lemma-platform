@@ -64,9 +64,7 @@ async def test_a_notification_lands_in_the_conversation_waiting_on_an_approval(
     world, monkeypatch
 ):
     chat = world.had_chatted(hours_ago=1)
-    world.agent_side.conversations[chat.id].updated_at = _now() - timedelta(
-        minutes=31
-    )
+    world.agent_side.conversations[chat.id].updated_at = _now() - timedelta(minutes=31)
     _paused(monkeypatch, chat.id)
 
     notification = await world.ask(title="Standup")

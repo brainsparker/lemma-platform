@@ -123,7 +123,10 @@ class SurfaceGroupRepository:
         """The group's place, and whether it was made now. A title the platform
         names it by now replaces the one it was known by."""
         place = _place(
-            surface_id=surface_id, platform=platform, chat=external_channel_id, title=title
+            surface_id=surface_id,
+            platform=platform,
+            chat=external_channel_id,
+            title=title,
         )
         known = await find_place(self.uow, pod_id=pod_id, place=place)
         if known is not None:
@@ -218,9 +221,7 @@ class SurfaceGroupRepository:
     async def set_answers_outsiders(
         self, group_id: UUID, *, answers_outsiders: bool
     ) -> None:
-        await change_place(
-            self.uow, group_id, {"answers_outsiders": answers_outsiders}
-        )
+        await change_place(self.uow, group_id, {"answers_outsiders": answers_outsiders})
 
     async def set_shared_externally(self, group_id: UUID, *, shared: bool) -> None:
         await change_place(self.uow, group_id, {"shared_externally": shared})

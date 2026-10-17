@@ -29,6 +29,7 @@ from app.modules.agent_surfaces.tests.unit.surface_doubles import (
 
 pytestmark = pytest.mark.asyncio
 
+
 def _channel(*, shared: bool):
     surface = _slack_surface()
     conversation_id = uuid4()

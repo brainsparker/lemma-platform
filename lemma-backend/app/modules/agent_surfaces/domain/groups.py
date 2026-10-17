@@ -34,6 +34,7 @@ from pydantic import BaseModel
 from app.core.domain.entity import Entity
 from app.modules.channels.contracts import Source
 
+
 class SurfaceGroup(Entity):
     """One group, on one surface: a shared place, as the surface reads it."""
 

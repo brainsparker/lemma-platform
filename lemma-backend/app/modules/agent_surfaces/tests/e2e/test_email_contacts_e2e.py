@@ -477,6 +477,52 @@ async def test_two_new_contacts_at_once_cannot_both_take_the_last_place(
     assert sorted(held) == [False, True], held
 
 
+async def test_two_turns_of_one_new_contact_at_once_both_run(
+    authenticated_client: AsyncClient, fixed_test_org, test_pod, fixed_test_user
+):
+    """The second turn waits on the count, then finds its contact already took
+    the place -- and runs, rather than being held as one too many."""
+    import asyncio
+
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.contacts.contracts import (
+        IdentityKind,
+        IdentityStrength,
+        open_contact,
+    )
+
+    org_id, pod_id = fixed_test_org["id"], UUID(test_pod["id"])
+    limited = await authenticated_client.put(
+        f"/usage/organizations/{org_id}/contacts-cap", json={"max_contacts": 1}
+    )
+    assert limited.status_code == 200, limited.text
+    async with get_uow_factory()() as uow:
+        contact = await open_contact(
+            uow,
+            pod_id=pod_id,
+            kind=IdentityKind.EMAIL,
+            value="twice@client.example",
+            strength=IdentityStrength.CHANNEL,
+            display_name=None,
+        )
+        conversation = ConversationModel(
+            user_id=UUID(fixed_test_user["id"]), pod_id=pod_id, contact_id=contact.id
+        )
+        uow.session.add(conversation)
+        await uow.commit()
+
+    async def admit() -> bool:
+        async with get_uow_factory()() as uow:
+            held = await held_for_a_person(
+                uow, pod_id=pod_id, conversation_id=conversation.id
+            )
+            await uow.commit()
+            return held
+
+    assert await asyncio.gather(admit(), admit()) == [False, False]
+
+
 async def _orders_for(
     client: AsyncClient, pod_id: str, contact_id: str | None, item: str
 ):

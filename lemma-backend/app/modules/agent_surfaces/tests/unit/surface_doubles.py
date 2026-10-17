@@ -13,6 +13,7 @@ certifying a shape production never produces. One definition, three callers.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from types import MethodType, SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
@@ -28,7 +29,6 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -51,6 +51,7 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     AttachmentIngest,
 )
 from app.modules.agent_surfaces.services.turn_starter import SurfaceTurnStarter
+from app.modules.channels.contracts import Source, SourceKind
 from app.modules.test_support.surface_routing_double import routing_surfaces_double
 
 #: Where `agent` publishes what a surface does to a conversation, and where the
@@ -80,6 +81,7 @@ def conversation_operations(monkeypatch):
     doubles = {
         "surface_conversation": AsyncMock(return_value=None),
         "open_surface_conversation": AsyncMock(),
+        "authorize_surface_conversation": AsyncMock(),
         "start_surface_turn": AsyncMock(return_value=uuid4()),
         "append_notification_message": AsyncMock(),
         "pending_interaction": AsyncMock(return_value=None),
@@ -296,13 +298,73 @@ def _delivers_one_reply(platform: str) -> bool:
     return bool(caps and caps.delivery_cardinality is DeliveryCardinality.ONE)
 
 
+@dataclass(frozen=True)
+class AnsweredAt:
+    """Where a conversation's answer goes: the place it was last spoken to
+    from, and the event heard there.
+
+    ``conversation_kind`` ``"CHANNEL"`` makes the place a group's -- the chat
+    -- and anything else a person's: theirs on the platform, or for email
+    the thread.
+    """
+
+    surface_id: UUID
+    conversation_id: UUID
+    platform: str
+    external_channel_id: str | None = None
+    external_thread_id: str | None = None
+    external_user_id: str | None = None
+    last_event: dict | None = None
+    last_inbound_at: datetime | None = None
+    conversation_kind: str = "DM"
+    #: The pod the place is in, when it is not the surface's.
+    pod_id: UUID | None = None
+
+    @property
+    def is_group(self) -> bool:
+        return self.conversation_kind == "CHANNEL"
+
+    def source(self, surface: AgentSurfaceEntity | None) -> Source:
+        email = self.conversation_kind == "EMAIL"
+        return Source(
+            id=uuid4(),
+            channel_id=uuid4(),
+            pod_id=self.pod_id or (surface.pod_id if surface else uuid4()),
+            surface_id=self.surface_id,
+            platform=self.platform,
+            kind=SourceKind.SHARED if self.is_group else SourceKind.PRIVATE,
+            external_channel_id=(
+                self.external_channel_id
+                if self.is_group
+                else (self.external_thread_id if email else None)
+            ),
+            external_user_id=None if self.is_group else self.external_user_id,
+            last_inbound_at=self.last_inbound_at,
+            delivery_ref=self.last_event,
+            updated_at=self.last_inbound_at or datetime.now(timezone.utc),
+        )
+
+
 class SurfaceDoubles(SimpleNamespace):
     """The session, repositories and adapter one scenario is built over."""
 
     uow: SimpleNamespace
     surface_repository: AsyncMock
-    conversation_link_repository: AsyncMock
+    seats: InMemoryChannelSeats
     adapter: AsyncMock
+
+
+def answer_at(
+    seats: InMemoryChannelSeats,
+    answered: AnsweredAt,
+    surfaces: list[AgentSurfaceEntity],
+) -> Source:
+    """Put ``answered`` in the seats: its place, and the conversation that took
+    up what was said there."""
+    surface = next((item for item in surfaces if item.id == answered.surface_id), None)
+    source = answered.source(surface)
+    seats.answer(answered.conversation_id, source, answered.last_event)
+    return source
 
 
 def build_doubles(
@@ -310,7 +372,7 @@ def build_doubles(
     adapter,
     surfaces: list[AgentSurfaceEntity] | None = None,
     conversation: Conversation | None = None,
-    existing_link: AgentSurfaceConversationLink | None = None,
+    answered: AnsweredAt | None = None,
 ) -> SurfaceDoubles:
     resolved_surfaces = surfaces or []
     surface_repository = AsyncMock()
@@ -322,30 +384,12 @@ def build_doubles(
         None,
     )
 
-    conversation_link_repository = AsyncMock()
-    conversation_link_repository.get_by_external_thread.return_value = existing_link
-    # A bare AsyncMock answers every call with a truthy mock, which the binder
-    # would read as "this person has an earlier private-chat link".
-    conversation_link_repository.find_latest_dm_link_for_person.return_value = None
-    conversation_link_repository.latest_dm_links_for_person.return_value = []
-    conversation_link_repository.create.side_effect = lambda link, **_: link
-    conversation_link_repository.update_last_event.side_effect = lambda **kwargs: (
-        existing_link
-    )
-    conversation_link_repository.update_conversation.side_effect = lambda **kwargs: (
-        existing_link.model_copy(
-            update={
-                "conversation_id": kwargs["conversation_id"],
-                "last_event": kwargs.get("last_event", {}),
-                "last_message_id": kwargs.get("last_message_id"),
-            }
-        )
-        if existing_link is not None
-        else None
-    )
+    seats = InMemoryChannelSeats()
+    if answered is not None:
+        answer_at(seats, answered, resolved_surfaces)
 
     # Egress reads the pod from the conversation now, not from the surface, so a
-    # link implies a conversation. For every scenario in these files the two pods
+    # place answered implies a conversation. For every scenario in these files the two pods
     # are the same; a personal DM is where they differ, and that has its own
     # coverage.
     if resolved_surfaces:
@@ -378,6 +422,9 @@ def build_doubles(
         session=SimpleNamespace(
             get=AsyncMock(side_effect=_fake_get),
             execute=AsyncMock(return_value=_EmptyExecuteResult()),
+            # An empty database answers every read the same way.
+            scalars=AsyncMock(return_value=_EmptyScalarResult()),
+            scalar=AsyncMock(return_value=None),
             flush=AsyncMock(),
             # `connection_released` commits through the *session*, and
             # `commit_now` reaches the unit of work through `session.info`.
@@ -404,7 +451,7 @@ def build_doubles(
     return SurfaceDoubles(
         uow=uow,
         surface_repository=surface_repository,
-        conversation_link_repository=conversation_link_repository,
+        seats=seats,
         adapter=adapter,
     )
 
@@ -415,13 +462,13 @@ def build_ingress_service(
     surfaces: list[AgentSurfaceEntity] | None = None,
     resolved_user: ResolvedSurfaceUser | None = None,
     conversation: Conversation | None = None,
-    existing_link: AgentSurfaceConversationLink | None = None,
+    answered: AnsweredAt | None = None,
 ):
     doubles = build_doubles(
         adapter=adapter,
         surfaces=surfaces,
         conversation=conversation,
-        existing_link=existing_link,
+        answered=answered,
     )
     resolved_surfaces = surfaces or []
     membership = SimpleNamespace(
@@ -453,7 +500,7 @@ def build_ingress_service(
     router = SurfaceRouter(
         uow=doubles.uow,
         surface_repository=doubles.surface_repository,
-        conversation_link_repository=doubles.conversation_link_repository,
+        seats=doubles.seats,
         pod_membership_port=membership,
         identity_service=identity,
         credential_resolver=credentials,
@@ -461,15 +508,13 @@ def build_ingress_service(
     binder = ConversationBinder(
         uow=doubles.uow,
         surface_repository=doubles.surface_repository,
-        conversation_link_repository=doubles.conversation_link_repository,
-        seats=InMemoryChannelSeats(),
+        seats=doubles.seats,
     )
     return AgentSurfaceIngressService(
         uow=doubles.uow,
         router=router,
         binder=binder,
         surface_repository=doubles.surface_repository,
-        conversation_link_repository=doubles.conversation_link_repository,
         adapter_registry=_registry(adapter),
         credential_resolver=credentials,
         event_dedup_store=SimpleNamespace(
@@ -486,7 +531,7 @@ def build_egress(
     adapter,
     surfaces: list[AgentSurfaceEntity] | None = None,
     conversation: Conversation | None = None,
-    existing_link: AgentSurfaceConversationLink | None = None,
+    answered: AnsweredAt | None = None,
     doubles: SurfaceDoubles | None = None,
 ) -> SurfaceEgress:
     """A real `SurfaceEgress` over doubled collaborators.
@@ -500,12 +545,12 @@ def build_egress(
         adapter=adapter,
         surfaces=surfaces,
         conversation=conversation,
-        existing_link=existing_link,
+        answered=answered,
     )
     delivery = SurfaceDelivery(
         uow=doubles.uow,
         surface_repository=doubles.surface_repository,
-        conversation_link_repository=doubles.conversation_link_repository,
+        seats=doubles.seats,
         adapter_registry=_registry(adapter),
         credential_resolver=SimpleNamespace(
             for_surface=AsyncMock(return_value={}),
@@ -526,11 +571,11 @@ def build_member_reach(
     surfaces: list[AgentSurfaceEntity] | None = None,
     pod_ids: list[UUID] | None = None,
     identities: list | None = None,
-    existing_link: AgentSurfaceConversationLink | None = None,
+    answered: AnsweredAt | None = None,
 ) -> MemberReach:
     resolved_surfaces = surfaces or []
     doubles = build_doubles(
-        adapter=adapter, surfaces=resolved_surfaces, existing_link=existing_link
+        adapter=adapter, surfaces=resolved_surfaces, answered=answered
     )
     external_user_repository = AsyncMock()
     external_user_repository.list_by_resolved_users.return_value = identities or []
@@ -547,7 +592,7 @@ def build_member_reach(
             get_user_email=AsyncMock(return_value="sender@example.com"),
         ),
         external_user_repository=external_user_repository,
-        conversation_link_repository=doubles.conversation_link_repository,
+        seats=doubles.seats,
     )
 
 
@@ -580,8 +625,8 @@ def _telegram_event(*, chat_id: str, message_id: str) -> ParsedInboundSurfaceEve
     )
 
 
-async def _ask_user_link(surface, conversation_id, parsed_event):
-    return AgentSurfaceConversationLink(
+def _answered_in_thread(surface, conversation_id, parsed_event) -> AnsweredAt:
+    return AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform="SLACK",
@@ -686,7 +731,7 @@ def build_turn_starter(
     adapter,
     surfaces: list[AgentSurfaceEntity] | None = None,
     conversation: Conversation | None = None,
-    existing_link: AgentSurfaceConversationLink | None = None,
+    answered: AnsweredAt | None = None,
     uow_factory: object | None = None,
     file_ingest_service: object | None = None,
     pooled_numbers: object | None = None,
@@ -703,7 +748,7 @@ def build_turn_starter(
         adapter=adapter,
         surfaces=surfaces,
         conversation=conversation,
-        existing_link=existing_link,
+        answered=answered,
     )
     return SurfaceTurnStarter(
         uow_factory=uow_factory or ScopeCountingFactory(doubles.uow),

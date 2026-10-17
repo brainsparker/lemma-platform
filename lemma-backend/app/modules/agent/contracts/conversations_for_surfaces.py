@@ -199,6 +199,20 @@ async def lemma_message_run_started_at(
     return run.started_at
 
 
+async def authorize_surface_conversation(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, agent_name: str | None, user_id: UUID
+) -> None:
+    """Refuse a person who may not run this agent, as opening would.
+
+    It releases the pooled connection while it checks, so a caller that opens
+    under a transaction-scoped lock checks here before taking the lock, and
+    opens with ``require_execute_grant=False``.
+    """
+    await _service(uow).authorize_opening(
+        pod_id=pod_id, agent_name=agent_name, user_id=user_id
+    )
+
+
 async def open_surface_conversation(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -559,6 +573,7 @@ __all__ = [
     "SurfaceConversation",
     "append_delivery_notice",
     "append_notification_message",
+    "authorize_surface_conversation",
     "conversation_metadata_value",
     "lemma_message_run_started_at",
     "open_surface_conversation",

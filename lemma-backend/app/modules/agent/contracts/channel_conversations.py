@@ -9,9 +9,10 @@ conversation it opened in its channel.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 
 from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -55,6 +56,29 @@ async def conversation_in_channel(
     )
 
 
+async def lock_person_in_channel(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    channel_id: UUID,
+    pod_id: UUID,
+    agent_id: UUID | None,
+    person_id: UUID,
+) -> None:
+    """Serialise finding-or-opening one person's conversation in a channel
+    until this transaction ends.
+
+    Two first messages from one person -- on two platforms at once, or a
+    burst on one -- would otherwise each find none and each open one. The
+    second waits here, then finds the first's. The unique index behind it is
+    the backstop, not the plan.
+    """
+    agent = effective_agent_id(agent_id, pod_id=pod_id)
+    await uow.session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"channel-person:{channel_id}:{agent}:{person_id}"},
+    )
+
+
 async def place_in_channel(
     uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, channel_id: UUID
 ) -> None:
@@ -78,3 +102,31 @@ async def channel_of_conversation(
             ConversationModel.id == conversation_id
         )
     )
+
+
+#: The most conversations one read of contacts' conversations returns.
+_MAX_CONTACT_CONVERSATIONS = 2000
+
+
+async def contact_conversations_in(
+    uow: SqlAlchemyUnitOfWork, channel_ids: Collection[UUID]
+) -> dict[UUID, list[UUID]]:
+    """Each channel's conversations with contacts -- its people outside the pod."""
+    if not channel_ids:
+        return {}
+    conversation = ConversationModel
+    rows = (
+        await uow.session.execute(
+            select(conversation.channel_id, conversation.id)
+            .where(
+                conversation.channel_id.in_(sorted(channel_ids)),
+                conversation.contact_id.is_not(None),
+                conversation.parent_id.is_(None),
+            )
+            .limit(_MAX_CONTACT_CONVERSATIONS)
+        )
+    ).all()
+    found: dict[UUID, list[UUID]] = {}
+    for channel_id, conversation_id in rows:
+        found.setdefault(channel_id, []).append(conversation_id)
+    return found

@@ -8,7 +8,7 @@ lists a pod's channels -- that is a member's, through this module's API.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -58,15 +58,14 @@ __all__ = [
     "Source",
     "SourceKind",
     "Speaker",
-    "answering_source",
     "background",
     "channel_by_id",
     "contact_channel",
+    "direct_channel",
     "handler_of",
     "may_read",
     "participants_of",
     "post",
-    "shared_sources",
     "source_by_id",
     "source_for",
     "sources_of",
@@ -89,6 +88,13 @@ async def channel_by_id(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> Channel 
     return await ChannelRepository(uow.session).get(channel_id)
 
 
+async def direct_channel(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, user_id: UUID
+) -> Channel:
+    """The member's DIRECT channel with the pod, made if there is none yet."""
+    return await ChannelRepository(uow.session).direct(pod_id=pod_id, user_id=user_id)
+
+
 async def contact_channel(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_id: UUID
 ) -> Channel:
@@ -109,6 +115,7 @@ async def post(
     conversation_id: UUID | None = None,
     external_message_id: str | None = None,
     external_thread_id: str | None = None,
+    reply_ref: Mapping[str, object] | None = None,
 ) -> ChannelMessage | None:
     """Add a line to the channel's timeline; the same platform message once.
 
@@ -127,6 +134,7 @@ async def post(
         conversation_id=conversation_id,
         external_message_id=external_message_id,
         external_thread_id=external_thread_id,
+        reply_ref=reply_ref,
     )
 
 
@@ -135,17 +143,6 @@ async def background(
 ) -> list[ChannelMessage]:
     """The recent lines a run reading as ``reader`` may be shown, oldest first."""
     return await Timeline(uow).background(channel_id, reader=reader, limit=limit)
-
-
-async def answering_source(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
-) -> Source | None:
-    """Where the conversation's answer goes: the source its person last spoke on.
-
-    A conversation spans every source of its channel, and an answer goes back
-    only to the one it answers -- never mirrored to the others.
-    """
-    return await ChannelRepository(uow.session).latest_heard(conversation_id)
 
 
 async def sources_of(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> list[Source]:
@@ -172,10 +169,3 @@ async def speakers_in(
 ) -> list[Speaker]:
     """Who spoke in these channels, once per channel, most recent first."""
     return await SpeakerReads(uow.session).speakers(channel_ids, limit=limit)
-
-
-async def shared_sources(
-    uow: SqlAlchemyUnitOfWork, places: Collection[tuple[UUID, str]]
-) -> dict[tuple[UUID, str], Source]:
-    """The source each ``(surface_id, chat id)`` is, for those heard so far."""
-    return await SpeakerReads(uow.session).shared_sources(places)

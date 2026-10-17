@@ -29,6 +29,7 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.surface_route_types import (
     SurfaceEgressTarget,
 )
+from app.modules.channels.contracts.places import reply_address
 from app.modules.channels.contracts import (
     ContactsHome,
     Place,
@@ -36,7 +37,6 @@ from app.modules.channels.contracts import (
     Sender,
     Source,
     SourceKind,
-    answering_source,
     post,
     source_by_id,
     source_for,
@@ -77,6 +77,17 @@ class ChannelLines(Protocol):
         written_by: UUID | None = None,
     ) -> None: ...
 
+    async def opened(
+        self,
+        *,
+        source: Source,
+        conversation_id: UUID,
+        sender: Sender,
+        text: str,
+        external_message_id: str | None,
+        external_thread_id: str | None,
+    ) -> None: ...
+
 
 class ChannelLinesInDatabase:
     """The lines, on the channels' timelines."""
@@ -103,6 +114,27 @@ class ChannelLinesInDatabase:
             text=text,
             agent_display_name=agent_display_name,
             written_by=written_by,
+        )
+
+    async def opened(
+        self,
+        *,
+        source: Source,
+        conversation_id: UUID,
+        sender: Sender,
+        text: str,
+        external_message_id: str | None,
+        external_thread_id: str | None,
+    ) -> None:
+        await post(
+            self.uow,
+            channel_id=source.channel_id,
+            sender=sender,
+            text=text,
+            source_id=source.id,
+            conversation_id=conversation_id,
+            external_message_id=external_message_id,
+            external_thread_id=external_thread_id,
         )
 
 
@@ -138,6 +170,9 @@ async def note_heard(
         source_id=source.id,
         conversation_id=context.conversation_id,
         external_message_id=context.message_external_message_id,
+        external_thread_id=context.event.external_thread_id,
+        # What answers this line in place: its thread, the message replied to.
+        reply_ref=context.event.model_dump(mode="json"),
     )
 
 
@@ -191,14 +226,11 @@ async def note_said(
     wrote (``written_by``), that member's. After the platform took it, so the
     timeline never holds a line nobody saw.
     """
-    source_id = target.link.source_id
-    if source_id is None or target.conversation_user_id is None:
+    if target.conversation_user_id is None:
         return
-    source = await source_by_id(uow, source_id)
-    if source is None:
-        return
+    source = target.source
     agent_id = effective_agent_id(
-        target.link.routed_agent_id or target.surface.agent_id, pod_id=target.pod_id
+        target.agent_id or target.surface.agent_id, pod_id=target.pod_id
     )
     await post(
         uow,
@@ -215,6 +247,8 @@ async def note_said(
         text=text,
         source_id=source.id,
         conversation_id=conversation_id,
+        # The thread it went to, so the place knows the agent is in it.
+        external_thread_id=target.event.external_thread_id,
     )
 
 
@@ -256,9 +290,10 @@ async def note_written_by_member(
 ) -> None:
     """What a member wrote to the conversation's person where no platform
     delivers it -- a web chat, read on their next visit -- as the member's line."""
-    source = await answering_source(uow, conversation_id)
-    if source is None:
+    address = await reply_address(uow, conversation_id)
+    if address is None:
         return
+    source = address.source
     await post(
         uow,
         channel_id=source.channel_id,

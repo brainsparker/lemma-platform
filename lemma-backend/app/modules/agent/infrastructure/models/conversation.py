@@ -75,6 +75,17 @@ class ConversationModel(UUIDAuditBase):
             "conversation_metadata",
             postgresql_using="gin",
         ),
+        # A person has one live conversation per agent in a channel.
+        Index(
+            "uq_agent_conversations_channel_person",
+            "channel_id",
+            text("COALESCE(agent_id, pod_id)"),
+            text("COALESCE(contact_id, user_id)"),
+            unique=True,
+            postgresql_where=text(
+                "channel_id IS NOT NULL AND parent_id IS NULL AND NOT is_archived"
+            ),
+        ),
         Index(
             "uq_agent_conversation_origin",
             "origin_type",

@@ -15,6 +15,7 @@ key it, and says which channel a place heard for the first time belongs to:
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from typing import Protocol
 from uuid import UUID
 
@@ -26,7 +27,6 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
 )
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -38,18 +38,34 @@ from app.modules.channels.contracts import (
     Place,
     Source,
     SourceKind,
+    direct_channel,
     source_for,
 )
+from app.modules.channels.contracts import places
+from app.modules.channels.contracts.places import ReplyAddress
 
 
 class ChannelSeats(Protocol):
-    """Where a thread sits in channels: its source, and the person's conversation.
+    """Where things sit in channels: places, what was heard at them, and the
+    person's conversation there.
 
-    The three reads and writes the binder makes of other modules, behind one
-    seam so a binder can be exercised without a database.
+    What a surface asks of other modules about places, behind one seam so the
+    binder, routing and delivery can be exercised without a database.
     """
 
     async def source_for(self, *, pod_id: UUID, place: Place, home: Home) -> Source: ...
+
+    async def heard_at(
+        self, source_id: UUID, delivery_ref: Mapping[str, object]
+    ) -> None: ...
+
+    async def addressed_at(
+        self, source_id: UUID, delivery_ref: Mapping[str, object]
+    ) -> None: ...
+
+    async def lock_person(
+        self, *, channel_id: UUID, pod_id: UUID, agent_id: UUID | None, person_id: UUID
+    ) -> None: ...
 
     async def conversation_in_channel(
         self,
@@ -61,9 +77,44 @@ class ChannelSeats(Protocol):
         contact_id: UUID | None,
     ) -> UUID | None: ...
 
-    async def place_in_channel(
-        self, *, conversation_id: UUID, channel_id: UUID
-    ) -> None: ...
+    async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID: ...
+
+    async def reply_address(self, conversation_id: UUID) -> ReplyAddress | None: ...
+
+    async def person_places(
+        self,
+        *,
+        platform: str,
+        external_user_id: str,
+        surface_ids: Collection[UUID] | None = None,
+        pod_id: UUID | None = None,
+        limit: int = 10,
+    ) -> list[Source]: ...
+
+    async def people_places(
+        self,
+        *,
+        platform: str,
+        external_user_ids: Collection[str],
+        surface_id: UUID,
+        pod_id: UUID,
+    ) -> dict[str, Source]: ...
+
+    async def places_hearing(
+        self,
+        *,
+        platform: str | None,
+        external_channel_id: str,
+        surface_ids: Collection[UUID] | None = None,
+    ) -> list[Source]: ...
+
+    async def conversation_at(
+        self,
+        source_id: UUID,
+        *,
+        sender_external_id: str | None = None,
+        external_thread_id: str | None = None,
+    ) -> UUID | None: ...
 
 
 class ChannelSeatsInDatabase:
@@ -74,6 +125,25 @@ class ChannelSeatsInDatabase:
 
     async def source_for(self, *, pod_id: UUID, place: Place, home: Home) -> Source:
         return await source_for(self.uow, pod_id=pod_id, place=place, home=home)
+
+    async def heard_at(self, source_id: UUID, delivery_ref: Mapping[str, object]) -> None:
+        await places.heard_at(self.uow, source_id, delivery_ref)
+
+    async def addressed_at(
+        self, source_id: UUID, delivery_ref: Mapping[str, object]
+    ) -> None:
+        await places.addressed_at(self.uow, source_id, delivery_ref)
+
+    async def lock_person(
+        self, *, channel_id: UUID, pod_id: UUID, agent_id: UUID | None, person_id: UUID
+    ) -> None:
+        await channel_conversations.lock_person_in_channel(
+            self.uow,
+            channel_id=channel_id,
+            pod_id=pod_id,
+            agent_id=agent_id,
+            person_id=person_id,
+        )
 
     async def conversation_in_channel(
         self,
@@ -93,11 +163,72 @@ class ChannelSeatsInDatabase:
             contact_id=contact_id,
         )
 
-    async def place_in_channel(
-        self, *, conversation_id: UUID, channel_id: UUID
-    ) -> None:
-        await channel_conversations.place_in_channel(
-            self.uow, conversation_id=conversation_id, channel_id=channel_id
+    async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID:
+        return (await direct_channel(self.uow, pod_id=pod_id, user_id=user_id)).id
+
+    async def reply_address(self, conversation_id: UUID) -> ReplyAddress | None:
+        return await places.reply_address(self.uow, conversation_id)
+
+    async def person_places(
+        self,
+        *,
+        platform: str,
+        external_user_id: str,
+        surface_ids: Collection[UUID] | None = None,
+        pod_id: UUID | None = None,
+        limit: int = 10,
+    ) -> list[Source]:
+        return await places.person_places(
+            self.uow,
+            platform=platform,
+            external_user_id=external_user_id,
+            surface_ids=surface_ids,
+            pod_id=pod_id,
+            limit=limit,
+        )
+
+    async def people_places(
+        self,
+        *,
+        platform: str,
+        external_user_ids: Collection[str],
+        surface_id: UUID,
+        pod_id: UUID,
+    ) -> dict[str, Source]:
+        return await places.people_places(
+            self.uow,
+            platform=platform,
+            external_user_ids=external_user_ids,
+            surface_id=surface_id,
+            pod_id=pod_id,
+        )
+
+    async def places_hearing(
+        self,
+        *,
+        platform: str | None,
+        external_channel_id: str,
+        surface_ids: Collection[UUID] | None = None,
+    ) -> list[Source]:
+        return await places.places_hearing(
+            self.uow,
+            platform=platform,
+            external_channel_id=external_channel_id,
+            surface_ids=surface_ids,
+        )
+
+    async def conversation_at(
+        self,
+        source_id: UUID,
+        *,
+        sender_external_id: str | None = None,
+        external_thread_id: str | None = None,
+    ) -> UUID | None:
+        return await places.conversation_at(
+            self.uow,
+            source_id,
+            sender_external_id=sender_external_id,
+            external_thread_id=external_thread_id,
         )
 
 
@@ -143,18 +274,6 @@ def place_of(
             parsed.external_thread_id if route.conversation_kind == _EMAIL else None
         ),
         external_user_id=external_user_id,
-    )
-
-
-def group_place(group: SurfaceGroup) -> Place:
-    """The place a group the pod knows is, as its channel's source names it."""
-    return Place(
-        surface_id=group.surface_id,
-        platform=group.platform,
-        kind=SourceKind.SHARED,
-        external_channel_id=group.external_channel_id,
-        external_user_id=None,
-        title=group.title,
     )
 
 

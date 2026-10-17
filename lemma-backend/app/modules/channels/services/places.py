@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.domain.entities import Channel, Source, SourceKind
 from app.modules.channels.infrastructure.repository import ChannelRepository
+from app.modules.channels.infrastructure.source_repository import SourceRepository
 
 
 class _LostTheRace(Exception):
@@ -69,7 +70,7 @@ class ChannelPlaces:
 
     async def source_for(self, *, pod_id: UUID, place: Place, home: Home) -> Source:
         """The source for ``place``, made -- with its channel -- the first time."""
-        found = await self._find(place)
+        found = await self._find(pod_id, place)
         if found is not None:
             return found
         if isinstance(home, GroupHome):
@@ -84,7 +85,7 @@ class ChannelPlaces:
             external_user_id=place.external_user_id,
             title=place.title,
         )
-        return added or await self._winner(place)
+        return added or await self._winner(pod_id, place)
 
     async def _group_source(
         self, pod_id: UUID, place: Place, home: GroupHome
@@ -112,7 +113,31 @@ class ChannelPlaces:
                     raise _LostTheRace
                 return added
         except IntegrityError, _LostTheRace:
-            return await self._winner(place)
+            return await self._winner(pod_id, place)
+
+    async def open_pending_group(
+        self,
+        *,
+        pod_id: UUID,
+        surface_id: UUID,
+        platform: str,
+        title: str,
+        owner_user_id: UUID,
+        request_id: str,
+        answers_outsiders: bool,
+    ) -> Source:
+        """A group the bot asked a platform to create: its channel, and a place
+        with no id until the platform confirms it."""
+        channel = await self.channels.open_group(pod_id=pod_id, title=title)
+        return await SourceRepository(self.session).add_pending(
+            channel=channel,
+            surface_id=surface_id,
+            platform=platform,
+            title=title,
+            owner_user_id=owner_user_id,
+            request_id=request_id,
+            answers_outsiders=answers_outsiders,
+        )
 
     async def _home(self, pod_id: UUID, home: MembersHome | ContactsHome) -> Channel:
         if isinstance(home, MembersHome):
@@ -121,16 +146,17 @@ class ChannelPlaces:
             pod_id=pod_id, contact_id=home.contact_id
         )
 
-    async def _find(self, place: Place) -> Source | None:
+    async def _find(self, pod_id: UUID, place: Place) -> Source | None:
         return await self.channels.find_source(
+            pod_id=pod_id,
             surface_id=place.surface_id,
             platform=place.platform,
             external_channel_id=place.external_channel_id,
             external_user_id=place.external_user_id,
         )
 
-    async def _winner(self, place: Place) -> Source:
-        winner = await self._find(place)
+    async def _winner(self, pod_id: UUID, place: Place) -> Source:
+        winner = await self._find(pod_id, place)
         if winner is None:  # pragma: no cover - the conflict named it
             raise LookupError("A source another writer added vanished")
         return winner

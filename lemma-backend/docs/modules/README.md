@@ -49,7 +49,7 @@ depending on import order.
 | [function](function.md) | Versioned deterministic function definitions and sandboxed runs | `functions`, `function_runs` |
 | [apps](apps.md) | Pod app metadata, source/dist releases, and public asset hosting | `apps`, `app_releases` |
 | [workflow](workflow.md) | Workflow graphs, execution, waits, forms, and resumptions | `workflow_flows`, `workflow_flow_runs`, `workflow_run_waits` |
-| [agent_surfaces](agent_surfaces.md) | External chat/email ingress, identity mapping, and delivery | `agent_surfaces`, `agent_surface_external_users`, `agent_surface_conversation_links` |
+| [agent_surfaces](agent_surfaces.md) | External chat/email ingress, identity mapping, and delivery | `agent_surfaces`, `agent_surface_external_users`, `surface_deliveries` |
 | [icon](icon.md) | Public raster icon upload and retrieval | None; bytes live in public object/local storage |
 | [usage](usage.md) | Model-usage metering, reservations, limits, and reporting | `usage_records`, `usage_limit_counters`, `usage_contacts_caps` |
 | [workspace](workspace.md) | sandbox/session access and workspace tool runtime | `sandboxes`, `sandbox_instances`; live process/session state stays in the sandbox runtime and Redis |

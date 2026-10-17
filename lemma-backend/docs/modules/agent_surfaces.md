@@ -5,7 +5,8 @@
 `app/modules/agent_surfaces` connects external messaging/email platforms to
 pod-scoped agent conversations. It owns surface configuration, webhook/native
 receiver ingress, signature verification, event normalization, external-user
-identity resolution, thread-to-conversation links, attachment ingestion,
+identity resolution, placing each message in a channel and its conversation,
+attachment ingestion,
 platform tools, progress rendering, and outbound delivery.
 
 Supported adapters are Slack, Microsoft Teams, Telegram, WhatsApp, and Resend
@@ -28,13 +29,11 @@ Resend address.
 | --- | --- |
 | `agent_surfaces` | Pod/platform/name, the one agent it answers as, account binding, allowed channels, identity and send policy |
 | `agent_surface_external_users` | Stable external identity to Lemma user/contact resolution |
-| `agent_surface_conversation_links` | External channel/thread to agent conversation mapping, with `source_id`: the channel source the thread is on (`app.modules.channels`) |
 | `surface_verified_identities` | One row per hashed platform/tenant/installation/actor binding: that this person proved who they are, and the pod and installation their private chat reaches. A check constraint keeps a revoked identity from holding a destination, so a live route beside a revoked proof is unrepresentable rather than merely unlikely |
 | `surface_pending_onboarding` | Onboarding in flight for one binding — step, email challenge, offered pods, and the original inbound event held until there is a conversation to commit it to |
 | `surface_onboarding_input_tokens` | Hashed handles for a native input form — a Slack modal, a Teams card, a WhatsApp prompt — each minted against one pending row, step and challenge. A submission is accepted only while all three still match, so a form left open across a step stops working rather than answering the wrong question; the cleanup sweep deletes handles at expiry |
 | `surface_whatsapp_numbers` | The deployment's WhatsApp numbers, one row each and each independent: its own WABA, access token, verify token and Flow ids, every one falling back to settings when absent so a single-number deployment declares nothing. `role` separates the one `SHARED` line everybody rides from the `ALLOCATABLE` pool; `status` separates "stop handing this out" from "we no longer own it". Who holds a number is not stored here — it is `agent_surfaces.surface_identity_id`, so there is no second copy to disagree |
 | `notifications` | Something the pod needs a person to see: recipient, actor, origin, body, optional background instruction, and open/expiry state. It lives in this module because delivery is surface work; the agent and workflow modules reach it through ports in `app/composition` |
-| `agent_surface_groups` | A group chat a surface's bot is in, one row per (surface, chat): its title, whether the bot answers people outside the pod there, and `owner_user_id`, the member who answers for them. No owner means outsiders are not answered. A WhatsApp group the bot asked Meta to create exists here before its chat id does: `external_channel_id` is null and `request_id` set until the confirmation webhook fills in the id and `invite_link` |
 | `agent_surface_web_widgets` | A pod's chat on other people's web pages, each answering as one of its agents, and the door a form page adds rows through. `public_key` (unique, readable by anybody) names the widget; `signing_secret` (encrypted) signs host tokens on the customer's server; `allowed_origins`, `answer` (`off`/`known`/`anyone`) and `looked_after_by` as for a bot's contacts. See `services/web_chat.py`. A form is any page that adds a row to a table the pod opened to visitors (`datastore_public_rows`): `GET /public/web/{key}/table` says what to ask, `POST /public/web/{key}/rows` adds the row, and `/public/web/{key}/page?table=` is the form Lemma hosts, with the chat beside it. On a web visitor's run the agent's `fill_form` tool fills that form's fields; it never sends it. Answers reach the page live on `GET /public/web/{key}/stream`, one JSON object per line after an `open` handshake, at most two per session, translated by `agent/contracts/visitor_stream.py`: the answer's text as it is written, `typing`, the finished message and `done` -- never thinking, tool traffic or a private note's run |
 | `visitor_sessions` (contacts' table) | One visitor's hold on one widget, found by a secret stored only as its digest and traded at `POST /public/web/{key}/session` for a 15-minute `visitor-access` token sent as `Authorization: Bearer` (`api/public_dependencies.py`). `strength` is `ANONYMOUS`, `CODE` or `HOST`; anonymous sessions end 90 days after they began, a contact's 30 days after last use, and a `HOST` session never refreshes without a fresh host token. Reissuing a widget's secret revokes its host sessions; forgetting a contact revokes theirs. Cascades from its conversation. CORS for `/public/web/*` is answered from the widget's own origins, never with credentials (`api/public_cors.py`), and nothing there is served unless `PUBLIC_WEB_ENABLED` is on |
 | `agent_surface_web_codes` | One-time codes sent to email addresses web visitors typed, stored salted with their session, expiring in ten minutes after five guesses at most, each counted before it is compared. `events/visitor_retention.py` sweeps ended sessions and spent codes hourly; a visitor's conversation is a contact's, and is never swept |
@@ -43,9 +42,18 @@ Resend address.
 | `surface_deliveries` | Every outbound message the platform owes: a run's answer, a held reply, a notification, a "please resend". Unique on an idempotency key; PENDING → SENDING → SENT, or UNKNOWN when a send's outcome was lost (never re-sent), or FAILED. One `surface.reply` pump per destination sends them in order |
 | `surface_receiver_state` | One cursor per polling receiver (Telegram offset, Resend cursor, the Telegram manager bot), written in the transaction that stores the messages before it, so a receiver that moves to another worker resumes without a gap or a duplicate |
 
-Conversation metadata records surface, platform, external user/channel/thread,
-and message identifiers so delivery and debugging do not depend only on the
-link table.
+Where a message was said, and where a conversation's answer goes, are the
+`channels` module's: every thread sits on a channel source, which keeps how to
+write back to it, and every line on the channel's timeline keeps what answers
+it in place (`channels.contracts.places`). A group the pod's bot is in is a
+shared source of a `GROUP` channel, and carries the group's settings: its
+title, whether the bot answers people outside the pod there, and
+`owner_user_id`, the member who answers for them -- no owner means outsiders
+are not answered. A WhatsApp group the bot asked Meta to create is a source
+before its chat id is known: `external_channel_id` is null and `request_id` set
+until the confirmation webhook fills in the id and `invite_link`. A group's id
+is its source's. Conversation metadata still records the surface, platform and
+external identifiers, for debugging.
 
 Onboarding storage is deliberately private rather than pod-scoped: a person
 being recognised and a person having somewhere to talk are different states,
@@ -86,7 +94,7 @@ sequenceDiagram
     P->>API: webhook / poll / socket event
     API->>API: verify, classify, answer deadline interactions
     API->>DB: row + surface.ingest item (one transaction), return quickly
-    DB->>In: resolve surface, identity, claim, conversation link
+    DB->>In: resolve surface, identity, claim, place and conversation
     In->>A: user message + agent.turn (one transaction)
     A-->>Out: AgentRunFinished -> surface_deliveries row
     Out-->>P: reply in original channel/thread
@@ -238,10 +246,10 @@ is answered *for the pod*, in a group the pod has opened to them.
 - **The pod's groups are one page** (`services/space_groups.py`, read by every
   member). It is assembled from rows other parts already keep: the registry,
   the group's channel for who has spoken and what was said (people keyed
-  `member:<id>` or `contact:<id>`, never by platform id), the contacts' (`~contact:`)
-  thread links for which conversations are a group's outsiders', and the open
-  notifications those
-  conversations sent the reader for what is waiting on them. A member's own
+  `member:<id>` or `contact:<id>`, never by platform id), the contacts'
+  conversations in that channel for which are a group's outsiders', and the
+  open notifications those conversations sent the reader for what is waiting
+  on them. A member's own
   conversation with the bot and a private note are never part of it. Each of
   the bot's lines in the log records whom it answered and whether that was from
   what is Public (`group_log.answered_in_group`), so the page can say so -- and
@@ -309,8 +317,7 @@ is answered *for the pod*, in a group the pod has opened to them.
   in a shared channel. Opened the first time they put the bot to work there.
 - **Where their turn runs**: in a conversation of their own in that group,
   looked after by the group's owner and naming the contact in its
-  `contact_id` column, linked under their `~contact:{id}` key on the group's
-  thread. The agent module runs every turn in it as that contact: a context
+  `contact_id` column, in the group's channel. The agent module runs every turn in it as that contact: a context
   pinned to the pod that reads what the pod marked Public. The column is the
   server's alone, so nothing a client writes to the conversation changes whom
   it answers.

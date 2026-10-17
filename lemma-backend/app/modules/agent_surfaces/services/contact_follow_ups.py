@@ -34,17 +34,15 @@ from uuid import UUID
 from app.core.config import settings
 from app.core.crypto.factory import get_secret_signer
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.contracts.contact_conversations import append_follow_up
 from app.modules.agent_surfaces.composition import build_surface_egress
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.infrastructure.repositories.outside_links import (
-    WEB_PLATFORM,
-    latest_contact_thread,
-)
 from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.channel_lines import (
+    WEB,
     WRITTEN_BY_MEMBER,
     note_written_by_member,
 )
@@ -57,6 +55,8 @@ from app.modules.agent_surfaces.services.contact_windows import (
     ContactWindows,
     Window,
 )
+from app.modules.channels.contracts import contact_channel
+from app.modules.channels.contracts.places import conversation_at, private_places_of
 from app.modules.contacts.contracts import (
     ContactHandle,
     IdentityKind,
@@ -182,6 +182,23 @@ def _verified_email(handles: list[ContactHandle]) -> ContactHandle:
     return max(verified, key=lambda handle: handle.verified_at)
 
 
+async def _latest_private_conversation(
+    uow: SqlAlchemyUnitOfWork, pod_id: UUID, contact_id: UUID
+) -> tuple[UUID, str] | None:
+    """The contact's conversation at the private place they wrote at last --
+    a chat, an email thread, a web chat -- and that place's platform.
+
+    Never a group's: what a member writes first to a contact goes to them
+    alone, and their channel holds only their own places.
+    """
+    channel = await contact_channel(uow, pod_id=pod_id, contact_id=contact_id)
+    for place in await private_places_of(uow, channel.id):
+        conversation_id = await conversation_at(uow, place.id)
+        if conversation_id is not None:
+            return conversation_id, place.platform
+    return None
+
+
 async def send_follow_up(
     uow_factory: UnitOfWorkFactory,
     *,
@@ -201,7 +218,7 @@ async def send_follow_up(
             raise FollowUpRefused(
                 "Contact not found", code="not_found", status_code=404
             )
-        thread = await latest_contact_thread(uow.session, contact_id)
+        thread = await _latest_private_conversation(uow, pod_id, contact_id)
         if thread is None:
             raise FollowUpRefused(
                 "The contact has not written to the pod yet", code="no_conversation"
@@ -232,7 +249,7 @@ async def send_follow_up(
     # the contact's next visit, which is what writing it down does.
     delivered = (
         None
-        if platform == WEB_PLATFORM
+        if platform == WEB
         else await _send(
             uow_factory, conversation_id, text, platform, written_by=sent_by_user_id
         )

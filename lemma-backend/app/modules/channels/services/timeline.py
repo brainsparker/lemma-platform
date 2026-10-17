@@ -8,6 +8,7 @@ it: delivering a member's post, waking somebody's agent.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -49,6 +50,7 @@ class Timeline:
         conversation_id: UUID | None = None,
         external_message_id: str | None = None,
         external_thread_id: str | None = None,
+        reply_ref: Mapping[str, object] | None = None,
     ) -> ChannelMessage | None:
         """The line, posted; ``None`` when there was nothing to say.
 
@@ -67,6 +69,7 @@ class Timeline:
             conversation_id=conversation_id,
             external_message_id=external_message_id,
             external_thread_id=external_thread_id,
+            reply_ref=reply_ref,
         )
         if not written:
             return message

@@ -21,6 +21,7 @@ from sqlalchemy import (
     Text,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import Base, UUIDAuditBase
@@ -127,14 +128,29 @@ class ChannelAgentModel(Base):
 class ChannelSourceModel(UUIDAuditBase):
     __tablename__ = "channel_sources"
     __table_args__ = (
+        # One row per place a surface hears, per pod: a personal DM arrives
+        # through a company's installation and is the person's own pod's. A
+        # group the bot asked a platform to create has no id yet, and is keyed
+        # by its request instead.
         Index(
             "uq_channel_sources_place",
+            "pod_id",
             "surface_id",
             "platform",
             text("coalesce(external_channel_id, '')"),
             text("coalesce(external_user_id, '')"),
             unique=True,
-            postgresql_where=text("surface_id IS NOT NULL"),
+            postgresql_where=text(
+                "surface_id IS NOT NULL AND (external_channel_id IS NOT NULL"
+                " OR external_user_id IS NOT NULL)"
+            ),
+        ),
+        Index(
+            "uq_channel_sources_request",
+            "platform",
+            "request_id",
+            unique=True,
+            postgresql_where=text("request_id IS NOT NULL"),
         ),
         # A web chat is a widget's, not a surface's: keyed by the widget and
         # the browser's session instead.
@@ -148,6 +164,14 @@ class ChannelSourceModel(UUIDAuditBase):
             postgresql_where=text("surface_id IS NULL"),
         ),
         Index("ix_channel_sources_channel", "channel_id"),
+        # The surfaces that hear one chat, and the private places of one person.
+        Index("ix_channel_sources_chat", "platform", "external_channel_id"),
+        Index(
+            "ix_channel_sources_person",
+            "platform",
+            "external_user_id",
+            postgresql_where=text("kind = 'PRIVATE'"),
+        ),
     )
 
     channel_id: Mapped[UUID] = mapped_column(
@@ -167,6 +191,30 @@ class ChannelSourceModel(UUIDAuditBase):
     last_inbound_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: What the surface last heard here, as its adapter reads it: how to write
+    #: into this place when nothing is being answered (a notification, a
+    #: follow-up). The surface's own shape; nothing else reads inside it.
+    delivery_ref: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    # -- a shared place the pod's bot is in: a group, a shared channel --------
+    #: The member who answers for the people here from outside the pod.
+    owner_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    #: Whether people outside the pod are answered here at all.
+    answers_outsiders: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    #: A Slack channel shared with another company.
+    shared_externally: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    #: The link people join by, where joining is by link (WhatsApp).
+    invite_link: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    #: The platform's id for a creation the bot asked for; kept once confirmed,
+    #: to recognise a replayed confirmation.
+    request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class ChannelMessageModel(UUIDAuditBase):
@@ -236,3 +284,9 @@ class ChannelMessageModel(UUIDAuditBase):
     )
     external_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: On a line a person said on a platform: what its surface needs to answer
+    #: it in place -- its thread, the message replied to, the number it came
+    #: to. The surface's own shape; nothing else reads inside it.
+    reply_ref: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB, nullable=True
+    )

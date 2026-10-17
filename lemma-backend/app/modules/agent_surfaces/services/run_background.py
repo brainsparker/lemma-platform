@@ -91,12 +91,14 @@ async def run_background(
 ) -> RunBackground:
     """What this run is shown of the group, and who outside the pod reads it.
 
-    The pod's own log where it keeps one (Telegram, WhatsApp); otherwise the
-    platform's history, read live. Either way a member's run is not shown
+    The pod's own log where it keeps one (Telegram, WhatsApp) and it has lines;
+    otherwise the platform's history, read live. Either way a member's run is not shown
     what strangers wrote (``group_log``), and is told that they are there.
     """
     group, logged = await _group_background(uow_factory, context)
-    if logged is not None:
+    # A log with nothing in it yet -- a group first heard with this very
+    # message -- says less than the platform does: the message replied to.
+    if logged is not None and logged.lines:
         lines = [line.model_dump(mode="json") for line in logged.lines]
         withheld, outside = logged.withheld, list(logged.outside_authors)
         participants = logged.participants
@@ -186,6 +188,8 @@ async def _group_background(
         if group is None:
             return None, None
         source = await group_source(uow, group)
+        if source is None:
+            return None, None
         logged = await group_background(
             uow,
             group=group,

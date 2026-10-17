@@ -18,14 +18,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.channels.domain.entities import (
     Principal,
     SenderKind,
-    Source,
-    SourceKind,
 )
 from app.modules.channels.infrastructure.models import (
     ChannelMessageModel,
-    ChannelSourceModel,
 )
-from app.modules.channels.infrastructure.repository import source_entity
 
 #: Ceilings on one read. A pod lists at most a few hundred groups.
 MAX_SPEAKERS = 5000
@@ -97,27 +93,3 @@ class SpeakerReads:
             )
             for channel_id, user_id, contact_id, name, said_at in rows
         ]
-
-    async def shared_sources(
-        self, places: Collection[tuple[UUID, str]]
-    ) -> dict[tuple[UUID, str], Source]:
-        """The shared source at each ``(surface, chat)``, where there is one yet."""
-        if not places:
-            return {}
-        source = ChannelSourceModel
-        rows = await self.session.scalars(
-            select(source)
-            .where(
-                source.kind == SourceKind.SHARED.value,
-                source.external_user_id.is_(None),
-                source.surface_id.in_(sorted({surface for surface, _ in places})),
-                source.external_channel_id.in_(sorted({chat for _, chat in places})),
-            )
-            .limit(_MAX_SOURCES)
-        )
-        found = {
-            (row.surface_id, row.external_channel_id): source_entity(row)
-            for row in rows
-            if row.surface_id is not None and row.external_channel_id is not None
-        }
-        return {place: found[place] for place in places if place in found}

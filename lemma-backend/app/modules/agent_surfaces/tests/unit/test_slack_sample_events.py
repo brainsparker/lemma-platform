@@ -99,6 +99,7 @@ def _conversation_operations(monkeypatch, *, conversation):
     """
     operations = SimpleNamespace(
         open_surface_conversation=AsyncMock(return_value=conversation),
+        authorize_surface_conversation=AsyncMock(),
         surface_conversation=AsyncMock(return_value=conversation),
         # A real run id, because the caller checks whether one was started.
         start_surface_turn=AsyncMock(return_value=uuid4()),
@@ -136,12 +137,7 @@ def _build_service(*, surface, monkeypatch):
     surface_repository.list_active_for_routing.side_effect = routing_surfaces_double(
         [surface]
     )
-    conversation_link_repository = AsyncMock()
-    conversation_link_repository.get_by_external_thread.return_value = None
-    # A bare AsyncMock answers every call with a truthy mock, which the binder
-    # would read as "this person has an earlier private-chat link".
-    conversation_link_repository.find_latest_dm_link_for_person.return_value = None
-    conversation_link_repository.create.side_effect = lambda link, **_: link
+    seats = InMemoryChannelSeats()
     slack_credentials = {
         "access_token": "xoxb-test",
         "scope": "assistant:write,chat:write.customize,reactions:write",
@@ -153,7 +149,7 @@ def _build_service(*, surface, monkeypatch):
     router = SurfaceRouter(
         uow=uow,
         surface_repository=surface_repository,
-        conversation_link_repository=conversation_link_repository,
+        seats=seats,
         pod_membership_port=SimpleNamespace(
             get_user_pod_ids=AsyncMock(return_value=[surface.pod_id]),
             get_user_email=AsyncMock(return_value="sender@example.com"),
@@ -178,11 +174,9 @@ def _build_service(*, surface, monkeypatch):
         binder=ConversationBinder(
             uow=uow,
             surface_repository=surface_repository,
-            conversation_link_repository=conversation_link_repository,
-            seats=InMemoryChannelSeats(),
+            seats=seats,
         ),
         surface_repository=surface_repository,
-        conversation_link_repository=conversation_link_repository,
         credential_resolver=credential_resolver,
     )
     service._resolve_account_credentials = AsyncMock(return_value={})

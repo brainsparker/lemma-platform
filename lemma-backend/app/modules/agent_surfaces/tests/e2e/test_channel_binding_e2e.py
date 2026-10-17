@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.agent_surfaces.composition import build_conversation_binder
+from app.modules.agent_surfaces.services.agent_naming import agent_name_for_agent_id
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ConversationType,
@@ -82,7 +83,7 @@ class _Pod:
         """``person`` writes privately to ``surface``, arriving on ``chat``."""
         uow = SqlAlchemyUnitOfWork(self.session)
         agent = agent_id or surface.agent_id or self.pod_id
-        link, created_title = await build_conversation_binder(uow).bind_conversation(
+        bound = await build_conversation_binder(uow).bind_conversation(
             surface=surface,
             parsed=ParsedInboundSurfaceEvent(
                 platform=surface.surface_type,
@@ -97,24 +98,24 @@ class _Pod:
             resolved_user=ResolvedSurfaceUser(
                 internal_user_id=self.user_id, external_user_id=person
             ),
+            # Named, as routing names it: the conversation is opened by name.
             route=ResolvedSurfaceRoute(
                 pod_id=self.pod_id,
                 agent_id=agent,
-                agent_name=None,
+                agent_name=await agent_name_for_agent_id(uow, agent),
                 agent_display_name="Assistant",
                 conversation_kind="DM",
                 route_key="dm",
             ),
         )
         await uow.commit()
-        assert link.source_id is not None
-        source = await source_by_id(uow, link.source_id)
+        source = await source_by_id(uow, bound.source_id)
         assert source is not None
         return Bound(
-            conversation_id=link.conversation_id,
+            conversation_id=bound.conversation_id,
             channel_id=source.channel_id,
             source_id=source.id,
-            created=created_title is not None,
+            created=bound.created_title is not None,
         )
 
     async def conversations(self) -> list[ConversationModel]:

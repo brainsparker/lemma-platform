@@ -8,52 +8,37 @@ team. They are not in the pod and hold no access to it, and the bot answers
 them anyway, *for the pod* -- reading only what the pod has marked Public (see
 ``app.modules.agent.domain.outsiders``).
 
-Somebody has to answer for that, and it is this row's ``owner_user_id``: the
+Somebody has to answer for that, and it is the group's ``owner_user_id``: the
 member who brought the bot into the group, or who switched it on for outsiders
 since. Their conversation is where outsiders' questions land, where the bot
 passes on what it cannot answer, and whose name is on it. With no owner there is
 nobody to answer for a stranger's turn, so outsiders are not answered at all --
 members still are.
 
-What is said in it is its channel's timeline (``app.modules.channels``). Each
-member's turn runs in their own conversation, so without it the bot would know
-only what was said to it; on platforms whose history cannot be fetched --
-Telegram, WhatsApp -- it is the only record there is.
+A group is a shared place of a GROUP channel (``app.modules.channels``): the
+place's row keeps the group's settings, and its id is the group's. What is
+said in it is the channel's timeline. Each member's turn runs in their own
+conversation, so without it the bot would know only what was said to it; on
+platforms whose history cannot be fetched -- Telegram, WhatsApp -- it is the
+only record there is.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel
 
 from app.core.domain.entity import Entity
-
-#: The link-key prefix of a contact's conversation; the contact's id follows.
-#: Every link is keyed by sender so that each person has their own
-#: conversation: a member by their platform id, a contact -- in a private chat
-#: or in a group -- by this. Not the platform's sender id, because a contact can
-#: write from WhatsApp one day and email the next. Not a platform user id on any
-#: platform: none of them starts with "~".
-CONTACT_LINK_USER_PREFIX = "~contact:"
-
-
-def contact_link_user(contact_id: UUID) -> str:
-    """The link key of one contact's conversation."""
-    return f"{CONTACT_LINK_USER_PREFIX}{contact_id}"
-
-
-def is_contact_link_user(external_user_id: str | None) -> bool:
-    """Whether a link's sender key names a contact rather than a platform user."""
-    return bool(external_user_id) and str(external_user_id).startswith(
-        CONTACT_LINK_USER_PREFIX
-    )
-
+from app.modules.channels.contracts import Source
 
 class SurfaceGroup(Entity):
-    """One group, on one surface."""
+    """One group, on one surface: a shared place, as the surface reads it."""
 
+    #: The group's channel.
+    channel_id: UUID
     pod_id: UUID
     surface_id: UUID
     platform: str
@@ -72,6 +57,8 @@ class SurfaceGroup(Entity):
     #: Slack sender outside the pod is an outsider to answer; inside one's own
     #: workspace they are a colleague to invite.
     shared_externally: bool = False
+    #: When somebody last said something in it.
+    last_inbound_at: datetime | None = None
 
     @property
     def is_pending(self) -> bool:
@@ -86,6 +73,29 @@ class SurfaceGroup(Entity):
         pod wants it, the owner is who answers for it.
         """
         return self.answers_outsiders and self.owner_user_id is not None
+
+    @classmethod
+    def of(cls, source: Source) -> SurfaceGroup:
+        """The group a shared place is. Only a place on a surface is one."""
+        if source.surface_id is None:
+            raise ValueError("A group is a place on a surface")
+        return cls(
+            id=source.id,
+            channel_id=source.channel_id,
+            pod_id=source.pod_id,
+            surface_id=source.surface_id,
+            platform=source.platform,
+            external_channel_id=source.external_channel_id,
+            title=source.title,
+            owner_user_id=source.owner_user_id,
+            answers_outsiders=source.answers_outsiders,
+            request_id=source.request_id,
+            invite_link=source.invite_link,
+            shared_externally=source.shared_externally,
+            last_inbound_at=source.last_inbound_at,
+            created_at=source.created_at or datetime.now(timezone.utc),
+            updated_at=source.updated_at or datetime.now(timezone.utc),
+        )
 
 
 class GroupUpdateKind(StrEnum):

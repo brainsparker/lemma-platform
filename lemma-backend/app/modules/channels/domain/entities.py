@@ -114,6 +114,27 @@ class Source(BaseModel):
     external_user_id: str | None = None
     title: str | None = None
     last_inbound_at: datetime | None = None
+    #: What the surface last heard here: how to write into the place cold.
+    delivery_ref: dict[str, object] | None = None
+    # -- a shared place the pod's bot is in -----------------------------------
+    owner_user_id: UUID | None = None
+    answers_outsiders: bool = True
+    shared_externally: bool = False
+    invite_link: str | None = None
+    request_id: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    @property
+    def is_pending(self) -> bool:
+        """A group the bot asked a platform to create, not confirmed yet."""
+        return self.external_channel_id is None and self.external_user_id is None
+
+    @property
+    def welcomes_outsiders(self) -> bool:
+        """Whether a stranger's question here gets an answer: the pod wants it,
+        and somebody answers for it."""
+        return self.answers_outsiders and self.owner_user_id is not None
 
 
 class Participant(BaseModel):
@@ -207,3 +228,6 @@ class ChannelMessage(BaseModel):
     conversation_id: UUID | None = None
     external_message_id: str | None = None
     external_thread_id: str | None = None
+    #: On a line a person said on a platform: what its surface needs to answer
+    #: it in place.
+    reply_ref: dict[str, object] | None = None

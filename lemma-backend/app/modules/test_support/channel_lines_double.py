@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.surface_route_types import (
     SurfaceEgressTarget,
 )
+from app.modules.channels.contracts import Sender, Source
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,10 +33,20 @@ class SaidLine:
     text: str
 
 
+@dataclass(frozen=True, slots=True)
+class OpenedLine:
+    conversation_id: UUID
+    source_id: UUID
+    sender: Sender
+    text: str
+    external_message_id: str | None
+
+
 @dataclass
 class RecordingChannelLines:
     heard_lines: list[HeardLine] = field(default_factory=list)
     said_lines: list[SaidLine] = field(default_factory=list)
+    opened_lines: list[OpenedLine] = field(default_factory=list)
 
     def __call__(self, _uow: SqlAlchemyUnitOfWork) -> RecordingChannelLines:
         """The same recorder for every unit of work a writer opens."""
@@ -55,4 +66,18 @@ class RecordingChannelLines:
         agent_display_name: str | None = None,
         written_by: UUID | None = None,
     ) -> None:
-        self.said_lines.append(SaidLine(conversation_id, target.link.source_id, text))
+        self.said_lines.append(SaidLine(conversation_id, target.source.id, text))
+
+    async def opened(
+        self,
+        *,
+        source: Source,
+        conversation_id: UUID,
+        sender: Sender,
+        text: str,
+        external_message_id: str | None,
+        external_thread_id: str | None,
+    ) -> None:
+        self.opened_lines.append(
+            OpenedLine(conversation_id, source.id, sender, text, external_message_id)
+        )

@@ -34,13 +34,11 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.contracts import channel_conversations
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
     SqlAlchemySurfaceRoutingResolutionAdapter,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.group_page_repository import (  # noqa: E501
     GroupPageRepository,
@@ -60,10 +58,8 @@ from app.modules.channels.contracts import (
     Principal,
     Reader,
     SenderKind,
-    Source,
     Speaker,
     background,
-    shared_sources,
     speakers_in,
 )
 
@@ -179,15 +175,12 @@ class SpaceGroups:
         group = await self._in_pod(pod_id=pod_id, group_id=group_id)
         if group is None:
             return None
-        source = (await self._sources([group])).get(group.id)
-        if source is None:
-            return []
         lines = await background(
-            self.uow, channel_id=source.channel_id, reader=Reader.member(), limit=limit
+            self.uow, channel_id=group.channel_id, reader=Reader.member(), limit=limit
         )
         names = {
             speaker.principal: speaker.name
-            for speaker in await speakers_in(self.uow, [source.channel_id])
+            for speaker in await speakers_in(self.uow, [group.channel_id])
         }
         members = await self.people.pod_members_among(
             pod_id, {line.sender.user_id for line in lines if line.sender.user_id}
@@ -216,7 +209,6 @@ class SpaceGroups:
         everyone = [speaker for said in speakers.values() for speaker in said]
         in_pod = await self.people.pod_members_among(pod_id, owners | _proven(everyone))
         names = await self.people.display_names(owners)
-        sources = await self._sources(groups)
         waiting = await self._waiting_counts(groups, viewer_id=viewer_id)
         return [
             _summary(
@@ -227,33 +219,21 @@ class SpaceGroups:
                 owner_name=names.get(group.owner_user_id)
                 if group.owner_user_id
                 else None,
-                last_message_at=(
-                    source.last_inbound_at
-                    if (source := sources.get(group.id)) is not None
-                    else None
-                ),
+                last_message_at=group.last_inbound_at,
                 waiting=waiting.get(group.id, 0),
             )
             for group in groups
         ]
 
-    async def _sources(self, groups: Sequence[SurfaceGroup]) -> dict[UUID, Source]:
-        """Each group's channel source, for the groups heard in so far."""
-        places = {
-            (group.surface_id, group.external_channel_id): group.id
-            for group in groups
-            if group.external_channel_id is not None
-        }
-        found = await shared_sources(self.uow, places.keys())
-        return {places[place]: source for place, source in found.items()}
-
     async def _speakers(
         self, groups: Sequence[SurfaceGroup]
     ) -> dict[UUID, list[Speaker]]:
         """Who has spoken in each group the pod keeps a log of, newest first."""
-        logged = [group for group in groups if keeps_group_log(group.platform)]
-        sources = await self._sources(logged)
-        group_of = {source.channel_id: group_id for group_id, source in sources.items()}
+        group_of = {
+            group.channel_id: group.id
+            for group in groups
+            if keeps_group_log(group.platform)
+        }
         by_group: dict[UUID, list[Speaker]] = defaultdict(list)
         for speaker in await speakers_in(self.uow, group_of.keys()):
             by_group[group_of[speaker.channel_id]].append(speaker)
@@ -262,7 +242,15 @@ class SpaceGroups:
     async def _waiting_counts(
         self, groups: Sequence[SurfaceGroup], *, viewer_id: UUID
     ) -> dict[UUID, int]:
-        conversations = await self.page.outsider_conversations(groups)
+        group_of = {group.channel_id: group.id for group in groups}
+        conversations = {
+            group_of[channel_id]: ids
+            for channel_id, ids in (
+                await channel_conversations.contact_conversations_in(
+                    self.uow, group_of.keys()
+                )
+            ).items()
+        }
         counts = await self.page.open_asks_by_conversation(
             recipient_user_id=viewer_id,
             conversation_ids=[c for ids in conversations.values() for c in ids],
@@ -309,15 +297,11 @@ class SpaceGroups:
         self, group: SurfaceGroup, *, viewer_id: UUID
     ) -> list[WaitingQuestion]:
         """What this group's people outside the pod are waiting on the viewer for."""
-        if group.external_channel_id is None:
-            return []
-        conversations = await SurfaceConversationLinkRepository(
-            self.uow
-        ).conversation_ids_in_channel(
-            surface_id=group.surface_id,
-            external_channel_id=group.external_channel_id,
-            contacts_only=True,
-        )
+        conversations = (
+            await channel_conversations.contact_conversations_in(
+                self.uow, [group.channel_id]
+            )
+        ).get(group.channel_id, [])
         asks = await NotificationRepository(self.uow).list_open_asks_from(
             recipient_user_id=viewer_id, origin_conversation_ids=conversations
         )

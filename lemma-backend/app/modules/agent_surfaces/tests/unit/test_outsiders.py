@@ -12,6 +12,8 @@ Three decisions are pinned here, each of which fails open if it is wrong:
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.services.conversation_binder import BoundThread
+
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -30,7 +32,6 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.groups import (
     SurfaceGroup,
-    contact_link_user,
 )
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
@@ -120,6 +121,7 @@ def test_the_pod_keeps_a_log_only_where_the_platform_keeps_no_history():
 
 def test_a_group_welcomes_outsiders_only_with_somebody_answering_for_them():
     group = SurfaceGroup(
+        channel_id=uuid4(),
         pod_id=POD, surface_id=uuid4(), platform="TELEGRAM", external_channel_id=CHAT
     )
 
@@ -206,6 +208,7 @@ class _Contacts:
 
 def _welcoming_group() -> SurfaceGroup:
     return SurfaceGroup(
+        channel_id=uuid4(),
         pod_id=POD,
         surface_id=uuid4(),
         platform="TELEGRAM",
@@ -255,12 +258,14 @@ async def test_a_lemma_user_from_another_pod_is_an_outsider_here():
     [
         None,
         SurfaceGroup(
+            channel_id=uuid4(),
             pod_id=POD,
             surface_id=uuid4(),
             platform="TELEGRAM",
             external_channel_id=CHAT,
         ),
         SurfaceGroup(
+            channel_id=uuid4(),
             pod_id=POD,
             surface_id=uuid4(),
             platform="TELEGRAM",
@@ -312,9 +317,10 @@ class _Binder:
 
     async def bind_conversation(self, **kwargs):
         self.seen = kwargs
-        return (
-            SimpleNamespace(conversation_id=uuid4(), source_id=uuid4()),
-            "when are proofs due?",
+        return BoundThread(
+            conversation_id=uuid4(),
+            source_id=uuid4(),
+            created_title="when are proofs due?",
         )
 
 
@@ -358,9 +364,8 @@ async def test_a_strangers_turn_runs_as_their_contact_in_a_conversation_of_their
     contact = door.open_contact.by_handle[(IdentityKind.TELEGRAM, "777")]
     assert binder.seen["contact_id"] == contact.id
     assert binder.seen["resolved_user"].internal_user_id == OWNER
-    assert binder.seen["resolved_user"].external_user_id == contact_link_user(
-        contact.id
-    )
+    # Their own id on the platform: it keys the place they wrote from.
+    assert binder.seen["resolved_user"].external_user_id == "777"
     assert context.audience == Audience.contact(contact.id)
     assert context.user_id == OWNER
     # Who actually asked goes on the message, for whoever reads the thread.

@@ -8,7 +8,7 @@ instead of failing or making a second one.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -70,6 +70,14 @@ def source_entity(row: ChannelSourceModel) -> Source:
         external_user_id=row.external_user_id,
         title=row.title,
         last_inbound_at=row.last_inbound_at,
+        delivery_ref=row.delivery_ref,
+        owner_user_id=row.owner_user_id,
+        answers_outsiders=row.answers_outsiders,
+        shared_externally=row.shared_externally,
+        invite_link=row.invite_link,
+        request_id=row.request_id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
@@ -100,6 +108,7 @@ def _message(row: ChannelMessageModel) -> ChannelMessage:
         conversation_id=row.conversation_id,
         external_message_id=row.external_message_id,
         external_thread_id=row.external_thread_id,
+        reply_ref=row.reply_ref,
     )
 
 
@@ -277,6 +286,7 @@ class ChannelRepository:
     async def find_source(
         self,
         *,
+        pod_id: UUID,
         surface_id: UUID | None,
         platform: str,
         external_channel_id: str | None,
@@ -284,6 +294,7 @@ class ChannelRepository:
     ) -> Source | None:
         row = await self.session.scalar(
             select(ChannelSourceModel).where(
+                ChannelSourceModel.pod_id == pod_id,
                 ChannelSourceModel.surface_id.is_not_distinct_from(surface_id),
                 ChannelSourceModel.platform == platform,
                 func.coalesce(ChannelSourceModel.external_channel_id, "")
@@ -400,12 +411,15 @@ class ChannelRepository:
         conversation_id: UUID | None,
         external_message_id: str | None,
         external_thread_id: str | None,
+        reply_ref: Mapping[str, object] | None = None,
     ) -> tuple[ChannelMessage, bool]:
         """Add a line, or return the one this platform message already made.
 
         A platform that delivers a message twice -- a retried webhook, a
         replayed poll -- names it the same both times, and the second writes
-        nothing. Says which: ``True`` only for a line written now.
+        nothing. Says which: ``True`` only for a line written now. A line
+        logged before anyone answered it -- a group's -- takes the conversation
+        that answers it, and what answers it in place, the second time.
         """
         behalf = sender.on_behalf_of
         values = {
@@ -424,6 +438,7 @@ class ChannelRepository:
             "conversation_id": conversation_id,
             "external_message_id": external_message_id,
             "external_thread_id": external_thread_id,
+            "reply_ref": dict(reply_ref) if reply_ref is not None else None,
         }
         statement = insert(ChannelMessageModel).values(**values)
         if external_message_id is not None and source_id is not None:
@@ -441,6 +456,11 @@ class ChannelRepository:
             )
             if existing is None:  # pragma: no cover - the conflict named it
                 raise LookupError("A duplicate line vanished")
+            if existing.conversation_id is None and conversation_id is not None:
+                existing.conversation_id = conversation_id
+            if existing.reply_ref is None and reply_ref is not None:
+                existing.reply_ref = dict(reply_ref)
+            await self.session.flush()
             return _message(existing), False
         await self.session.execute(
             update(ChannelModel)
@@ -454,23 +474,6 @@ class ChannelRepository:
                 .values(last_inbound_at=inserted.created_at)
             )
         return _message(inserted), True
-
-    async def latest_heard(self, conversation_id: UUID) -> Source | None:
-        """The source of the newest line a person said in this conversation."""
-        row = await self.session.scalar(
-            select(ChannelSourceModel)
-            .join(
-                ChannelMessageModel,
-                ChannelMessageModel.source_id == ChannelSourceModel.id,
-            )
-            .where(
-                ChannelMessageModel.conversation_id == conversation_id,
-                ChannelMessageModel.sender_kind != SenderKind.AGENT.value,
-            )
-            .order_by(ChannelMessageModel.created_at.desc())
-            .limit(1)
-        )
-        return source_entity(row) if row else None
 
     async def recent(
         self,

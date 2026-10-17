@@ -54,11 +54,13 @@ from app.modules.agent_surfaces.infrastructure.repositories.group_repository imp
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
-from app.modules.agent_surfaces.services.channel_places import group_place
 from app.modules.agent_surfaces.services.sender_handles import group_handle
 from app.modules.agent_surfaces.services.slack_groups import note_slack_channel
+from app.modules.agent_surfaces.services.channel_places import (
+    ChannelSeats,
+    ChannelSeatsInDatabase,
+)
 from app.modules.channels.contracts import (
-    GroupHome,
     Principal,
     Reader,
     Sender,
@@ -67,7 +69,7 @@ from app.modules.channels.contracts import (
     background,
     may_read,
     post,
-    source_for,
+    source_by_id,
     speakers_in,
 )
 from app.modules.contacts.contracts import IdentityStrength, open_contact
@@ -90,19 +92,17 @@ def keeps_group_log(platform: str) -> bool:
     return capabilities is not None and not capabilities.reads_channel_history
 
 
-async def group_source(uow: SqlAlchemyUnitOfWork, group: SurfaceGroup) -> Source:
-    """The group's source, with its channel made the first time it is heard."""
-    return await source_for(
-        uow,
-        pod_id=group.pod_id,
-        place=group_place(group),
-        home=GroupHome(title=group.title),
-    )
+async def group_source(uow: SqlAlchemyUnitOfWork, group: SurfaceGroup) -> Source | None:
+    """The group's place, as channels keep it: the group is its source."""
+    return await source_by_id(uow, group.id)
 
 
 class GroupLog:
-    def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
+    def __init__(
+        self, uow: SqlAlchemyUnitOfWork, *, seats: ChannelSeats | None = None
+    ) -> None:
         self.uow = uow
+        self.seats = seats or ChannelSeatsInDatabase(uow)
         self.groups = SurfaceGroupRepository(uow.session)
         self.membership: SurfacePodMembershipPort = (
             SqlAlchemySurfaceRoutingResolutionAdapter(uow)
@@ -125,7 +125,7 @@ class GroupLog:
             return False
         if parsed.platform is SurfacePlatform.SLACK:
             # Slack keeps its own history; the pod keeps only the channel's row.
-            return await note_slack_channel(self.groups, surfaces, parsed)
+            return await note_slack_channel(self.groups, self.seats, surfaces, parsed)
         if (
             not keeps_group_log(parsed.platform.value)
             or not parsed.message_text.strip()
@@ -136,13 +136,12 @@ class GroupLog:
             surface_ids=[surface.id for surface in surfaces],
         )
         for group in known:
-            source = await group_source(self.uow, group)
             await post(
                 self.uow,
-                channel_id=source.channel_id,
+                channel_id=group.channel_id,
                 sender=await self._speaker(group, parsed),
                 text=parsed.message_text,
-                source_id=source.id,
+                source_id=group.id,
                 external_message_id=parsed.external_message_id,
             )
         return bool(known)

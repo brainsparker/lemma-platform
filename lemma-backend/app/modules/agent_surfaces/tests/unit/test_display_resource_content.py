@@ -17,10 +17,14 @@ import pytest
 
 from datetime import datetime, timezone
 
-from app.modules.agent_surfaces.tests.unit.surface_doubles import surface_conversation
+from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    AnsweredAt,
+    answer_at,
+    surface_conversation,
+)
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 from app.modules.agent.contracts import DisplayResourceRequest, DisplayResourceType
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -375,23 +379,25 @@ def _inbound() -> ParsedInboundSurfaceEvent:
 def _delivery(installation: AgentSurfaceEntity, conversation_id):
     surfaces = AsyncMock()
     surfaces.get.return_value = installation
-    links = AsyncMock()
-    links.get_by_conversation_id.return_value = AgentSurfaceConversationLink(
-        id=uuid4(),
-        surface_id=installation.id,
-        conversation_id=conversation_id,
-        platform=installation.surface_type.value,
-        external_channel_id="D1",
-        external_thread_id="D1",
-        external_user_id="U1",
-        last_event=_inbound().model_dump(mode="json"),
-        last_message_id="1700000000.1",
-        last_inbound_at=datetime.now(timezone.utc),
+    seats = InMemoryChannelSeats()
+    answer_at(
+        seats,
+        AnsweredAt(
+            surface_id=installation.id,
+            conversation_id=conversation_id,
+            platform=installation.surface_type.value,
+            external_channel_id="D1",
+            external_thread_id="D1",
+            external_user_id="U1",
+            last_event=_inbound().model_dump(mode="json"),
+            last_inbound_at=datetime.now(timezone.utc),
+        ),
+        [installation],
     )
     return SurfaceDelivery(
         uow=SimpleNamespace(session=None),
         surface_repository=surfaces,
-        conversation_link_repository=links,
+        seats=seats,
         adapter_registry=SimpleNamespace(get=lambda platform: AsyncMock()),
         # The real resolver reaches a database. This is the same collaborator,
         # answering the one call target resolution makes of it -- given to the

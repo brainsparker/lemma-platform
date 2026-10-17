@@ -18,18 +18,21 @@ the behaviour they name works. Three ways that happens, all measured below — t
 test asserts nothing; the test asserts that a mock was called; or the test
 patches the very thing it is exercising, so the real code never runs.
 
-The estate is large and, in the places that matter most, good: 6,491 backend
+The estate is large and, in the places that matter most, good: 14,405 backend
 tests, a 405-test black-box scenario suite traced to a numbered specification,
 and meta-gates that each exist because they caught a real regression. The rules
 below are about the gap between that and the doctrine already written down.
 
 | Suite | Tests |
 |---|---:|
-| backend unit + module e2e | 6,491 |
+| backend unit + module e2e | 14,405 |
 | product scenarios | 405 |
 | `lemma-cli` | 584 |
 | `lemma-python` | 68 |
 | `lemma-typescript` | 254 |
+
+The backend figure is `uv run pytest --collect-only -q` in `lemma-backend/`;
+re-run it rather than trusting the table.
 
 ---
 

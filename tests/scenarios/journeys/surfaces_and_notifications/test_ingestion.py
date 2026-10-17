@@ -164,8 +164,9 @@ async def test_an_unsigned_delivery_is_rejected(forged):
 
     delivered = await chat.delivers(chat.update("let me in"), signed=False)
 
-    assert delivered.status_code >= 400, (
-        f"an unsigned delivery was accepted ({delivered.status_code})"
+    assert delivered.status_code == 401, (
+        f"an unsigned delivery was not refused as unauthenticated "
+        f"({delivered.status_code})"
     )
     await never(
         chat.replies,
@@ -183,8 +184,9 @@ async def test_a_wrongly_signed_delivery_is_rejected(forged):
 
     delivered = await chat.delivers(chat.update("let me in"), secret="not-the-secret")
 
-    assert delivered.status_code >= 400, (
-        f"a delivery with the wrong secret was accepted ({delivered.status_code})"
+    assert delivered.status_code == 401, (
+        f"a delivery with the wrong secret was not refused as unauthenticated "
+        f"({delivered.status_code})"
     )
     await never(
         chat.replies,

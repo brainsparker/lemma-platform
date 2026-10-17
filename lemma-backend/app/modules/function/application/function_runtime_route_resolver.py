@@ -219,11 +219,21 @@ class FunctionRuntimeRouteResolver:
         A function sandbox holds no user files, so replacing it loses no data --
         but it does end every run in flight on it, which is why the decision to
         call this belongs to the health probe and not to one failed request.
+
+        Only the sandbox this endpoint was leased from is destroyed. Two runs
+        failing on the same dead runtime both get here; the first replaces it,
+        and the second -- still holding the old endpoint -- must not destroy
+        the replacement and every healthy run on it. The allocation epoch is
+        the fence: a sandbox that has moved past it reports False.
         """
         await self.invalidate_for(pod_id, endpoint)
         client = self._sandbox_client_factory()
         try:
-            await client.destroy_sandbox(WorkloadKind.FUNCTION, pod_id)
+            destroyed = await client.destroy_sandbox(
+                WorkloadKind.FUNCTION,
+                pod_id,
+                expected_epoch=endpoint.allocation_epoch,
+            )
         except SandboxError, httpx.HTTPError:
             # Best effort, and deliberately narrow: a provider that cannot be
             # reached leaves the endpoint evicted anyway, so the next run
@@ -237,9 +247,17 @@ class FunctionRuntimeRouteResolver:
             )
             return False
         else:
+            if not destroyed:
+                logger.info(
+                    "function.runtime.quarantine_superseded",
+                    pod_id=str(pod_id),
+                    allocation_epoch=endpoint.allocation_epoch,
+                )
+                return False
             logger.info(
                 "function.runtime.sandbox_quarantined",
                 pod_id=str(pod_id),
+                allocation_epoch=endpoint.allocation_epoch,
             )
             return True
         finally:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SlackCredentials
+from app.modules.agent_surfaces.platforms.slack.adapter import SlackSurfaceAdapter
+
 from uuid import uuid4
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -128,23 +131,34 @@ def _slack_channel_event(
     )
 
 
-def test_slack_channel_message_mentioning_somebody_else_is_refused():
+async def _admitted_after_settling(surface, event) -> bool:
+    """What ingress does: the Slack adapter settles whether *this* bot was
+    mentioned, then the surface admits on that."""
+    settled = await SlackSurfaceAdapter().settle_mention(
+        credentials=SlackCredentials(),
+        event=event,
+        bot_user_id=surface.surface_identity_id,
+    )
+    return surface.allows_inbound_event(settled)
+
+
+async def test_slack_channel_message_mentioning_somebody_else_is_refused():
     surface = _slack_surface(bot_user_id="U-BOT")
     event = _slack_channel_event(
         event_type="message", mentioned_user_ids=["U-COLLEAGUE"]
     )
-    assert surface.allows_inbound_event(event) is False
+    assert await _admitted_after_settling(surface, event) is False
 
 
-def test_slack_channel_message_mentioning_the_bot_is_allowed():
+async def test_slack_channel_message_mentioning_the_bot_is_allowed():
     surface = _slack_surface(bot_user_id="U-BOT")
     event = _slack_channel_event(
         event_type="message", mentioned_user_ids=["U-COLLEAGUE", "U-BOT"]
     )
-    assert surface.allows_inbound_event(event) is True
+    assert await _admitted_after_settling(surface, event) is True
 
 
-def test_slack_surface_without_a_recorded_bot_id_stays_out_of_the_channel():
+async def test_slack_surface_without_a_recorded_bot_id_stays_out_of_the_channel():
     """A surface that cannot say whether it was mentioned must not answer.
 
     ``surface_identity_id`` is unset on a Slack surface created through the
@@ -155,10 +169,10 @@ def test_slack_surface_without_a_recorded_bot_id_stays_out_of_the_channel():
     event = _slack_channel_event(
         event_type="message", mentioned_user_ids=["U-COLLEAGUE"]
     )
-    assert surface.allows_inbound_event(event) is False
+    assert await _admitted_after_settling(surface, event) is False
 
 
-def test_slack_app_mention_is_allowed_without_a_recorded_bot_id():
+async def test_slack_app_mention_is_allowed_without_a_recorded_bot_id():
     """Slack only fires ``app_mention`` for the app that was mentioned.
 
     So the event type is itself the answer, and a surface with no recorded bot
@@ -167,7 +181,7 @@ def test_slack_app_mention_is_allowed_without_a_recorded_bot_id():
     """
     surface = _slack_surface(bot_user_id=None)
     event = _slack_channel_event(event_type="app_mention", mentioned_user_ids=[])
-    assert surface.allows_inbound_event(event) is True
+    assert await _admitted_after_settling(surface, event) is True
 
 
 def _slack_group_dm_event(*, mentioned: bool) -> ParsedInboundSurfaceEvent:
@@ -208,7 +222,7 @@ def test_a_slack_channel_off_the_allow_list_is_still_refused():
 
 
 def test_a_slack_group_dm_is_one_conversation_per_group_dm():
-    from app.modules.agent_surfaces.services.surface_router import _channel_route_key
+    from app.modules.agent_surfaces.services.route_resolver import _channel_route_key
 
     surface = _slack_surface(bot_user_id="U-BOT")
 

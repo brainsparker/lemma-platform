@@ -28,7 +28,6 @@ from app.core.authorization.context import (
     ResourceType,
     ResourceVisibility,
 )
-from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.grants import (
     NormalizedResourceGrant,
     ResourceGrantInputProtocol,
@@ -171,7 +170,6 @@ class PodLinkService:
             uow=self.uow,
             conversation_repository=ConversationRepository(self.uow),
             agent_repository=AgentRepository(self.uow),
-            authorization_service=create_authorization_data_service(self.uow),
             usage_service=build_usage_service(self.uow),
         )
         for conversation_id, owner in threads:

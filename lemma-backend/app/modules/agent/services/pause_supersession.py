@@ -16,7 +16,9 @@ from uuid import UUID
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
-from app.modules.agent.domain.ports import ConversationRepository
+from app.modules.agent.domain.conversation_ports import PauseSupersession
+
+
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
@@ -31,7 +33,7 @@ logger = get_logger(__name__)
 
 async def supersede_stale_pending_interactions(
     *,
-    repository: ConversationRepository,
+    repository: PauseSupersession,
     resume_returns: ResumeToolReturnBuilder,
     conversation: Conversation,
     user_id: UUID,
@@ -71,7 +73,7 @@ async def supersede_stale_pending_interactions(
 
 async def _deny_stale_pending_interaction(
     *,
-    repository: ConversationRepository,
+    repository: PauseSupersession,
     resume_returns: ResumeToolReturnBuilder,
     conversation: Conversation,
     message: Message,

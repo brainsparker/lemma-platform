@@ -684,6 +684,22 @@ function Focused({
 }
 
 export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) {
+    return (
+        <Modal
+            title={"Where can you reach " + pod.name + "?"}
+            subtitle={"Pick a channel and " + pod.name + " answers there, under its own name."}
+            onClose={onClose}
+        >
+            <ReachPanel pod={pod} onLeave={onClose} />
+        </Modal>
+    );
+}
+
+/** What the sheet holds — the channels it answers on, and the ones it could —
+ *  without the sheet. Channels on About is a page of its own, and this is that
+ *  page; the strip elsewhere opens the same thing in a sheet. `inline` drops
+ *  the count at the top, which the page's own heading already says. */
+export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave?: () => void; inline?: boolean }) {
     const queryClient = useQueryClient();
     const [managing, setManaging] = useState<Surface | null>(null);
     const [completionError, setCompletionError] = useState<string | null>(null);
@@ -781,12 +797,8 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
     const failed = connect.error ?? drop.error ?? (isCredentialConflict(useAccount.error) ? null : useAccount.error);
 
     return (
-        <Modal
-            title={"Where can you reach " + pod.name + "?"}
-            subtitle={"Pick a channel and " + pod.name + " answers there, under its own name."}
-            onClose={onClose}
-        >
-            {managing ? <SurfaceManage pod={pod} surface={managing} onBack={() => setManaging(null)} onSaved={() => { refresh(); setManaging(null); }} onLeave={onClose} /> : focus ? (
+        <>
+            {managing ? <SurfaceManage pod={pod} surface={managing} onBack={() => setManaging(null)} onSaved={() => { refresh(); setManaging(null); }} onLeave={onLeave} /> : focus ? (
                 <Focused
                     entry={focus}
                     pod={pod}
@@ -798,15 +810,15 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
                     onDone={() => { void finish(focus.platform); }}
                 />
             ) : (
-            <div className="reachsheet">
-                <div className="reachsheet__who">
+            <div className={inline ? "reachsheet reachsheet--inline" : "reachsheet"}>
+                {!inline && <div className="reachsheet__who">
                     <Mark seed={pod.id} name={pod.name} icon={pod.iconUrl} size={40} />
                     <p>
                         {on.length === 0
                             ? pod.name + " can only be reached here, in Lemma."
                             : pod.name + " has " + on.length + (on.length === 1 ? " channel." : " channels.")}
                     </p>
-                </div>
+                </div>}
 
                 {on.length > 0 && (
                     <ul className="reachrows">
@@ -856,6 +868,6 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
                 )}
             </div>
             )}
-        </Modal>
+        </>
     );
 }

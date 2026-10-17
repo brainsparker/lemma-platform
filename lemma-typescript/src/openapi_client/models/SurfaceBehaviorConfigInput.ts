@@ -9,6 +9,7 @@ import type { SurfaceIdentityConfigInput } from './SurfaceIdentityConfigInput.js
 import type { SurfaceSendPolicyConfig } from './SurfaceSendPolicyConfig.js';
 import type { SurfaceSlackConfigInput } from './SurfaceSlackConfigInput.js';
 import type { SurfaceTelegramConfigInput } from './SurfaceTelegramConfigInput.js';
+import type { SurfaceWhatsAppConfigInput } from './SurfaceWhatsAppConfigInput.js';
 export type SurfaceBehaviorConfigInput = {
     channels?: Array<SurfaceChannelRouteInput>;
     contacts?: SurfaceContactsConfig;
@@ -22,4 +23,5 @@ export type SurfaceBehaviorConfigInput = {
     send_policy?: SurfaceSendPolicyConfig;
     slack?: SurfaceSlackConfigInput;
     telegram?: SurfaceTelegramConfigInput;
+    whatsapp?: SurfaceWhatsAppConfigInput;
 };

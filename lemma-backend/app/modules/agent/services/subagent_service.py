@@ -33,6 +33,14 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
 )
 from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.subagent_results import (
+    COLLECTED_BY_AWAIT,
+    COLLECTED_BY_STATUS,
+    DELIVERED_STATUSES,
+    PARENT_RUN_KEY,
+    REPORTS_TO_PARENT_KEY,
+    SUBAGENTS_OUT_KEY,
+)
 from app.modules.agent.domain.subagent_spawn import SPAWN_KEY, spawn_key
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
@@ -40,7 +48,7 @@ from app.modules.agent.infrastructure.repositories import (
 )
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.poll_backoff import poll_delay
-from app.core.authorization.factory import create_authorization_data_service
+from app.modules.agent.services.subagent_result_delivery import mark_collected
 from app.modules.usage.contracts.execution import build_usage_service
 
 if TYPE_CHECKING:
@@ -151,7 +159,6 @@ class SubAgentService:
             uow=uow,
             conversation_repository=ConversationRepository(uow),
             agent_repository=AgentRepository(uow),
-            authorization_service=create_authorization_data_service(uow),
             usage_service=build_usage_service(uow),
         )
 
@@ -175,6 +182,7 @@ class SubAgentService:
         *,
         agent_name: str | None = None,
         input_data: JsonObject | str,
+        tool_call_id: str | None = None,
     ) -> SubAgentHandle:
         # Self-spawn: omit agent_name (or pass the parent's own name) to launch
         # another instance of the agent already running in this conversation. The
@@ -191,10 +199,19 @@ class SubAgentService:
         )
         task = self._input_prompt(input_data)
         key = spawn_key(target_name=target_name, task=task)
+        # The spawning call, when the run gave it one: a resumed turn re-runs an
+        # interrupted spawn under the same id and must get the same child.
+        spawn_call = (
+            f"{deps.agent_run_id}:{tool_call_id}"
+            if deps.agent_run_id and tool_call_id
+            else None
+        )
         async with self.uow_factory() as uow:
             token = set_current_context(await self._agent_ctx(uow, deps))
             try:
-                earlier = await self._already_spawned(uow, deps, key)
+                earlier = await self._already_spawned(
+                    uow, deps, key, spawn_call=spawn_call
+                )
                 if earlier is not None:
                     return earlier
                 service = self._conversation_service(uow)
@@ -212,12 +229,20 @@ class SubAgentService:
                         # this child IS a sub-agent, so its run gets no spawn tools.
                         "is_sub_agent": True,
                         "spawned_by_agent": deps.agent_name,
-                        "parent_run_id": str(deps.agent_run_id)
+                        PARENT_RUN_KEY: str(deps.agent_run_id)
                         if deps.agent_run_id
                         else None,
                         "self_spawned": is_self,
                         SPAWN_KEY: key,
+                        REPORTS_TO_PARENT_KEY: True,
                     },
+                )
+                if spawn_call is not None:
+                    await ConversationRepository(uow).set_spawn_call(
+                        conversation.id, spawn_call
+                    )
+                await ConversationRepository(uow).set_conversation_metadata_key(
+                    deps.conversation_id, SUBAGENTS_OUT_KEY, True
                 )
                 result = await service.add_user_message_and_start_run(
                     conversation_id=conversation.id,
@@ -238,7 +263,12 @@ class SubAgentService:
                 reset_current_context(token)
 
     async def _already_spawned(
-        self, uow: SqlAlchemyUnitOfWork, deps: BaseAgentContext, key: str
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        deps: BaseAgentContext,
+        key: str,
+        *,
+        spawn_call: str | None = None,
     ) -> SubAgentHandle | None:
         """The child this run already spawned for this task, if it has.
 
@@ -250,7 +280,13 @@ class SubAgentService:
             return None
         repository = ConversationRepository(uow)
         await repository.lock_conversation(deps.conversation_id)
-        child = await repository.find_spawned_child(
+        child = (
+            await repository.find_child_by_spawn_call(
+                parent_id=deps.conversation_id, spawn_call=spawn_call
+            )
+            if spawn_call is not None
+            else None
+        ) or await repository.find_spawned_child(
             parent_id=deps.conversation_id,
             parent_run_id=deps.agent_run_id,
             spawn_key=key,
@@ -358,6 +394,9 @@ class SubAgentService:
             }
             if report["status"] == _NEEDS_INPUT:
                 report.update(await _open_question(uow, conversation_id))
+            elif latest.status in DELIVERED_STATUSES:
+                await mark_collected(uow, latest.id, by=COLLECTED_BY_STATUS)
+                await uow.commit()
             return report
 
     async def send(
@@ -376,6 +415,13 @@ class SubAgentService:
                     await AgentRepository(uow).get(child.agent_id)
                     if child.agent_id
                     else None
+                )
+                # This run gave the child its work now, so this run is the one
+                # that may collect the result (`domain/subagent_results`).
+                await ConversationRepository(uow).set_conversation_metadata_key(
+                    conversation_id,
+                    PARENT_RUN_KEY,
+                    str(deps.agent_run_id) if deps.agent_run_id else None,
                 )
                 result = await service.add_user_message_and_start_run(
                     conversation_id=conversation_id,
@@ -453,7 +499,13 @@ class SubAgentService:
                         "Sub-agent run not found in this sub-conversation."
                     )
                 if run.status not in ACTIVE_AGENT_RUN_STATUSES:
-                    return await _finished_or_asking(uow, run)
+                    report = await _finished_or_asking(uow, run)
+                    if report["status"] != _NEEDS_INPUT and (
+                        run.status in DELIVERED_STATUSES
+                    ):
+                        await mark_collected(uow, run.id, by=COLLECTED_BY_AWAIT)
+                        await uow.commit()
+                    return report
             if loop.time() >= deadline:
                 return {
                     "conversation_id": str(conversation_id),
@@ -461,8 +513,9 @@ class SubAgentService:
                     "status": run.status.value,
                     "timed_out": True,
                     "hint": (
-                        "Still running; poll query_subagents (mode='messages') "
-                        "or interact_subagent (action='await') again."
+                        "Still running. Rather than awaiting again, call "
+                        "`wait_for` with `subagent_run_id` and end your turn; "
+                        "you wake with its result."
                     ),
                 }
             attempt += 1

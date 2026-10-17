@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.core.domain.generation import GenerationSettings, ReasoningEffort
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.modules.agent.domain.runtime_profiles import (
@@ -189,11 +190,11 @@ class TestReasoningGate:
 
 class TestValidation:
     def test_a_profile_saved_with_a_bad_value_is_refused(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(RuntimeProfileValidationError):
             normalize_model_settings({"temperature": "hot"})
-        with pytest.raises(ValueError):
+        with pytest.raises(RuntimeProfileValidationError):
             normalize_model_settings({"reasoning_effort": "extreme"})
-        with pytest.raises(ValueError):
+        with pytest.raises(RuntimeProfileValidationError):
             normalize_model_settings({"max_tokens": "lots"})
 
     def test_good_values_are_kept_as_written(self):

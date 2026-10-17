@@ -8,7 +8,7 @@ import pytest
 
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     ProjectRepo,
     generate_cwd_slug,
     parse_project_repo,
@@ -162,7 +162,6 @@ def _service(conversations: dict):
             conversations
         ),
         agent_repository=None,  # type: ignore[arg-type]
-        authorization_service=None,
     )
 
 

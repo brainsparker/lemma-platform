@@ -335,7 +335,13 @@ themselves, exactly as in private. Everybody else is answered *for the pod*.
 ### PS-SURF-017 — A person can say something to the agent without the group reading it
 **Status:** planned
 
-> Proven at unit level by `agent/tests/unit/test_private_notes.py`,
+> Not yet a scenario: the suite has no group chat to hold the conversation in.
+> The answer staying off the platform is proven at module level by
+> `agent_surfaces/tests/e2e/test_private_note_in_channel_e2e.py`, which sends a
+> note through the endpoint the web app uses into a Teams channel's
+> conversation and checks the channel receives nothing -- not the answer, the
+> resource it shows, or its approval card. The labelling and run-marking rules
+> are proven at unit level by `agent/tests/unit/test_private_notes.py`,
 > `agent/tests/unit/test_written_in_lemma.py` and
 > `agent_surfaces/tests/unit/test_private_note_runs.py`.
 

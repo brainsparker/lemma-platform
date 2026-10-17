@@ -8,6 +8,11 @@ made -- and the two halves of that decision are made together, in
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import (
+    SurfaceCredentials,
+    TelegramCredentials,
+)
+
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -18,7 +23,7 @@ from uuid import UUID
 from app.core.config import reveal_secret, settings
 from app.core.infrastructure.db.session_uow import commit_now
 from app.modules.agent_surfaces.platforms.common import (
-    PLATFORM_TRANSPORT_ERRORS,
+    platform_transport_errors,
     public_https_api_url_available,
 )
 from app.modules.agent_surfaces.platforms.delivery import with_retry
@@ -121,7 +126,7 @@ class SurfaceTelegramWebhookMixin:
     async def _prepare_telegram_webhook(
         self,
         surface: AgentSurfaceEntity,
-    ) -> dict[str, Any]:
+    ) -> TelegramCredentials:
         """Validate the Telegram account and mint a webhook secret.
 
         Returns the bot credentials so the caller can register the webhook after
@@ -134,7 +139,7 @@ class SurfaceTelegramWebhookMixin:
 
     async def _telegram_credentials(
         self, surface: AgentSurfaceEntity
-    ) -> dict[str, Any]:
+    ) -> TelegramCredentials:
         if surface.account_id is None:
             raise AgentSurfaceValidationError(
                 "Telegram WEBHOOK surfaces require account_id"
@@ -144,8 +149,8 @@ class SurfaceTelegramWebhookMixin:
             raise AgentSurfaceValidationError(
                 "Telegram surfaces require a connected telegram account"
             )
-        credentials = dict(account.credentials or {})
-        if not str(credentials.get("bot_token") or "").strip():
+        credentials = TelegramCredentials.from_payload(account.credentials or {})
+        if credentials.bot_token is None:
             raise AgentSurfaceValidationError(
                 "Telegram account credentials missing bot_token"
             )
@@ -168,7 +173,7 @@ class SurfaceTelegramWebhookMixin:
         self,
         surface: AgentSurfaceEntity,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         drop_pending_updates: bool,
     ) -> AgentSurfaceEntity:
         """Register the webhook for a surface whose row has been committed.
@@ -205,7 +210,7 @@ class SurfaceTelegramWebhookMixin:
     async def _register_telegram_webhook(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         webhook_url: str,
         webhook_secret: str,
         drop_pending_updates: bool = True,
@@ -248,7 +253,7 @@ class SurfaceTelegramWebhookMixin:
                 "Could not configure Telegram webhook automatically. Set it "
                 f"manually to {webhook_url}. Telegram response: {exc.description}",
             ) from exc
-        except PLATFORM_TRANSPORT_ERRORS as exc:
+        except platform_transport_errors() as exc:
             raise AgentSurfacePlatformError(
                 "telegram",
                 "Could not configure Telegram webhook automatically. Set it "
@@ -261,7 +266,7 @@ class SurfaceTelegramWebhookMixin:
     ) -> None:
         try:
             info = await self._telegram_webhook_call(client, "getWebhookInfo", {})
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.surface_service.telegram_webhook_unconfirmed.degraded",
                 exc_info=True,

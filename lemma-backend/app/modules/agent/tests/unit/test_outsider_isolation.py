@@ -22,6 +22,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.capabilities.open_notifications import (
     render_open_notifications,
 )
@@ -126,10 +128,14 @@ def test_a_client_cannot_create_a_conversation_that_claims_an_audience():
 _SEQUENCE = itertools.count(1)
 
 
+_SYSTEM_RUNTIME = AgentRuntimeConfig(profile_id=SYSTEM_LEMMA_PROFILE_ID)
+
+
 def _run(*, private: bool) -> AgentRun:
     return AgentRun(
         conversation_id=uuid4(),
         started_at=datetime.now(timezone.utc),
+        agent_runtime=_SYSTEM_RUNTIME,
         metadata={PRIVATE_NOTE_KEY: True} if private else {"source": "user_message"},
     )
 

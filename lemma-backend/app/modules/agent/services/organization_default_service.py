@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.modules.agent.domain.errors import RuntimeProfileNotFoundError
 from app.modules.agent.domain.organization_default import (
     ORGANIZATION_WIDE_VIEWER,
     is_marked_default,
@@ -24,8 +25,16 @@ from app.modules.agent.infrastructure.repositories import (
 )
 
 
-class OrganizationDefaultNotFoundError(LookupError):
-    """The profile named is not one of this organization's."""
+class OrganizationDefaultNotFoundError(RuntimeProfileNotFoundError):
+    """The profile named is not one of this organization's.
+
+    A 404 whatever the reason, a personal key included: saying "that is
+    somebody's own key" would confirm a profile id to someone who cannot see it.
+    """
+
+    def __init__(self, profile_id: str) -> None:
+        del profile_id
+        super().__init__()
 
 
 class OrganizationDefaultService:
@@ -45,7 +54,7 @@ class OrganizationDefaultService:
 
         Raises `OrganizationDefaultNotFoundError` when the profile is not an
         organization-wide one here (a personal key is not visible to the
-        organization-wide read, so it lands here too), ``ValueError`` when it
+        organization-wide read, so it lands here too), `RuntimeProfileValidationError` when it
         is visible but cannot be the default, and
         `OrganizationDefaultConflictError` (a 409) when another default was set
         at the same moment.

@@ -7,6 +7,11 @@ Rendering and attachment handling reuse the shared email modules.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    EmailReplyTarget,
+    reply_target_as,
+)
+
 import base64
 from collections.abc import Mapping
 from email.utils import formataddr
@@ -15,7 +20,13 @@ from uuid import uuid4
 
 import httpx
 
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    ResendCredentials,
+)
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
@@ -82,11 +93,13 @@ def _resend_retry_after(exc: Exception) -> float | None:
 
 
 class ResendPlatformService:
-    def __init__(self, credentials: dict[str, Any]):
-        self._api_key = str(credentials.get("api_key") or "")
-        self._from_address = str(credentials.get("from_address") or "")
-        self._from_name = str(credentials.get("from_name") or "Lemma")
-        self._api_base = str(credentials.get("api_base_url") or _RESEND_API_BASE)
+    def __init__(self, credentials: CredentialsLike):
+        resend = ResendCredentials.of(credentials)
+        # Revealed into a service built for the call at hand.
+        self._api_key = reveal_secret(resend.api_key) or ""
+        self._from_address = resend.from_address or ""
+        self._from_name = resend.from_name or "Lemma"
+        self._api_base = resend.api_base_url or _RESEND_API_BASE
         self._retry_policy = RetryPolicy()
 
     def _sender_name(self, metadata: dict[str, Any] | None) -> str:
@@ -95,20 +108,32 @@ class ResendPlatformService:
         Read off metadata rather than added to every signature between here and
         the notification service: ``agent_display_name`` already travels that
         way for the chat platforms, and both send paths already forward the
-        dict. A caller that knows neither name gets ``self._from_name`` back,
-        which is what the header said before any of this existed.
+        dict. ``email_sender_name`` is mail's own key and wins where it is set:
+        it names the pod when the pod's assistant is writing, and a chat bot
+        answering to the pod's name is not what that key is for. A caller that
+        knows neither gets ``self._from_name`` back, which is what the header
+        said before any of this existed. A present ``email_sender_name`` of
+        ``None`` is an answer -- the pod's name could not be found -- and the
+        chat name beside it is ``Lem``, which names no pod, so it does not stand
+        in.
         """
         data = metadata or {}
         return sender_display_name(
-            agent_name=data.get("agent_display_name"),
-            actor_display_name=data.get("actor_display_name"),
+            sender_name=(
+                data["email_sender_name"]
+                if "email_sender_name" in data
+                else data.get("agent_display_name")
+            ),
             product_name=self._from_name,
         )
 
     async def fetch_sender_profile(
         self, event: ParsedInboundSurfaceEvent
     ) -> SurfaceSenderProfile | None:
-        email = event.sender_email or event.reply_target.get("recipient_email")
+        email = (
+            event.sender_email
+            or reply_target_as(event, EmailReplyTarget).recipient_email
+        )
         if not email:
             return None
         return SurfaceSenderProfile(
@@ -123,18 +148,18 @@ class ResendPlatformService:
         message: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        target = reply_target_as(event, EmailReplyTarget)
         await self._send_email(
-            recipient_email=str(event.reply_target.get("recipient_email") or ""),
-            subject=event.reply_target.get("subject"),
-            in_reply_to=str(event.reply_target.get("in_reply_to") or "").strip()
-            or None,
-            references=[str(r) for r in (event.reply_target.get("references") or [])],
+            recipient_email=target.recipient_email or "",
+            subject=target.subject,
+            in_reply_to=target.in_reply_to,
+            references=list(target.references),
             content=message,
             content_type="markdown",
             full_width=_wants_full_width(metadata),
             attachments=list((metadata or {}).get("attachments") or []),
             from_name=self._sender_name(metadata),
-            cc=[str(a) for a in (event.reply_target.get("cc") or [])],
+            cc=list(target.cc),
         )
 
     def _raise_unsendable(self, recipient_email: str) -> None:
@@ -173,7 +198,7 @@ class ResendPlatformService:
         if not email_id:
             raise AgentSurfaceValidationError("Resend receive requires an email id.")
         await assert_safe_api_base(self._api_base, platform="Resend")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with outbound_http(30.0) as client:
             response = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving/{email_id}",
                 headers={"Authorization": f"Bearer {self._api_key}"},
@@ -197,7 +222,7 @@ class ResendPlatformService:
         if after:
             params["after"] = after
         await assert_safe_api_base(self._api_base, platform="Resend")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with outbound_http(30.0) as client:
             response = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving",
                 headers={"Authorization": f"Bearer {self._api_key}"},
@@ -224,7 +249,7 @@ class ResendPlatformService:
             return None
 
         await assert_safe_api_base(self._api_base, platform="Resend")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with outbound_http(30.0) as client:
             described = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving/"
                 f"{email_id}/attachments/{attachment_id}",
@@ -368,7 +393,7 @@ class ResendPlatformService:
         idempotency_key = str(uuid4())
 
         async def post_email_once() -> dict[str, Any]:
-            async with httpx.AsyncClient(timeout=_SEND_TIMEOUT) as client:
+            async with outbound_http(_SEND_TIMEOUT) as client:
                 resp = await client.post(
                     f"{self._api_base.rstrip('/')}/emails",
                     json=payload,

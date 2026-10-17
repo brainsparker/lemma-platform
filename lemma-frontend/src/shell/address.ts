@@ -1,6 +1,7 @@
 import type { Tab } from "@/data";
 import { docTitle } from "@/library/doc-title";
 import { readableName } from "@/library/reading";
+import { isAboutSection, type AboutSection } from "@/space/about-sections";
 
 /** The one segment every workspace URL hangs off. */
 export const ROOT = "/t";
@@ -29,6 +30,11 @@ export interface Address {
      *  scrolling page and will want `#skills`, which cannot collide with this
      *  precisely because one is a fragment and the other is a segment. */
     agentName: string | null;
+    /** Which part of About is open: `/t/{pod}/about/people`. Absent on the
+     *  overview and everywhere else, like `team`, so every other address reads
+     *  as it always did. A segment rather than a fragment because each part is
+     *  a page of its own now, and Back should step out of it to the overview. */
+    section?: AboutSection;
     /** Set on the organization's own page, where no teammate is chosen:
      *  `/t/teammates`. Absent everywhere else, rather than false, so an
      *  address about a teammate reads exactly as it always did. */
@@ -103,8 +109,12 @@ export function readAddress(pathname: string): Address {
         case "workflows":
         case "groups":
         case "contacts":
-        case "about":
             return rest.length > 1 ? here(null) : here("space:" + rest[0]);
+        /* A part of About is a page under it. One this build does not know —
+           a section that moved to Settings, say — still opens About. */
+        case "about":
+            if (rest.length > 2) return here(null);
+            return isAboutSection(rest[1]) ? here("space:about", { section: rest[1] }) : here("space:about");
         /* The space's settings are sections of the teammate's page now. A link
            that still names the page they had opens the one that carries them
            rather than nothing, and the shell rewrites the address. */
@@ -165,6 +175,7 @@ function tailOf(address: Address): string[] {
         case "profile":
             return address.agentName ? ["profile", encodeURIComponent(address.agentName)] : ["profile"];
         case "space":
+            if (rest === "about" && address.section) return ["about", address.section];
             return rest ? [rest] : [];
         case "library":
         case "history":
@@ -260,6 +271,8 @@ export function isNewPlace(from: Address, to: Address): boolean {
     if (!from.podId || !from.tabId) return false;
     if (from.podId !== to.podId) return true;
     if (from.tabId !== to.tabId) return true;
+    /* Into a part of About, out of it, or across to another. */
+    if ((from.section ?? null) !== (to.section ?? null)) return true;
     if (from.conversationId && to.conversationId && from.conversationId !== to.conversationId) return true;
     return Boolean(from.agentName && to.agentName && from.agentName !== to.agentName);
 }

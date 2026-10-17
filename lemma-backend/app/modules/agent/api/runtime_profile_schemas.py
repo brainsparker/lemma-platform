@@ -16,6 +16,7 @@ from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import AgentHostStatus
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCatalogEntry,
+    RuntimeProfileAvailability,
     RuntimeProfileKind,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
@@ -42,10 +43,14 @@ class AgentRuntimeProfileResponse(BaseModel):
     model_catalog: list[RuntimeModelCatalogEntry] = Field(default_factory=list)
     config: JsonObject = Field(default_factory=dict)
     status: RuntimeProfileStatus
-    metadata: JsonObject = Field(default_factory=dict)
+    #: The coding agent an Agent Host profile runs (``codex``, ``claude-code``),
+    #: as its computer published it; null for a model provider.
+    harness_key: str | None = None
+    #: Whether an owner chose this profile as what every teammate runs on.
+    organization_default: bool = False
     has_credentials: bool = False
     derived_harness_kind: HarnessKind
-    availability_status: str | None = None
+    availability_status: RuntimeProfileAvailability | None = None
 
 
 class AgentRuntimeProfileListResponse(BaseModel):

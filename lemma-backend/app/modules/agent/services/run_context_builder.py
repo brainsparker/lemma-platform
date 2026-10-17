@@ -16,6 +16,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -43,7 +44,7 @@ from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.services.surface_context import (
     surface_context_from_conversation,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     has_recorded_cwd,
     pod_cwd_from_workspace_cwd,
     resolve_workspace_location,
@@ -180,7 +181,8 @@ async def build_run_context(
     # that. A run could lose the pod's name, its tables, its grants and its
     # memory at once, with nothing logged and nothing said to the model, which
     # then saw a pod that appeared to be empty.
-    except DomainError, SQLAlchemyError, OSError, TimeoutError:
+    except (DomainError, SQLAlchemyError, OSError, TimeoutError) as exc:
+        raise_if_database_unavailable(exc)
         logger.warning(
             "agent.run.context_brief_unavailable.degraded",
             agent_id=str(agent.id),

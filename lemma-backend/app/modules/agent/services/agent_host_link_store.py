@@ -21,6 +21,7 @@ from uuid import UUID
 from sqlalchemy.exc import DBAPIError
 
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.transient_errors import is_deadlock
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -47,6 +48,9 @@ from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
 from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
 )
+from app.modules.agent.services.agent_host_profile_refresh import (
+    refresh_harness_profiles,
+)
 from app.modules.agent.services.agent_host_auth import (
     generate_host_secret,
     host_secret_hash,
@@ -56,8 +60,10 @@ from app.modules.agent.services.agent_host_auth import (
 
 logger = get_logger(__name__)
 
-#: How many commands one read of the queue hands out, as the poll did.
-MAX_COMMANDS_PER_READ = 16
+#: How many commands one read of the queue hands out. Above a Desktop host's
+#: default run limit (20), so a burst of starts queued while the link was down
+#: goes out in one read rather than waiting for the next poke.
+MAX_COMMANDS_PER_READ = 32
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,16 +95,6 @@ def _stored_host_execution(
 ) -> dict[str, object]:
     """What the host row's ``capacity`` keeps under ``host_execution``."""
     return (host_execution or HostExecutionCapability()).model_dump(mode="json")
-
-
-def is_deadlock(exc: DBAPIError) -> bool:
-    """Whether Postgres aborted this transaction to break a deadlock (40P01).
-
-    Read off the driver error rather than the message: asyncpg surfaces the
-    SQLSTATE, and matching on text would break the moment a locale or a driver
-    changes.
-    """
-    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "40P01"
 
 
 class AgentHostLinkStore:
@@ -288,6 +284,9 @@ class AgentHostLinkStore:
                 host_id=host_id,
                 reported_keys={snapshot.harness_key for snapshot in snapshots},
             )
+            # Only the profiles of the harnesses just reported, through the
+            # `harness_id` index; see `agent_host_profile_refresh`.
+            await refresh_harness_profiles(uow.session, published)
             records = [
                 AgentHostHarnessRecord.model_validate(harness) for harness in published
             ]

@@ -76,7 +76,6 @@ def conversation_service(
         uow=uow,
         conversation_repository=ConversationRepository(uow),
         agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_data_service(uow),
         usage_service=usage_service,
     )
 

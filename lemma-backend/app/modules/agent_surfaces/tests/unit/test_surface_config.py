@@ -36,6 +36,12 @@ EXPECTED = [
     ("whatsapp_verify_token", "WHATSAPP_VERIFY_TOKEN", None),
     ("whatsapp_app_secret", "WHATSAPP_APP_SECRET", None),
     ("whatsapp_display_phone_number", "WHATSAPP_DISPLAY_PHONE_NUMBER", None),
+    ("whatsapp_reengage_template", "WHATSAPP_REENGAGE_TEMPLATE", None),
+    (
+        "whatsapp_reengage_template_language",
+        "WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE",
+        "en_US",
+    ),
     ("telegram_bot_token", "TELEGRAM_BOT_TOKEN", None),
     ("telegram_webhook_secret", "TELEGRAM_WEBHOOK_SECRET", None),
     ("telegram_manager_bot_token", "TELEGRAM_MANAGER_BOT_TOKEN", None),

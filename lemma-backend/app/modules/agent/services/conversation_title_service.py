@@ -123,7 +123,6 @@ class ConversationOpeningReader(Protocol):
         self,
         conversation_id: UUID,
         *,
-        include_messages: bool = False,
         include_runs: bool = False,
     ) -> Conversation | None: ...
 

@@ -18,6 +18,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
+
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
 from app.modules.agent.domain.outsiders import AUDIENCE_KEY, OUTSIDERS, Audience
 from app.modules.agent.domain.private_notes import (
@@ -136,7 +138,11 @@ def _coordinator(conversation: Conversation):
         )
     )
     uow = SimpleNamespace(
-        collect_events=MagicMock(), commit=AsyncMock(), after_commit=MagicMock()
+        collect_events=MagicMock(),
+        commit=AsyncMock(),
+        after_commit=MagicMock(),
+        # The pod names no default runtime of its own.
+        session=RecordingWorkSession(),
     )
     coordinator = turns.TurnCoordinator(
         uow,

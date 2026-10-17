@@ -25,11 +25,11 @@ from collections.abc import Callable, Sequence
 
 from pydantic_ai.capabilities import AbstractCapability, ProcessHistory
 from pydantic_ai.messages import ModelMessage
-from pydantic_ai._history_processor import HistoryProcessor
 
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
+from app.modules.agent.infrastructure.pydantic_ai_compat import HistoryProcessor
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.infrastructure.harnesses.context_window import (
     ContextFootprint,

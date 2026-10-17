@@ -8,10 +8,19 @@ message is worded or posted.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from app.modules.agent_surfaces.domain.reply_targets import (
+    SlackReplyTarget,
+    reply_target_as,
+)
+
+from app.modules.agent_surfaces.domain.credentials import SlackCredentials
+
 import mimetypes
 
-import httpx
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 
 from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
@@ -25,11 +34,14 @@ from app.modules.agent_surfaces.platforms.slack.client import (
     slack_customized_message_kwargs,
 )
 
+if TYPE_CHECKING:
+    from slack_sdk.errors import SlackApiError
+
 
 class SlackFilesMixin:
     """Attachment download and file upload for :class:`SlackPlatformService`."""
 
-    credentials: dict[str, object]
+    credentials: SlackCredentials
 
     async def download_attachment_bytes(
         self,
@@ -91,7 +103,7 @@ class SlackFilesMixin:
         always send one, and a declared size is the sender's claim rather than a
         limit on what actually arrives.
         """
-        async with httpx.AsyncClient(timeout=60.0) as http_client:
+        async with outbound_http(60.0) as http_client:
             async with http_client.stream(
                 "GET",
                 url,
@@ -114,17 +126,17 @@ class SlackFilesMixin:
         """Upload + share raw file bytes to the inbound channel (egress)."""
         del mime_type  # Slack infers the type from the filename.
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
             return False
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         client = await build_slack_client(self.credentials)
         upload_ticket = await client.files_getUploadURLExternal(
             filename=file_name, length=len(file_bytes)
         )
         upload_url = str(upload_ticket["upload_url"])
         file_id = str(upload_ticket["file_id"])
-        async with httpx.AsyncClient(timeout=60.0) as http_client:
+        async with outbound_http(60.0) as http_client:
             upload_response = await http_client.post(
                 upload_url, files={"file": (file_name, file_bytes)}
             )
@@ -143,7 +155,7 @@ class SlackFilesMixin:
         )
         try:
             await client.files_completeUploadExternal(**completion_payload)
-        except SlackApiError as exc:
+        except slack_api_error() as exc:
             if not _slack_rejected_customized_identity(exc):
                 raise
             fallback_payload: dict[str, object] = {

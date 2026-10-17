@@ -61,6 +61,9 @@ def follow_background_waits(
     deadline = time.monotonic() + wait_timeout
     announced = False
     while waits_in_background(terminal):
+        # Everything the paused run wrote is at or below this; whatever a
+        # resumed run writes comes after it.
+        after = _newest_sequence(conversations, conversation_id)
         delay = FIRST_POLL_SECONDS
         while True:
             conversation = to_plain(conversations.get(conversation_id)) or {}
@@ -78,40 +81,65 @@ def follow_background_waits(
         status = str(conversation.get("status") or "").upper()
         if status in {"RUNNING", "STOP_REQUESTED"}:
             # No run id: the server attaches to whichever run is active now.
-            terminal = render(open_stream())
-        else:
-            # The resumed run finished between two polls. Attaching would
-            # replay only its ending, so read what it said instead.
-            terminal = render(
-                _resumed_messages(conversations, conversation_id, terminal, status)
+            live = _Watched(open_stream())
+            terminal = render(live)
+            if live.saw_text:
+                continue
+            # It finished between the poll and the attach, so the stream
+            # replayed only its ending: the answer is in the messages.
+            status = _ending_status(terminal) or status
+        # The resumed run finished unwatched. Attaching would replay only its
+        # ending, so read what it said instead.
+        terminal = render(
+            _resumed_messages(conversations, conversation_id, after, status)
+        )
+
+
+def _newest_sequence(conversations: Any, conversation_id: str) -> int:
+    listed = to_plain(conversations.messages(conversation_id, limit=1)) or {}
+    return max((m.get("sequence") or 0 for m in listed.get("items") or []), default=0)
+
+
+def _messages_after(conversations: Any, conversation_id: str, after: int) -> list:
+    """Every message after ``after``, oldest first, across all pages."""
+    items: list[dict[str, Any]] = []
+    token: str | None = None
+    while True:
+        listed = (
+            to_plain(
+                conversations.messages(
+                    conversation_id, after_sequence=after, page_token=token
+                )
             )
+            or {}
+        )
+        items.extend(listed.get("items") or [])
+        token = listed.get("next_page_token")
+        if not token:
+            return sorted(items, key=lambda m: m.get("sequence") or 0)
+
+
+def _ending_status(terminal: StreamEvent | None) -> str | None:
+    if terminal is None:
+        return None
+    data = terminal.data if isinstance(terminal.data, dict) else {}
+    found = data.get("conversation_status") or data.get("status")
+    return str(found).upper() if found else None
 
 
 def _resumed_messages(
-    conversations: Any,
-    conversation_id: str,
-    paused: StreamEvent | None,
-    status: str,
+    conversations: Any, conversation_id: str, after: int, status: str
 ) -> SseResponse:
     """The answer of runs that ended unwatched, as the frames a stream sends.
 
-    Everything after the paused run's last message is theirs. Played through
-    the ordinary renderer, so text and `--output json` read it as they would
-    have read it live.
+    Everything after ``after`` -- the newest message when the wait began -- is
+    theirs. Played through the ordinary renderer, so text and `--output json`
+    read it as they would have read it live.
     """
-    listed = to_plain(conversations.messages(conversation_id)) or {}
-    items = sorted(listed.get("items") or [], key=lambda m: m.get("sequence") or 0)
-    paused_run = paused.agent_run_id if paused else None
-    after = max(
-        (m["sequence"] for m in items if str(m.get("agent_run_id")) == paused_run),
-        default=max(
-            (m["sequence"] for m in items if m.get("role") == "user"), default=-1
-        ),
-    )
     frames: list[dict[str, Any]] = []
-    run_id = paused_run
-    for message in items:
-        if message["sequence"] <= after or message.get("role") != "assistant":
+    run_id: str | None = None
+    for message in _messages_after(conversations, conversation_id, after):
+        if message.get("role") != "assistant":
             continue
         run_id = str(message.get("agent_run_id") or run_id)
         if message.get("kind") == "TEXT" and message.get("text"):
@@ -128,6 +156,28 @@ def _resumed_messages(
             }
         )
     return _Replayed([{**frame, "agent_run_id": run_id} for frame in frames])
+
+
+class _Watched:
+    """A live stream, noting whether it carried any of the run's text."""
+
+    def __init__(self, stream: SseResponse) -> None:
+        self._stream = stream
+        self.saw_text = False
+
+    def iter_lines(self) -> Iterator[str]:
+        for line in self._stream.iter_lines():
+            if line.startswith("data:") and (
+                '"type": "token"' in line
+                or '"type":"token"' in line
+                or '"type": "message"' in line
+                or '"type":"message"' in line
+            ):
+                self.saw_text = True
+            yield line
+
+    def close(self) -> None:
+        self._stream.close()
 
 
 class _Replayed:

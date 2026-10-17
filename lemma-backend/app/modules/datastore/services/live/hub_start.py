@@ -25,45 +25,61 @@ START_TIMEOUT = 10.0
 _EXPECTED = (SQLAlchemyError, OSError, LiveCursorExpired)
 
 
-class HubStart:
-    def __init__(self, name: str) -> None:
-        self._name = name
-        self.task: asyncio.Task[None] | None = None
-        self._started = asyncio.Event()
-        self._error: BaseException | None = None
+class StartAttempt:
+    """One start: its waiters wake on its event and read its own result, never
+    a later attempt's -- and the run it launched settles it, not whichever
+    attempt is current by the time that run gets there."""
 
-    def launch(self, run: Callable[[], Coroutine[Any, Any, None]]) -> bool:
-        """Run the hub unless it is running; True when it never ran before."""
-        if self.task is not None and not self.task.done():
-            return False
-        first = self.task is None
-        self._started = asyncio.Event()
-        self._error = None
-        self.task = create_background_task(run(), name=self._name)
-        return first
+    def __init__(self) -> None:
+        self.done = asyncio.Event()
+        self.error: BaseException | None = None
 
-    async def until_started(self) -> None:
-        started = self._started
-        try:
-            await asyncio.wait_for(started.wait(), timeout=START_TIMEOUT)
-        except TimeoutError as exc:
-            raise LiveHubUnavailable(
-                "the pod's live feed took too long to start"
-            ) from exc
-        if self._error is not None:
-            raise self._error
+    def settle(self, error: BaseException | None) -> None:
+        if not self.done.is_set():
+            self.error = error
+            self.done.set()
 
     def succeeded(self) -> None:
-        self._started.set()
+        self.settle(None)
 
     def failed(self, exc: BaseException) -> None:
-        self._error = (
+        self.settle(
             exc
             if isinstance(exc, _EXPECTED)
             else LiveHubUnavailable("the pod's live feed did not start")
         )
-        self._started.set()
+
+
+class HubStart:
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self.task: asyncio.Task[None] | None = None
+        self._attempt = StartAttempt()
+
+    def launch(self, run: Callable[[StartAttempt], Coroutine[Any, Any, None]]) -> bool:
+        """Run the hub unless it is running; True when it never ran before."""
+        if self.task is not None and not self.task.done():
+            return False
+        first = self.task is None
+        self._attempt = StartAttempt()
+        self.task = create_background_task(run(self._attempt), name=self._name)
+        return first
+
+    async def until_started(self) -> None:
+        attempt = self._attempt
+        try:
+            await asyncio.wait_for(attempt.done.wait(), timeout=START_TIMEOUT)
+        except TimeoutError as exc:
+            raise LiveHubUnavailable(
+                "the pod's live feed took too long to start"
+            ) from exc
+        if attempt.error is not None:
+            raise attempt.error
 
     def take(self) -> asyncio.Task[None] | None:
+        """Hand the task over to be stopped. A start it never got to make --
+        cancelled before its first step -- is failed here, so its waiters hear
+        now rather than at the timeout."""
         task, self.task = self.task, None
+        self._attempt.settle(LiveHubUnavailable("the pod's live feed was stopped"))
         return task

@@ -46,7 +46,7 @@ from app.modules.datastore.services.live.connection import (
     LiveConnection,
     LiveSubscription,
 )
-from app.modules.datastore.services.live.hub_start import HubStart
+from app.modules.datastore.services.live.hub_start import HubStart, StartAttempt
 from app.modules.datastore.services.live.fanout import (
     HubStats,
     encode_batch,
@@ -310,13 +310,13 @@ class PodHub:
 
     # -- the loop ---------------------------------------------------------------
 
-    async def _run(self) -> None:
+    async def _run(self, start: StartAttempt) -> None:
         try:
             self._cursor = await self._feed.horizon(self.pod_id)
             self._position = self._feed.position(self._cursor)
             self._epoch = await self._epoch_of(self.pod_id)
         except BaseException as exc:
-            self._start.failed(exc)
+            start.failed(exc)
             if isinstance(exc, asyncio.CancelledError):
                 raise
             logger.error(
@@ -331,7 +331,7 @@ class PodHub:
         self._next_epoch_check = (
             time.monotonic() + self._settings.live_authz_check_seconds
         )
-        self._start.succeeded()
+        start.succeeded()
         pump = create_background_task(
             self._pump_wakes(), name=f"live-wake-{self.pod_id}"
         )

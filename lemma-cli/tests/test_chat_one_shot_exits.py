@@ -130,6 +130,25 @@ class Scenario:
     resumed: list[bytes] = field(default_factory=list)
     #: The conversation's persisted messages, as the message list returns them.
     messages: list[dict[str, object]] = field(default_factory=list)
+    #: Written by the resumed run: listed once a poll has seen the wait end.
+    resumed_messages: list[dict[str, object]] = field(default_factory=list)
+
+
+def _message_page(
+    messages: list[dict[str, object]], query: dict[str, list[str]]
+) -> dict[str, object]:
+    """The message list's paging: newest first by page, oldest first within."""
+    limit = int(query.get("limit", ["100"])[0])
+    after = int(query.get("after_sequence", ["-1"])[0])
+    before = int(query.get("page_token", [str(1 << 62)])[0])
+    newest = sorted(
+        (m for m in messages if after < int(m["sequence"]) < before),  # type: ignore[arg-type]
+        key=lambda m: int(m["sequence"]),  # type: ignore[arg-type]
+        reverse=True,
+    )
+    page = newest[:limit]
+    token = str(page[-1]["sequence"]) if len(newest) > limit else None
+    return {"items": list(reversed(page)), "limit": limit, "next_page_token": token}
 
 
 class _FakeApi:
@@ -180,7 +199,9 @@ class _FakeApi:
             def do_GET(self) -> None:  # noqa: N802
                 url = urlparse(self.path)
                 if url.path.endswith(f"/conversations/{CONVERSATION_ID}/messages"):
-                    self._json({"items": api.scenario.messages, "limit": 100})
+                    self._json(
+                        _message_page(api.scenario.messages, parse_qs(url.query))
+                    )
                     return
                 lookup = next(
                     (
@@ -199,6 +220,9 @@ class _FakeApi:
                 ):
                     status, pending = polls[min(api.scenario.polled, len(polls) - 1)]
                     api.scenario.polled += 1
+                    if status != "WAITING" and api.scenario.resumed_messages:
+                        api.scenario.messages.extend(api.scenario.resumed_messages)
+                        api.scenario.resumed_messages = []
                     lookup = {
                         **lookup,
                         "status": status,
@@ -477,8 +501,8 @@ RESUMED_RUN_ID = str(uuid.uuid4())
                 _message(1, "user", "Reply with exactly: OK", None),
                 _message(2, "assistant", "Asking the sub-agent.", RUN_ID),
                 _message(3, "assistant", "wait_for", RUN_ID, kind="TOOL_CALL"),
-                _message(4, "assistant", "SUB: 391", RESUMED_RUN_ID),
             ],
+            resumed_messages=[_message(4, "assistant", "SUB: 391", RESUMED_RUN_ID)],
         )
     ],
     indirect=True,
@@ -494,3 +518,61 @@ def test_a_resumed_run_that_ended_between_polls_is_read_from_its_messages(
     assert output.count("Asking the sub-agent.") == 1, "the paused run, once"
     assert "wait_for" not in output
     assert api.scenario.reattached_for == [], "nothing live to attach to"
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Asking the sub-agent."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("WAITING", False), ("RUNNING", False)],
+            # It finished between the poll and the attach: the stream replays
+            # only its ending.
+            resumed=[_completed("COMPLETED")],
+            messages=[
+                _message(1, "user", "Reply with exactly: OK", None),
+                _message(2, "assistant", "Asking the sub-agent.", RUN_ID),
+            ],
+            resumed_messages=[_message(3, "assistant", "SUB: 391", RESUMED_RUN_ID)],
+        )
+    ],
+    indirect=True,
+)
+def test_an_attach_that_replays_only_the_ending_reads_the_answer(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "SUB: 391" in output
+    assert api.scenario.reattached_for == [None]
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Asking the sub-agent."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("WAITING", False), ("COMPLETED", False)],
+            messages=[
+                _message(1, "user", "Reply with exactly: OK", None),
+                _message(2, "assistant", "Asking the sub-agent.", RUN_ID),
+            ],
+            # More than one page of the message list.
+            resumed_messages=[
+                _message(3 + n, "assistant", f"line {n}", RESUMED_RUN_ID)
+                for n in range(150)
+            ],
+        )
+    ],
+    indirect=True,
+)
+def test_an_answer_longer_than_one_page_is_read_in_full(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "line 0" in output and "line 149" in output

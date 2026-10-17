@@ -524,6 +524,7 @@ def _generator(
     raise_on_run: bool = False,
     reasons: bool = True,
     refuses_effort: bool = False,
+    answers_status: int | None = None,
 ) -> tuple[ConversationTitleGenerator, dict]:
     """The real generator with only the model boundary faked."""
     capture: dict[str, object] = {"run_calls": 0, "usage": [], "settings_seen": []}
@@ -543,6 +544,8 @@ def _generator(
                 raise RuntimeError("llm boom")
             if refuses_effort and "openai_reasoning_effort" in (model_settings or {}):
                 raise ModelHTTPError(400, "a-model", {"error": "unknown field"})
+            if answers_status is not None:
+                raise ModelHTTPError(answers_status, "a-model", {"error": "no"})
             return SimpleNamespace(output=output)
 
     profiles = _FakeProfileService(reasons=reasons)
@@ -614,6 +617,18 @@ async def test_a_model_that_refuses_the_effort_field_is_asked_again_without_it()
 
     assert title == "A nice title"
     assert capture["settings_seen"] == [{"openai_reasoning_effort": "none"}, {}]
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_title_is_not_asked_again() -> None:
+    """Only a refused reasoning field earns a second request: a 429 or a 401
+    would answer the same, and the fallback title is the caller's."""
+    generator, capture = _generator(answers_status=429)
+
+    with pytest.raises(ModelHTTPError):
+        await _ask(generator, user_text="Plan a trip to Japan")
+
+    assert capture["run_calls"] == 1
 
 
 def test_a_title_reasoned_at_length_is_kept_not_discarded() -> None:

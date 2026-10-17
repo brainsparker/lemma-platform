@@ -11,9 +11,10 @@ from harness.steps.datastore import column
 
 pytestmark = [journey("Agents and conversations"), capability("Define an agent")]
 
-# The pod tools that read a table. A table grant implies all of them, and the
-# model picks whichever suits the question.
-TABLE_READS = frozenset({"pod_tables", "pod_get_records", "pod_query"})
+# The pod tools that read a table's rows. A table grant implies both, and the
+# model picks whichever suits the question. Listing the tables (`pod_tables`)
+# is not reading them, so it does not count.
+TABLE_READS = frozenset({"pod_get_records", "pod_query"})
 
 
 @pytest.fixture

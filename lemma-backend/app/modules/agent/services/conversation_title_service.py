@@ -231,21 +231,22 @@ class ConversationTitleGenerator:
         )
         prompt = _build_user_prompt(user_text, reply_text)
         limits = usage_limits_for(model, _TITLE_USAGE_LIMITS)
+        # No reasoning for a few words, asked of every model.
+        asked = title_model_settings(resolved)
+        plain = title_model_settings(resolved, ask_no_reasoning=False)
         async with metering_execution(usage_context):
             try:
-                # No reasoning for a few words, asked of every model.
                 result = await agent.run(
                     prompt,
                     usage_limits=limits,
-                    model_settings=provider_model_settings(
-                        title_model_settings(resolved)
-                    ),
+                    model_settings=provider_model_settings(asked),
                 )
             except ModelHTTPError as error:
-                # A strict endpoint refuses a reasoning field it does not know
-                # (a 4xx); asked once more without it. Anything else -- an
-                # outage, a 5xx -- is the caller's fallback to decide.
-                if not 400 <= error.status_code < 500:
+                # A strict endpoint refuses a request field it does not know
+                # (400/422): asked once more without the reasoning field --
+                # only when it was sent. A refusal of anything else, or an
+                # auth or rate-limit answer, is the caller's fallback.
+                if asked == plain or error.status_code not in (400, 422):
                     raise
                 logger.info(
                     "agent.conversation_title.reasoning_field_refused",
@@ -254,9 +255,7 @@ class ConversationTitleGenerator:
                 result = await agent.run(
                     prompt,
                     usage_limits=limits,
-                    model_settings=provider_model_settings(
-                        title_model_settings(resolved, ask_no_reasoning=False)
-                    ),
+                    model_settings=provider_model_settings(plain),
                 )
 
         return _sanitize_title(str(result.output))

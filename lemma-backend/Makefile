@@ -255,6 +255,12 @@ coverage-backend-unit:
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-unit.xml
 	$(MAKE) coverage-backend-report COVERAGE_PHASE=unit
 
+# One retry for a failed e2e test, so a single flake does not fail the whole
+# pull request -- and with it a 15-minute rerun of every shard. Not silent:
+# every retried test is listed in junit-<phase>.reruns.txt and annotated on
+# the run by e2e.yml. `E2E_RERUNS=` turns it off. (From #796, which merged into
+# a stacked branch and never reached main.)
+E2E_RERUNS ?= --reruns 1 --reruns-delay 2
 coverage-backend-e2e-shard:
 	@test -n "$(E2E_ARGS)" || (echo "E2E_ARGS is required" && exit 1)
 	@test -n "$(COVERAGE_PHASE)" || (echo "COVERAGE_PHASE is required, e.g. e2e-surfaces" && exit 1)
@@ -262,7 +268,7 @@ coverage-backend-e2e-shard:
 	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/junit-*.phases.json $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
-		$(E2E_PARALLEL) $(E2E_ARGS) \
+		$(E2E_PARALLEL) $(E2E_ARGS) $(E2E_RERUNS) \
 		-m "$(E2E_SHARD_MARKERS)" \
 		-o timeout=120 \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-$(COVERAGE_PHASE).xml
@@ -836,8 +842,32 @@ print-sandbox-images:
 
 sandbox-images: sandbox-image-workspace sandbox-image-function
 
+# Layer cache for the two local builds, off unless SANDBOX_CACHE_REPO is set.
+# CI points it at GHCR so a changed input rebuilds only the layers it touches
+# instead of the whole image (~100s cold, almost all of it the Chromium/apt
+# layer that changes a few times a year). Pushing the cache is main's job
+# (SANDBOX_CACHE_PUSH=1); everything else only reads it, and a read that fails
+# -- a fork's token, a cache not written yet -- is a cold build, as before. A
+# failed cache *write* is ignored too (`ignore-error`): it costs the next run
+# its warm layers, never this run its image.
+# Needs a buildx builder with the docker-container driver, which
+# `docker/setup-buildx-action` makes. (From #795, which merged into a stacked
+# branch and never reached main.)
+SANDBOX_CACHE_REPO ?=
+SANDBOX_CACHE_PUSH ?=
+comma := ,
+ifeq ($(strip $(SANDBOX_CACHE_REPO)),)
+SANDBOX_BUILD = docker build
+sandbox_cache_args =
+else
+SANDBOX_BUILD = docker buildx build --load
+sandbox_cache_args = --cache-from type=registry,ref=$(SANDBOX_CACHE_REPO):$(1) \
+	$(if $(SANDBOX_CACHE_PUSH),--cache-to type=registry$(comma)ref=$(SANDBOX_CACHE_REPO):$(1)$(comma)mode=max$(comma)ignore-error=true)
+endif
+
 sandbox-image-workspace:
-	docker build \
+	$(SANDBOX_BUILD) \
+		$(call sandbox_cache_args,workspace) \
 		--platform $(SANDBOX_PLATFORM) \
 		-f $(IMAGES_DIR)/Dockerfile.workspace \
 		$(SANDBOX_BASE_ARGS) \
@@ -845,7 +875,8 @@ sandbox-image-workspace:
 		..
 
 sandbox-image-function:
-	docker build \
+	$(SANDBOX_BUILD) \
+		$(call sandbox_cache_args,function) \
 		--platform $(SANDBOX_FUNCTION_PLATFORM) \
 		-f $(IMAGES_DIR)/Dockerfile.function \
 		$(SANDBOX_BASE_ARGS) \

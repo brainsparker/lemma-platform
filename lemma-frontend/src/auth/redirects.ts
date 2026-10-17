@@ -153,6 +153,26 @@ export function authLink(path: string, search = window.location.search): string 
     return destination ? path + "?redirect_uri=" + encodeURIComponent(destination) : path;
 }
 
+/** Where to make an organization, and come back here afterwards.
+ *
+ *  Somebody installing a teammate with no organization yet has to make one
+ *  first. Sent to the bare page, they finished in the workspace and had to
+ *  find the install again; the destination rides along the way it does
+ *  through sign-in. */
+export function newOrganizationLink(here: string): string {
+    return "/organizations/new?redirect_uri=" + encodeURIComponent(here);
+}
+
+/** Where a new organization opens: what the link asked for, if this app
+ *  would honour it after a sign-in, else the organization itself. */
+export function afterNewOrganizationIn(orgId: string, search: string, where: Where): string {
+    return safeDestinationIn(rawDestination(search), where) ?? "/t?org=" + encodeURIComponent(orgId);
+}
+
+export function afterNewOrganization(orgId: string, search: string): string {
+    return afterNewOrganizationIn(orgId, search, { origin: siteOrigin(), appsSuffix: appsDomainSuffix(), apiOrigin: onApi("/") });
+}
+
 const INVITATION_PATH = /^\/invitations\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/accept\/?$/i;
 
 /** The invitation a sign-up is on its way to accept, read off where it lands.

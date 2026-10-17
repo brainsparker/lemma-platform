@@ -19,6 +19,7 @@ import { hasApiUrl, lemma } from "@/session/client";
 import { source as data } from "@/data";
 import { bestAccount } from "@/data/accounts";
 import { Mark } from "@/shell/mark";
+import { newOrganizationLink } from "@/auth/redirects";
 import type { Pod } from "@/data/types";
 import type { ImportStatusResponse, VariableSpec } from "../import-types";
 import {
@@ -335,7 +336,12 @@ function Journey({ repo, owner, title }: Props) {
                 <p className={s.muted}>
                     You need an organization to hire a teammate into.
                 </p>
-                <a className={s.primary} href="/organizations/new">
+                <a
+                    className={s.primary}
+                    href={newOrganizationLink(
+                        window.location.pathname + window.location.search,
+                    )}
+                >
                     Create an organization
                 </a>
             </Panel>

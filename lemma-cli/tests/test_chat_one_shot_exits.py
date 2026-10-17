@@ -603,3 +603,31 @@ def test_an_unmarked_wait_is_looked_at_briefly_not_for_the_full_timeout(
     assert exit_code == 0, output
     assert "resume:" in output
     assert time.monotonic() - started < 10, "held for the full wait timeout"
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        Scenario(
+            sent=[_status(), _token("Asking the sub-agent."), _completed("WAITING")],
+            then="keepalive",
+            polls=[("COMPLETED", False)],
+            # A quick sub-agent: the resumed run wrote its answer before the
+            # CLI's first look, so the newest message is already the answer.
+            messages=[
+                _message(1, "user", "Reply with exactly: OK", None),
+                _message(2, "assistant", "Asking the sub-agent.", RUN_ID),
+                _message(3, "assistant", "SUB: 391", RESUMED_RUN_ID),
+            ],
+        )
+    ],
+    indirect=True,
+)
+def test_an_answer_written_before_the_first_look_is_still_shown(
+    api: _FakeApi, fast_rechecks: None, no_sleep: None
+) -> None:
+    exit_code, output = _one_shot(api.base_url)
+
+    assert exit_code == 0, output
+    assert "SUB: 391" in output
+    assert output.count("Asking the sub-agent.") == 1

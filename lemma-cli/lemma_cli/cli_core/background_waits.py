@@ -74,9 +74,9 @@ def follow_background_waits(
             overall,
             time.monotonic() + (wait_timeout if marked else UNMARKED_WAIT_SECONDS),
         )
-        # Everything the paused run wrote is at or below this; whatever a
-        # resumed run writes comes after it.
-        after = _newest_sequence(conversations, conversation_id)
+        # The paused run's last message: whatever a resumed run writes comes
+        # after it, even if it is already written by the time this reads.
+        after = _paused_run_end(conversations, conversation_id, terminal)
         delay = FIRST_POLL_SECONDS
         while True:
             conversation = to_plain(conversations.get(conversation_id)) or {}
@@ -108,9 +108,26 @@ def follow_background_waits(
         )
 
 
-def _newest_sequence(conversations: Any, conversation_id: str) -> int:
-    listed = to_plain(conversations.messages(conversation_id, limit=1)) or {}
-    return max((m.get("sequence") or 0 for m in listed.get("items") or []), default=0)
+def _paused_run_end(
+    conversations: Any, conversation_id: str, paused: StreamEvent | None
+) -> int:
+    """The sequence of the paused run's last message, or of the last message
+    before any run's if it wrote none. Not simply the newest message: a quick
+    resumed run may already have written its answer, which must stay after."""
+    listed = to_plain(conversations.messages(conversation_id)) or {}
+    items = listed.get("items") or []
+    run_id = paused.agent_run_id if paused else None
+    own = [
+        m.get("sequence") or 0
+        for m in items
+        if run_id and str(m.get("agent_run_id")) == run_id
+    ]
+    if own:
+        return max(own)
+    return max(
+        (m.get("sequence") or 0 for m in items if not m.get("agent_run_id")),
+        default=0,
+    )
 
 
 def _messages_after(conversations: Any, conversation_id: str, after: int) -> list:

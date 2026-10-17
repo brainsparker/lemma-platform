@@ -15,6 +15,7 @@ import { allConversationsKey, applyTitle, insertConversation, patchConversationL
 import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
+import { ModelPicker } from "./model-picker";
 import { useChannelReply } from "./use-channel-reply";
 import { splitQueued, withdrawFailure, withoutSent } from "./queued";
 import { sendToConversation, steerConversation } from "./send-message";
@@ -32,6 +33,7 @@ import { conversationRefOf } from "@/data/live";
 import { draftKeyFor } from "./drafts";
 import { useAsksFollowWaiting } from "./use-conversation-asks";
 import { CONVERSATION_ASKS } from "./waiting-on-you";
+import type { Choice } from "@/data/runtimes";
 
 /** The conversation, on the SDK's own session.
  *
@@ -290,6 +292,10 @@ export function LiveConversation({
     const fromCache = historyLoading && cached ? cached : null;
     const conversationRecord = session.conversation ?? fromCache?.conversation ?? null;
 
+    /* A model picked before the conversation exists. It has nowhere to be
+       stored until there is a conversation, so it waits here and goes up with
+       the one the first send creates. */
+    const [pickedModel, setPickedModel] = useState<Choice | null>(null);
     const [pending, setPending] = useState<readonly PendingSend[]>([]);
     /* Steers whose request is still in the air. */
     const steering = useRef<Set<string>>(new Set());
@@ -427,6 +433,23 @@ export function LiveConversation({
         return next;
     }, [transcript, notesHere]);
     useEffect(() => { lastTurnId.current = turns.at(-1)?.id ?? ""; }, [turns]);
+
+    /* Memoised, because the box around it is: the pane redraws for every few
+       tokens of a reply, and a node made fresh each time would redraw the box
+       with it. */
+    const modelPicker = useMemo(
+        () => (bot?.pinnedRuntime ? null : (
+            <ModelPicker
+                podId={pod.id}
+                orgId={pod.orgId}
+                conversationId={session.conversationId}
+                locked={turns.length > 0}
+                picked={pickedModel}
+                onPicked={setPickedModel}
+            />
+        )),
+        [bot?.pinnedRuntime, pod.id, pod.orgId, session.conversationId, turns.length, pickedModel],
+    );
 
     /* What the run is blocked on, read straight out of the transcript.
        An approval IS a tool call: `request_approval` streams in like any
@@ -640,7 +663,18 @@ export function LiveConversation({
                        for. Omitting the field is the only payload that means
                        "the pod's own assistant". */
                     create: async () => {
-                        const made = await client.conversations.create({ pod_id: pod.id, ...createWith } as Parameters<typeof client.conversations.create>[0]);
+                        const made = await client.conversations.create({
+                            pod_id: pod.id,
+                            ...createWith,
+                            /* The model chosen while the box was still a
+                               draft. Sent with the conversation rather than
+                               patched onto it afterwards, so the first run
+                               -- the one the choice was made for -- already
+                               runs on it. */
+                            ...(pickedModel
+                                ? { agent_runtime: { profile_id: pickedModel.runtimeId, model_name: pickedModel.model || null } }
+                                : {}),
+                        } as Parameters<typeof client.conversations.create>[0]);
                         /* A folder chosen while composing is parked in the
                            desktop shell. Adopted here, before the session
                            learns the id and before the first run reads it. */
@@ -1014,6 +1048,12 @@ export function LiveConversation({
                 onStop={stop}
                 onVoice={onVoice}
                 draftKey={draftKey}
+                model={
+                    /* Read-only once it has answered, and gone for a teammate
+                       that names its own model: the picker would offer to
+                       change what that agent's own configuration decides. */
+                    modelPicker
+                }
             />
         </>
     );

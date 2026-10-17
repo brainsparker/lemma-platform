@@ -86,6 +86,7 @@ export const Composer = memo(function Composer({
     choices,
     onTall,
     draftKey,
+    model,
 }: {
     placeholder: string;
     note?: string;
@@ -128,6 +129,11 @@ export const Composer = memo(function Composer({
      *  after switching away and back (`drafts.ts`). Null keeps it only as long
      *  as the box. */
     draftKey?: string | null;
+    /** Which model this conversation answers on, drawn in the action row
+     *  beside the paperclip. A node rather than a prop per field, because what
+     *  it holds — the runtimes, the conversation's own pin — is the pane's to
+     *  read, and the box has no business knowing about either. */
+    model?: ReactNode;
 }) {
     const hintId = useId();
     const chosen = choices?.options.find((option) => option.id === choices.value) ?? null;
@@ -322,6 +328,7 @@ export const Composer = memo(function Composer({
             <div className="composer__row">
                 {choices && <Choices choices={choices} />}
                 <div className="composer__box">
+                    {model}
                     {takesFiles && (
                         <>
                             <input

@@ -768,11 +768,10 @@ Public, the way a group's people from outside it are.
 
 > Proven at module level by `agent_surfaces/tests/e2e/test_web_widgets_e2e.py`
 > and at unit level by `agent_surfaces/tests/unit/test_web_widgets.py`.
-
-> **Gap:** a row sent to `POST /public/web/{key}/rows` by a page that never
-> opened a visitor session is stored naming no contact: with no session there
-> is no browser to make one for. A message, and a row from a page with a
-> session, do make the visitor a contact.
+>
+> **Gap:** a row sent from a page that never opened a chat is kept, but its
+> visitor does not become a contact. A message, and a row from a page with a
+> chat open, do make them one. See DEV-SURF-004.
 
 - The system shall let a pod's editors put its chat on a web page with a
   public key, or share it as a page Lemma hosts, and shall show its signing

@@ -14,8 +14,10 @@ bots may answer at all; null for no limit. `max_contacts_set` and
 not follows the deployment's default. A cap stored before this was an owner's
 spend choice.
 
-Schema only. Groups and web chat were unreleased, so there is nothing of the
-old way to carry over.
+Schema only. Contacts, groups and web chat were never released -- the pages
+are behind feature flags and a bot answers no contact until an owner turns it
+on -- so no deployment holds a contact's conversation keyed the old way
+(``audience``/``contact_id`` in metadata), and there is nothing to carry over.
 
 Revision ID: 0057_contacts_for_everyone
 Revises: 0056_agent_surface_bundle_work

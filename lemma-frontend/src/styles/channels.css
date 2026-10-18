@@ -1585,3 +1585,30 @@ code.gsheet__code-text {
     }
 }
 
+
+/* ── a contact's agent switch ─────────────────────────────────────────── */
+
+.agent-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.agent-switch__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.agent-switch__label input {
+    accent-color: var(--accent);
+}
+
+.agent-switch__problem {
+    font-size: 12px;
+    color: var(--bad);
+}

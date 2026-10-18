@@ -120,7 +120,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
-| DELETE | `/pods/{pod_id}/channels/{channel_id}/handler` | `channel.handler.release` | Release Channel |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.delete` | Delete Channel Message |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/participants/{member_id}` | `channel.participant.remove` | Remove Participant |
 | GET | `/pods/{pod_id}/channels` | `channel.list` | List Channels |
@@ -136,7 +135,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer` | `channel.message.answer` | Answer Channel Question |
 | POST | `/pods/{pod_id}/channels/{channel_id}/participants` | `channel.participant.add` | Add Participants |
 | POST | `/pods/{pod_id}/channels/{channel_id}/read` | `channel.mark_read` | Mark Channel Read |
-| PUT | `/pods/{pod_id}/channels/{channel_id}/handler` | `channel.handler.take` | Take Channel |
 | PUT | `/pods/{pod_id}/channels/{channel_id}/me` | `channel.notify.update` | Set My Notify |
 
 ## connectors

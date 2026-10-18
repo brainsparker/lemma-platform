@@ -126,6 +126,8 @@ _NAME_TO_MODULE = {
     'ChannelPostRequest': 'channel_post_request',
     'ChannelPostRequestPartsItem': 'channel_post_request_parts_item',
     'ChannelResponse': 'channel_response',
+    'ChannelSettingsChange': 'channel_settings_change',
+    'ChannelSettingsResponse': 'channel_settings_response',
     'ChannelSourceResponse': 'channel_source_response',
     'ChannelUpdateRequest': 'channel_update_request',
     'CodeRequest': 'code_request',
@@ -790,6 +792,8 @@ if TYPE_CHECKING:
     from .channel_post_request import ChannelPostRequest
     from .channel_post_request_parts_item import ChannelPostRequestPartsItem
     from .channel_response import ChannelResponse
+    from .channel_settings_change import ChannelSettingsChange
+    from .channel_settings_response import ChannelSettingsResponse
     from .channel_source_response import ChannelSourceResponse
     from .channel_update_request import ChannelUpdateRequest
     from .code_request import CodeRequest
@@ -1467,6 +1471,8 @@ __all__ = [
     'ChannelPostRequest',
     'ChannelPostRequestPartsItem',
     'ChannelResponse',
+    'ChannelSettingsChange',
+    'ChannelSettingsResponse',
     'ChannelSourceResponse',
     'ChannelUpdateRequest',
     'CodeRequest',

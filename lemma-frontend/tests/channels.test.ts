@@ -208,11 +208,24 @@ test("cuts a timeline at each day, named the way a chat names them", () => {
 });
 
 test("says who answers when nobody is named", () => {
-    assert.equal(whoAnswers({ kind: "DIRECT", handler: null }, "Marketing", ME), "Marketing answers everything you write here.");
-    assert.equal(whoAnswers({ kind: "GROUP", handler: null }, "Marketing", ME), "@mention an agent to have it answer.");
-    assert.equal(whoAnswers({ kind: "CONTACT", handler: null }, "Marketing", ME), "Marketing’s agents answer them here.");
-    assert.equal(whoAnswers({ kind: "CONTACT", handler: { kind: "MEMBER", id: ME, name: null } }, "M", ME), "You are answering here; its agents wait.");
-    assert.equal(whoAnswers({ kind: "CONTACT", handler: priya as never }, "M", ME), "Priya is answering here; its agents wait.");
+    const on = { agentsAnswer: true, handBackAfterHours: 12 };
+    assert.equal(whoAnswers({ kind: "DIRECT", handler: null, ...on }, "Marketing", ME), "Marketing answers everything you write here.");
+    assert.equal(whoAnswers({ kind: "GROUP", handler: null, ...on }, "Marketing", ME), "@mention an agent to have it answer.");
+    assert.equal(whoAnswers({ kind: "CONTACT", handler: null, ...on }, "Marketing", ME), "Marketing’s agent answers them. Write here to answer them yourself.");
+    assert.equal(
+        whoAnswers({ kind: "CONTACT", handler: { kind: "MEMBER", id: ME, name: null }, ...on }, "M", ME),
+        "You are answering here; its agent answers again 12 hours after your last line.",
+    );
+    assert.equal(
+        whoAnswers({ kind: "CONTACT", handler: priya as never, ...on }, "M", ME),
+        "Priya is answering here; its agent answers again 12 hours after their last line.",
+    );
+});
+
+test("a contact whose agent is off is answered by members alone, whoever stepped in", () => {
+    const off = { agentsAnswer: false, handBackAfterHours: 12 };
+    assert.equal(whoAnswers({ kind: "CONTACT", handler: null, ...off }, "M", ME), "Its agent is off: only members answer them.");
+    assert.equal(whoAnswers({ kind: "CONTACT", handler: priya as never, ...off }, "M", ME), "Its agent is off: only members answer them.");
 });
 
 test("offers to add the space's people not in the channel yet, never a teammate", () => {

@@ -58,6 +58,7 @@ from app.modules.contacts.infrastructure.visitor_sessions import (
 )
 from app.modules.agent_surfaces.services.contact_keepers import UNATTENDED_WARNING
 from app.modules.agent_surfaces.tests.e2e.helpers import _resend_payload
+from app.modules.channels.infrastructure.models import ChannelMessageModel
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     record_model_requests,
@@ -518,15 +519,16 @@ async def test_past_the_cap_no_run_starts_and_a_person_takes_over(
     assert {"Hello again?", "Anyone there?"} <= set(heard)
 
 
-async def test_a_member_who_steps_in_answers_alone_until_they_hand_back(
+async def _contact_writes_on(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
+    *,
     test_pod,
     fixed_test_user,
     fake_resend,
     monkeypatch,
 ):
-    """Taking a contact's channel quiets its agents; releasing it wakes them."""
+    """Dana, a contact on the email bot, and a way for her to write again."""
     pod_id = test_pod["id"]
     _surface, address = await _email_bot(
         authenticated_client,
@@ -540,7 +542,6 @@ async def test_a_member_who_steps_in_answers_alone_until_they_hand_back(
     first = await _dana_writes(db_session, address, "step-1")
     conversation = await db_session.get(ConversationModel, first.conversation_id)
     assert conversation is not None and conversation.channel_id is not None
-    channel = f"/pods/{pod_id}/channels/{conversation.channel_id}"
     starter = build_surface_turn_starter(SessionUnitOfWorkFactory(async_session_maker))
 
     async def write(message_id: str, text: str) -> None:
@@ -558,24 +559,117 @@ async def test_a_member_who_steps_in_answers_alone_until_they_hand_back(
         assert isinstance(context, SurfaceChatContext)
         await starter.execute_chat(context)
 
-    taken = await authenticated_client.put(f"{channel}/handler")
-    assert taken.status_code == 200, taken.text
-    assert taken.json()["handler"]["id"] == fixed_test_user["id"]
-    runs_before = await _runs(db_session, first.conversation_id)
+    async def runs() -> int:
+        db_session.expire_all()
+        return await _runs(db_session, first.conversation_id)
+
+    return conversation.channel_id, write, runs
+
+
+async def test_a_contacts_agent_switched_off_leaves_them_to_members(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """Off, nothing answers the contact but a member, and nothing tells them a
+    person will: the channel waits on a reply. On again, the agent answers."""
+    channel_id, write, runs = await _contact_writes_on(
+        authenticated_client,
+        db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+    )
+    channel = f"/pods/{test_pod['id']}/channels/{channel_id}"
+    off = await authenticated_client.patch(
+        channel, json={"settings": {"agents_answer": False}}
+    )
+    assert off.status_code == 200, off.text
+    assert off.json()["settings"]["agents_answer"] is False
+    before = await runs()
 
     await write("step-2", "Can a person look at this?")
 
-    db_session.expire_all()
-    assert await _runs(db_session, first.conversation_id) == runs_before
+    assert await runs() == before
+    waiting = (await authenticated_client.get(channel)).json()
+    assert waiting["attention"]["reason"] == "Waiting on a reply: the agent is off"
+    replies = await db_session.scalars(
+        select(MessageModel.text).where(
+            MessageModel.conversation_id.in_(
+                select(ConversationModel.id).where(
+                    ConversationModel.channel_id == channel_id
+                )
+            )
+        )
+    )
+    assert not any("will reply" in str(text) for text in replies)
 
-    released = await authenticated_client.delete(f"{channel}/handler")
-    assert released.status_code == 200, released.text
-    assert released.json()["handler"] is None
-
+    on = await authenticated_client.patch(
+        channel, json={"settings": {"agents_answer": True}}
+    )
+    assert on.status_code == 200, on.text
     await write("step-3", "Thanks, back to the bot.")
 
-    db_session.expire_all()
-    assert await _runs(db_session, first.conversation_id) == runs_before + 1
+    assert await runs() == before + 1
+
+
+async def test_a_member_who_writes_holds_the_contact_until_they_go_quiet(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """Writing to a contact steps in: the agent waits while the member is in
+    the conversation, and answers again once they have been quiet past the
+    channel's window -- telling the member it has."""
+    channel_id, write, runs = await _contact_writes_on(
+        authenticated_client,
+        db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+    )
+    channel = f"/pods/{test_pod['id']}/channels/{channel_id}"
+    wrote = await authenticated_client.post(
+        f"{channel}/messages", json={"text": "Hi Dana, I can help with that."}
+    )
+    assert wrote.status_code == 201, wrote.text
+    stepped_in = (await authenticated_client.get(channel)).json()
+    assert stepped_in["handler"]["id"] == fixed_test_user["id"]
+    before = await runs()
+
+    await write("step-2", "Great, what are the options?")
+    assert await runs() == before
+
+    window = await authenticated_client.patch(
+        channel, json={"settings": {"hand_back_after_hours": 1}}
+    )
+    assert window.json()["handler"]["id"] == fixed_test_user["id"]
+    await db_session.execute(
+        update(ChannelMessageModel)
+        .where(
+            ChannelMessageModel.channel_id == channel_id,
+            ChannelMessageModel.sender_user_id == UUID(fixed_test_user["id"]),
+        )
+        .values(created_at=datetime.now(timezone.utc) - timedelta(hours=2))
+    )
+    await db_session.commit()
+
+    await write("step-3", "Hello? Anyone there?")
+
+    assert await runs() == before + 1
+    assert (await authenticated_client.get(channel)).json()["handler"] is None
+    told = await direct_lines(
+        db_session, pod_id=test_pod["id"], user_id=fixed_test_user["id"]
+    )
+    assert any("the agent answers them again" in line.body for line in told)
 
 
 async def test_a_contacts_run_calls_a_person_in_and_the_keeper_is_told_where(
@@ -649,8 +743,11 @@ async def test_a_contacts_run_calls_a_person_in_and_the_keeper_is_told_where(
     assert notice.members_only and notice.interaction_kind is None
     assert "A contact you look after needs a person" in notice.body
 
-    taken = await authenticated_client.put(f"{channel}/handler")
-    assert taken.status_code == 200, taken.text
+    # Writing to them is stepping in, and answers the call.
+    taken = await authenticated_client.post(
+        f"{channel}/messages", json={"text": "Hi Dana, let me look at that refund."}
+    )
+    assert taken.status_code == 201, taken.text
     assert (await authenticated_client.get(channel)).json()["attention"] is None
 
 

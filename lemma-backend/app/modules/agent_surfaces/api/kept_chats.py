@@ -12,11 +12,8 @@ supplied goes into a cookie's name or path.
 
 from __future__ import annotations
 
-from cryptography.fernet import InvalidToken
 from fastapi import Request, Response
 
-from app.core.crypto import get_secret_cipher
-from app.core.crypto.envelope import is_encrypted_str
 from app.core.public_web import hosted_pages_host
 from app.modules.agent_surfaces.domain.web_widgets import WebWidget
 
@@ -40,6 +37,12 @@ def _name(widget: WebWidget) -> str:
 def kept_secret(request: Request, widget: WebWidget) -> str | None:
     """The secret this widget's cookie keeps, if it holds one this deployment
     sealed: anything else is as if there were no cookie."""
+    # The cipher, and what it pulls in, only for a page that keeps a chat.
+    from cryptography.fernet import InvalidToken
+
+    from app.core.crypto import get_secret_cipher
+    from app.core.crypto.envelope import is_encrypted_str
+
     sealed = request.cookies.get(_name(widget))
     if not sealed or not is_encrypted_str(sealed):
         return None
@@ -51,6 +54,8 @@ def kept_secret(request: Request, widget: WebWidget) -> str | None:
 
 
 def keep(response: Response, widget: WebWidget, secret: str) -> None:
+    from app.core.crypto import get_secret_cipher
+
     sealed = get_secret_cipher().encrypt_str(secret)
     if sealed is None:  # pragma: no cover - a secret was given
         return

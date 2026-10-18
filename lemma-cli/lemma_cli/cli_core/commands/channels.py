@@ -240,24 +240,30 @@ def tell(
     _run(ctx, pod, lambda p: p.channels.notify(to, text, title=title))
 
 
-@app.command("take")
-def take(
+@app.command("agent")
+def switch_agent(
     ctx: typer.Context,
     channel_id: str = typer.Argument(..., help="A contact's channel id."),
+    state: str = typer.Argument(..., help="on or off."),
+    hand_back_after: int | None = typer.Option(
+        None,
+        "--hand-back-after",
+        help="Hours a member who wrote to them holds them before the agent answers again.",
+    ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Answer a contact's channel yourself: its agents stop answering there."""
-    _run(ctx, pod, lambda p: p.channels.take(channel_id))
-
-
-@app.command("release")
-def release(
-    ctx: typer.Context,
-    channel_id: str = typer.Argument(..., help="A contact's channel id."),
-    pod: str | None = typer.Option(None, "--pod"),
-) -> None:
-    """Hand a contact's channel back to its agents."""
-    _run(ctx, pod, lambda p: p.channels.release(channel_id))
+    """Whether a contact's agent answers them. Off, only members do; on hands
+    them back to the agent at once."""
+    on = {"on": True, "off": False}.get(state.lower())
+    if on is None:
+        raise typer.BadParameter("STATE is on or off.")
+    _run(
+        ctx,
+        pod,
+        lambda p: p.channels.set_agent_answers(
+            channel_id, on, hand_back_after_hours=hand_back_after
+        ),
+    )
 
 
 @source_app.command("get")

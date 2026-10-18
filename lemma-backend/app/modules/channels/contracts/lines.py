@@ -8,6 +8,7 @@ the only reader.
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -38,6 +39,15 @@ async def last_heard_line(
     """The latest line a person said in this conversation -- in Lemma or on a
     platform -- which is where its answer belongs."""
     return await LineRepository(uow.session).last_heard(conversation_id)
+
+
+async def last_said_by(
+    uow: SqlAlchemyUnitOfWork, *, channel_id: UUID, user_id: UUID
+) -> datetime | None:
+    """When this member last wrote to the people in this channel."""
+    return await LineRepository(uow.session).last_said_by(
+        channel_id=channel_id, user_id=user_id
+    )
 
 
 async def line_went_out(

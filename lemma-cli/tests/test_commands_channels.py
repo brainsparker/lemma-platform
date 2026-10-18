@@ -116,3 +116,17 @@ def test_a_source_is_switched_through_the_sources_resource(
     assert sources.calls == [
         ("update", ("src-1",), {"answers_outsiders": False, "take_over": False})
     ]
+
+
+def test_a_contacts_agent_is_switched_on_or_off(runner, patch_run, json_state):
+    fake = Recorder()
+    patch_run(channels, client=_client(fake), state=json_state)
+
+    off = runner.invoke(app, ["channels", "agent", "ch-1", "off", "--json"])
+    wrong = runner.invoke(app, ["channels", "agent", "ch-1", "maybe"])
+
+    assert off.exit_code == 0, off.stderr
+    assert wrong.exit_code != 0
+    assert fake.calls == [
+        ("set_agent_answers", ("ch-1", False), {"hand_back_after_hours": None})
+    ]

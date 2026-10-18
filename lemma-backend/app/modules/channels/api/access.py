@@ -28,6 +28,15 @@ async def sees_contacts(pod_id: UUID) -> bool:
     )
 
 
+async def may_message_contacts(pod_id: UUID) -> bool:
+    """Whether this member may write to the pod's contacts, and so decide who
+    answers them."""
+    ctx = get_current_context()
+    return ctx is not None and await ctx.can(
+        Permissions.CONTACT_MESSAGE, ResourceRef.pod(pod_id)
+    )
+
+
 async def may_manage(pod_id: UUID) -> bool:
     """Whether this member may change any channel of the pod, not only theirs."""
     ctx = get_current_context()

@@ -642,10 +642,15 @@ remember where the bot is, who is in there, or what is waiting on them.
   shall flag that person's channel as waiting on a person and tell the member
   who answers for them where to look, without quoting them.
 - When a member writes in that channel, the system shall carry it to the
-  person, clear the flag, and keep the bot from answering there until the
-  member hands it back.
+  person, clear the flag, and keep the bot from answering there while the
+  member is in the conversation; once the member has not written there for the
+  channel's hand-back window, the bot shall answer again and tell them.
+- Where a member switches the channel's agent off, the system shall start no
+  run for that person and tell them nothing, and shall flag the channel as
+  waiting on a reply, until a member switches it on again -- which hands the
+  person back to the bot at once.
 
-**Contracts:** `channel.handler.take`, `channel.handler.release`
+**Contracts:** `channel.update`, `channel.message.post`
 
 ### PS-SURF-042 — A member adds the pod's Telegram bot to a group from Lemma
 **Status:** planned

@@ -206,29 +206,45 @@ async def test_an_answer_made_with_a_members_own_access_is_theirs_to_read(
         }
 
 
-async def test_a_contacts_channel_is_answered_by_hand_by_who_may_write_to_contacts(
-    pod,
-):
+async def test_who_may_write_to_contacts_switches_a_contacts_agent(pod):
     client = pod.scenario.async_client
-    handler = f"{_base(pod)}/{pod.dana.channel_id}/handler"
+    channel = f"{_base(pod)}/{pod.dana.channel_id}"
+    off = {"settings": {"agents_answer": False}}
 
-    viewer = await client.put(handler, headers=auth_headers(pod.viewer))
-    assert viewer.status_code == 403, viewer.text
+    viewer = await client.patch(channel, json=off, headers=auth_headers(pod.viewer))
+    assert viewer.status_code in (403, 404), viewer.text
 
-    taken = await client.put(handler, headers=auth_headers(pod.editor))
-    assert taken.status_code == 200, taken.text
-    assert taken.json()["handler"]["kind"] == "MEMBER"
-    assert taken.json()["handler"]["id"] == pod.editor["id"]
+    switched = await client.patch(channel, json=off, headers=auth_headers(pod.editor))
+    assert switched.status_code == 200, switched.text
+    assert switched.json()["settings"] == {
+        "agents_answer": False,
+        "hand_back_after_hours": 12,
+    }
+    shown = await client.get(channel, headers=auth_headers(pod.editor))
+    assert shown.json()["settings"]["agents_answer"] is False
 
-    released = await client.delete(handler, headers=auth_headers(pod.editor))
-    assert released.json()["handler"] is None
+    on = await client.patch(
+        channel,
+        json={"settings": {"agents_answer": True}},
+        headers=auth_headers(pod.editor),
+    )
+    assert on.json()["settings"]["agents_answer"] is True
+    assert on.json()["handler"] is None
 
 
-async def test_only_a_contacts_channel_is_answered_by_hand(pod):
+async def test_only_a_contacts_channel_has_an_agent_to_switch(pod):
     owner = pod.scenario.owner_client
     for channel in (pod.group, pod.direct):
-        refused = await owner.put(f"{_base(pod)}/{channel.channel_id}/handler")
+        refused = await owner.patch(
+            f"{_base(pod)}/{channel.channel_id}",
+            json={"settings": {"agents_answer": False}},
+        )
         assert refused.status_code == 409, refused.text
+    renamed = await owner.patch(
+        f"{_base(pod)}/{pod.dana.channel_id}",
+        json={"title": "Dana", "settings": {"agents_answer": False}},
+    )
+    assert renamed.status_code == 409, renamed.text
 
 
 async def test_a_timeline_pages_back_without_skipping_or_repeating(pod):

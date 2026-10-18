@@ -2,7 +2,6 @@ import { SenderKind } from "lemma-sdk";
 import { source } from "@/data";
 import { lemma } from "@/session/client";
 import {
-    readChannel,
     readChannelDetail,
     readChannelPage,
     readLine,
@@ -37,8 +36,8 @@ export interface ChannelApi {
     addMembers(channelId: string, members: string[]): Promise<ChannelDetail>;
     removeMember(channelId: string, memberId: string): Promise<void>;
     setNotify(channelId: string, notify: NotifyLevel): Promise<ChannelDetail>;
-    take(channelId: string): Promise<Channel>;
-    release(channelId: string): Promise<Channel>;
+    /** A contact's channel: switch its agent on (handing them back now) or off. */
+    setAgentAnswers(channelId: string, on: boolean): Promise<ChannelDetail>;
     /** Every group one bot is in, with its settings. */
     sources(surfaceName: string): Promise<SourceSettings[]>;
     source(sourceId: string): Promise<SourceSettings>;
@@ -110,11 +109,8 @@ function liveApi(podId: string): ChannelApi {
         async setNotify(channelId, notify) {
             return detail(await client().channels.setNotify(podId, channelId, notify));
         },
-        async take(channelId) {
-            return must(readChannel(await client().channels.take(podId, channelId)), "channel");
-        },
-        async release(channelId) {
-            return must(readChannel(await client().channels.release(podId, channelId)), "channel");
+        async setAgentAnswers(channelId, on) {
+            return detail(await client().channels.setAgentAnswers(podId, channelId, on));
         },
         async sources(surfaceName) {
             const listed = await client().podSources.list(podId, surfaceName);

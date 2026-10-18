@@ -5,7 +5,7 @@ import {
     SAMPLE_SOURCE_SETTINGS,
 } from "@/data/fixtures";
 import type { ChannelApi } from "./api";
-import { readChannel, readChannelDetail, readChannelPage, readLine, readLinePage, type Line } from "./model";
+import { readChannelDetail, readChannelPage, readLine, readLinePage, type Line } from "./model";
 import { readSourceSettings } from "./sources";
 
 /** The sample's channels, answering the same calls the API does from the
@@ -167,13 +167,14 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             const channel = channelOf(channelId);
             return readChannelDetail(listed(save(channelId, { me: { ...(channel.me as Wire), notify } })))!;
         },
-        async take(channelId) {
+        async setAgentAnswers(channelId, on) {
             await wait(250);
-            return readChannel(listed(save(channelId, { handler: ME, attention: null })))!;
-        },
-        async release(channelId) {
-            await wait(250);
-            return readChannel(listed(save(channelId, { handler: null })))!;
+            const stored = channelOf(channelId).settings;
+            const was = stored && typeof stored === "object" ? (stored as Wire) : {};
+            return readChannelDetail(listed(save(channelId, {
+                settings: { ...was, agents_answer: on },
+                ...(on ? { handler: null } : {}),
+            })))!;
         },
         async sources(surfaceName) {
             await wait(120);

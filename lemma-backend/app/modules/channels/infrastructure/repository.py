@@ -10,7 +10,7 @@ instead of failing or making a second one.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from uuid import UUID
 
@@ -107,8 +107,11 @@ class ChannelRepository:
         title: str | None = None,
         topic: str | None = None,
         archived: bool | None = None,
+        settings: Mapping[str, object] | None = None,
     ) -> Channel | None:
-        """Rename, re-describe or archive a channel; ``None`` leaves a field be."""
+        """Rename, re-describe or archive a channel, or change some of its
+        settings; ``None`` leaves a field be, and a setting not named keeps
+        its value."""
         row = await self.session.get(ChannelModel, channel_id)
         if row is None:
             return None
@@ -118,6 +121,8 @@ class ChannelRepository:
             row.topic = topic or None
         if archived is not None:
             row.archived_at = now() if archived else None
+        if settings:
+            row.settings = {**(row.settings or {}), **settings}
         await self.session.flush()
         return channel_entity(row)
 

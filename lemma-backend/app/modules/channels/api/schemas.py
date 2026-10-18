@@ -13,6 +13,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.modules.channels.domain.entities import (
+    HAND_BACK_AFTER_HOURS,
     Channel,
     ChannelKind,
     NotifyLevel,
@@ -71,6 +72,33 @@ class LinePreview(BaseModel):
     created_at: datetime
 
 
+class ChannelSettingsResponse(BaseModel):
+    agents_answer: bool = Field(
+        default=True,
+        description=(
+            "A contact's channel: whether its agents answer the contact. Off, "
+            "only members do."
+        ),
+    )
+    hand_back_after_hours: int = Field(
+        default=HAND_BACK_AFTER_HOURS,
+        description=(
+            "How long a member who stepped in holds the contact after their "
+            "last line, before the agent answers again."
+        ),
+    )
+
+
+class ChannelSettingsChange(BaseModel):
+    """Only what is named changes."""
+
+    agents_answer: bool | None = Field(
+        default=None,
+        description="Switch the agent on or off; on also hands the contact back now.",
+    )
+    hand_back_after_hours: int | None = Field(default=None, ge=1, le=720)
+
+
 class ChannelResponse(BaseModel):
     id: UUID
     kind: ChannelKind
@@ -85,12 +113,17 @@ class ChannelResponse(BaseModel):
     )
     handler: PersonRef | None = Field(
         default=None,
-        description="A member answering by hand; agents do not answer meanwhile.",
+        description=(
+            "A member who stepped in by writing to the contact: agents stay quiet "
+            "until they have not written for `settings.hand_back_after_hours`, "
+            "or the agent is switched on again."
+        ),
     )
     attention: AttentionResponse | None = Field(
         default=None, description="The channel asks for a person, and why."
     )
     archived: bool = False
+    settings: ChannelSettingsResponse = Field(default_factory=ChannelSettingsResponse)
     created_at: datetime
     last_message_at: datetime | None = None
     sources: list[SourceSummary] = Field(
@@ -141,6 +174,10 @@ class ChannelUpdateRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     topic: str | None = Field(default=None, max_length=500)
     archived: bool | None = None
+    settings: ChannelSettingsChange | None = Field(
+        default=None,
+        description="A contact's channel only; takes `contact.message`.",
+    )
 
 
 class ParticipantsAddRequest(BaseModel):
@@ -210,6 +247,10 @@ def channel_response(
             else None
         ),
         archived=channel.archived_at is not None,
+        settings=ChannelSettingsResponse(
+            agents_answer=channel.settings.agents_answer,
+            hand_back_after_hours=channel.settings.hand_back_after_hours,
+        ),
         created_at=channel.created_at,
         last_message_at=channel.last_message_at,
         sources=[

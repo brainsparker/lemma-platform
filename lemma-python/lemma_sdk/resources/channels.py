@@ -7,8 +7,6 @@ from ..openapi_client.api.agent_surfaces import agent_notice_send
 from ..openapi_client.api.channels import (
     channel_create,
     channel_get,
-    channel_handler_release,
-    channel_handler_take,
     channel_inbox_get,
     channel_list,
     channel_mark_read,
@@ -33,7 +31,6 @@ from ..openapi_client.models.channel_list_response import ChannelListResponse
 from ..openapi_client.models.channel_message_response import ChannelMessageResponse
 from ..openapi_client.models.channel_messages_response import ChannelMessagesResponse
 from ..openapi_client.models.channel_post_request import ChannelPostRequest
-from ..openapi_client.models.channel_response import ChannelResponse
 from ..openapi_client.models.channel_update_request import ChannelUpdateRequest
 from ..openapi_client.models.inbox_response import InboxResponse
 from ..openapi_client.models.notice_request import NoticeRequest
@@ -130,6 +127,28 @@ class PodChannels(BoundResource):
             self._pod_uuid(),
             as_uuid(channel_id),
             body=body,
+            body_model=ChannelUpdateRequest,
+        )
+
+    def set_agent_answers(
+        self,
+        channel_id: str | UUID,
+        on: bool,
+        *,
+        hand_back_after_hours: int | None = None,
+    ) -> ChannelDetailResponse:
+        """Whether a contact's agents answer them. Off, only members do; on
+        hands them back to the agent at once. ``hand_back_after_hours`` is how
+        long a member who wrote to them holds them before the agent answers
+        again. Takes ``contact.message``."""
+        settings: dict[str, Any] = {"agents_answer": on}
+        if hand_back_after_hours is not None:
+            settings["hand_back_after_hours"] = hand_back_after_hours
+        return self._call(
+            channel_update,
+            self._pod_uuid(),
+            as_uuid(channel_id),
+            body={"settings": settings},
             body_model=ChannelUpdateRequest,
         )
 
@@ -298,16 +317,3 @@ class PodChannels(BoundResource):
     def mark_read(self, channel_id: str | UUID) -> None:
         """Note that the caller has read the channel up to now."""
         self._call(channel_mark_read, self._pod_uuid(), as_uuid(channel_id))
-
-    def take(self, channel_id: str | UUID) -> ChannelResponse:
-        """Answer a contact's channel by hand: its agents stop answering there.
-
-        Takes ``contact.message``.
-        """
-        return self._call(channel_handler_take, self._pod_uuid(), as_uuid(channel_id))
-
-    def release(self, channel_id: str | UUID) -> ChannelResponse:
-        """Hand a contact's channel back to its agents."""
-        return self._call(
-            channel_handler_release, self._pod_uuid(), as_uuid(channel_id)
-        )

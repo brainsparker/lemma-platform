@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.channel_settings_change import ChannelSettingsChange
+
 
 T = TypeVar("T", bound="ChannelUpdateRequest")
 
@@ -16,21 +20,33 @@ class ChannelUpdateRequest:
     """
     Attributes:
         archived (bool | None | Unset):
+        settings (ChannelSettingsChange | None | Unset): A contact's channel only; takes `contact.message`.
         title (None | str | Unset):
         topic (None | str | Unset):
     """
 
     archived: bool | None | Unset = UNSET
+    settings: ChannelSettingsChange | None | Unset = UNSET
     title: None | str | Unset = UNSET
     topic: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.channel_settings_change import ChannelSettingsChange
+
         archived: bool | None | Unset
         if isinstance(self.archived, Unset):
             archived = UNSET
         else:
             archived = self.archived
+
+        settings: dict[str, Any] | None | Unset
+        if isinstance(self.settings, Unset):
+            settings = UNSET
+        elif isinstance(self.settings, ChannelSettingsChange):
+            settings = self.settings.to_dict()
+        else:
+            settings = self.settings
 
         title: None | str | Unset
         if isinstance(self.title, Unset):
@@ -49,6 +65,8 @@ class ChannelUpdateRequest:
         field_dict.update({})
         if archived is not UNSET:
             field_dict["archived"] = archived
+        if settings is not UNSET:
+            field_dict["settings"] = settings
         if title is not UNSET:
             field_dict["title"] = title
         if topic is not UNSET:
@@ -58,6 +76,8 @@ class ChannelUpdateRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.channel_settings_change import ChannelSettingsChange
+
         d = dict(src_dict)
 
         def _parse_archived(data: object) -> bool | None | Unset:
@@ -68,6 +88,23 @@ class ChannelUpdateRequest:
             return cast(bool | None | Unset, data)
 
         archived = _parse_archived(d.pop("archived", UNSET))
+
+        def _parse_settings(data: object) -> ChannelSettingsChange | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                settings_type_0 = ChannelSettingsChange.from_dict(data)
+
+                return settings_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(ChannelSettingsChange | None | Unset, data)
+
+        settings = _parse_settings(d.pop("settings", UNSET))
 
         def _parse_title(data: object) -> None | str | Unset:
             if data is None:
@@ -89,6 +126,7 @@ class ChannelUpdateRequest:
 
         channel_update_request = cls(
             archived=archived,
+            settings=settings,
             title=title,
             topic=topic,
         )

@@ -11,7 +11,6 @@ import type { ChannelListResponse } from '../models/ChannelListResponse.js';
 import type { ChannelMessageResponse } from '../models/ChannelMessageResponse.js';
 import type { ChannelMessagesResponse } from '../models/ChannelMessagesResponse.js';
 import type { ChannelPostRequest } from '../models/ChannelPostRequest.js';
-import type { ChannelResponse } from '../models/ChannelResponse.js';
 import type { ChannelUpdateRequest } from '../models/ChannelUpdateRequest.js';
 import type { InboxResponse } from '../models/InboxResponse.js';
 import type { NotifyRequest } from '../models/NotifyRequest.js';
@@ -141,7 +140,11 @@ export class ChannelsService {
     }
     /**
      * Update Channel
-     * Rename, re-describe or archive a group.
+     * Rename, re-describe or archive a group; switch a contact's agent.
+     *
+     * A contact's channel changes only its `settings`, and takes
+     * `contact.message`: switching its agent off leaves the contact to members;
+     * switching it on hands them back to the agent at once, whoever stepped in.
      * @param podId
      * @param channelId
      * @param requestBody
@@ -162,54 +165,6 @@ export class ChannelsService {
             },
             body: requestBody,
             mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Release Channel
-     * Hand the contact back to the channel's agents.
-     * @param podId
-     * @param channelId
-     * @returns ChannelResponse Successful Response
-     * @throws ApiError
-     */
-    public static channelHandlerRelease(
-        podId: string,
-        channelId: string,
-    ): CancelablePromise<ChannelResponse> {
-        return __request(OpenAPI, {
-            method: 'DELETE',
-            url: '/pods/{pod_id}/channels/{channel_id}/handler',
-            path: {
-                'pod_id': podId,
-                'channel_id': channelId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Take Channel
-     * Answer a contact by hand: their agent stays quiet until it is handed back.
-     * @param podId
-     * @param channelId
-     * @returns ChannelResponse Successful Response
-     * @throws ApiError
-     */
-    public static channelHandlerTake(
-        podId: string,
-        channelId: string,
-    ): CancelablePromise<ChannelResponse> {
-        return __request(OpenAPI, {
-            method: 'PUT',
-            url: '/pods/{pod_id}/channels/{channel_id}/handler',
-            path: {
-                'pod_id': podId,
-                'channel_id': channelId,
-            },
             errors: {
                 422: `Validation Error`,
             },

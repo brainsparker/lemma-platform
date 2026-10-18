@@ -115,8 +115,12 @@ asker waiting on several answers is woken once the last closes.
   counted on its line), `GET /{id}/messages/{message_id}/thread`,
   `POST /{id}/messages` (text, a note to members, a source, a thread,
   mentions), `PATCH`/`DELETE` one's own line, and `POST …/answer`.
-- `PUT /{id}/handler` steps in on a contact's channel and `DELETE` releases
-  it; take `contact.message`.
+- A contact's channel is answered by hand two ways, both taking
+  `contact.message`: writing there steps in, and its agents wait while the
+  member is in the conversation (`handler`, let go after the channel's
+  `hand_back_after_hours` of quiet); `PATCH /{id}` with
+  `{"settings": {"agents_answer": false}}` switches its agents off until a
+  member switches them on, which hands the contact back at once.
 - `GET /pods/{pod_id}/inbox` -- what is new across the pod and what waits on
   the caller -- and `GET /pods/{pod_id}/channels/search?q=` (Postgres full
   text, in the channels the caller sees).

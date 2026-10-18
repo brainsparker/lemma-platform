@@ -7,6 +7,7 @@ import { isForbidden, isMissing } from "@/session/auth-state";
 import { useMe } from "@/session/use-me";
 import { ChannelIcon } from "@/shell/channels";
 import { InfoIcon } from "@/ui/icons";
+import { AgentSwitch } from "./agent-switch";
 import { ChannelPanel } from "./channel-panel";
 import { Composer } from "./composer";
 import { mentionables } from "./mentions";
@@ -101,6 +102,7 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
                             <span>{channel.topic ?? whoAnswers(channel, pod.name, me)}</span>
                         </p>
                     </div>
+                    {channel.kind === "CONTACT" && <AgentSwitch podId={pod.id} channel={channel} />}
                     <button
                         type="button"
                         className="icon-button"
@@ -115,8 +117,8 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
                 {channel.archived && <p className="cpage__note" role="status">This channel is archived. It still reads and writes; bring it back from About to list it again.</p>}
                 {channel.kind === "CONTACT" && channel.attention && !channel.handler && (
                     <p className="cpage__note cpage__note--ask" role="status">
-                        {channel.person?.name ?? "This contact"} asks for a person{channel.attention.reason ? ": " + channel.attention.reason : "."}{" "}
-                        <button type="button" className="gsheet__inline" onClick={() => setSide("about")}>Step in</button>
+                        {channel.person?.name ?? "This contact"} is waiting on a person{channel.attention.reason ? ": " + channel.attention.reason : "."}{" "}
+                        Write below to answer them.
                     </p>
                 )}
                 <Timeline

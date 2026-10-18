@@ -16620,7 +16620,11 @@ var LemmaClient = (() => {
     }
     /**
      * Update Channel
-     * Rename, re-describe or archive a group.
+     * Rename, re-describe or archive a group; switch a contact's agent.
+     *
+     * A contact's channel changes only its `settings`, and takes
+     * `contact.message`: switching its agent off leaves the contact to members;
+     * switching it on hands them back to the agent at once, whoever stepped in.
      * @param podId
      * @param channelId
      * @param requestBody
@@ -16637,48 +16641,6 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Release Channel
-     * Hand the contact back to the channel's agents.
-     * @param podId
-     * @param channelId
-     * @returns ChannelResponse Successful Response
-     * @throws ApiError
-     */
-    static channelHandlerRelease(podId, channelId) {
-      return request(OpenAPI, {
-        method: "DELETE",
-        url: "/pods/{pod_id}/channels/{channel_id}/handler",
-        path: {
-          "pod_id": podId,
-          "channel_id": channelId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Take Channel
-     * Answer a contact by hand: their agent stays quiet until it is handed back.
-     * @param podId
-     * @param channelId
-     * @returns ChannelResponse Successful Response
-     * @throws ApiError
-     */
-    static channelHandlerTake(podId, channelId) {
-      return request(OpenAPI, {
-        method: "PUT",
-        url: "/pods/{pod_id}/channels/{channel_id}/handler",
-        path: {
-          "pod_id": podId,
-          "channel_id": channelId
-        },
         errors: {
           422: `Validation Error`
         }
@@ -16996,6 +16958,18 @@ var LemmaClient = (() => {
     update(podId, channelId, body) {
       return this.client.request(() => ChannelsService.channelUpdate(podId, channelId, body));
     }
+    /** Whether a contact's agents answer them. Off, only members do; on hands
+     *  them back to the agent at once. Takes `contact.message`. */
+    setAgentAnswers(podId, channelId, on, options = {}) {
+      return this.client.request(
+        () => ChannelsService.channelUpdate(podId, channelId, {
+          settings: {
+            agents_answer: on,
+            ...options.handBackAfterHours !== void 0 ? { hand_back_after_hours: options.handBackAfterHours } : {}
+          }
+        })
+      );
+    }
     /** Add members of the pod to a group. */
     addMembers(podId, channelId, members) {
       return this.client.request(
@@ -17090,15 +17064,6 @@ var LemmaClient = (() => {
     /** Note that the caller has read the channel up to now. */
     markRead(podId, channelId) {
       return this.client.request(() => ChannelsService.channelMarkRead(podId, channelId));
-    }
-    /** Answer a contact's channel by hand: its agents stop answering there.
-     *  Takes `contact.message`. */
-    take(podId, channelId) {
-      return this.client.request(() => ChannelsService.channelHandlerTake(podId, channelId));
-    }
-    /** Hand a contact's channel back to its agents. */
-    release(podId, channelId) {
-      return this.client.request(() => ChannelsService.channelHandlerRelease(podId, channelId));
     }
   };
 

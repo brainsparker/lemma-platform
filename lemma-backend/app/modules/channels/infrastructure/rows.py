@@ -23,6 +23,7 @@ from app.modules.channels.domain.entities import (
     SenderKind,
     Source,
     SourceKind,
+    read_settings,
 )
 from app.modules.channels.infrastructure.models import (
     ChannelMessageModel,
@@ -55,6 +56,7 @@ def channel_entity(row: ChannelModel) -> Channel:
         archived_at=row.archived_at,
         attention_at=row.attention_at,
         attention_reason=row.attention_reason,
+        settings=read_settings(row.settings),
     )
 
 

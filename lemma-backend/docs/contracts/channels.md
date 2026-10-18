@@ -12,8 +12,6 @@ The table below is generated from the committed OpenAPI specification by `script
 | --- | --- | --- | --- |
 | `channel.create` | POST | `/pods/{pod_id}/channels` | Create Channel |
 | `channel.get` | GET | `/pods/{pod_id}/channels/{channel_id}` | Get Channel |
-| `channel.handler.release` | DELETE | `/pods/{pod_id}/channels/{channel_id}/handler` | Release Channel |
-| `channel.handler.take` | PUT | `/pods/{pod_id}/channels/{channel_id}/handler` | Take Channel |
 | `channel.inbox.get` | GET | `/pods/{pod_id}/inbox` | Get Inbox |
 | `channel.list` | GET | `/pods/{pod_id}/channels` | List Channels |
 | `channel.mark_read` | POST | `/pods/{pod_id}/channels/{channel_id}/read` | Mark Channel Read |

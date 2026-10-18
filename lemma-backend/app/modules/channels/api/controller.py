@@ -24,6 +24,7 @@ from app.core.authorization.permissions import Permissions
 from app.modules.channels.api.access import (
     cursor,
     may_manage,
+    may_message_contacts,
     sees_contacts,
     visible,
 )
@@ -248,16 +249,62 @@ async def update_channel(
     user: CurrentUser,
     uow: UoWDep,
 ) -> ChannelDetailResponse:
-    """Rename, re-describe or archive a group."""
-    channel = await _changeable(uow, pod_id, channel_id, user.id)
+    """Rename, re-describe or archive a group; switch a contact's agent.
+
+    A contact's channel changes only its `settings`, and takes
+    `contact.message`: switching its agent off leaves the contact to members;
+    switching it on hands them back to the agent at once, whoever stepped in.
+    """
+    if body.settings is not None:
+        channel = await _contact_settings(uow, pod_id, channel_id, user.id, body)
+    else:
+        channel = await _changeable(uow, pod_id, channel_id, user.id)
     changed = await ChannelRepository(uow.session).change(
         channel.id,
         title=body.title.strip() if body.title else None,
         topic=body.topic.strip() if body.topic is not None else None,
         archived=body.archived,
+        settings=(
+            body.settings.model_dump(exclude_none=True) if body.settings else None
+        ),
     )
+    if body.settings is not None and body.settings.agents_answer:
+        await ChannelRepository(uow.session).set_handler(channel.id, None)
+        changed = await ChannelRepository(uow.session).get(channel.id)
     await uow.commit()
     return await _detail(uow, changed or channel, user_id=user.id)
+
+
+async def _contact_settings(
+    uow: UoWDep,
+    pod_id: UUID,
+    channel_id: UUID,
+    user_id: UUID,
+    body: ChannelUpdateRequest,
+) -> Channel:
+    """A contact's channel whose settings this member may change."""
+    channel = await visible(
+        ChannelRepository(uow.session),
+        pod_id=pod_id,
+        channel_id=channel_id,
+        user_id=user_id,
+    )
+    if channel.kind is not ChannelKind.CONTACT:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Only a contact's channel has an agent to switch",
+        )
+    if body.title is not None or body.topic is not None or body.archived is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="A contact's channel is named after them",
+        )
+    if not await may_message_contacts(pod_id):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Only who may write to contacts can switch their agent",
+        )
+    return channel
 
 
 @router.post(
@@ -362,54 +409,3 @@ async def mark_channel_read(
     await channels.mark_read(channel=channel, user_id=user.id)
     await InboxReads(uow.session).read_mentions(channel_id=channel.id, user_id=user.id)
     await uow.commit()
-
-
-@router.put(
-    "/{channel_id}/handler",
-    operation_id="channel.handler.take",
-    response_model=ChannelResponse,
-    dependencies=[require_action(Permissions.CONTACT_MESSAGE)],
-)
-async def take_channel(
-    pod_id: UUID, channel_id: UUID, user: CurrentUser, uow: UoWDep
-) -> ChannelResponse:
-    """Answer a contact by hand: their agent stays quiet until it is handed back."""
-    return await _set_handler(uow, pod_id, channel_id, user.id, handler=user.id)
-
-
-@router.delete(
-    "/{channel_id}/handler",
-    operation_id="channel.handler.release",
-    response_model=ChannelResponse,
-    dependencies=[require_action(Permissions.CONTACT_MESSAGE)],
-)
-async def release_channel(
-    pod_id: UUID, channel_id: UUID, user: CurrentUser, uow: UoWDep
-) -> ChannelResponse:
-    """Hand the contact back to the channel's agents."""
-    return await _set_handler(uow, pod_id, channel_id, user.id, handler=None)
-
-
-async def _set_handler(
-    uow: UoWDep,
-    pod_id: UUID,
-    channel_id: UUID,
-    user_id: UUID,
-    *,
-    handler: UUID | None,
-) -> ChannelResponse:
-    channels = ChannelRepository(uow.session)
-    channel = await visible(
-        channels, pod_id=pod_id, channel_id=channel_id, user_id=user_id
-    )
-    if channel.kind is not ChannelKind.CONTACT:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail="Only a contact's channel is answered by hand",
-        )
-    await channels.set_handler(channel.id, handler)
-    await uow.commit()
-    updated = await channels.get(channel.id)
-    target = updated or channel
-    names = await Names(uow).of(pod_id=pod_id, people=channel_people(target))
-    return channel_response(target, names=names)

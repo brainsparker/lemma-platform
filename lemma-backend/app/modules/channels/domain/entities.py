@@ -25,7 +25,7 @@ from enum import StrEnum
 from typing import Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 class ChannelKind(StrEnum):
@@ -104,6 +104,36 @@ class Principal(BaseModel):
         return self.contact_id is not None
 
 
+#: How long a member who stepped in holds a contact by default, unless they
+#: write again: past it, the contact's agent answers them once more.
+HAND_BACK_AFTER_HOURS = 12
+
+
+class ChannelSettings(BaseModel):
+    """A channel's own switches, kept as one JSON object; a key never set is
+    its default, so a setting is added without a migration."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    #: Whether a contact's agents answer them here. Off, nobody but a member
+    #: does -- however long it is since one last wrote.
+    agents_answer: bool = True
+    #: A member who stepped in holds the contact this long after their last
+    #: line; then the agent answers again, and the member is told.
+    hand_back_after_hours: int = Field(default=HAND_BACK_AFTER_HOURS, ge=1, le=720)
+
+
+def read_settings(raw: object) -> ChannelSettings:
+    """A channel's settings as stored; a stored value no longer valid is its
+    default, never an error on every read of the channel."""
+    if not isinstance(raw, dict):
+        return ChannelSettings()
+    try:
+        return ChannelSettings.model_validate(raw)
+    except ValidationError:
+        return ChannelSettings()
+
+
 class Channel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -126,6 +156,7 @@ class Channel(BaseModel):
     #: Since when it has asked for a person, and why; cleared on stepping in.
     attention_at: datetime | None = None
     attention_reason: str | None = None
+    settings: ChannelSettings = ChannelSettings()
 
 
 class Source(BaseModel):

@@ -5,6 +5,7 @@
 import type { AttentionResponse } from './AttentionResponse.js';
 import type { ChannelKind } from './ChannelKind.js';
 import type { ChannelParticipantResponse } from './ChannelParticipantResponse.js';
+import type { ChannelSettingsResponse } from './ChannelSettingsResponse.js';
 import type { ChannelSourceResponse } from './ChannelSourceResponse.js';
 import type { LinePreview } from './LinePreview.js';
 import type { MyChannelSettings } from './MyChannelSettings.js';
@@ -19,7 +20,7 @@ export type ChannelDetailResponse = {
     attention?: (AttentionResponse | null);
     created_at: string;
     /**
-     * A member answering by hand; agents do not answer meanwhile.
+     * A member who stepped in by writing to the contact: agents stay quiet until they have not written for `settings.hand_back_after_hours`, or the agent is switched on again.
      */
     handler?: (PersonRef | null);
     id: string;
@@ -32,6 +33,7 @@ export type ChannelDetailResponse = {
      * Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP.
      */
     person?: (PersonRef | null);
+    settings?: ChannelSettingsResponse;
     source_places?: Array<ChannelSourceResponse>;
     /**
      * The outside places feeding it.

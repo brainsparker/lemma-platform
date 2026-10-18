@@ -91,6 +91,8 @@ export type { ChannelMessagesResponse } from './models/ChannelMessagesResponse.j
 export type { ChannelParticipantResponse } from './models/ChannelParticipantResponse.js';
 export type { ChannelPostRequest } from './models/ChannelPostRequest.js';
 export type { ChannelResponse } from './models/ChannelResponse.js';
+export type { ChannelSettingsChange } from './models/ChannelSettingsChange.js';
+export type { ChannelSettingsResponse } from './models/ChannelSettingsResponse.js';
 export type { ChannelSourceResponse } from './models/ChannelSourceResponse.js';
 export type { ChannelUpdateRequest } from './models/ChannelUpdateRequest.js';
 export type { CodeRequest } from './models/CodeRequest.js';

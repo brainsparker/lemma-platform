@@ -35,8 +35,12 @@ export interface Channel {
      *  CONTACT one; null for a group. */
     person: PersonRef | null;
     sources: SourceSummary[];
-    /** A member answering by hand; its agents do not answer meanwhile. */
+    /** A member who stepped in by writing to the contact; its agents wait
+     *  until they have been quiet `handBackAfterHours`. */
     handler: PersonRef | null;
+    /** A contact's channel: whether its agents answer them at all. */
+    agentsAnswer: boolean;
+    handBackAfterHours: number;
     /** It asks for a person, and why. */
     attention: { since: string; reason: string | null } | null;
     archived: boolean;
@@ -146,6 +150,7 @@ export function readChannel(raw: unknown): Channel | null {
     const attention = row.attention && typeof row.attention === "object" ? record(row.attention) : null;
     const last = row.last_line && typeof row.last_line === "object" ? record(row.last_line) : null;
     const unread = record(row.unread);
+    const settings = record(row.settings);
     return {
         id,
         kind: KINDS.includes(row.kind as ChannelKind) ? (row.kind as ChannelKind) : "GROUP",
@@ -158,6 +163,8 @@ export function readChannel(raw: unknown): Channel | null {
             return platform ? [{ platform: platform.toUpperCase(), title: words(source.title) }] : [];
         }),
         handler: readPerson(row.handler),
+        agentsAnswer: settings.agents_answer !== false,
+        handBackAfterHours: typeof settings.hand_back_after_hours === "number" && settings.hand_back_after_hours > 0 ? settings.hand_back_after_hours : 12,
         attention: attention ? { since: String(attention.since ?? ""), reason: words(attention.reason) } : null,
         archived: row.archived === true,
         lastLine: last ? {
@@ -514,13 +521,15 @@ export function composerChoices(detail: Pick<ChannelDetail, "places">): { notes:
 /** Who answers in a channel when nobody is named. In the reader's own the
  *  pod's agent answers every line; anywhere else an agent answers only when
  *  @mentioned, and not at all while a member has stepped in. */
-export function whoAnswers(channel: Pick<Channel, "kind" | "handler">, space: string, me: string | null): string {
+export function whoAnswers(channel: Pick<Channel, "kind" | "handler" | "agentsAnswer" | "handBackAfterHours">, space: string, me: string | null): string {
+    if (channel.kind === "CONTACT" && !channel.agentsAnswer) return "Its agent is off: only members answer them.";
     if (channel.handler) {
         const name = personName(channel.handler, me);
-        return name === "You" ? "You are answering here; its agents wait." : name + " is answering here; its agents wait.";
+        const back = "its agent answers again " + channel.handBackAfterHours + " hours after " + (name === "You" ? "your" : "their") + " last line.";
+        return (name === "You" ? "You are answering here; " : name + " is answering here; ") + back;
     }
     if (channel.kind === "DIRECT") return space + " answers everything you write here.";
-    if (channel.kind === "CONTACT") return space + "’s agents answer them here.";
+    if (channel.kind === "CONTACT") return space + "’s agent answers them. Write here to answer them yourself.";
     return "@mention an agent to have it answer.";
 }
 

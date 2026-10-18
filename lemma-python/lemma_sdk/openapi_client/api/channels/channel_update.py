@@ -76,7 +76,11 @@ def sync_detailed(
 ) -> Response[ChannelDetailResponse | ErrorResponse]:
     """Update Channel
 
-     Rename, re-describe or archive a group.
+     Rename, re-describe or archive a group; switch a contact's agent.
+
+    A contact's channel changes only its `settings`, and takes
+    `contact.message`: switching its agent off leaves the contact to members;
+    switching it on hands them back to the agent at once, whoever stepped in.
 
     Args:
         pod_id (UUID):
@@ -113,7 +117,11 @@ def sync(
 ) -> ChannelDetailResponse | ErrorResponse | None:
     """Update Channel
 
-     Rename, re-describe or archive a group.
+     Rename, re-describe or archive a group; switch a contact's agent.
+
+    A contact's channel changes only its `settings`, and takes
+    `contact.message`: switching its agent off leaves the contact to members;
+    switching it on hands them back to the agent at once, whoever stepped in.
 
     Args:
         pod_id (UUID):
@@ -145,7 +153,11 @@ async def asyncio_detailed(
 ) -> Response[ChannelDetailResponse | ErrorResponse]:
     """Update Channel
 
-     Rename, re-describe or archive a group.
+     Rename, re-describe or archive a group; switch a contact's agent.
+
+    A contact's channel changes only its `settings`, and takes
+    `contact.message`: switching its agent off leaves the contact to members;
+    switching it on hands them back to the agent at once, whoever stepped in.
 
     Args:
         pod_id (UUID):
@@ -180,7 +192,11 @@ async def asyncio(
 ) -> ChannelDetailResponse | ErrorResponse | None:
     """Update Channel
 
-     Rename, re-describe or archive a group.
+     Rename, re-describe or archive a group; switch a contact's agent.
+
+    A contact's channel changes only its `settings`, and takes
+    `contact.message`: switching its agent off leaves the contact to members;
+    switching it on hands them back to the agent at once, whoever stepped in.
 
     Args:
         pod_id (UUID):

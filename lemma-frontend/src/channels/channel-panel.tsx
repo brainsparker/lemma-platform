@@ -9,6 +9,7 @@ import { NOWHERE, writeAddress } from "@/shell/address";
 import { ChannelIcon } from "@/shell/channels";
 import { PlaceLink } from "@/shell/place-link";
 import { CloseIcon } from "@/ui/icons";
+import { AgentSwitch } from "./agent-switch";
 import { channelApi } from "./api";
 import { problemOf } from "./line";
 import {
@@ -69,13 +70,6 @@ function About({ pod, channel }: { pod: Pod; channel: ChannelDetail }) {
         mutationFn: (body: { title?: string | null; topic?: string | null; archived?: boolean }) => channelApi(pod.id).update(channel.id, body),
         onSuccess: (saved) => { keepChannel(cache, pod.id, saved); setEditing(false); },
     });
-    const hand = useMutation({
-        mutationFn: (take: boolean) => (take ? channelApi(pod.id).take(channel.id) : channelApi(pod.id).release(channel.id)),
-        onSuccess: () => {
-            void cache.invalidateQueries({ queryKey: channelKey(pod.id, channel.id) });
-            refreshLists(cache, pod.id);
-        },
-    });
     const refused = (error: unknown, what: string) => isForbidden(error) ? "Only who made this channel, or an admin of " + pod.name + ", can " + what + "." : problemOf(error, "Couldn’t " + what + ".");
     const save = (event: FormEvent) => {
         event.preventDefault();
@@ -97,14 +91,11 @@ function About({ pod, channel }: { pod: Pod; channel: ChannelDetail }) {
                     )}
                     <div className="gowner">
                         <span>{whoAnswers(channel, pod.name, me)}</span>
-                        {channel.handler && channel.handler.id === me ? (
-                            <button type="button" className="gsheet__inline" disabled={hand.isPending} onClick={() => hand.mutate(false)}>{hand.isPending ? "Handing back…" : "Hand back to its agents"}</button>
-                        ) : !channel.handler && (
-                            <button type="button" className="gsheet__inline" disabled={hand.isPending} onClick={() => hand.mutate(true)}>{hand.isPending ? "Stepping in…" : "Step in"}</button>
-                        )}
+                        <AgentSwitch podId={pod.id} channel={channel} />
                     </div>
-                    {!channel.handler && <p className="gside__fine">Step in to answer them yourself; its agents wait until you hand it back.</p>}
-                    {hand.isError && <p className="gside__problem" role="alert">{isForbidden(hand.error) ? "Only an editor of " + pod.name + " can answer contacts." : problemOf(hand.error, "Couldn’t change who answers.")}</p>}
+                    <p className="gside__fine">
+                        Writing to them steps in: the agent waits while you are in the conversation. Switch it off to answer them yourself until you switch it on again.
+                    </p>
                 </>
             )}
             {channel.kind === "GROUP" && (editing ? (

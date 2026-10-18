@@ -14,6 +14,7 @@ from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.domain.entities import (
     Channel,
+    ChannelSettings,
     ChannelKind,
     ChannelMessage,
     Interaction,
@@ -47,6 +48,7 @@ from app.modules.channels.services.timeline import ChannelNotFound, Timeline
 
 __all__ = [
     "Channel",
+    "ChannelSettings",
     "ChannelKind",
     "ChannelMessage",
     "ChannelNotFound",
@@ -74,6 +76,7 @@ __all__ = [
     "channel_by_id",
     "contact_channel",
     "direct_channel",
+    "hand_back",
     "handler_of",
     "may_read",
     "withheld_from",
@@ -200,6 +203,11 @@ async def participants_of(
     uow: SqlAlchemyUnitOfWork, channel_id: UUID
 ) -> list[Participant]:
     return await ChannelRepository(uow.session).participants(channel_id)
+
+
+async def hand_back(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> None:
+    """The member who stepped in lets go: the channel's agents answer again."""
+    await ChannelRepository(uow.session).set_handler(channel_id, None)
 
 
 async def handler_of(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> UUID | None:

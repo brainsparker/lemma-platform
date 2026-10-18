@@ -301,6 +301,16 @@ class LineRepository:
             )
         )
 
+    async def last_said_by(self, *, channel_id: UUID, user_id: UUID) -> datetime | None:
+        """When this member last wrote in this channel, notes to members aside."""
+        return await self.session.scalar(
+            select(func.max(ChannelMessageModel.created_at)).where(
+                ChannelMessageModel.channel_id == channel_id,
+                ChannelMessageModel.sender_user_id == user_id,
+                ChannelMessageModel.members_only.is_(False),
+            )
+        )
+
     async def said_in_run(
         self, *, channel_id: UUID, agent_run_id: UUID, text: str
     ) -> ChannelMessage | None:

@@ -14,6 +14,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.attention_response import AttentionResponse
+    from ..models.channel_settings_response import ChannelSettingsResponse
     from ..models.line_preview import LinePreview
     from ..models.person_ref import PersonRef
     from ..models.source_summary import SourceSummary
@@ -32,11 +33,13 @@ class ChannelResponse:
         kind (ChannelKind):
         archived (bool | Unset):  Default: False.
         attention (AttentionResponse | None | Unset): The channel asks for a person, and why.
-        handler (None | PersonRef | Unset): A member answering by hand; agents do not answer meanwhile.
+        handler (None | PersonRef | Unset): A member who stepped in by writing to the contact: agents stay quiet until
+            they have not written for `settings.hand_back_after_hours`, or the agent is switched on again.
         last_line (LinePreview | None | Unset):
         last_message_at (datetime.datetime | None | Unset):
         person (None | PersonRef | Unset): Whose channel it is: the member's for a DIRECT one, the contact's for a
             CONTACT one; absent for a GROUP.
+        settings (ChannelSettingsResponse | Unset):
         sources (list[SourceSummary] | Unset): The outside places feeding it.
         title (None | str | Unset):
         topic (None | str | Unset):
@@ -52,6 +55,7 @@ class ChannelResponse:
     last_line: LinePreview | None | Unset = UNSET
     last_message_at: datetime.datetime | None | Unset = UNSET
     person: None | PersonRef | Unset = UNSET
+    settings: ChannelSettingsResponse | Unset = UNSET
     sources: list[SourceSummary] | Unset = UNSET
     title: None | str | Unset = UNSET
     topic: None | str | Unset = UNSET
@@ -111,6 +115,10 @@ class ChannelResponse:
         else:
             person = self.person
 
+        settings: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.settings, Unset):
+            settings = self.settings.to_dict()
+
         sources: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.sources, Unset):
             sources = []
@@ -155,6 +163,8 @@ class ChannelResponse:
             field_dict["last_message_at"] = last_message_at
         if person is not UNSET:
             field_dict["person"] = person
+        if settings is not UNSET:
+            field_dict["settings"] = settings
         if sources is not UNSET:
             field_dict["sources"] = sources
         if title is not UNSET:
@@ -169,6 +179,7 @@ class ChannelResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.attention_response import AttentionResponse
+        from ..models.channel_settings_response import ChannelSettingsResponse
         from ..models.line_preview import LinePreview
         from ..models.person_ref import PersonRef
         from ..models.source_summary import SourceSummary
@@ -268,6 +279,13 @@ class ChannelResponse:
 
         person = _parse_person(d.pop("person", UNSET))
 
+        _settings = d.pop("settings", UNSET)
+        settings: ChannelSettingsResponse | Unset
+        if isinstance(_settings, Unset):
+            settings = UNSET
+        else:
+            settings = ChannelSettingsResponse.from_dict(_settings)
+
         _sources = d.pop("sources", UNSET)
         sources: list[SourceSummary] | Unset = UNSET
         if _sources is not UNSET:
@@ -312,6 +330,7 @@ class ChannelResponse:
             last_line=last_line,
             last_message_at=last_message_at,
             person=person,
+            settings=settings,
             sources=sources,
             title=title,
             topic=topic,

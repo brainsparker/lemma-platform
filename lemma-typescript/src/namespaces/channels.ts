@@ -61,6 +61,26 @@ export class ChannelsNamespace {
     return this.client.request(() => ChannelsService.channelUpdate(podId, channelId, body));
   }
 
+  /** Whether a contact's agents answer them. Off, only members do; on hands
+   *  them back to the agent at once. Takes `contact.message`. */
+  setAgentAnswers(
+    podId: string,
+    channelId: string,
+    on: boolean,
+    options: { handBackAfterHours?: number } = {},
+  ) {
+    return this.client.request(() =>
+      ChannelsService.channelUpdate(podId, channelId, {
+        settings: {
+          agents_answer: on,
+          ...(options.handBackAfterHours !== undefined
+            ? { hand_back_after_hours: options.handBackAfterHours }
+            : {}),
+        },
+      }),
+    );
+  }
+
   /** Add members of the pod to a group. */
   addMembers(podId: string, channelId: string, members: string[]) {
     return this.client.request(() =>
@@ -168,16 +188,5 @@ export class ChannelsNamespace {
   /** Note that the caller has read the channel up to now. */
   markRead(podId: string, channelId: string) {
     return this.client.request(() => ChannelsService.channelMarkRead(podId, channelId));
-  }
-
-  /** Answer a contact's channel by hand: its agents stop answering there.
-   *  Takes `contact.message`. */
-  take(podId: string, channelId: string) {
-    return this.client.request(() => ChannelsService.channelHandlerTake(podId, channelId));
-  }
-
-  /** Hand a contact's channel back to its agents. */
-  release(podId: string, channelId: string) {
-    return this.client.request(() => ChannelsService.channelHandlerRelease(podId, channelId));
   }
 }

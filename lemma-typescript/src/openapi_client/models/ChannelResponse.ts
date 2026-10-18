@@ -4,6 +4,7 @@
 /* eslint-disable */
 import type { AttentionResponse } from './AttentionResponse.js';
 import type { ChannelKind } from './ChannelKind.js';
+import type { ChannelSettingsResponse } from './ChannelSettingsResponse.js';
 import type { LinePreview } from './LinePreview.js';
 import type { PersonRef } from './PersonRef.js';
 import type { SourceSummary } from './SourceSummary.js';
@@ -16,7 +17,7 @@ export type ChannelResponse = {
     attention?: (AttentionResponse | null);
     created_at: string;
     /**
-     * A member answering by hand; agents do not answer meanwhile.
+     * A member who stepped in by writing to the contact: agents stay quiet until they have not written for `settings.hand_back_after_hours`, or the agent is switched on again.
      */
     handler?: (PersonRef | null);
     id: string;
@@ -27,6 +28,7 @@ export type ChannelResponse = {
      * Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP.
      */
     person?: (PersonRef | null);
+    settings?: ChannelSettingsResponse;
     /**
      * The outside places feeding it.
      */

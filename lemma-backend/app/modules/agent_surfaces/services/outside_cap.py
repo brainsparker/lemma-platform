@@ -11,9 +11,10 @@ surface asks first, before any run starts, and when the cap is reached:
   every message, which would be the bot talking to itself at them.
 * **The member is told** in their inbox, on the same once a day.
 
-A member can also step in by hand on a contact's channel, whatever the cap:
-while the channel has a handler (``channels``' ``handler_user_id``) no run
-starts for that contact either, until the member hands it back.
+A member can also answer a contact by hand, whatever the cap
+(``contact_hold``): while the contact's channel has its agents off, or a member
+has stepped in there, no run starts for them either -- and they are not told
+"a person will reply", since one is, or has chosen to.
 
 Used by every place a run for somebody outside the pod starts: the chat and
 email surfaces (``SurfaceTurnStarter``) and web chat. All of it is in the
@@ -31,14 +32,15 @@ from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
-from app.modules.agent.contracts.channel_conversations import (
-    channel_of_conversation,
-)
 from app.modules.agent.contracts.contact_conversations import hold_outside_turn
 from app.modules.agent.contracts import channel_conversations
 from app.modules.agent_surfaces.services.direct_messages import tell_member
 from app.modules.agent_surfaces.services.contact_windows import ContactWindows
-from app.modules.channels.contracts import call_for_person, handler_of
+from app.modules.agent_surfaces.services.contact_hold import (
+    MemberHold,
+    held_by_a_member,
+)
+from app.modules.channels.contracts import call_for_person
 from app.modules.contacts.contracts import (
     answered_contacts_in_organization,
     contact_by_id,
@@ -84,7 +86,7 @@ async def held_for_a_person(
     contact answered, in the same transaction, so the count it was let in under
     holds.
     """
-    if await _handler(uow, conversation_id) is not None:
+    if await held_by_a_member(uow, conversation_id) is not None:
         return True
     organization_id = await pod_organization_id(uow, pod_id)
     if organization_id is None:
@@ -103,12 +105,6 @@ async def held_for_a_person(
         )
         return True
     return False
-
-
-async def _handler(uow: SqlAlchemyUnitOfWork, conversation_id: UUID) -> UUID | None:
-    """The member answering this conversation's channel by hand, if one is."""
-    channel_id = await channel_of_conversation(uow, conversation_id)
-    return await handler_of(uow, channel_id) if channel_id is not None else None
 
 
 async def _admitted(
@@ -174,7 +170,20 @@ async def hand_to_a_person(
     theirs. ``tell`` is ``first_word_today``'s answer: whether this is the turn
     that tells the person, and the member, today.
     """
-    member = await _handler(uow, conversation_id) or owner_id
+    member_hold = await held_by_a_member(uow, conversation_id)
+    if member_hold is not None:
+        await _keep_for_a_member(
+            uow,
+            pod_id=pod_id,
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+            text=text,
+            metadata=metadata,
+            hold=member_hold,
+            tell=tell,
+        )
+        return HeldTurn(reply=None)
+    member = owner_id
     first_today = tell
     space = await pod_name(uow.session, pod_id)
     reply = person_will_reply(space) if first_today else None
@@ -200,6 +209,49 @@ async def hand_to_a_person(
         told=first_today,
     )
     return HeldTurn(reply=reply)
+
+
+async def _keep_for_a_member(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    pod_id: UUID,
+    conversation_id: UUID,
+    owner_id: UUID,
+    text: str,
+    metadata: dict[str, object],
+    hold: MemberHold,
+    tell: bool,
+) -> None:
+    """Their message, kept for the member answering them by hand.
+
+    Nothing is said to the contact: a member is answering them, or has chosen
+    to. A member who stepped in reads it in the channel they are writing in;
+    with the agents off, the channel asks for a reply and the member who looks
+    after them is told, once a day.
+    """
+    await hold_outside_turn(
+        uow, conversation_id=conversation_id, text=text, metadata=metadata, reply=None
+    )
+    if hold is MemberHold.STEPPED_IN:
+        return
+    channel_id = await channel_conversations.channel_of_conversation(
+        uow, conversation_id
+    )
+    if channel_id is not None:
+        await call_for_person(
+            uow, channel_id=channel_id, reason="Waiting on a reply: the agent is off"
+        )
+    if tell and await pod_member_id(uow, pod_id, owner_id) is not None:
+        await tell_member(
+            uow,
+            pod_id=pod_id,
+            user_id=owner_id,
+            text=(
+                "A contact you look after wrote, and the agent is off in their "
+                "channel: they are waiting on a reply from you. Their channel "
+                "is in Contacts."
+            ),
+        )
 
 
 async def _tell_member(

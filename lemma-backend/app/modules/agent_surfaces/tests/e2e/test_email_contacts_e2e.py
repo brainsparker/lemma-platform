@@ -865,10 +865,13 @@ async def test_a_members_lines_are_mailed_until_the_contact_unsubscribes(
     # Writing to her took her channel: the member answers her by hand now.
     shown = await authenticated_client.get(f"/pods/{pod_id}/channels/{channel}")
     assert shown.json()["handler"]["id"] == fixed_test_user["id"]
-    handed_back = await authenticated_client.delete(
-        f"/pods/{pod_id}/channels/{channel}/handler"
+    # Switching the agent on hands her back to it at once.
+    handed_back = await authenticated_client.patch(
+        f"/pods/{pod_id}/channels/{channel}",
+        json={"settings": {"agents_answer": True}},
     )
     assert handed_back.status_code == 200, handed_back.text
+    assert handed_back.json()["handler"] is None
 
     # Writing again is how a contact opts back in.
     await dana_writes("follow-2")

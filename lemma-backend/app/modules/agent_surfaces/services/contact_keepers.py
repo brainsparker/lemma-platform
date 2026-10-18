@@ -18,16 +18,9 @@ from app.modules.agent.contracts.contact_conversations import (
 )
 from app.modules.agent.contracts.conversations_for_surfaces import SurfaceConversation
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationDeliveryStatus,
-    NotificationEntity,
-    NotificationOriginKind,
-)
 from app.modules.agent_surfaces.domain.surface_config import ContactAnswer
 from app.modules.agent_surfaces.domain.web_widgets import WidgetAnswer
-from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
-    NotificationRepository,
-)
+from app.modules.agent_surfaces.services.direct_messages import tell_member
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
@@ -92,25 +85,18 @@ async def tell_admins_a_keeper_left(
         for admin in await pod_administrators(uow, pod_id)
         if admin.user_id != user_id
     ]
-    notes = NotificationRepository(uow)
     for admin in admins:
-        await notes.create(
-            NotificationEntity(
-                pod_id=pod_id,
-                recipient_user_id=admin.user_id,
-                recipient_pod_member_id=admin.pod_member_id,
-                origin_kind=NotificationOriginKind.API,
-                title="Nobody is looking after contacts",
-                body=(
-                    "The member who looked after contacts on "
-                    + ", ".join(sorted(names))
-                    + " has left the space, so those bots have stopped answering "
-                    "contacts. Choose someone else to look after them in each "
-                    "bot's settings."
-                ),
-                expects_response=False,
-                delivery_status=NotificationDeliveryStatus.UNDELIVERABLE,
-            )
+        await tell_member(
+            uow,
+            pod_id=pod_id,
+            user_id=admin.user_id,
+            text=(
+                "The member who looked after contacts on "
+                + ", ".join(sorted(names))
+                + " has left the space, so those bots have stopped answering "
+                "contacts. Choose someone else to look after them in each "
+                "bot's settings."
+            ),
         )
     logger.info(
         "agent_surfaces.contact_keepers.keeper_left.observed",

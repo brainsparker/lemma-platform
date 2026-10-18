@@ -14,7 +14,7 @@ from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import get_secret_cipher
@@ -36,6 +36,10 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent,
     _create_surface,
     _ensure_connector_account,
+)
+from app.modules.channels.infrastructure.models import (
+    ChannelMessageModel,
+    ChannelModel,
 )
 from app.modules.connectors.infrastructure.models.account import Account
 
@@ -79,6 +83,30 @@ async def rows(session_maker: Any, sql: str, **params: object) -> list[Any]:
 async def scalar(sql: str, **params: object) -> Any:
     async with async_session_maker() as session:
         return await session.scalar(text(sql), params)
+
+
+async def direct_lines(
+    db_session: AsyncSession, *, pod_id: str | UUID, user_id: str | UUID
+) -> list[ChannelMessageModel]:
+    """Every line in this member's own channel with the pod, oldest first.
+
+    Read from the table, so a test can look at a member it holds no client for.
+    """
+    db_session.expire_all()
+    return list(
+        (
+            await db_session.scalars(
+                select(ChannelMessageModel)
+                .join(ChannelModel, ChannelModel.id == ChannelMessageModel.channel_id)
+                .where(
+                    ChannelModel.pod_id == UUID(str(pod_id)),
+                    ChannelModel.kind == "DIRECT",
+                    ChannelModel.member_user_id == UUID(str(user_id)),
+                )
+                .order_by(ChannelMessageModel.created_at)
+            )
+        ).all()
+    )
 
 
 async def a_telegram_bot(
@@ -145,13 +173,21 @@ async def mobile_changed(user_id: UUID) -> None:
     ``user_id`` names whose change is being settled; a session worker may
     already have run the item, which is equally fine.
     """
-    from app.modules.agent_surfaces.events.notification_work import (
-        register_notification_work,
-    )
+    from app.core.infrastructure.work import registry as default_registry
+    from app.modules.agent_surfaces.module import module as surfaces_module
+    from app.modules.agent_surfaces.events.work_kinds import SURFACE_MOBILE_CHANGED
 
     del user_id
+    assert surfaces_module.register_work is not None
+    surfaces_module.register_work()
+    # Whichever surfaces module handles the kind, as the worker would find it.
+    spec = default_registry.find(SURFACE_MOBILE_CHANGED)
+    assert spec is not None, (
+        f"nothing handles {SURFACE_MOBILE_CHANGED!r}: identity's UserMobileChanged "
+        "has no effect in the surfaces"
+    )
     registry = WorkRegistry()
-    register_notification_work(registry)
+    registry.register(spec)
     await run_until_idle(
         async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
     )
@@ -170,7 +206,7 @@ async def clean_surface_work():
                 "DELETE FROM work_items WHERE kind LIKE 'surface%' "
                 "OR kind LIKE 'surfaces.%' OR kind IN ('agent.turn', "
                 "'agent.turn.automation', 'agent.title', 'agent.approval.execute', "
-                "'agent.replies_arrived', 'notification.expire')"
+                "'agent.replies_arrived')"
             )
         )
         for table in (
@@ -203,3 +239,63 @@ async def deliver_replies() -> int:
     return await run_until_idle(
         async_session_maker, registry=_REPLY_REGISTRY, classes=[WorkClass.DELIVERY]
     )
+
+
+async def contact_channel_id(client: AsyncClient, pod_id: str, contact_id: str) -> str:
+    """The contact's channel, as the members who see contacts list it."""
+    listed = await client.get(f"/pods/{pod_id}/channels", params={"kind": "CONTACT"})
+    assert listed.status_code == 200, listed.text
+    [channel] = [
+        c
+        for c in listed.json()["items"]
+        if (c.get("person") or {}).get("id") == str(contact_id)
+    ]
+    return channel["id"]
+
+
+async def member_writes(
+    client: AsyncClient, pod_id: str, channel_id: str, text: str, **body: object
+) -> dict:
+    """A member's line in a channel: what Lemma's own app posts."""
+    posted = await client.post(
+        f"/pods/{pod_id}/channels/{channel_id}/messages", json={"text": text, **body}
+    )
+    assert posted.status_code == 201, posted.text
+    return posted.json()
+
+
+_MEMBER_POST_REGISTRY: WorkRegistry | None = None
+
+
+async def deliver_member_posts() -> int:
+    """Carry members' lines to their outside places, as the worker would.
+
+    A member's line is posted at once; ``surface.member_post`` takes it to the
+    platform afterwards, and records on the line what became of it.
+    """
+    from app.modules.agent_surfaces.events.member_post_work import (
+        register_member_post_work,
+    )
+
+    global _MEMBER_POST_REGISTRY
+    if _MEMBER_POST_REGISTRY is None:
+        _MEMBER_POST_REGISTRY = WorkRegistry()
+        register_member_post_work(_MEMBER_POST_REGISTRY)
+    await make_due(async_session_maker)
+    return await run_until_idle(
+        async_session_maker,
+        registry=_MEMBER_POST_REGISTRY,
+        classes=[WorkClass.DELIVERY],
+    )
+
+
+async def deliveries_of_line(message_id: str | UUID) -> list[Any]:
+    """What became of one line: each attempt to carry it somewhere."""
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.channels.contracts.deliveries import deliveries_of
+
+    async with async_session_maker() as session:
+        found = await deliveries_of(
+            SqlAlchemyUnitOfWork(session), [UUID(str(message_id))]
+        )
+    return found.get(UUID(str(message_id)), [])

@@ -20,6 +20,8 @@ SURFACE_REPLY: Final = "surface.reply"
 SURFACE_REPLY_FOR_RUN: Final = "surface.reply_for_run"
 #: Starts the turn an agent answers a member's line in Lemma with.
 SURFACE_IN_APP_TURN: Final = "surface.in_app_turn"
+#: Carries a member's line written in Lemma to the outside place it is for.
+SURFACE_MEMBER_POST: Final = "surface.member_post"
 #: Brings the lines of a conversation's questions in line with its pauses.
 SURFACE_PAUSE_LINES: Final = "surface.pause_lines"
 #: A perpetual poller for one credential (Telegram, Slack socket, Resend).
@@ -28,8 +30,8 @@ SURFACE_RECEIVER: Final = "surface.receiver"
 SURFACE_PLATFORM_UPDATE: Final = "surface.platform_update"
 #: Clears identities bound to a phone number a user no longer has.
 SURFACE_MOBILE_CHANGED: Final = "surfaces.mobile_changed"
-#: Expires a notification nobody answered in time.
-NOTIFICATION_EXPIRE: Final = "notification.expire"
+#: Gives a conversation its turn back once everybody it asked has answered.
+SURFACE_ASKED_QUESTIONS: Final = "surface.asked_questions"
 
 #: Periodic names (``periodic(name, every, kind)``).
 RECEIVERS_RECONCILE_PERIODIC: Final = "surfaces.receivers.reconcile"
@@ -48,6 +50,10 @@ def in_app_turn_key(message_id: UUID) -> str:
     return f"in-app-turn:{message_id}"
 
 
+def member_post_key(message_id: UUID) -> str:
+    return f"member-post:{message_id}"
+
+
 def pause_lines_key(run_id: UUID) -> str:
     return f"pause-lines:{run_id}"
 
@@ -56,16 +62,17 @@ def receiver_key(credential_key: str) -> str:
     return f"receiver:{credential_key}"
 
 
-def notification_expire_key(notification_id: UUID) -> str:
-    return f"notification-expire:{notification_id}"
+def asked_questions_key(message_id: UUID) -> str:
+    return f"asked-questions:{message_id}"
 
 
 __all__ = [
-    "NOTIFICATION_EXPIRE",
     "ONBOARDING_CLEANUP_PERIODIC",
     "RECEIVERS_RECONCILE_PERIODIC",
     "SURFACE_IN_APP_TURN",
+    "SURFACE_ASKED_QUESTIONS",
     "SURFACE_INGEST",
+    "SURFACE_MEMBER_POST",
     "SURFACE_PAUSE_LINES",
     "SURFACE_MOBILE_CHANGED",
     "SURFACE_PLATFORM_UPDATE",
@@ -74,7 +81,8 @@ __all__ = [
     "SURFACE_REPLY_FOR_RUN",
     "in_app_turn_key",
     "ingest_key",
-    "notification_expire_key",
+    "asked_questions_key",
+    "member_post_key",
     "pause_lines_key",
     "receiver_key",
     "run_reply_key",

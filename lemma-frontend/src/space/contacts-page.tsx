@@ -18,8 +18,11 @@ import {
     type WebWidget,
     type WidgetDraft,
 } from "@/data/contacts";
+import { channelApi } from "@/channels/api";
 import { isForbidden } from "@/session/auth-state";
 import { Modal } from "@/shell/modal";
+import { channelHref, goTo } from "@/shell/place-link";
+import { useFeature } from "@/site/analytics/flags";
 import {
     useContacts,
     useCreateWidget,
@@ -168,7 +171,11 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
                             {
                                 onSuccess: (sent) => {
                                     setMessage("");
-                                    setSaid(sent.delivered ? "Sent." : "Left in their chat for their next visit.");
+                                    setSaid(
+                                        sent.platform === "WEB" || !sent.platform
+                                            ? "In their channel; it waits in their chat for their next visit."
+                                            : "In their channel, on its way to them.",
+                                    );
                                 },
                                 onError: (error) => setSaid(followUpRefusal((error as { code?: string }).code)),
                             },
@@ -186,6 +193,8 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
                         {said && <p role="status">{said}</p>}
                     </div>
                 </form>
+
+                <OpenChannel pod={pod} contact={contact} onLeave={onClose} />
 
                 <div className="csheet__foot">
                     <button type="button" className="linkish" onClick={() => void download()}>Export what {pod.name} holds</button>
@@ -205,6 +214,38 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
                 {problem && <p role="alert">{problem}</p>}
             </div>
         </Modal>
+    );
+}
+
+/** A contact's channel: everything they and the space's agents said, where
+ *  an editor can step in. Found when asked for, since a contact who has
+ *  never written has none. */
+function OpenChannel({ pod, contact, onLeave }: { pod: Pod; contact: Contact; onLeave: () => void }) {
+    const [state, setState] = useState<"idle" | "finding" | "none" | "failed">("idle");
+    /* Channels are behind the flag Groups had. */
+    const channelsOn = useFeature("groups");
+    if (!channelsOn) return null;
+    const open = async () => {
+        setState("finding");
+        try {
+            const found = await channelApi(pod.id).list({ kind: "CONTACT", contactId: contact.id, limit: 1 });
+            const channel = found.items[0];
+            if (!channel) { setState("none"); return; }
+            setState("idle");
+            onLeave();
+            goTo(channelHref(pod.id, channel.id));
+        } catch {
+            setState("failed");
+        }
+    };
+    return (
+        <div className="csheet__actions">
+            <button type="button" className="ghost-pill" disabled={state === "finding"} onClick={() => void open()}>
+                {state === "finding" ? "Finding it…" : "Open their channel"}
+            </button>
+            {state === "none" && <p role="status">They have no channel yet: it starts when they first write.</p>}
+            {state === "failed" && <p role="alert">Couldn’t find their channel. Try again.</p>}
+        </div>
     );
 }
 

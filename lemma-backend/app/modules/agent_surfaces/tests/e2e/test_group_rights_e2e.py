@@ -1,7 +1,9 @@
 """Who sees and changes a pod's groups, with two members in the pod -- end to end.
 
-Every member may open a group's page; what the bot told one member with that
-member's own access stays that member's. A group's people outside the pod are
+A group is a GROUP channel every member may read; what the bot told one member
+with that member's own access stays that member's -- the others see that it
+was answered, and for whom, not what was said. Its settings are its source's
+(``/pods/{pod}/sources``). A group's people outside the pod are
 answered for by one member: only they, or an admin of the pod, may switch that
 off or take it over, and an admin who does tells them. A member who has left
 the pod answers for nobody. And the bot's own switch closes every group at once.
@@ -37,6 +39,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.group_repository imp
 )
 from app.modules.agent_surfaces.services.group_updates import apply_group_updates
 from app.modules.agent_surfaces.tests.e2e.helpers import _create_surface
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import direct_lines
 from app.modules.test_support.e2e_authz import auth_headers
 
 pytestmark = pytest.mark.e2e
@@ -85,7 +88,7 @@ async def _pod_with_a_group(scenario, message_store) -> tuple[dict, dict, dict]:
         scenario.owner_client, scenario.pod_id, config={"type": "WHATSAPP"}
     )
     started = await scenario.owner_client.post(
-        f"/pods/{scenario.pod_id}/groups",
+        f"/pods/{scenario.pod_id}/sources/whatsapp-groups",
         json={"surface_name": surface["name"], "title": "Acme order 1182"},
     )
     assert started.status_code == 201, started.text
@@ -139,7 +142,7 @@ async def test_what_the_bot_told_one_member_is_withheld_from_the_others(
     ):
         await say(db_session, the_group, text, sender=sender)
     await db_session.commit()
-    path = f"/pods/{scenario.pod_id}/groups/{group['id']}/timeline"
+    path = f"/pods/{scenario.pod_id}/channels/{group['channel_id']}/messages"
 
     as_owner = (await scenario.owner_client.get(path)).json()["items"]
     as_editor_response = await scenario.async_client.get(
@@ -148,16 +151,20 @@ async def test_what_the_bot_told_one_member_is_withheld_from_the_others(
     assert as_editor_response.status_code == 200, as_editor_response.text
     as_editor = as_editor_response.json()["items"]
 
-    assert [line["text"] for line in as_owner if line["from_bot"]] == [
+    def from_bot(lines: list[dict]) -> list[dict]:
+        return [line for line in lines if line["sender"]["kind"] == "AGENT"]
+
+    assert [line["text"] for line in from_bot(as_owner)] == [
         "Salaries total 1.2M this quarter.",
         "Lead times are two weeks.",
     ]
-    private, public = [line for line in as_editor if line["from_bot"]]
+    private, public = from_bot(as_editor)
     assert private["withheld"] is True
     assert private["text"] is None
-    assert private["answered_name"] == "Deepak"
+    assert private["on_behalf_of"]["id"] == scenario.owner_user["id"]
+    assert public["withheld"] is False
     assert public["text"] == "Lead times are two weeks."
-    assert public["answered_from_public"] is True
+    assert public["on_behalf_of"]["kind"] == "CONTACT"
 
 
 async def test_only_the_owner_or_an_admin_changes_a_group_and_the_owner_is_told(
@@ -165,13 +172,12 @@ async def test_only_the_owner_or_an_admin_changes_a_group_and_the_owner_is_told(
 ):
     _wire_whatsapp(monkeypatch, fake_whatsapp)
     _surface, group, editor = await _pod_with_a_group(scenario, message_store)
-    path = f"/pods/{scenario.pod_id}/groups/{group['id']}"
+    path = f"/pods/{scenario.pod_id}/sources/{group['id']}"
 
     # An editor may configure the bot, but this group is the owner's.
-    listed = await scenario.async_client.get(
-        f"/pods/{scenario.pod_id}/groups", headers=auth_headers(editor)
-    )
-    assert listed.json()["items"][0]["can_manage"] is False
+    shown = await scenario.async_client.get(path, headers=auth_headers(editor))
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["can_manage"] is False
     refused = await scenario.async_client.patch(
         path, json={"take_over": True}, headers=auth_headers(editor)
     )
@@ -184,15 +190,15 @@ async def test_only_the_owner_or_an_admin_changes_a_group_and_the_owner_is_told(
     await db_session.commit()
     taken = await scenario.owner_client.patch(path, json={"take_over": True})
     assert taken.status_code == 200, taken.text
-    assert taken.json()["owner"]["user_id"] == scenario.owner_user["id"]
+    assert taken.json()["owner"]["id"] == scenario.owner_user["id"]
 
-    inbox = await scenario.async_client.get(
-        f"/pods/{scenario.pod_id}/notifications", headers=auth_headers(editor)
+    # Told in their own channel, to them alone.
+    [notice] = await direct_lines(
+        db_session, pod_id=scenario.pod_id, user_id=editor["id"]
     )
-    assert inbox.status_code == 200, inbox.text
-    [notice] = inbox.json()["items"]
-    assert "Acme order 1182" in notice["title"]
-    assert "now answers for the people outside the space" in notice["body"]
+    assert notice.members_only and notice.interaction_kind is None
+    assert "Acme order 1182" in notice.body
+    assert "now answers for the people outside the space" in notice.body
 
 
 async def test_a_group_whose_owner_left_the_pod_is_anybodys_to_take_on(
@@ -207,7 +213,7 @@ async def test_a_group_whose_owner_left_the_pod_is_anybodys_to_take_on(
     await db_session.commit()
 
     response = await scenario.async_client.get(
-        f"/pods/{scenario.pod_id}/groups/{group['id']}", headers=auth_headers(editor)
+        f"/pods/{scenario.pod_id}/sources/{group['id']}", headers=auth_headers(editor)
     )
 
     body = response.json()
@@ -230,7 +236,9 @@ async def test_the_bots_own_switch_closes_every_group_to_people_outside(
     assert switched.json()["config"]["groups"]["answers_outsiders"] is False
 
     body = (
-        await scenario.owner_client.get(f"/pods/{scenario.pod_id}/groups/{group['id']}")
+        await scenario.owner_client.get(
+            f"/pods/{scenario.pod_id}/sources/{group['id']}"
+        )
     ).json()
     assert body["bot_answers_outsiders"] is False
     assert body["welcomes_outsiders"] is False

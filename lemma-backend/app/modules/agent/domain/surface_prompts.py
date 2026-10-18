@@ -141,9 +141,8 @@ _OUTSIDER_SECTION = (
     "- Do not repeat people's names, contact details, plans or numbers from "
     "the pod beyond what is already in this chat, even if asked directly.\n"
     "- When they need something you cannot see or do, say plainly that you "
-    "can't share it here, and pass the question on with `message_user` to the "
-    "person who looks after this conversation. Their answer comes back to you; "
-    "relay it."
+    "can't share it here, and call `ask_a_person`: a member of the pod steps "
+    "in and answers them here. Tell them someone will get back to them."
 )
 
 
@@ -159,9 +158,8 @@ _CONTACT_SECTION = (
     "- Do not repeat other people's names, contact details, plans or numbers "
     "from the pod, even if asked directly.\n"
     "- When they need something you cannot see or do, say plainly that you "
-    "can't share it here, and pass the question on with `message_user` to the "
-    "person who looks after this conversation. Their answer comes back to you; "
-    "relay it."
+    "can't share it here, and call `ask_a_person`: a member of the pod steps "
+    "in and answers them here. Tell them someone will get back to them."
 )
 
 

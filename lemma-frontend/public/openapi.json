@@ -8711,60 +8711,6 @@
         "title": "FirstWorkspaceResponse",
         "type": "object"
       },
-      "FollowUpChannel": {
-        "description": "Where a follow-up goes.\n\n``latest``: the contact's most recent conversation, on its own channel.\n``email``: their verified email address -- that conversation when it is\nan email thread, a new thread from the pod's address when it is not.",
-        "enum": [
-          "latest",
-          "email"
-        ],
-        "title": "FollowUpChannel",
-        "type": "string"
-      },
-      "FollowUpRequest": {
-        "properties": {
-          "channel": {
-            "$ref": "#/components/schemas/FollowUpChannel",
-            "default": "latest",
-            "description": "`latest` writes in the contact's most recent conversation. `email` sends to their verified email address: in that conversation when it is an email thread, otherwise in a new thread from the pod's email address that answers contacts."
-          },
-          "message": {
-            "maxLength": 4000,
-            "minLength": 1,
-            "title": "Message",
-            "type": "string"
-          }
-        },
-        "required": [
-          "message"
-        ],
-        "title": "FollowUpRequest",
-        "type": "object"
-      },
-      "FollowUpResponse": {
-        "properties": {
-          "conversation_id": {
-            "format": "uuid",
-            "title": "Conversation Id",
-            "type": "string"
-          },
-          "delivered": {
-            "description": "Handed to the platform now. False for a web chat, where the message waits for the contact's next visit.",
-            "title": "Delivered",
-            "type": "boolean"
-          },
-          "platform": {
-            "title": "Platform",
-            "type": "string"
-          }
-        },
-        "required": [
-          "conversation_id",
-          "platform",
-          "delivered"
-        ],
-        "title": "FollowUpResponse",
-        "type": "object"
-      },
       "ForeignKeySpec": {
         "description": "Specification for a foreign key constraint.",
         "properties": {
@@ -10487,383 +10433,6 @@
         "title": "GenerationSettings",
         "type": "object"
       },
-      "GroupDetailResponse": {
-        "properties": {
-          "answers_outsiders": {
-            "title": "Answers Outsiders",
-            "type": "boolean"
-          },
-          "bot_answers_outsiders": {
-            "default": true,
-            "description": "The bot's own switch, over every group it is in. Off, nobody outside the pod is answered in any of them.",
-            "title": "Bot Answers Outsiders",
-            "type": "boolean"
-          },
-          "can_manage": {
-            "default": false,
-            "description": "The reader may switch outsiders for this group or take it over: they answer for it, nobody in the pod does, or they are an admin of the pod.",
-            "title": "Can Manage",
-            "type": "boolean"
-          },
-          "external_channel_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "External Channel Id"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "invite_link": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Invite Link"
-          },
-          "last_message_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Message At"
-          },
-          "owner": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GroupOwnerResponse"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Who answers for the people outside the pod."
-          },
-          "pending": {
-            "default": false,
-            "description": "Asked of the platform and not yet confirmed (WhatsApp).",
-            "title": "Pending",
-            "type": "boolean"
-          },
-          "people": {
-            "items": {
-              "$ref": "#/components/schemas/GroupPersonResponse"
-            },
-            "title": "People",
-            "type": "array"
-          },
-          "people_in_pod": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "People in the pod seen speaking here; none where not kept.",
-            "title": "People In Pod"
-          },
-          "people_outside": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "People outside the pod seen speaking here.",
-            "title": "People Outside"
-          },
-          "platform": {
-            "title": "Platform",
-            "type": "string"
-          },
-          "public": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GroupPublicResponse"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "shared_externally": {
-            "default": false,
-            "description": "A Slack channel shared with another company.",
-            "title": "Shared Externally",
-            "type": "boolean"
-          },
-          "surface_name": {
-            "title": "Surface Name",
-            "type": "string"
-          },
-          "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Title"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          },
-          "waiting": {
-            "items": {
-              "$ref": "#/components/schemas/GroupWaitingResponse"
-            },
-            "title": "Waiting",
-            "type": "array"
-          },
-          "waiting_for_you": {
-            "default": 0,
-            "description": "Questions its people outside the pod passed on to you.",
-            "title": "Waiting For You",
-            "type": "integer"
-          },
-          "welcomes_outsiders": {
-            "description": "People outside the pod are answered here today: the group's switch is on, a member of the pod answers for them, and the bot's own switch is on.",
-            "title": "Welcomes Outsiders",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "surface_name",
-          "platform",
-          "answers_outsiders",
-          "welcomes_outsiders",
-          "updated_at",
-          "people",
-          "waiting"
-        ],
-        "title": "GroupDetailResponse",
-        "type": "object"
-      },
-      "GroupLineResponse": {
-        "properties": {
-          "answered_from_public": {
-            "default": false,
-            "description": "On the bot's lines: answered from what the pod made Public.",
-            "title": "Answered From Public",
-            "type": "boolean"
-          },
-          "answered_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "On the bot's lines: whom it answered.",
-            "title": "Answered Name"
-          },
-          "at": {
-            "format": "date-time",
-            "title": "At",
-            "type": "string"
-          },
-          "author_external_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The speaker's key among the group's people.",
-            "title": "Author External Id"
-          },
-          "author_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Author Name"
-          },
-          "from_bot": {
-            "title": "From Bot",
-            "type": "boolean"
-          },
-          "in_pod": {
-            "title": "In Pod",
-            "type": "boolean"
-          },
-          "text": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "None where the line is withheld from the reader.",
-            "title": "Text"
-          },
-          "withheld": {
-            "default": false,
-            "description": "An answer the bot made with another member's own access: shown to that member alone. ``answered_name`` still says whom it was for.",
-            "title": "Withheld",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "in_pod",
-          "from_bot",
-          "at"
-        ],
-        "title": "GroupLineResponse",
-        "type": "object"
-      },
-      "GroupLinkRequest": {
-        "properties": {
-          "surface_name": {
-            "minLength": 1,
-            "title": "Surface Name",
-            "type": "string"
-          }
-        },
-        "required": [
-          "surface_name"
-        ],
-        "title": "GroupLinkRequest",
-        "type": "object"
-      },
-      "GroupLinkResponse": {
-        "properties": {
-          "expires_at": {
-            "format": "date-time",
-            "title": "Expires At",
-            "type": "string"
-          },
-          "url": {
-            "description": "Opens Telegram's own choose-a-group screen.",
-            "title": "Url",
-            "type": "string"
-          }
-        },
-        "required": [
-          "url",
-          "expires_at"
-        ],
-        "title": "GroupLinkResponse",
-        "type": "object"
-      },
-      "GroupListResponse": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/GroupResponse"
-            },
-            "title": "Items",
-            "type": "array"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "title": "GroupListResponse",
-        "type": "object"
-      },
-      "GroupOwnerResponse": {
-        "properties": {
-          "display_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Display Name"
-          },
-          "user_id": {
-            "format": "uuid",
-            "title": "User Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "user_id"
-        ],
-        "title": "GroupOwnerResponse",
-        "type": "object"
-      },
-      "GroupPersonResponse": {
-        "properties": {
-          "external_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Who they are to the pod -- ``member:<id>`` or ``contact:<id>`` -- the key a timeline line's ``author_external_id`` matches.",
-            "title": "External Id"
-          },
-          "in_pod": {
-            "title": "In Pod",
-            "type": "boolean"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "user_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "User Id"
-          }
-        },
-        "required": [
-          "name",
-          "in_pod"
-        ],
-        "title": "GroupPersonResponse",
-        "type": "object"
-      },
       "GroupPublicResponse": {
         "description": "The pod's Public files and tables, the first few of each.",
         "properties": {
@@ -10893,249 +10462,6 @@
           "more"
         ],
         "title": "GroupPublicResponse",
-        "type": "object"
-      },
-      "GroupResponse": {
-        "properties": {
-          "answers_outsiders": {
-            "title": "Answers Outsiders",
-            "type": "boolean"
-          },
-          "bot_answers_outsiders": {
-            "default": true,
-            "description": "The bot's own switch, over every group it is in. Off, nobody outside the pod is answered in any of them.",
-            "title": "Bot Answers Outsiders",
-            "type": "boolean"
-          },
-          "can_manage": {
-            "default": false,
-            "description": "The reader may switch outsiders for this group or take it over: they answer for it, nobody in the pod does, or they are an admin of the pod.",
-            "title": "Can Manage",
-            "type": "boolean"
-          },
-          "external_channel_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "External Channel Id"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "invite_link": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Invite Link"
-          },
-          "last_message_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Message At"
-          },
-          "owner": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GroupOwnerResponse"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Who answers for the people outside the pod."
-          },
-          "pending": {
-            "default": false,
-            "description": "Asked of the platform and not yet confirmed (WhatsApp).",
-            "title": "Pending",
-            "type": "boolean"
-          },
-          "people_in_pod": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "People in the pod seen speaking here; none where not kept.",
-            "title": "People In Pod"
-          },
-          "people_outside": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "People outside the pod seen speaking here.",
-            "title": "People Outside"
-          },
-          "platform": {
-            "title": "Platform",
-            "type": "string"
-          },
-          "shared_externally": {
-            "default": false,
-            "description": "A Slack channel shared with another company.",
-            "title": "Shared Externally",
-            "type": "boolean"
-          },
-          "surface_name": {
-            "title": "Surface Name",
-            "type": "string"
-          },
-          "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Title"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          },
-          "waiting_for_you": {
-            "default": 0,
-            "description": "Questions its people outside the pod passed on to you.",
-            "title": "Waiting For You",
-            "type": "integer"
-          },
-          "welcomes_outsiders": {
-            "description": "People outside the pod are answered here today: the group's switch is on, a member of the pod answers for them, and the bot's own switch is on.",
-            "title": "Welcomes Outsiders",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "surface_name",
-          "platform",
-          "answers_outsiders",
-          "welcomes_outsiders",
-          "updated_at"
-        ],
-        "title": "GroupResponse",
-        "type": "object"
-      },
-      "GroupStartRequest": {
-        "properties": {
-          "answers_outsiders": {
-            "default": true,
-            "title": "Answers Outsiders",
-            "type": "boolean"
-          },
-          "surface_name": {
-            "minLength": 1,
-            "title": "Surface Name",
-            "type": "string"
-          },
-          "title": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Title",
-            "type": "string"
-          }
-        },
-        "required": [
-          "surface_name",
-          "title"
-        ],
-        "title": "GroupStartRequest",
-        "type": "object"
-      },
-      "GroupTimelineResponse": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/GroupLineResponse"
-            },
-            "title": "Items",
-            "type": "array"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "title": "GroupTimelineResponse",
-        "type": "object"
-      },
-      "GroupUpdateRequest": {
-        "properties": {
-          "answers_outsiders": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Answer people outside the pod in this group. Switching it on where nobody answers for them makes the caller the one who does.",
-            "title": "Answers Outsiders"
-          },
-          "take_over": {
-            "default": false,
-            "description": "The caller answers for this group's outsiders from now on.",
-            "title": "Take Over",
-            "type": "boolean"
-          }
-        },
-        "title": "GroupUpdateRequest",
-        "type": "object"
-      },
-      "GroupWaitingResponse": {
-        "properties": {
-          "asked_at": {
-            "format": "date-time",
-            "title": "Asked At",
-            "type": "string"
-          },
-          "notification_id": {
-            "description": "Answer it with the notification's respond endpoint.",
-            "format": "uuid",
-            "title": "Notification Id",
-            "type": "string"
-          },
-          "question": {
-            "title": "Question",
-            "type": "string"
-          }
-        },
-        "required": [
-          "notification_id",
-          "question",
-          "asked_at"
-        ],
-        "title": "GroupWaitingResponse",
         "type": "object"
       },
       "HarnessKind": {
@@ -12757,291 +12083,50 @@
         "title": "NavigationResponse",
         "type": "object"
       },
-      "NotificationDeliveryStatus": {
-        "description": "Where the *channel* is: did the message physically get to them?\n\nDeliberately a second column rather than more members on\n:class:`NotificationStatus`. The two axes are independent — a notification\ncan be DELIVERED and still OPEN (they haven't answered), or UNDELIVERABLE\nand still RESPONDED (they saw it in the app and replied there). Smearing\nthem into one enum is how you end up unable to answer \"who did we fail to\nreach?\", which is the only question this column exists for.",
-        "enum": [
-          "PENDING",
-          "SENDING",
-          "DELIVERED",
-          "UNDELIVERABLE",
-          "FAILED"
-        ],
-        "title": "NotificationDeliveryStatus",
-        "type": "string"
-      },
-      "NotificationListResponse": {
+      "NoticeRequest": {
         "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/NotificationResponse"
-            },
-            "title": "Items",
-            "type": "array"
-          },
-          "limit": {
-            "title": "Limit",
-            "type": "integer"
-          },
-          "next_page_token": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Next Page Token"
-          }
-        },
-        "required": [
-          "limit"
-        ],
-        "title": "NotificationListResponse",
-        "type": "object"
-      },
-      "NotificationOriginKind": {
-        "description": "What produced the notification. ``origin_id`` is read against this.",
-        "enum": [
-          "AGENT_RUN",
-          "WORKFLOW_FORM",
-          "SCHEDULE",
-          "API"
-        ],
-        "title": "NotificationOriginKind",
-        "type": "string"
-      },
-      "NotificationRespondRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "data": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Optional structured payload alongside the answer.",
-            "title": "Data"
-          },
-          "summary": {
-            "description": "The answer, in the person's words.",
+          "text": {
+            "maxLength": 4000,
             "minLength": 1,
-            "title": "Summary",
+            "title": "Text",
             "type": "string"
-          }
-        },
-        "required": [
-          "summary"
-        ],
-        "title": "NotificationRespondRequest",
-        "type": "object"
-      },
-      "NotificationResponse": {
-        "description": "One notification, shaped for the inbox that renders it.\n\nCarries enough to draw the row *and* decide what its action button does,\nwithout a second request: ``awaiting_response`` says whether to draw one at\nall, and ``responds_through_action`` says whether it opens a text box or the\nreal form described by ``action``.",
-        "properties": {
-          "action": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Action"
-          },
-          "actor_agent_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Actor Agent Id"
-          },
-          "actor_user_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Actor User Id"
-          },
-          "awaiting_response": {
-            "title": "Awaiting Response",
-            "type": "boolean"
-          },
-          "body": {
-            "title": "Body",
-            "type": "string"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "delivered_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Delivered At"
-          },
-          "delivery_conversation_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Delivery Conversation Id"
-          },
-          "delivery_platform": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Delivery Platform"
-          },
-          "delivery_status": {
-            "$ref": "#/components/schemas/NotificationDeliveryStatus"
-          },
-          "expects_response": {
-            "title": "Expects Response",
-            "type": "boolean"
-          },
-          "expires_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expires At"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "origin_conversation_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Origin Conversation Id"
-          },
-          "origin_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Origin Id"
-          },
-          "origin_kind": {
-            "$ref": "#/components/schemas/NotificationOriginKind"
-          },
-          "pod_id": {
-            "format": "uuid",
-            "title": "Pod Id",
-            "type": "string"
-          },
-          "read_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Read At"
-          },
-          "responded_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Responded At"
-          },
-          "responds_through_action": {
-            "title": "Responds Through Action",
-            "type": "boolean"
-          },
-          "response_data": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Response Data"
-          },
-          "response_summary": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Response Summary"
-          },
-          "status": {
-            "$ref": "#/components/schemas/NotificationStatus"
           },
           "title": {
-            "title": "Title",
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "An email's subject, if it goes by email.",
+            "title": "Title"
+          },
+          "to": {
+            "description": "The member to tell: a pod member id, user id, or email address.",
+            "maxLength": 320,
+            "minLength": 1,
+            "title": "To",
+            "type": "string"
+          }
+        },
+        "required": [
+          "to",
+          "text"
+        ],
+        "title": "NoticeRequest",
+        "type": "object"
+      },
+      "NoticeResponse": {
+        "properties": {
+          "channel_id": {
+            "format": "uuid",
+            "title": "Channel Id",
             "type": "string"
           },
-          "undeliverable_reason": {
+          "delivered_via": {
             "anyOf": [
               {
                 "type": "string"
@@ -13050,48 +12135,31 @@
                 "type": "null"
               }
             ],
-            "title": "Undeliverable Reason"
+            "title": "Delivered Via"
+          },
+          "message_id": {
+            "format": "uuid",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it went no further than their channel, if it didn't.",
+            "title": "Reason"
           }
         },
         "required": [
-          "id",
-          "pod_id",
-          "title",
-          "body",
-          "origin_kind",
-          "status",
-          "delivery_status",
-          "expects_response",
-          "awaiting_response",
-          "responds_through_action",
-          "created_at"
+          "message_id",
+          "channel_id"
         ],
-        "title": "NotificationResponse",
-        "type": "object"
-      },
-      "NotificationStatus": {
-        "description": "Where the *person* is: has the thing we needed from them happened?",
-        "enum": [
-          "OPEN",
-          "RESPONDED",
-          "ACKNOWLEDGED",
-          "EXPIRED",
-          "CANCELLED"
-        ],
-        "title": "NotificationStatus",
-        "type": "string"
-      },
-      "NotificationUnreadCountResponse": {
-        "properties": {
-          "unread": {
-            "title": "Unread",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "unread"
-        ],
-        "title": "NotificationUnreadCountResponse",
+        "title": "NoticeResponse",
         "type": "object"
       },
       "NotifyLevel": {
@@ -13103,64 +12171,6 @@
         ],
         "title": "NotifyLevel",
         "type": "string"
-      },
-      "NotifyMemberRequest": {
-        "additionalProperties": false,
-        "description": "Send a notification to one pod member.",
-        "properties": {
-          "background_instruction": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Never shown to the recipient. Tells the agent that handles their reply what to do with it.",
-            "title": "Background Instruction"
-          },
-          "body": {
-            "minLength": 1,
-            "title": "Body",
-            "type": "string"
-          },
-          "expects_response": {
-            "default": true,
-            "title": "Expects Response",
-            "type": "boolean"
-          },
-          "expires_in_seconds": {
-            "anyOf": [
-              {
-                "exclusiveMinimum": 0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expires In Seconds"
-          },
-          "recipient": {
-            "description": "Pod member id, user id, or email address of the recipient.",
-            "title": "Recipient",
-            "type": "string"
-          },
-          "title": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Title",
-            "type": "string"
-          }
-        },
-        "required": [
-          "recipient",
-          "title",
-          "body"
-        ],
-        "title": "NotifyMemberRequest",
-        "type": "object"
       },
       "NotifyRequest": {
         "properties": {
@@ -17772,6 +16782,139 @@
         "title": "SourceKind",
         "type": "string"
       },
+      "SourceListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SourceSettingsResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SourceListResponse",
+        "type": "object"
+      },
+      "SourceSettingsResponse": {
+        "properties": {
+          "answers_outsiders": {
+            "description": "This group's own switch for people outside the pod.",
+            "title": "Answers Outsiders",
+            "type": "boolean"
+          },
+          "bot_answers_outsiders": {
+            "default": true,
+            "description": "The bot's own switch, over every group it is in. Off, nobody outside the pod is answered in any of them.",
+            "title": "Bot Answers Outsiders",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "default": false,
+            "description": "The reader may switch outsiders here or take it over: they answer for it, nobody in the pod does, or they are an admin of the pod.",
+            "title": "Can Manage",
+            "type": "boolean"
+          },
+          "channel_id": {
+            "format": "uuid",
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "id": {
+            "description": "The source's id, as the channel lists it.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "invite_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Link"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The member who answers for its outsiders."
+          },
+          "pending": {
+            "default": false,
+            "description": "Asked of the platform and not yet confirmed (WhatsApp).",
+            "title": "Pending",
+            "type": "boolean"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "public": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupPublicResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What people outside the pod can be answered from."
+          },
+          "shared_externally": {
+            "default": false,
+            "description": "A Slack channel shared with another company.",
+            "title": "Shared Externally",
+            "type": "boolean"
+          },
+          "surface_name": {
+            "title": "Surface Name",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "welcomes_outsiders": {
+            "description": "People outside the pod are answered here today: the group's switch is on, a member of the pod answers for them, and the bot's own switch is on.",
+            "title": "Welcomes Outsiders",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "channel_id",
+          "surface_name",
+          "platform",
+          "answers_outsiders",
+          "welcomes_outsiders",
+          "updated_at"
+        ],
+        "title": "SourceSettingsResponse",
+        "type": "object"
+      },
       "SourceSummary": {
         "properties": {
           "platform": {
@@ -17794,6 +16937,30 @@
           "platform"
         ],
         "title": "SourceSummary",
+        "type": "object"
+      },
+      "SourceUpdateRequest": {
+        "properties": {
+          "answers_outsiders": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Answer people outside the pod here, or stop.",
+            "title": "Answers Outsiders"
+          },
+          "take_over": {
+            "default": false,
+            "description": "Answer for its outsiders yourself from now on.",
+            "title": "Take Over",
+            "type": "boolean"
+          }
+        },
+        "title": "SourceUpdateRequest",
         "type": "object"
       },
       "StepRecordResponse": {
@@ -19297,6 +18464,40 @@
           "updated_at"
         ],
         "title": "TableSummaryResponse",
+        "type": "object"
+      },
+      "TelegramLinkRequest": {
+        "properties": {
+          "surface_name": {
+            "minLength": 1,
+            "title": "Surface Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface_name"
+        ],
+        "title": "TelegramLinkRequest",
+        "type": "object"
+      },
+      "TelegramLinkResponse": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "url": {
+            "description": "Opens Telegram's own choose-a-group screen.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expires_at"
+        ],
+        "title": "TelegramLinkResponse",
         "type": "object"
       },
       "TelegramManagedBotSetupRequest": {
@@ -22159,6 +21360,32 @@
           }
         },
         "title": "WebWidgetUpdateRequest",
+        "type": "object"
+      },
+      "WhatsAppGroupRequest": {
+        "properties": {
+          "answers_outsiders": {
+            "default": true,
+            "title": "Answers Outsiders",
+            "type": "boolean"
+          },
+          "surface_name": {
+            "minLength": 1,
+            "title": "Surface Name",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface_name",
+          "title"
+        ],
+        "title": "WhatsAppGroupRequest",
         "type": "object"
       },
       "WidgetAnswer": {
@@ -30591,6 +29818,25 @@
             }
           },
           {
+            "description": "Only this contact's channel.",
+            "in": "query",
+            "name": "contact_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this contact's channel.",
+              "title": "Contact Id"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
@@ -32158,80 +31404,6 @@
           "resource": "contact",
           "result": "entity",
           "verb": "export"
-        }
-      }
-    },
-    "/pods/{pod_id}/contacts/{contact_id}/messages": {
-      "post": {
-        "description": "Write to a contact in their most recent conversation, where the channel allows.\n\nWith ``channel: email``, to their verified email address instead, which\nreaches a web chat contact who is not on the page.\n\nRefused (409) when they unsubscribed there, when WhatsApp's 24-hour window\nhas closed, when they have never written to the pod, or, for email, when\nthey have no verified address or the pod no email address answering\ncontacts; 429 past the day's follow-ups for this contact; 502 when the\nplatform did not take it, which the conversation then shows as not sent.",
-        "operationId": "contact.follow_up",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "contact_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Contact Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FollowUpRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FollowUpResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Follow Up Contact",
-        "tags": [
-          "Contacts"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "contact"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "contact",
-          "result": "entity",
-          "verb": "follow_up"
         }
       }
     },
@@ -37406,389 +36578,6 @@
         }
       }
     },
-    "/pods/{pod_id}/groups": {
-      "get": {
-        "description": "Every group the pod's bots are in, most recently changed first.",
-        "operationId": "agent.group.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GroupListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Groups",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.group",
-          "result": "collection",
-          "verb": "list"
-        }
-      },
-      "post": {
-        "description": "Start a WhatsApp group with the pod's bot in it, answered for by the caller.\n\nWhatsApp confirms the group moments later: it comes back ``pending``, and\nits invite link appears once confirmed. Telegram and Slack cannot create\ngroups for a bot; add the bot to one of theirs instead.",
-        "operationId": "agent.group.start",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GroupStartRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GroupResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Start Group",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.group"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.group",
-          "result": "entity",
-          "verb": "start"
-        }
-      }
-    },
-    "/pods/{pod_id}/groups/links": {
-      "post": {
-        "description": "A one-use link that adds the pod's Telegram bot to a group the caller picks.\n\nThe group is then the caller's to answer for. Which Telegram account is\ntheirs is still their profile's to say: a link is easily passed on, so the\none that used it is never taken for them. The link works for an hour.",
-        "operationId": "agent.group.link",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GroupLinkRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GroupLinkResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Group Link",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.group"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.group",
-          "result": "entity",
-          "verb": "link"
-        }
-      }
-    },
-    "/pods/{pod_id}/groups/{group_id}": {
-      "get": {
-        "description": "One group: who is in it, and what its outsiders are waiting on you for.",
-        "operationId": "agent.group.get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "group_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Group Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GroupDetailResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Group",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.group",
-          "result": "entity",
-          "verb": "get"
-        }
-      },
-      "patch": {
-        "description": "Switch outsiders on or off in one group, or take it over.\n\nThe member who answers for the group may; so may anybody who configures the\nbot when nobody in the pod answers for it, and an admin of the pod, whose\nchange the member is told about.",
-        "operationId": "agent.group.update",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "group_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Group Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GroupUpdateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GroupResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Update Group",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.group"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.group",
-          "result": "entity",
-          "verb": "update"
-        }
-      }
-    },
-    "/pods/{pod_id}/groups/{group_id}/timeline": {
-      "get": {
-        "description": "What was said in the group, oldest first, as far as the pod kept it.\n\nThe group's channel timeline, kept for WhatsApp and Telegram groups. A\nSlack channel's history is Slack's; it comes back empty here. An answer the bot made with one member's\nown access comes back withheld to everybody else: they may not be able to\nsee what it was made from.",
-        "operationId": "agent.group.timeline",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "group_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Group Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 60,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GroupTimelineResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Group Timeline",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": true,
-          "resource": "agent.group",
-          "result": "entity",
-          "verb": "timeline"
-        }
-      }
-    },
     "/pods/{pod_id}/inbox": {
       "get": {
         "description": "What is new for the reader across the pod, and every question waiting\non them, newest first.",
@@ -38624,106 +37413,10 @@
         }
       }
     },
-    "/pods/{pod_id}/notifications": {
-      "get": {
-        "description": "Notifications addressed to the current user in this pod, newest first. Filter with `status` (repeatable). Each item carries everything needed to render its action: `awaiting_response` decides whether to offer one, and `responds_through_action` decides whether it is a free-text reply or the form described by `action`.",
-        "operationId": "notification.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "status",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/components/schemas/NotificationStatus"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Status"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "page_token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Page Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotificationListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List My Notifications",
-        "tags": [
-          "notifications"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": true,
-          "resource": "notification",
-          "result": "collection",
-          "verb": "list"
-        }
-      },
+    "/pods/{pod_id}/notices": {
       "post": {
-        "description": "Reach a pod member on whichever surface they actually use, leaving a copy in their Lemma inbox either way.\n\nGated on `conversation.write` rather than an editor permission: this opens a conversation and writes a message into it, which is exactly that grant. Requiring `agent.update` is what left the older `surface.send` endpoint with no caller in the product.\n\nA 201 with `delivery_status` of `UNDELIVERABLE` is a success, not a failure — the notification exists and the inbox has it. Read `undeliverable_reason` to tell the user what to do about it.",
-        "operationId": "notification.send",
+        "description": "Tell another member of the pod something, in their own channel.",
+        "operationId": "agent.notice.send",
         "parameters": [
           {
             "in": "path",
@@ -38740,7 +37433,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NotifyMemberRequest"
+                "$ref": "#/components/schemas/NoticeRequest"
               }
             }
           },
@@ -38751,7 +37444,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NotificationResponse"
+                  "$ref": "#/components/schemas/NoticeResponse"
                 }
               }
             },
@@ -38768,325 +37461,19 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Notify A Pod Member",
+        "summary": "Send Notice",
         "tags": [
-          "notifications"
+          "Agent Surfaces"
         ],
         "x-lemma": {
           "invalidates": [
-            "notification"
+            "agent.notice"
           ],
           "kind": "mutation",
           "paginates": false,
-          "resource": "notification",
+          "resource": "agent.notice",
           "result": "entity",
           "verb": "send"
-        }
-      }
-    },
-    "/pods/{pod_id}/notifications/read-all": {
-      "post": {
-        "description": "Returns the remaining unread count, which is always zero.",
-        "operationId": "notification.mark_all_read",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotificationUnreadCountResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Mark All My Notifications Read",
-        "tags": [
-          "notifications"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "notification"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "notification",
-          "result": "entity",
-          "verb": "mark_all_read"
-        }
-      }
-    },
-    "/pods/{pod_id}/notifications/unread-count": {
-      "get": {
-        "description": "Unread, not unanswered. A notification you have read but not yet acted on has stopped being new.",
-        "operationId": "notification.unread_count",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotificationUnreadCountResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Count My Unread Notifications",
-        "tags": [
-          "notifications"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "notification",
-          "result": "entity",
-          "verb": "unread_count"
-        }
-      }
-    },
-    "/pods/{pod_id}/notifications/{notification_id}/acknowledge": {
-      "post": {
-        "description": "Dismiss a notification that asked for nothing. Returns 409 when a response is owed — dismissing a question is not answering it.",
-        "operationId": "notification.acknowledge",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "notification_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Notification Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotificationResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Acknowledge A Notification",
-        "tags": [
-          "notifications"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "notification"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "notification",
-          "result": "entity",
-          "verb": "acknowledge"
-        }
-      }
-    },
-    "/pods/{pod_id}/notifications/{notification_id}/read": {
-      "post": {
-        "operationId": "notification.mark_read",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "notification_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Notification Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotificationResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Mark Notification Read",
-        "tags": [
-          "notifications"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "notification"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "notification",
-          "result": "entity",
-          "verb": "mark_read"
-        }
-      }
-    },
-    "/pods/{pod_id}/notifications/{notification_id}/respond": {
-      "post": {
-        "description": "Answer a notification from the app. Produces the same `RESPONDED` an agent-mediated reply on a chat surface produces, so the asking run sees it either way.\n\nReturns 409 when the notification is answered by completing its `action` instead — a workflow form is submitted through the workflow run endpoint, where it is validated against the node's schema. It also returns 409 if somebody already answered it, rather than overwriting an answer that may already have been acted on.",
-        "operationId": "notification.respond",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "notification_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Notification Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NotificationRespondRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotificationResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Respond To A Notification",
-        "tags": [
-          "notifications"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "notification"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "notification",
-          "result": "entity",
-          "verb": "respond"
         }
       }
     },
@@ -40795,6 +39182,330 @@
           "resource": "schedule.skip",
           "result": "collection",
           "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/sources": {
+      "get": {
+        "description": "Every group one bot is in, with each one's settings, newest first.",
+        "operationId": "agent.source.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The bot's surface name.",
+            "in": "query",
+            "name": "surface_name",
+            "required": true,
+            "schema": {
+              "description": "The bot's surface name.",
+              "minLength": 1,
+              "title": "Surface Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Sources",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.source",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/sources/telegram-links": {
+      "post": {
+        "description": "A one-use link that adds the pod's Telegram bot to a group the caller picks.\n\nThe group becomes a GROUP channel, the caller's to answer for. Which\nTelegram account is theirs is still their profile's to say: a link is\neasily passed on, so the one that used it is never taken for them. The link\nworks for an hour.",
+        "operationId": "agent.source.telegram_link.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramLinkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Telegram Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.source.telegram_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.source.telegram_link",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/sources/whatsapp-groups": {
+      "post": {
+        "description": "Start a WhatsApp group with the pod's bot in it, answered for by the caller.\n\nIt is a new GROUP channel's source. WhatsApp confirms the group moments\nlater: it comes back ``pending``, and its invite link appears once\nconfirmed. Telegram and Slack cannot create groups for a bot; add the bot\nto one of theirs instead.",
+        "operationId": "agent.source.whatsapp_group.start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WhatsAppGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Whatsapp Group",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.source.whatsapp_group"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.source.whatsapp_group",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
+    "/pods/{pod_id}/sources/{source_id}": {
+      "get": {
+        "description": "A group source's settings: who answers its outsiders, and from what.",
+        "operationId": "agent.source.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Source",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.source",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "patch": {
+        "description": "Switch outsiders on or off in one group, or take it over.\n\nThe member who answers for the group may; so may anybody who configures the\nbot when nobody in the pod answers for it, and an admin of the pod, whose\nchange the member is told about.",
+        "operationId": "agent.source.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Source",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.source"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.source",
+          "result": "entity",
+          "verb": "update"
         }
       }
     },
@@ -43625,7 +42336,7 @@
     },
     "/public/web/{public_key}/session": {
       "post": {
-        "description": "Start a session, or come back to one: either way, a new access token.",
+        "description": "Start a session, or come back to one: either way, a new access token.\n\nOn a page Lemma hosts, a visitor nobody signed in comes back to their chat\nfrom its cookie when the page has no secret to send.",
         "operationId": "public.web.session.start",
         "parameters": [
           {

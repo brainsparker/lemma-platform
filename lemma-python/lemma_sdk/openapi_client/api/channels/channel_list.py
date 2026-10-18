@@ -18,6 +18,7 @@ def _get_kwargs(
     *,
     kind: ChannelKind | None | Unset = UNSET,
     archived: bool | Unset = False,
+    contact_id: None | Unset | UUID = UNSET,
     limit: int | Unset = 50,
     before: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
@@ -34,6 +35,15 @@ def _get_kwargs(
     params["kind"] = json_kind
 
     params["archived"] = archived
+
+    json_contact_id: None | str | Unset
+    if isinstance(contact_id, Unset):
+        json_contact_id = UNSET
+    elif isinstance(contact_id, UUID):
+        json_contact_id = str(contact_id)
+    else:
+        json_contact_id = contact_id
+    params["contact_id"] = json_contact_id
 
     params["limit"] = limit
 
@@ -93,6 +103,7 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
     archived: bool | Unset = False,
+    contact_id: None | Unset | UUID = UNSET,
     limit: int | Unset = 50,
     before: None | str | Unset = UNSET,
 ) -> Response[ChannelListResponse | ErrorResponse]:
@@ -105,6 +116,7 @@ def sync_detailed(
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
         archived (bool | Unset):  Default: False.
+        contact_id (None | Unset | UUID): Only this contact's channel.
         limit (int | Unset):  Default: 50.
         before (None | str | Unset):
 
@@ -120,6 +132,7 @@ def sync_detailed(
         pod_id=pod_id,
         kind=kind,
         archived=archived,
+        contact_id=contact_id,
         limit=limit,
         before=before,
     )
@@ -137,6 +150,7 @@ def sync(
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
     archived: bool | Unset = False,
+    contact_id: None | Unset | UUID = UNSET,
     limit: int | Unset = 50,
     before: None | str | Unset = UNSET,
 ) -> ChannelListResponse | ErrorResponse | None:
@@ -149,6 +163,7 @@ def sync(
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
         archived (bool | Unset):  Default: False.
+        contact_id (None | Unset | UUID): Only this contact's channel.
         limit (int | Unset):  Default: 50.
         before (None | str | Unset):
 
@@ -165,6 +180,7 @@ def sync(
         client=client,
         kind=kind,
         archived=archived,
+        contact_id=contact_id,
         limit=limit,
         before=before,
     ).parsed
@@ -176,6 +192,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
     archived: bool | Unset = False,
+    contact_id: None | Unset | UUID = UNSET,
     limit: int | Unset = 50,
     before: None | str | Unset = UNSET,
 ) -> Response[ChannelListResponse | ErrorResponse]:
@@ -188,6 +205,7 @@ async def asyncio_detailed(
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
         archived (bool | Unset):  Default: False.
+        contact_id (None | Unset | UUID): Only this contact's channel.
         limit (int | Unset):  Default: 50.
         before (None | str | Unset):
 
@@ -203,6 +221,7 @@ async def asyncio_detailed(
         pod_id=pod_id,
         kind=kind,
         archived=archived,
+        contact_id=contact_id,
         limit=limit,
         before=before,
     )
@@ -218,6 +237,7 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
     archived: bool | Unset = False,
+    contact_id: None | Unset | UUID = UNSET,
     limit: int | Unset = 50,
     before: None | str | Unset = UNSET,
 ) -> ChannelListResponse | ErrorResponse | None:
@@ -230,6 +250,7 @@ async def asyncio(
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
         archived (bool | Unset):  Default: False.
+        contact_id (None | Unset | UUID): Only this contact's channel.
         limit (int | Unset):  Default: 50.
         before (None | str | Unset):
 
@@ -247,6 +268,7 @@ async def asyncio(
             client=client,
             kind=kind,
             archived=archived,
+            contact_id=contact_id,
             limit=limit,
             before=before,
         )

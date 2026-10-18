@@ -67,6 +67,9 @@ async def list_channels(
     uow: UoWDep,
     kind: ChannelKind | None = Query(default=None),
     archived: bool = Query(default=False),
+    contact_id: UUID | None = Query(
+        default=None, description="Only this contact's channel."
+    ),
     limit: int = Query(default=50, ge=1, le=MAX_LINES),
     before: str | None = Query(default=None, max_length=100),
 ) -> ChannelListResponse:
@@ -90,6 +93,7 @@ async def list_channels(
         before=cursor(before),
         limit=limit,
         archived=archived,
+        contact_id=contact_id,
     )
     last = channels[-1] if len(channels) == limit else None
     return ChannelListResponse(

@@ -1,13 +1,17 @@
-"""Getting a notification onto a platform, and leaving a way back.
+"""Getting a line meant for a member onto a platform, and leaving a way back.
 
-Everything here is about the half of delivery that had no tests at all, which
-is why it shipped calling two ingress methods that were never written. The
-existing suites all run in a pod with no active surface, so ``deliver()``
-returns before reaching any of this and both ``AttributeError``s were invisible.
+A message to a member is a line in their own channel first; this is the half
+that carries it to them where they are -- choosing the channel
+(``NotificationChannelResolver``), opening their conversation and sending
+(``NotificationEgress``), and the loop that tries each channel in turn
+(``DirectMessages`` over ``send_on_first_channel``).
 
-The doubles are built with ``create_autospec`` on purpose. A bare ``Mock()``
-answers any attribute you ask it for, which reproduces exactly the blind spot
-under test: it would have passed happily against a method that did not exist.
+That half once shipped calling two ingress methods that were never written,
+because every suite ran in a pod with no active surface and returned before
+reaching it. The doubles are built with ``create_autospec`` on purpose. A bare
+``Mock()`` answers any attribute you ask it for, which reproduces exactly the
+blind spot under test: it would have passed happily against a method that did
+not exist.
 """
 
 from __future__ import annotations
@@ -19,55 +23,68 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.agent_surfaces.tests.unit.surface_doubles import (
-    RecordingNotificationWork,
-)
-from app.modules.channels.contracts import Source, SourceKind
-from app.modules.test_support.channel_lines_double import RecordingChannelLines
-from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceConfig,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationDeliveryStatus,
-    NotificationEntity,
-    NotificationOriginKind,
-)
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.models import ColdEmailSendResult
-from app.modules.agent_surfaces.domain.ports import ColdEmailThread
+from app.modules.agent_surfaces.domain.ports import (
+    ColdEmailThread,
+    SurfacePodMembershipPort,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (  # noqa: E501
+    ExternalSurfaceUserRepository,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+    SurfaceRepository,
+)
+from app.modules.agent_surfaces.services import notification_dispatch
 from app.modules.agent_surfaces.services.cold_email_thread import (
     build_cold_email_thread,
     cold_thread_seed_id,
 )
+from app.modules.agent_surfaces.services.direct_messages import (
+    DirectMessage,
+    DirectMessages,
+)
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
+from app.modules.agent_surfaces.services.notification_channels import (
+    NotificationChannelResolver,
+)
 from app.modules.agent_surfaces.services.notification_delivery import (
     DeliveryChannel,
+    Outbound,
     UndeliverableReason,
 )
 from app.modules.agent_surfaces.services.notification_egress import NotificationEgress
-
-
-async def _no_outside_origin(_conversation_id):
-    """No conversation here answers people outside the pod."""
-    return
-
+from app.modules.agent_surfaces.services.notification_rate_limiter import (
+    EmailBudget,
+    PushBudget,
+)
+from app.modules.channels.contracts import (
+    NotifyLevel,
+    Source,
+    SourceKind,
+)
+from app.modules.channels.contracts.deliveries import DeliveryStatus
+from app.modules.agent_surfaces.tests.unit.surface_doubles import MemberChannelDouble
+from app.modules.test_support.channel_lines_double import RecordingChannelLines
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 
 pytestmark = pytest.mark.asyncio
 
 
-def _notification(**overrides) -> NotificationEntity:
+def _outbound(**overrides) -> Outbound:
     payload = {
+        "id": uuid4(),
         "pod_id": uuid4(),
         "recipient_user_id": uuid4(),
-        "recipient_pod_member_id": uuid4(),
-        "origin_kind": NotificationOriginKind.AGENT_RUN,
         "title": "Standup",
-        "body": "What did you ship yesterday?",
     }
     payload.update(overrides)
-    return NotificationEntity(**payload)
+    return Outbound(**payload)
 
 
 class _FakeRedis:
@@ -232,7 +249,7 @@ async def test_the_conversation_is_opened_under_the_surface_agents_name(
     method ever goes back to being underscored.
     """
     surface = _email_surface()
-    notification = _notification()
+    outbound = _outbound()
     conversation_id = uuid4()
     conversations.open_surface_conversation.return_value = _Conversation(
         conversation_id
@@ -244,7 +261,7 @@ async def test_the_conversation_is_opened_under_the_surface_agents_name(
     channel_id = uuid4()
     opened = await egress.open_conversation(
         DeliveryChannel(surface=surface, email_address="bob@example.com"),
-        notification=notification,
+        outbound=outbound,
         channel_id=channel_id,
     )
 
@@ -254,7 +271,7 @@ async def test_the_conversation_is_opened_under_the_surface_agents_name(
     assert kwargs["agent_name"] == "Ops"
     # The recipient owns the conversation, never the asker — their reply has to
     # run under their own permissions.
-    assert kwargs["user_id"] == notification.recipient_user_id
+    assert kwargs["user_id"] == outbound.recipient_user_id
     assert kwargs["channel_id"] == channel_id
 
 
@@ -263,13 +280,13 @@ async def test_a_cold_email_places_its_thread_where_the_reply_will_arrive():
 
     An inbound reply is placed by its surface, the thread and the sender's
     address. Any one of them wrong and the reply lands at a place of its own,
-    in a conversation the notification never reached, and the asking run waits
+    in a conversation the message never reached, and the asking run waits
     for an answer that silently cannot arrive.
     """
     surface = _email_surface()
-    notification = _notification()
+    outbound = _outbound()
     conversation_id = uuid4()
-    seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
+    seed = cold_thread_seed_id(notification_id=outbound.id, surface=surface)
     thread = _thread_for(surface, seed, "Bob@Example.com")
 
     egress_port = _egress_double()
@@ -280,7 +297,7 @@ async def test_a_cold_email_places_its_thread_where_the_reply_will_arrive():
     sent = await egress.send(
         DeliveryChannel(surface=surface, email_address="Bob@Example.com"),
         conversation_id=conversation_id,
-        notification=notification,
+        outbound=outbound,
         message="What did you ship?",
     )
 
@@ -293,7 +310,7 @@ async def test_a_cold_email_places_its_thread_where_the_reply_will_arrive():
     # Lowercased, because that is what the inbound parser records as the sender.
     assert place.external_user_id == "bob@example.com"
     # In the recipient's own channel, where their conversation with the agent is.
-    direct = ("DIRECT", notification.pod_id, notification.recipient_user_id)
+    direct = ("DIRECT", outbound.pod_id, outbound.recipient_user_id)
     assert seats.channels[direct] == place.channel_id
     # How to write there again is the mail just sent. They have not written to
     # us; claiming otherwise would let an outbound masquerade as inbound
@@ -320,7 +337,7 @@ async def test_a_platform_that_cannot_cold_open_is_reported_not_crashed():
     sent = await egress.send(
         DeliveryChannel(surface=surface, email_address="bob@example.com"),
         conversation_id=uuid4(),
-        notification=_notification(),
+        outbound=_outbound(),
         message="hello",
     )
 
@@ -344,22 +361,22 @@ async def test_no_place_is_made_when_the_send_raises():
         await egress.send(
             DeliveryChannel(surface=_email_surface(), email_address="bob@example.com"),
             conversation_id=uuid4(),
-            notification=_notification(),
+            outbound=_outbound(),
             message="hello",
         )
 
     assert not seats.sources
 
 
-async def test_redelivering_the_same_notification_reuses_its_thread():
-    """The seed is derived from the notification id precisely for this.
+async def test_redelivering_the_same_line_reuses_its_thread():
+    """The seed is derived from the line's id precisely for this.
 
     A retried worker job must not stack a second conversation on somebody who
     has not even replied to the first.
     """
     surface = _email_surface()
-    notification = _notification()
-    seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
+    outbound = _outbound()
+    seed = cold_thread_seed_id(notification_id=outbound.id, surface=surface)
 
     egress_port = _egress_double()
     egress_port.open_cold_email_thread.return_value = _thread_for(
@@ -372,7 +389,7 @@ async def test_redelivering_the_same_notification_reuses_its_thread():
         sent = await egress.send(
             DeliveryChannel(surface=surface, email_address="bob@example.com"),
             conversation_id=uuid4(),
-            notification=notification,
+            outbound=outbound,
             message="What did you ship?",
         )
         assert sent is True
@@ -393,7 +410,7 @@ async def test_a_channel_with_a_live_thread_replies_into_it():
     sent = await egress.send(
         DeliveryChannel(surface=surface, source=place, external_user_id="u1"),
         conversation_id=conversation_id,
-        notification=_notification(),
+        outbound=_outbound(),
         message="What did you ship?",
     )
 
@@ -407,37 +424,21 @@ async def test_a_channel_with_a_live_thread_replies_into_it():
 # ------------------------------------------------- lazy surface provisioning
 
 
-def _notification_service(
-    *,
-    provisioner=None,
-    surfaces=(),
-    recipient_email="bob@example.com",
-    external_user=None,
+def _collaborators(
+    *, surfaces=(), recipient_email="bob@example.com", external_user=None
 ):
-    """A NotificationService with only the collaborators channel resolution uses.
+    """What channel resolution reads, autospecced against the real classes.
 
-    Autospecced against the real classes for the same reason as
-    ``_egress_double`` above — and this file previously did the opposite while
-    its own docstring condemned it. A bare ``AsyncMock`` answers any attribute,
-    so a renamed or never-written method reads as a passing test, which is the
-    exact failure this suite exists to catch.
+    For the same reason as ``_egress_double`` above. A bare ``AsyncMock``
+    answers any attribute, so a renamed or never-written method reads as a
+    passing test, which is the exact failure this suite exists to catch.
     """
-    from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
-    from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-        SurfaceRepository,
-    )
-    from app.modules.agent_surfaces.services.notification_service import (
-        NotificationService,
-    )
-
-    from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (  # noqa: E501
-        ExternalSurfaceUserRepository,
-    )
-
     surface_repo = create_autospec(SurfaceRepository, instance=True)
     surface_repo.list_by_pod.return_value = (list(surfaces), None)
     membership = create_autospec(SurfacePodMembershipPort, instance=True)
     membership.get_user_email.return_value = recipient_email
+    membership.get_pod_member_id.return_value = uuid4()
+    membership.get_user_display_name.return_value = "Ada Member"
     # Nobody has written to a chat surface unless a test says they have. A bare
     # AsyncMock here answers with a truthy Mock, which silently turns every chat
     # surface into a deliverable channel and makes "they never messaged the bot"
@@ -446,20 +447,52 @@ def _notification_service(
     external_users.list_by_resolved_users.return_value = (
         [external_user] if external_user is not None else []
     )
+    return surface_repo, external_users, membership
 
-    return NotificationService(
-        outside_origin_reader=_no_outside_origin,
+
+def _resolver(*, provisioner=None, seats=None, **collaborators):
+    surface_repo, external_users, membership = _collaborators(**collaborators)
+    return NotificationChannelResolver(
+        seats=seats or InMemoryChannelSeats(),
+        surface_repository=surface_repo,
+        external_user_repository=external_users,
+        pod_membership_port=membership,
+        surface_provisioner=provisioner,
+    )
+
+
+def _direct_messages(
+    *, provisioner=None, email_budget=None, push_budget=None, **collaborators
+) -> DirectMessages:
+    """`DirectMessages` over the same doubles, its line and seats in memory."""
+    surface_repo, external_users, membership = _collaborators(**collaborators)
+    return DirectMessages(
         uow=AsyncMock(),
-        notification_repository=AsyncMock(),
         surface_repository=surface_repo,
         external_user_repository=external_users,
         egress=_egress_double(),
         pod_membership_port=membership,
         surface_provisioner=provisioner,
-        work=RecordingNotificationWork(),
         seats=InMemoryChannelSeats(),
         lines=RecordingChannelLines(),
+        email_budget=email_budget,
+        push_budget=push_budget,
     )
+
+
+@pytest.fixture(autouse=True)
+def member_channel(monkeypatch) -> MemberChannelDouble:
+    return MemberChannelDouble().install(monkeypatch)
+
+
+def _message(**overrides) -> DirectMessage:
+    payload = {
+        "pod_id": uuid4(),
+        "recipient_user_id": uuid4(),
+        "text": "What did you ship yesterday?",
+    }
+    payload.update(overrides)
+    return DirectMessage(**payload)
 
 
 def _email_configured(monkeypatch):
@@ -478,7 +511,7 @@ def _email_configured(monkeypatch):
 
 
 async def test_a_pod_with_no_surface_is_given_the_system_mailbox(monkeypatch):
-    """Otherwise a pod's first notification can reach nobody at all.
+    """Otherwise a pod's first message can reach nobody at all.
 
     Provisioned here rather than at pod creation on purpose: most pods never
     message anyone, and an address handed out is an address that has to keep
@@ -488,9 +521,9 @@ async def test_a_pod_with_no_surface_is_given_the_system_mailbox(monkeypatch):
 
     surface = _email_surface()
     provisioner = AsyncMock(return_value=(surface, None))
-    service = _notification_service(provisioner=provisioner, surfaces=())
+    resolver = _resolver(provisioner=provisioner, surfaces=())
 
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=surface.pod_id, recipient_user_id=uuid4()
     )
 
@@ -513,7 +546,7 @@ async def test_the_pod_assistant_gets_a_mailbox_even_when_agents_have_theirs(
 
     assistant_mailbox = _email_surface()
     provisioner = AsyncMock(return_value=(assistant_mailbox, None))
-    service = _notification_service(
+    resolver = _resolver(
         provisioner=provisioner,
         # A pod that is anything but empty — every surface belongs to a named
         # agent, which is what a pod looks like after per-agent mailboxes.
@@ -523,7 +556,7 @@ async def test_the_pod_assistant_gets_a_mailbox_even_when_agents_have_theirs(
         ),
     )
 
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=None
     )
 
@@ -549,12 +582,12 @@ async def test_an_agent_from_before_per_agent_mailboxes_gets_one(monkeypatch):
     mailbox = _email_surface()
     provisioner = AsyncMock(return_value=(mailbox, None))
     older_agent = uuid4()
-    service = _notification_service(
+    resolver = _resolver(
         provisioner=provisioner,
         surfaces=(_surface_for(uuid4(), SurfacePlatform.RESEND),),
     )
 
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=older_agent
     )
 
@@ -578,12 +611,12 @@ async def test_a_chat_only_agent_falls_back_to_email_it_does_not_yet_have(
     agent_id = uuid4()
     mailbox = _email_surface()
     provisioner = AsyncMock(return_value=(mailbox, None))
-    service = _notification_service(
+    resolver = _resolver(
         provisioner=provisioner,
         surfaces=(_surface_for(agent_id, SurfacePlatform.SLACK),),
     )
 
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=agent_id
     )
 
@@ -603,13 +636,13 @@ async def test_an_agent_that_already_has_a_mailbox_is_not_given_a_second(
 
     agent_id = uuid4()
     provisioner = AsyncMock(return_value=(_email_surface(), None))
-    service = _notification_service(
+    resolver = _resolver(
         provisioner=provisioner,
         surfaces=(_surface_for(agent_id, SurfacePlatform.RESEND),),
         recipient_email=None,
     )
 
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=agent_id
     )
 
@@ -632,11 +665,9 @@ async def test_unconfigured_email_says_so_rather_than_blaming_the_pod(monkeypatc
     monkeypatch.setattr(surface_settings, "resend_inbound_domain", None)
 
     provisioner = AsyncMock(return_value=(_email_surface(), None))
-    service = _notification_service(provisioner=provisioner, surfaces=())
+    resolver = _resolver(provisioner=provisioner, surfaces=())
 
-    channels, reason = await service.resolve_channels(
-        pod_id=uuid4(), recipient_user_id=uuid4()
-    )
+    channels, reason = await resolver.resolve(pod_id=uuid4(), recipient_user_id=uuid4())
 
     provisioner.assert_not_awaited()
     assert channels == []
@@ -659,11 +690,9 @@ async def test_a_failed_provision_is_undeliverable_not_an_exception(monkeypatch)
     _email_configured(monkeypatch)
 
     provisioner = AsyncMock(side_effect=AgentSurfaceError("resend refused"))
-    service = _notification_service(provisioner=provisioner, surfaces=())
+    resolver = _resolver(provisioner=provisioner, surfaces=())
 
-    channels, reason = await service.resolve_channels(
-        pod_id=uuid4(), recipient_user_id=uuid4()
-    )
+    channels, reason = await resolver.resolve(pod_id=uuid4(), recipient_user_id=uuid4())
 
     assert channels == []
     assert reason.startswith(UndeliverableReason.MAILBOX_PROVISION_FAILED)
@@ -701,10 +730,10 @@ async def test_an_agent_never_reaches_out_through_another_agents_bot():
     message and asks the recipient to trust a bot this agent never earned.
     """
     mine, theirs = uuid4(), uuid4()
-    service = _notification_service(
+    resolver = _resolver(
         surfaces=(_surface_for(mine), _surface_for(theirs, SurfacePlatform.SLACK))
     )
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=theirs
     )
 
@@ -723,9 +752,9 @@ async def test_an_agent_with_no_surface_says_so_when_email_cannot_help(monkeypat
     from app.core.config import settings as core_settings
 
     monkeypatch.setattr(core_settings, "resend_api_key", None)
-    service = _notification_service(surfaces=(_surface_for(uuid4()),))
+    resolver = _resolver(surfaces=(_surface_for(uuid4()),))
 
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=uuid4()
     )
 
@@ -737,9 +766,9 @@ async def test_an_agents_own_mailbox_is_used_when_it_has_no_chat_surface():
     """The default case: most agents are email-only."""
     agent_id = uuid4()
     mailbox = _surface_for(agent_id, SurfacePlatform.RESEND)
-    service = _notification_service(surfaces=(mailbox,))
+    resolver = _resolver(surfaces=(mailbox,))
 
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=agent_id
     )
 
@@ -755,7 +784,7 @@ async def test_the_recipients_own_preference_no_longer_steers_delivery():
     genuinely "which of our surfaces did this person mean to talk to".
     """
     pod_id = uuid4()
-    service = _notification_service(
+    resolver = _resolver(
         surfaces=(_surface_for(pod_id, SurfacePlatform.RESEND, pod_id=pod_id),)
     )
 
@@ -763,9 +792,9 @@ async def test_the_recipients_own_preference_no_longer_steers_delivery():
     # raises, so this is what proves the lookup is gone rather than just unused.
     with pytest.raises(AttributeError):
         # The expression is the assertion: the attribute must not exist.
-        service.membership.get_user_default_surface_ids  # noqa: B018
+        resolver.membership.get_user_default_surface_ids  # noqa: B018
 
-    channels, _ = await service.resolve_channels(
+    channels, _ = await resolver.resolve(
         pod_id=pod_id, recipient_user_id=uuid4(), actor_agent_id=None
     )
 
@@ -775,75 +804,12 @@ async def test_the_recipients_own_preference_no_longer_steers_delivery():
 # ------------------------------------------------ the shared sending domain
 
 
-async def test_the_daily_email_cap_stops_the_send_but_not_the_notification(
-    monkeypatch,
-):
-    """Running out of email budget is a delivery outcome, not a failed call.
-
-    The pod asked for something real and the recipient still has it in their
-    Lemma inbox; what we decline is putting it on a domain every other pod also
-    sends from. So it comes back as an undeliverable reason rather than an
-    exception out of ``notify``.
-    """
-    from app.modules.agent_surfaces.services.notification_rate_limiter import (
-        NotificationRateLimiter,
-    )
-
-    _email_configured(monkeypatch)
-
-    surface = _email_surface()
-    service = _notification_service(surfaces=(surface,))
-    service.rate_limiter = NotificationRateLimiter(email_limit=0, redis=_FakeRedis())
-    service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
-
-    notification = _notification(pod_id=surface.pod_id)
-    delivered = await service.deliver(notification)
-
-    assert delivered.delivery_status == NotificationDeliveryStatus.FAILED
-    assert "emails today" in (delivered.delivery_error or "")
-    # Never reached the platform: the point is that the mail does not go out.
-    service.egress.egress.open_cold_email_thread.assert_not_awaited()
-
-
-async def test_a_chat_channel_does_not_spend_the_email_budget(
-    monkeypatch, conversations
-):
-    """The budget exists to protect one shared domain.
-
-    A notification delivered on Slack costs that domain nothing, so charging it
-    would let ordinary chat traffic exhaust the ceiling that stops a mail flood.
-    """
-    from app.modules.agent_surfaces.services.notification_rate_limiter import (
-        NotificationRateLimiter,
-    )
-
-    _email_configured(monkeypatch)
-
-    redis = _FakeRedis()
-    agent_id = uuid4()
-    chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
-    service = _notification_service(
-        surfaces=(chat_surface,),
-        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
-    )
-    service.channels.seats.add(_place_for(chat_surface))
-    service.rate_limiter = NotificationRateLimiter(email_limit=0, redis=redis)
-    service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
-
-    delivered = await service.deliver(
-        _notification(pod_id=chat_surface.pod_id, actor_agent_id=agent_id)
-    )
-
-    assert delivered.delivery_status == NotificationDeliveryStatus.DELIVERED
-    assert redis.counts == {}
-
-
 async def test_the_pod_assistant_mailbox_is_named_for_the_pod_not_the_assistant(
     monkeypatch,
 ):
     """`acme@`, not `pod-default.acme@`.
 
-    The name carried on a notification from the assistant is its internal one,
+    The name carried on a message from the assistant is its internal one,
     `pod_default`. Passing it through produced `pod-default.personal@…` on dev —
     a working address, but not one to ask a person to type, and not the shape
     the pod's own mailbox is supposed to have.
@@ -852,9 +818,9 @@ async def test_the_pod_assistant_mailbox_is_named_for_the_pod_not_the_assistant(
 
     pod_id = uuid4()
     provisioner = AsyncMock(return_value=(_email_surface(pod_id), None))
-    service = _notification_service(provisioner=provisioner, surfaces=())
+    resolver = _resolver(provisioner=provisioner, surfaces=())
 
-    await service.resolve_channels(
+    await resolver.resolve(
         pod_id=pod_id,
         recipient_user_id=uuid4(),
         actor_agent_id=pod_id,
@@ -875,9 +841,9 @@ async def test_a_named_agent_still_gets_its_own_name_in_the_address(monkeypatch)
 
     agent_id = uuid4()
     provisioner = AsyncMock(return_value=(_email_surface(), None))
-    service = _notification_service(provisioner=provisioner, surfaces=())
+    resolver = _resolver(provisioner=provisioner, surfaces=())
 
-    await service.resolve_channels(
+    await resolver.resolve(
         pod_id=uuid4(),
         recipient_user_id=uuid4(),
         actor_agent_id=agent_id,
@@ -887,51 +853,6 @@ async def test_a_named_agent_still_gets_its_own_name_in_the_address(monkeypatch)
     _, passed_agent_id, agent_name = provisioner.await_args.args
     assert passed_agent_id == agent_id
     assert agent_name == "curator"
-
-
-async def test_the_connection_is_released_before_the_platform_send(
-    monkeypatch, conversations
-):
-    """Commit has to happen before the send, not after the whole delivery.
-
-    Two things ride on the ordering. "Persist before send" only means anything
-    if the row is committed — an uncommitted row is not a message anyone can
-    read. And the send is a platform API call that can take seconds, so holding
-    the transaction across it pins a pooled connection and the row locks it sits
-    on for that whole time.
-
-    Asserted as an ordering rather than a timing, because the ordering is the
-    property; the mocked send here is instant and always will be.
-    """
-    _email_configured(monkeypatch)
-
-    agent_id = uuid4()
-    chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
-    service = _notification_service(
-        surfaces=(chat_surface,),
-        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
-    )
-    service.channels.seats.add(_place_for(chat_surface))
-    service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
-
-    order: list[str] = []
-    service.uow.commit = AsyncMock(side_effect=lambda: order.append("commit"))
-    original_send = service.egress.send
-
-    async def _recording_send(*args, **kwargs):
-        order.append("send")
-        return await original_send(*args, **kwargs)
-
-    service.egress.send = _recording_send
-
-    await service.deliver(
-        _notification(pod_id=chat_surface.pod_id, actor_agent_id=agent_id)
-    )
-
-    assert "send" in order, "the test never reached the platform send"
-    assert order.index("commit") < order.index("send"), (
-        f"connection held across the send; call order was {order}"
-    )
 
 
 async def test_a_cold_open_carries_the_senders_name_to_the_platform():
@@ -948,9 +869,9 @@ async def test_a_cold_open_carries_the_senders_name_to_the_platform():
     beside it, because a chat platform puts that on the bot.
     """
     surface = _email_surface()
-    notification = _notification()
+    outbound = _outbound()
     conversation_id = uuid4()
-    seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
+    seed = cold_thread_seed_id(notification_id=outbound.id, surface=surface)
 
     egress_port = _egress_double()
     egress_port.open_cold_email_thread.return_value = _thread_for(
@@ -962,7 +883,7 @@ async def test_a_cold_open_carries_the_senders_name_to_the_platform():
     await egress.send(
         DeliveryChannel(surface=surface, email_address="bob@example.com"),
         conversation_id=conversation_id,
-        notification=notification,
+        outbound=outbound,
         message="What did you ship?",
         agent_name="Priya",
     )
@@ -983,8 +904,8 @@ async def test_a_named_agents_cold_mail_wears_its_name_when_the_caller_gave_none
     deployment's name on exactly the mail that had an agent to name.
     """
     surface = _email_surface().model_copy(update={"agent_id": uuid4()})
-    notification = _notification()
-    seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
+    outbound = _outbound()
+    seed = cold_thread_seed_id(notification_id=outbound.id, surface=surface)
 
     egress_port = _egress_double()
     egress_port.open_cold_email_thread.return_value = _thread_for(
@@ -995,7 +916,7 @@ async def test_a_named_agents_cold_mail_wears_its_name_when_the_caller_gave_none
     await egress.send(
         DeliveryChannel(surface=surface, email_address="bob@example.com"),
         conversation_id=uuid4(),
-        notification=notification,
+        outbound=outbound,
         message="What did you ship?",
         agent_name=None,
     )
@@ -1023,13 +944,189 @@ async def test_an_unknown_agent_name_is_absent_rather_than_None():
     await egress.send(
         DeliveryChannel(surface=surface, external_user_id="U123", source=place),
         conversation_id=conversation_id,
-        notification=_notification(),
+        outbound=_outbound(),
         message="What did you ship?",
         agent_name=None,
     )
 
     kwargs = egress_port.send_agent_message_for_conversation.await_args.kwargs
     assert "agent_display_name" not in kwargs["metadata"]
+
+
+# ------------------------------------------------- the line, then the platform
+
+
+def _cold_opens(surface: AgentSurfaceEntity):
+    """The platform's cold open, threading under whatever seed it was given --
+    the line's id is not known until the line is posted."""
+
+    async def open_thread(**kwargs) -> ColdEmailThread:
+        return _thread_for(surface, kwargs["thread_seed_id"], kwargs["recipient_email"])
+
+    return open_thread
+
+
+async def test_a_recipient_outside_the_pod_is_refused_before_any_line(member_channel):
+    """Membership fails closed, so no wiring bug becomes "any user id can be
+    messaged" -- not a line in a channel, let alone a push."""
+    messages = _direct_messages(surfaces=(_email_surface(),))
+    messages.membership.get_pod_member_id.return_value = None
+
+    with pytest.raises(AgentSurfaceValidationError):
+        await messages.send(_message())
+
+    assert member_channel.lines == []
+    messages.egress.egress.open_cold_email_thread.assert_not_awaited()
+
+
+async def test_the_line_is_in_their_channel_even_when_nothing_can_carry_it(
+    monkeypatch, member_channel
+):
+    """Undeliverable is a delivery outcome, never a lost message.
+
+    The member reads it in Lemma; the reason it went no further is recorded on
+    the line, and is the actionable one -- here, email not being set up.
+    """
+    from app.core.config import settings as core_settings
+
+    monkeypatch.setattr(core_settings, "resend_api_key", None)
+    messages = _direct_messages(provisioner=AsyncMock(), surfaces=())
+
+    result = await messages.send(_message())
+
+    assert [line.id for line in member_channel.lines] == [result.line.id]
+    assert result.delivered.sent is False
+    assert result.delivered.reason == UndeliverableReason.EMAIL_NOT_CONFIGURED
+    [delivery] = member_channel.deliveries
+    assert delivery["status"] is DeliveryStatus.SKIPPED
+    assert delivery["message_id"] == result.line.id
+
+
+async def test_a_channel_they_read_only_in_lemma_is_not_pushed(member_channel):
+    """A member who turned the channel's notifications off is not reached
+    elsewhere -- the line waits for them in the app."""
+    member_channel.notify = NotifyLevel.NONE
+    surface = _email_surface()
+    messages = _direct_messages(surfaces=(surface,))
+
+    result = await messages.send(_message(pod_id=surface.pod_id))
+
+    assert result.delivered.sent is False
+    assert "in Lemma only" in (result.delivered.reason or "")
+    messages.egress.egress.open_cold_email_thread.assert_not_awaited()
+
+
+async def test_the_push_budget_keeps_the_line_and_skips_the_push(member_channel):
+    """A runaway loop must not put forty messages on a colleague's phone; the
+    lines it writes are still in their channel."""
+    surface = _email_surface()
+    messages = _direct_messages(
+        surfaces=(surface,), push_budget=PushBudget(limit=0, redis=_FakeRedis())
+    )
+
+    result = await messages.send(_message(pod_id=surface.pod_id))
+
+    assert len(member_channel.lines) == 1
+    assert result.delivered.sent is False
+    assert "this hour" in (result.delivered.reason or "")
+    messages.egress.egress.open_cold_email_thread.assert_not_awaited()
+    assert member_channel.deliveries[-1]["status"] is DeliveryStatus.SKIPPED
+
+
+async def test_the_daily_email_cap_stops_the_email_but_not_the_line(
+    monkeypatch, member_channel
+):
+    """Running out of email budget is a delivery outcome, not a failed call.
+
+    The pod asked for something real and the recipient still has it in their
+    channel; what we decline is putting it on a domain every other pod also
+    sends from. So it comes back as a reason rather than an exception.
+    """
+    _email_configured(monkeypatch)
+    surface = _email_surface()
+    messages = _direct_messages(
+        surfaces=(surface,), email_budget=EmailBudget(limit=0, redis=_FakeRedis())
+    )
+
+    result = await messages.send(_message(pod_id=surface.pod_id))
+
+    assert len(member_channel.lines) == 1
+    assert result.delivered.sent is False
+    assert "emails today" in (result.delivered.reason or "")
+    # Never reached the platform: the point is that the mail does not go out.
+    messages.egress.egress.open_cold_email_thread.assert_not_awaited()
+    assert member_channel.deliveries[-1]["status"] is DeliveryStatus.FAILED
+
+
+async def test_a_chat_channel_does_not_spend_the_email_budget(
+    monkeypatch, member_channel
+):
+    """The budget exists to protect one shared domain.
+
+    A line carried on Slack costs that domain nothing, so charging it would let
+    ordinary chat traffic exhaust the ceiling that stops a mail flood.
+    """
+    _email_configured(monkeypatch)
+    redis = _FakeRedis()
+    agent_id = uuid4()
+    chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
+    place = _place_for(chat_surface)
+    messages = _direct_messages(
+        surfaces=(chat_surface,),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
+        email_budget=EmailBudget(limit=0, redis=redis),
+    )
+    messages.channels.seats.add(place)
+
+    result = await messages.send(
+        _message(pod_id=chat_surface.pod_id, actor_agent_id=agent_id)
+    )
+
+    assert result.delivered.platform == "SLACK"
+    assert redis.counts == {}
+    [delivery] = member_channel.deliveries
+    assert (delivery["status"], delivery["source_id"]) == (
+        DeliveryStatus.SENT,
+        place.id,
+    )
+
+
+async def test_the_copy_is_committed_before_the_platform_send(
+    monkeypatch, conversations
+):
+    """Commit has to happen between writing the copy and sending it.
+
+    Two things ride on the ordering. "Persist before send" only means anything
+    if the copy is committed -- an uncommitted one is not a message the agent
+    handling their reply can read. And the send is a platform API call that can
+    take seconds, so holding the transaction across it pins a pooled connection
+    for that whole time.
+
+    Asserted as an ordering rather than a timing, because the ordering is the
+    property; the mocked send here is instant and always will be.
+    """
+    _email_configured(monkeypatch)
+    agent_id = uuid4()
+    chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
+    messages = _direct_messages(
+        surfaces=(chat_surface,),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
+    )
+    messages.channels.seats.add(_place_for(chat_surface))
+
+    order: list[str] = []
+    messages.uow.commit = AsyncMock(side_effect=lambda: order.append("commit"))
+    conversations.append_notification_message.side_effect = lambda *_a, **_k: (
+        order.append("persist")
+    )
+    platform = messages.egress.egress.send_agent_message_for_conversation
+    platform.side_effect = lambda **_k: order.append("send") or True
+
+    await messages.send(_message(pod_id=chat_surface.pod_id, actor_agent_id=agent_id))
+
+    assert "send" in order, "the test never reached the platform send"
+    between = order[order.index("persist") : order.index("send")]
+    assert "commit" in between, f"connection held across the send; order was {order}"
 
 
 # ------------------------------------------- the channel the agent chose
@@ -1054,16 +1151,14 @@ async def test_a_named_channel_beats_the_ranking_that_would_have_won():
     agent_id = uuid4()
     chat = _surface_for(agent_id, SurfacePlatform.TELEGRAM)
     mailbox = _surface_for(agent_id, SurfacePlatform.RESEND)
-    service = _notification_service(
-        surfaces=(chat, mailbox), external_user=_identity("U123")
-    )
-    service.channels.seats.add(_place_for(chat))
+    resolver = _resolver(surfaces=(chat, mailbox), external_user=_identity("U123"))
+    resolver.seats.add(_place_for(chat))
     recipient = uuid4()
 
-    by_default, _ = await service.resolve_channels(
+    by_default, _ = await resolver.resolve(
         pod_id=chat.pod_id, recipient_user_id=recipient, actor_agent_id=agent_id
     )
-    chosen, reason = await service.resolve_channels(
+    chosen, reason = await resolver.resolve(
         pod_id=chat.pod_id,
         recipient_user_id=recipient,
         actor_agent_id=agent_id,
@@ -1087,9 +1182,9 @@ async def test_an_unreachable_named_channel_is_refused_not_rerouted():
     chat = _surface_for(agent_id, SurfacePlatform.TELEGRAM)
     mailbox = _surface_for(agent_id, SurfacePlatform.RESEND)
     # Nobody has written to the bot, so there is no thread to reply into.
-    service = _notification_service(surfaces=(chat, mailbox))
+    resolver = _resolver(surfaces=(chat, mailbox))
 
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=chat.pod_id,
         recipient_user_id=uuid4(),
         actor_agent_id=agent_id,
@@ -1105,11 +1200,9 @@ async def test_an_unreachable_named_channel_is_refused_not_rerouted():
 async def test_asking_for_a_channel_the_agent_does_not_have_says_so():
     """A different fix to a different person: connect one, or pick another."""
     agent_id = uuid4()
-    service = _notification_service(
-        surfaces=(_surface_for(agent_id, SurfacePlatform.RESEND),)
-    )
+    resolver = _resolver(surfaces=(_surface_for(agent_id, SurfacePlatform.RESEND),))
 
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=uuid4(),
         recipient_user_id=uuid4(),
         actor_agent_id=agent_id,
@@ -1133,9 +1226,9 @@ async def test_asking_for_chat_mints_no_mailbox_but_still_offers_one(monkeypatch
     """
     _email_configured(monkeypatch)
     provisioner = AsyncMock(return_value=(_email_surface(), None))
-    service = _notification_service(provisioner=provisioner, surfaces=())
+    resolver = _resolver(provisioner=provisioner, surfaces=())
 
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=uuid4(),
         recipient_user_id=uuid4(),
         actor_agent_id=uuid4(),
@@ -1162,14 +1255,14 @@ async def test_the_workspace_they_actually_use_is_found_among_their_identities()
     where_they_talk = _surface_for(
         agent_id, SurfacePlatform.SLACK, pod_id=seen_last.pod_id
     )
-    service = _notification_service(surfaces=(seen_last, where_they_talk))
-    service.channels.external_users.list_by_resolved_users = AsyncMock(
+    resolver = _resolver(surfaces=(seen_last, where_they_talk))
+    resolver.external_users.list_by_resolved_users = AsyncMock(
         # Freshest first, which is the order the repository returns.
         return_value=[_identity("U-OTHER"), _identity("U-THEIRS")]
     )
-    service.channels.seats.add(_place_for(where_they_talk, "U-THEIRS"))
+    resolver.seats.add(_place_for(where_they_talk, "U-THEIRS"))
 
-    channels, reason = await service.resolve_channels(
+    channels, reason = await resolver.resolve(
         pod_id=seen_last.pod_id, recipient_user_id=uuid4(), actor_agent_id=agent_id
     )
 
@@ -1187,13 +1280,13 @@ async def test_reachability_says_what_the_agent_can_choose_between():
     chat = _surface_for(agent_id, SurfacePlatform.TELEGRAM)
     mailbox = _surface_for(agent_id, SurfacePlatform.RESEND)
     priya, bob = uuid4(), uuid4()
-    service = _notification_service(surfaces=(chat, mailbox))
-    service.channels.external_users.list_by_resolved_users = AsyncMock(
+    resolver = _resolver(surfaces=(chat, mailbox))
+    resolver.external_users.list_by_resolved_users = AsyncMock(
         return_value=[_identity("U-PRIYA", user_id=priya)]
     )
-    service.channels.seats.add(_place_for(chat, "U-PRIYA"))
+    resolver.seats.add(_place_for(chat, "U-PRIYA"))
 
-    reach = await service.reachable_channels(
+    reach = await resolver.reachable_channels(
         pod_id=chat.pod_id,
         recipients={priya: "priya@example.com", bob: None},
         actor_agent_id=agent_id,
@@ -1206,29 +1299,22 @@ async def test_reachability_says_what_the_agent_can_choose_between():
 
 
 async def _deliver_and_read_header(monkeypatch, *, actor_user_id, recipient_user_id):
-    """Deliver one cold email and hand back the body that went out."""
+    """Deliver one cold email and hand back what went to the platform."""
     _email_configured(monkeypatch)
 
     surface = _email_surface()
-    service = _notification_service(surfaces=(surface,))
-    service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
-    service.membership.get_user_email.return_value = "bob@example.com"
+    messages = _direct_messages(surfaces=(surface,))
+    messages.egress.egress.open_cold_email_thread.side_effect = _cold_opens(surface)
 
-    notification = _notification(
-        pod_id=surface.pod_id,
-        recipient_user_id=recipient_user_id,
-        actor_user_id=actor_user_id,
+    await messages.send(
+        _message(
+            pod_id=surface.pod_id,
+            recipient_user_id=recipient_user_id,
+            actor_user_id=actor_user_id,
+            agent_name="Priya",
+        )
     )
-    service.egress.egress.open_cold_email_thread.return_value = _thread_for(
-        surface,
-        cold_thread_seed_id(notification_id=notification.id, surface=surface),
-        "bob@example.com",
-    )
-
-    await service.deliver(
-        notification, agent_name="Priya", actor_display_name="Ada Member"
-    )
-    return service.egress.egress.open_cold_email_thread.await_args.kwargs
+    return messages.egress.egress.open_cold_email_thread.await_args.kwargs
 
 
 async def test_a_message_to_its_own_asker_carries_no_header(monkeypatch):
@@ -1236,8 +1322,7 @@ async def test_a_message_to_its_own_asker_carries_no_header(monkeypatch):
 
     The header exists to resolve one ambiguity: under a bot you trust, whose
     authority is this? When the reader *is* that authority there is nothing to
-    resolve. The From line still names them -- an inbox list has to say
-    something, and their own name is the true thing to say.
+    resolve.
     """
     same_person = uuid4()
     kwargs = await _deliver_and_read_header(
@@ -1267,62 +1352,72 @@ async def test_a_colleagues_authority_is_still_named(monkeypatch):
     # pod, which is the whole of the header's job.
     assert "actor_display_name" not in kwargs["metadata"]
     assert kwargs["metadata"]["email_sender_name"] == "Acme"
+    # The subject is the message's first line, not a title nobody wrote.
+    assert kwargs["subject"] == "What did you ship yesterday?"
 
 
 # ------------------------------------------- sent once, and only where it landed
 
 
-def _chat_service(conversations):
-    agent_id = uuid4()
-    surface = _surface_for(agent_id, SurfacePlatform.SLACK)
-    service = _notification_service(
-        surfaces=(surface,),
-        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
+async def test_a_question_waits_on_the_person_it_was_put_to(
+    monkeypatch, member_channel
+):
+    """The asking conversation is in the ref, so its answers can wake it."""
+    _email_configured(monkeypatch)
+    surface = _email_surface()
+    messages = _direct_messages(surfaces=(surface,))
+    asking = uuid4()
+
+    result = await messages.send(
+        _message(
+            pod_id=surface.pod_id,
+            origin_conversation_id=asking,
+            wants_answer=True,
+            key="run:1:tool:1",
+        )
     )
-    service.channels.seats.add(_place_for(surface))
-    return service, surface, agent_id
+
+    assert member_channel.questions == {f"msg:{asking}:run:1:tool:1": result.line}
 
 
+@pytest.mark.parametrize("wants_answer", [True, False], ids=["question", "message"])
 async def test_a_send_whose_outcome_was_never_recorded_is_not_sent_again(
-    monkeypatch, conversations
+    monkeypatch, member_channel, wants_answer
 ):
     """The platform took it; writing that down failed. The retry must not post.
 
-    The row is SENDING when the send starts, in the commit before it, so a retry
-    with the same key finds a send that may have landed rather than none at all.
+    The line is committed before anything is sent, so a retry with the same key
+    finds the line that may already have landed rather than writing a second:
+    a question by its ref, a plain message by the run that wrote it.
     """
     _email_configured(monkeypatch)
-    service, surface, agent_id = _chat_service(conversations)
-    committed: dict[str, NotificationEntity] = {}
+    agent_id = uuid4()
+    surface = _surface_for(agent_id, SurfacePlatform.SLACK)
+    messages = _direct_messages(
+        surfaces=(surface,),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
+    )
+    messages.channels.seats.add(_place_for(surface))
 
-    async def create(entity: NotificationEntity) -> NotificationEntity:
-        return committed.get("row", entity)
+    async def connection_lost(_uow, **_delivery):
+        # The connection drops as the delivery is recorded; asyncpg says so
+        # with an OSError.
+        raise OSError("connection lost recording the delivery")
 
-    async def update(entity: NotificationEntity) -> NotificationEntity:
-        if entity.delivery_status is NotificationDeliveryStatus.DELIVERED:
-            # The connection drops as the delivery is recorded; asyncpg says so
-            # with an OSError, which the channel loop also catches.
-            raise OSError("connection lost recording the delivery")
-        committed["row"] = entity.model_copy()
-        return entity
+    monkeypatch.setattr(notification_dispatch, "record_delivery", connection_lost)
+    message = _message(
+        pod_id=surface.pod_id,
+        actor_agent_id=agent_id,
+        origin_conversation_id=uuid4(),
+        origin_run_id=uuid4(),
+        wants_answer=wants_answer,
+        key="run:1:tool:1",
+    )
 
-    service.notifications.create = AsyncMock(side_effect=create)
-    service.notifications.update = AsyncMock(side_effect=update)
-    service.membership.get_pod_member_id.return_value = uuid4()
+    with pytest.raises(OSError):
+        await messages.send(message)
+    retried = await messages.send(message)
 
-    for _ in range(2):
-        try:
-            await service.notify(
-                pod_id=surface.pod_id,
-                recipient_user_id=uuid4(),
-                title="Standup",
-                body="What did you ship?",
-                origin_kind=NotificationOriginKind.AGENT_RUN,
-                actor_agent_id=agent_id,
-                idempotency_key="run:1:tool:1",
-            )
-        except OSError:
-            pass
-
-    service.egress.egress.send_agent_message_for_conversation.assert_awaited_once()
-    assert committed["row"].delivery_status is NotificationDeliveryStatus.SENDING
+    assert retried.repeated is True
+    assert len(member_channel.lines) == 1
+    messages.egress.egress.send_agent_message_for_conversation.assert_awaited_once()

@@ -30,6 +30,7 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.surface_route_types import (
     SurfaceEgressTarget,
 )
+from app.modules.channels.contracts.lines import line_went_out, thread_root_at
 from app.modules.channels.contracts.places import reply_address
 from app.modules.channels.contracts import (
     ChannelMessage,
@@ -48,6 +49,13 @@ from app.modules.channels.contracts import (
 #: Delivery metadata naming the member who wrote what is being sent -- a
 #: follow-up -- so its line is theirs, not the agent's.
 WRITTEN_BY_MEMBER = "written_by_member_id"
+
+#: Delivery metadata naming the line being delivered, which is on the timeline
+#: already: the delivery writes no second one.
+ALREADY_A_LINE = "channel_message_id"
+
+#: Platforms whose channels have threads, kept as threads on the timeline.
+THREADED = frozenset({"SLACK", "TEAMS"})
 
 #: A web chat's platform, as its channel source names it.
 WEB = "WEB"
@@ -82,10 +90,9 @@ class ChannelLines(Protocol):
     async def opened(
         self,
         *,
+        line_id: UUID,
         source: Source,
         conversation_id: UUID,
-        sender: Sender,
-        text: str,
         external_message_id: str | None,
         external_thread_id: str | None,
     ) -> None: ...
@@ -121,18 +128,17 @@ class ChannelLinesInDatabase:
     async def opened(
         self,
         *,
+        line_id: UUID,
         source: Source,
         conversation_id: UUID,
-        sender: Sender,
-        text: str,
         external_message_id: str | None,
         external_thread_id: str | None,
     ) -> None:
-        await post(
+        """The line a delivery carried, as the first line of the place it
+        opened -- not a second line saying the same."""
+        await line_went_out(
             self.uow,
-            channel_id=source.channel_id,
-            sender=sender,
-            text=text,
+            message_id=line_id,
             source_id=source.id,
             conversation_id=conversation_id,
             external_message_id=external_message_id,
@@ -251,6 +257,16 @@ async def note_said(
         conversation_id=conversation_id,
         # The thread it went to, so the place knows the agent is in it.
         external_thread_id=target.event.external_thread_id,
+        # A Slack or Teams thread is a thread here too.
+        thread_root_id=(
+            await thread_root_at(
+                uow,
+                source_id=source.id,
+                external_thread_id=target.event.external_thread_id,
+            )
+            if source.kind is SourceKind.SHARED and source.platform in THREADED
+            else None
+        ),
     )
 
 

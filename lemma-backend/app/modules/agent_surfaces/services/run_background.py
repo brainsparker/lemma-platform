@@ -45,7 +45,7 @@ from app.modules.agent_surfaces.services.group_log import (
     for_member_run,
     group_background,
     group_source,
-    keeps_group_log,
+    background_from_log,
     live_participants,
     roster_reads,
 )
@@ -91,7 +91,8 @@ async def run_background(
 ) -> RunBackground:
     """What this run is shown of the group, and who outside the pod reads it.
 
-    The pod's own log where it keeps one (Telegram, WhatsApp) and it has lines;
+    The pod's own log where it keeps one (Telegram, WhatsApp, a Teams group
+    chat) and it has lines;
     otherwise the platform's history, read live. Either way a member's run is not shown
     what strangers wrote (``group_log``), and is told that they are there.
     """
@@ -178,7 +179,7 @@ async def _group_background(
     if (
         context.surface_id is None
         or not channel_id
-        or not keeps_group_log(context.platform.value)
+        or not background_from_log(context.event)
     ):
         return None, None
     async with uow_factory() as uow:

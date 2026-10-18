@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
+from ..openapi_client.api.agent_surfaces import agent_notice_send
 from ..openapi_client.api.channels import (
     channel_create,
     channel_get,
@@ -35,6 +36,8 @@ from ..openapi_client.models.channel_post_request import ChannelPostRequest
 from ..openapi_client.models.channel_response import ChannelResponse
 from ..openapi_client.models.channel_update_request import ChannelUpdateRequest
 from ..openapi_client.models.inbox_response import InboxResponse
+from ..openapi_client.models.notice_request import NoticeRequest
+from ..openapi_client.models.notice_response import NoticeResponse
 from ..openapi_client.models.notify_request import NotifyRequest
 from ..openapi_client.models.participants_add_request import ParticipantsAddRequest
 from ..openapi_client.models.search_response import SearchResponse
@@ -62,6 +65,7 @@ class PodChannels(BoundResource):
         *,
         kind: Literal["DIRECT", "CONTACT", "GROUP"] | None = None,
         archived: bool = False,
+        contact_id: str | UUID | None = None,
         limit: int = 50,
         before: str | None = None,
     ) -> ChannelListResponse:
@@ -75,6 +79,7 @@ class PodChannels(BoundResource):
             self._pod_uuid(),
             kind=ChannelKind(kind) if kind is not None else UNSET,
             archived=archived,
+            contact_id=as_uuid(contact_id) if contact_id else UNSET,
             limit=limit,
             before=_unset(before),
         )
@@ -278,6 +283,17 @@ class PodChannels(BoundResource):
     def search(self, q: str, *, limit: int = 30) -> SearchResponse:
         """Lines matching every word, newest first, in the channels the caller sees."""
         return self._call(channel_message_search, self._pod_uuid(), q=q, limit=limit)
+
+    def notify(self, to: str, text: str, *, title: str | None = None) -> NoticeResponse:
+        """Tell another member of the pod something: a line in their own
+        channel, carried on to where they last spoke. ``to`` is a pod member
+        id, user id or email address."""
+        return self._call(
+            agent_notice_send,
+            self._pod_uuid(),
+            body={"to": to, "text": text, "title": title},
+            body_model=NoticeRequest,
+        )
 
     def mark_read(self, channel_id: str | UUID) -> None:
         """Note that the caller has read the channel up to now."""

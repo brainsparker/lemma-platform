@@ -12,6 +12,10 @@ that wrong, and each is a different answer:
 Against real repositories: these replaced tests that patched six collaborators
 inside the service and asserted the arguments of a mocked `start`, which could
 not see any of the three.
+
+The news itself is `AskedQuestionsSettled`, emitted by surfaces once the last
+question a conversation put to people closes; the first test drives that fact
+through the work runtime, the rest call the service it reaches.
 """
 
 from __future__ import annotations
@@ -23,6 +27,8 @@ import pytest
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
+from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.agent.domain.pausing_tools import (
     USER_PAUSING_TOOL_NAMES,
     WAIT_TOOL_NAME,
@@ -32,6 +38,7 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
+from app.modules.agent.events.run_followup_work import register_run_followup_work
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
     AgentWaitStatus,
@@ -82,7 +89,37 @@ async def test_a_finished_conversation_gets_the_news_as_its_next_turn(scenario):
     (started,) = await runs(seeded.conversation_id)
     (news,) = _news(await messages(seeded.conversation_id))
     assert news.agent_run_id == started.id
-    assert "check_messages" in (news.text or "")
+    assert "channel_read(asked_by_me=True)" in (news.text or "")
+
+
+@pytest.mark.drives_work
+async def test_the_settled_fact_brings_the_asking_conversation_back(scenario):
+    """The wake path end to end from the fact: surfaces say every question
+    this conversation asked is closed, and the agent's subscriber turns that
+    into the conversation's next turn -- once, however often it is said."""
+    from app.modules.agent_surfaces.contracts.question_facts import (
+        AskedQuestionsSettled,
+    )
+
+    seeded = await seeded_conversation(scenario)
+    registry = WorkRegistry()
+    register_run_followup_work(registry)
+
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        settled = AskedQuestionsSettled(
+            conversation_id=seeded.conversation_id, pod_id=seeded.pod_id
+        )
+        assert await facts.emit(uow, settled) == 1
+        # Said twice before anything ran: one delivery, by the conversation key.
+        await facts.emit(uow, settled)
+        await uow.commit()
+    await run_until_idle(
+        async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
+    )
+
+    (started,) = await runs(seeded.conversation_id)
+    (news,) = _news(await messages(seeded.conversation_id))
+    assert news.agent_run_id == started.id
 
 
 async def test_an_open_question_is_not_answered_by_the_news(scenario):

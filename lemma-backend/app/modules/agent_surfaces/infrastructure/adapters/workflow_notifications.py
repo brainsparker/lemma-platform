@@ -50,9 +50,9 @@ from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 
 logger = get_logger(__name__)
 
-#: What a notification must survive rather than fail a workflow run over. See
-#: the module docstring: not `Exception`, because the platform failures that
-#: reason names are already handled inside `NotificationService.deliver`.
+#: What a form line must survive rather than fail a workflow run over. See the
+#: module docstring: not `Exception`, because the platform failures that reason
+#: names are already handled where the line is carried out.
 _SURVIVABLE = (AgentSurfaceError, SQLAlchemyError, OSError, HTTPError)
 #: What a form's question ``ref`` starts with.
 FORM_REF = "wf"
@@ -76,35 +76,6 @@ def describe_fields(schema: dict[str, object] | None) -> str:
             title = spec.get("title") or spec.get("description")
         labels.append(str(title or name))
     return ", ".join(labels[:8])
-
-
-def build_form_instruction(fields: str) -> str:
-    """What the recipient's agent is told to do with their reply.
-
-    It points at ``submit_workflow_form`` rather than inviting a free-text
-    answer, because a form is validated against its node's schema and a prose
-    reply cannot be. The notification refuses ``respond`` for the same reason.
-
-    The tool, not the CLI: this instruction is read by whichever agent happens
-    to be handling the reply, and on an email or chat surface that agent may
-    have no shell and no authenticated CLI. ``submit_workflow_form`` is attached
-    automatically whenever a form is open, so it is always reachable.
-
-    It used to take ``run_id`` and ``node_id`` and immediately ``del`` them:
-    both are read from the notification at submit time rather than retyped by
-    the model, which is what stops a recipient's agent naming a run it guessed.
-    """
-    asked = f" It asks for: {fields}." if fields else ""
-    return (
-        "This person is being asked to complete a workflow form."
-        f"{asked}\n\n"
-        "Collect the values conversationally, then submit them with "
-        "`submit_workflow_form`, using the field names listed with this "
-        "request. Do not invent values they did not give you — submission is "
-        "validated against the form's schema and a guess will be rejected. If "
-        "they decline or go quiet, leave the form unsubmitted; it stays in "
-        "their queue in the app."
-    )
 
 
 def form_ref(run_id: UUID, node_id: str) -> str:
@@ -289,7 +260,6 @@ __all__ = [
     "FORM_REF",
     "WorkflowNotificationAdapter",
     "answer_form",
-    "build_form_instruction",
     "describe_fields",
     "form_ref",
 ]

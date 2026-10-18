@@ -299,26 +299,18 @@ The CLI does not distinguish the two — `conversations get` reports `status` an
 `conversations approvals <id>` lists an outstanding `ask_user`/approval, and an
 empty list on a `WAITING` conversation means it is asleep.
 
-A **notification** is the third thing, and unlike the other two it comes looking for
-you: an agent or a workflow has asked *you* for something. They arrive wherever you
-already talk to the pod — Slack, Telegram, WhatsApp, email — and always leave a copy
-in your Lemma inbox, so nothing is only on a channel that can fail.
+A **question waiting on you** is the third thing, and unlike the other two it comes
+looking for you: an agent or a workflow has asked *you* for something. It is a line in
+your own channel in Lemma -- in your inbox as waiting on you -- and is carried on to
+wherever you already talk to the pod: Slack, Telegram, WhatsApp, email. Each line shows
+where it was delivered, or why it was not (`SKIPPED` when nothing could carry it -- it
+is still in your channel).
 
-Each carries two independent states, and reading them as one is the usual mistake.
-`status` is about you: `OPEN` (still owed), `RESPONDED`, `ACKNOWLEDGED` (seen and
-dismissed, or sent as a pure FYI), `EXPIRED` (nobody answered in 72h),
-`CANCELLED`. `delivery_status` is about the channel: `PENDING`, `DELIVERED`,
-`UNDELIVERABLE` when no chat app or mailbox could carry it — usually because you
-have never messaged the pod's bot — or `FAILED` when a channel *was* chosen and
-the send raised. Only `FAILED` is a real delivery fault. `UNDELIVERABLE` is not:
-the notification exists and the inbox has it.
-
-Answer it in the app, or just reply on the surface it arrived on — the agent handling
+Answer it on the line, or just reply on the surface it arrived on -- the agent handling
 that thread records your answer either way, and the asker sees the same result. A
-notification with `responds_through_action` is a workflow form: it is answered by
-`runs submit-form`, which validates against the node's schema, not by free text.
-It resolves exactly once: a second answer, from another device or after an
-expiry swept it, is refused rather than overwriting the first.
+workflow's form is answered with its fields, validated against the node's schema. A
+question is answered exactly once: a second answer is refused rather than overwriting
+the first.
 
 ## Agents and chat
 
@@ -352,27 +344,26 @@ your own access, never added to it (see "Missing access has three shapes").
 ### An agent can come and find a person
 
 With the `MESSAGING` toolset an agent reaches a pod member who is **not** in the
-conversation — that is where the notifications above come from. It is not a
-paused wait: `message_user` returns immediately, the agent finishes its turn, and
-it is given a *fresh* turn in the same conversation once the last person answers,
-where `check_messages` reads the replies. Nothing sleeps and nothing polls.
+conversation, and reads the pod's channels. It is not a paused wait: `channel_post`
+returns immediately, the agent finishes its turn, and it is given a *fresh* turn in
+the same conversation once the last person answers, where
+`channel_read(asked_by_me=True)` shows what they said. Nothing sleeps and nothing
+polls.
 
 - `list_pod_members` — resolve a name to an id or exact email (a name will not
-  resolve on its own), and read `reachable_on`: the channels that can actually
+  resolve on its own), and read `reachable_on`: the platforms that can actually
   carry a message to that person right now.
-- `message_user` — `to`, a Markdown `message`, an optional `background_instruction`
-  (never shown to them; it tells the agent handling their reply what counts as an
-  answer), an optional `title`, and an optional `channel` — `email`, `slack`,
-  `teams`, `telegram`, `whatsapp`. Omit `channel` unless you have a reason: the
-  default reaches them where they last spoke. A named channel is honored or
-  refused, never quietly swapped, so check `reachable_on` first. Keep the returned
-  `notification_id`.
-- `check_messages` — status by notification id. `RESPONDED` is the only status
-  that means somebody answered; call it when a turn opens saying replies landed,
-  not in a loop.
+- `channel_post` — `text` (Markdown) and either `to` (a person: a line in their own
+  channel in Lemma, carried on to where they last spoke) or `channel_id` (a channel).
+  `wants_answer` makes it a question waiting on them in their inbox. An optional
+  `platform` — `email`, `slack`, `teams`, `telegram`, `whatsapp` — is honored or
+  refused, never quietly swapped, so check `reachable_on` first.
+- `channel_read` — a channel's latest lines, or with `asked_by_me` the questions this
+  conversation asked and their answers; call it when a turn opens saying they
+  answered, not in a loop. `channel_list` and `channel_search` find channels and lines.
 
 To answer the person you are *already* talking to, just reply — `ask_user` is for
-a question that must block this turn, and neither is `message_user`.
+a question that must block this turn, and neither is `channel_post`.
 
 ## Surfaces — the pod is already reachable
 

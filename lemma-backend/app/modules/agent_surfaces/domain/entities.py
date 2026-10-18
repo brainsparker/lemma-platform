@@ -137,12 +137,19 @@ def platform_value_for_source(source: str) -> str | None:
 _GROUPS_NEED_NO_ROUTE = frozenset({SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP})
 
 
-def is_slack_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
-    """A Slack conversation between several people and the bot (an ``mpim``)."""
-    return (
-        event.platform is SurfacePlatform.SLACK
-        and InboundRoutingFacts.of(event).channel_type == "mpim"
-    )
+#: What each workspace platform calls a chat of several people and the bot.
+_GROUP_DM_TYPES = {
+    SurfacePlatform.SLACK: "mpim",
+    SurfacePlatform.TEAMS: "groupchat",
+}
+
+
+def is_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
+    """A chat between several people and the bot, outside any channel: a Slack
+    ``mpim`` or a Teams group chat. Somebody started it with the bot in it."""
+    kind = _GROUP_DM_TYPES.get(event.platform)
+    channel_type = InboundRoutingFacts.of(event).channel_type
+    return kind is not None and (channel_type or "").lower() == kind
 
 
 class ExternalSurfaceUserEntity(Entity):
@@ -506,14 +513,14 @@ class AgentSurfaceEntity(AggregateRoot):
         # groups have no allow-list — being added to the group is the
         # authorization — so any group is accepted (the @mention gate below, plus
         # the pod-membership check on the sender, still apply).
-        # A Slack group DM is the Telegram case too: somebody started it with
-        # the bot in it, so there is no channel to allow-list and no setup
+        # A Slack or Teams group DM is the Telegram case too: somebody started
+        # it with the bot in it, so there is no channel to allow-list and no setup
         # prompt to answer -- being in it is the authorization. A WhatsApp
         # group is one the bot created at a member's request, and ingress has
         # already narrowed it to the surface that created it.
         if (
             self.surface_type not in _GROUPS_NEED_NO_ROUTE
-            and not is_slack_group_dm(event)
+            and not is_group_dm(event)
             and not self.matches_channel(event.external_channel_id)
         ):
             return False

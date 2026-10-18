@@ -47,8 +47,7 @@ from app.modules.agent.domain.value_objects import AgentToolset
 #:               anonymous, so what reaches the stranger is what is Public.
 #: WEB_SEARCH -- for ``web_search`` alone. Its ``web_fetch`` opens the
 #:               conversation owner's sandbox and is withheld by name.
-#: MESSAGING  -- fenced to the member who looks after the conversation (see
-#:               ``message_user``), so the agent can pass a question on.
+#: MESSAGING  -- fenced to ``ask_a_person``: calling a member in to answer.
 #:
 #: Everything else acts as the conversation's owner rather than through the
 #: authorizer -- a sandbox session, a browser, a connector account, sub-agents
@@ -63,12 +62,6 @@ OUTSIDER_TOOLSETS = frozenset(
         AgentToolset.MESSAGING,
     }
 )
-
-
-#: The tool that records a member's answer to a question passed on to them. On a
-#: question from outside the pod it runs only as an approved call, and each
-#: approval covers exactly one answer -- never "for the rest of the session".
-OUTSIDE_ANSWER_TOOL = "respond_to_notification"
 
 
 class AudienceKind(StrEnum):

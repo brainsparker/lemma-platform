@@ -20,10 +20,7 @@ from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.ingress_request import SurfaceIngressRequest
-from app.modules.agent_surfaces.domain.notification import NotificationDeliveryStatus
-from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
-    NotificationRepository,
-)
+from app.modules.channels.contracts.deliveries import mark_delivery_failed
 from app.modules.agent_surfaces.platforms.whatsapp.parser import (
     WhatsAppFailedDelivery,
     failed_deliveries,
@@ -57,18 +54,14 @@ def failure_reason(failure: WhatsAppFailedDelivery) -> str:
 
 
 async def apply_delivery_statuses(
-    uow: SqlAlchemyUnitOfWork,
-    request: SurfaceIngressRequest,
-    *,
-    notifications: NotificationRepository | None = None,
+    uow: SqlAlchemyUnitOfWork, request: SurfaceIngressRequest
 ) -> None:
-    """Mark the notifications a ``statuses`` webhook says failed."""
+    """Mark the lines a ``statuses`` webhook says never arrived."""
     if request.payload.get("object") != "whatsapp_business_account":
         return
     failures = failed_deliveries(request.payload)
     if not failures:
         return
-    notifications = notifications or NotificationRepository(uow)
     for failure in failures:
         try:
             async with connection_released(uow.session):  # Redis, not the DB
@@ -87,11 +80,9 @@ async def apply_delivery_statuses(
         )
         if notification_id is None:
             continue
-        notification = await notifications.get(UUID(notification_id))
-        if (
-            notification is None
-            or notification.delivery_status is not NotificationDeliveryStatus.DELIVERED
-        ):
-            continue
-        notification.mark_delivery_failed(failure_reason(failure))
-        await notifications.update(notification)
+        await mark_delivery_failed(
+            uow,
+            message_id=UUID(notification_id),
+            platform="WHATSAPP",
+            error=failure_reason(failure),
+        )

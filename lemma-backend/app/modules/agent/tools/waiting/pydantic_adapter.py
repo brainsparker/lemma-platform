@@ -94,7 +94,7 @@ async def wait_for(
       anything you need to keep to the pod first.
 
     Don't use it to wait for a person: `ask_user` pauses for the one you are
-    talking to, and `message_user` ends your turn and gets you a new one when
+    talking to, and `channel_post` ends your turn and gets you a new one when
     the answers arrive.
     """
     deps = ctx.deps

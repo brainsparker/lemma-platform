@@ -1,11 +1,12 @@
-"""A pod's Groups page, end to end: every chat its bots are in, as the pod sees it.
+"""A pod's groups, end to end: every chat its bots are in, as a GROUP channel.
 
-A member starts a WhatsApp group from the page. It is pending until Meta
-confirms it, and then carries the link to hand out. A client in it asks what
-the pod cannot answer from what it made Public; the question waits on the
-member's page, and the bot's line in the group says whom it answered and on
-what. A Telegram group joins through a one-use link, and the account that used
-the link is never taken for the member.
+A group is a GROUP channel, read and written in like any channel; the bot's
+side of it -- whether outsiders are answered there, by whom, and from what --
+is its source's settings (``/pods/{pod}/sources``). A member starts a WhatsApp
+group from Lemma. It is pending until Meta confirms it, and then carries the
+link to hand out. A client in it asks something; the bot answers in the group,
+on the channel's timeline. A Telegram group joins through a one-use link, and
+the account that used the link is never taken for the member.
 
 Only the model's next move is scripted; Meta and Telegram are the fake servers.
 """
@@ -136,9 +137,9 @@ def _client_says(text: str, *, message_id: str) -> SurfacePlatformWebhookIngress
 async def _start_group(
     client: AsyncClient, pod_id: str, *, surface_name: str, message_store
 ) -> dict:
-    """Start one from the page, and let Meta confirm it."""
+    """Start one from Lemma, and let Meta confirm it."""
     response = await client.post(
-        f"/pods/{pod_id}/groups",
+        f"/pods/{pod_id}/sources/whatsapp-groups",
         json={"surface_name": surface_name, "title": "Acme order 1182"},
     )
     assert response.status_code == 201, response.text
@@ -152,7 +153,19 @@ async def _start_group(
     return started
 
 
-async def test_a_group_started_from_the_page_is_pending_until_meta_confirms_it(
+async def _groups(client: AsyncClient, pod_id: str) -> list[dict]:
+    listed = await client.get(f"/pods/{pod_id}/channels", params={"kind": "GROUP"})
+    assert listed.status_code == 200, listed.text
+    return listed.json()["items"]
+
+
+async def _settings(client: AsyncClient, pod_id: str, source_id: str) -> dict:
+    shown = await client.get(f"/pods/{pod_id}/sources/{source_id}")
+    assert shown.status_code == 200, shown.text
+    return shown.json()
+
+
+async def test_a_group_started_from_lemma_is_pending_until_meta_confirms_it(
     authenticated_client: AsyncClient,
     test_pod,
     fixed_test_user,
@@ -175,31 +188,44 @@ async def test_a_group_started_from_the_page_is_pending_until_meta_confirms_it(
 
     assert started["pending"] is True
     assert started["invite_link"] is None
-    assert started["owner"]["user_id"] == fixed_test_user["id"]
+    assert started["owner"]["id"] == fixed_test_user["id"]
     assert started["welcomes_outsiders"] is True
 
-    response = await authenticated_client.get(f"/pods/{pod_id}/groups")
-    assert response.status_code == 200, response.text
-    [listed] = response.json()["items"]
-    assert listed["id"] == started["id"]
-    assert listed["platform"] == "WHATSAPP"
-    assert listed["title"] == "Acme order 1182"
-    assert listed["pending"] is False
-    assert listed["invite_link"] == f"https://chat.whatsapp.com/{GROUP}"
+    [listed] = await _groups(authenticated_client, pod_id)
+    assert listed["id"] == started["channel_id"]
+    assert listed["sources"] == [{"platform": "WHATSAPP", "title": "Acme order 1182"}]
+    confirmed = await _settings(authenticated_client, pod_id, started["id"])
+    assert confirmed["platform"] == "WHATSAPP"
+    assert confirmed["title"] == "Acme order 1182"
+    assert confirmed["pending"] is False
+    assert confirmed["invite_link"] == f"https://chat.whatsapp.com/{GROUP}"
+
+    # The bot's own groups, read in one request, as its settings page shows them.
+    by_bot = await authenticated_client.get(
+        f"/pods/{pod_id}/sources", params={"surface_name": surface["name"]}
+    )
+    assert by_bot.status_code == 200, by_bot.text
+    [mine] = by_bot.json()["items"]
+    assert (mine["id"], mine["channel_id"]) == (started["id"], started["channel_id"])
+    assert mine["can_manage"] is True
 
 
-async def test_what_a_client_is_waiting_on_shows_on_the_page_of_whoever_answers(
+async def test_a_clients_question_and_the_bots_answer_are_the_groups_lines(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
-    fixed_test_user,
     fake_whatsapp,
     message_store,
     monkeypatch,
 ):
+    """The group's channel shows who is in it and what was said.
+
+    A question the bot cannot answer is passed to a person with
+    ``ask_a_person``: the group's channel waits on one, and answering is
+    stepping into it -- nothing waits on the member anywhere else.
+    """
     _wire_whatsapp(monkeypatch, fake_whatsapp)
     pod_id = test_pod["id"]
-    owner = fixed_test_user["id"]
     surface = await _create_surface(
         authenticated_client, pod_id, config={"type": "WHATSAPP"}
     )
@@ -218,11 +244,8 @@ async def test_what_a_client_is_waiting_on_shows_on_the_page_of_whoever_answers(
         ),
         script=[
             script_tool_call(
-                "message_user",
-                {
-                    "to": owner,
-                    "message": "Tiago asks whether order 1182 can arrive by Friday.",
-                },
+                "ask_a_person",
+                {"reason": "Tiago asks whether order 1182 can arrive by Friday."},
                 tool_call_id="ask-1",
             ),
             script_text("I've asked the team, and will answer here."),
@@ -230,33 +253,27 @@ async def test_what_a_client_is_waiting_on_shows_on_the_page_of_whoever_answers(
     )
     await wait_for_messages(message_store, "WHATSAPP", min_count=1)
 
-    detail = await authenticated_client.get(f"/pods/{pod_id}/groups/{group['id']}")
+    channel = f"/pods/{pod_id}/channels/{group['channel_id']}"
+    detail = await authenticated_client.get(channel)
     assert detail.status_code == 200, detail.text
     body = detail.json()
-    [waiting] = body["waiting"]
-    assert waiting["question"] == "Tiago asks whether order 1182 can arrive by Friday."
-    assert body["waiting_for_you"] == 1
-    assert (body["people_in_pod"], body["people_outside"]) == (0, 1)
-    [person] = body["people"]
-    assert (person["name"], person["in_pod"]) == ("Tiago", False)
+    assert body["kind"] == "GROUP"
+    assert body["attention"]["reason"] == (
+        "Tiago asks whether order 1182 can arrive by Friday."
+    )
+    people = {(p["person"]["kind"], p["person"]["name"]) for p in body["participants"]}
+    assert ("CONTACT", "Tiago") in people
 
-    timeline = await authenticated_client.get(
-        f"/pods/{pod_id}/groups/{group['id']}/timeline"
-    )
+    timeline = await authenticated_client.get(f"{channel}/messages")
     assert timeline.status_code == 200, timeline.text
-    asked, answered = timeline.json()["items"][-2:]
-    assert (asked["author_name"], asked["from_bot"], asked["in_pod"]) == (
-        "Tiago",
-        False,
-        False,
-    )
-    assert answered["from_bot"] is True
-    assert answered["text"] == "I've asked the team, and will answer here."
-    # Whom it answered, and that it answered from what the pod made Public.
-    assert (answered["answered_name"], answered["answered_from_public"]) == (
-        "Tiago",
-        True,
-    )
+    said = [
+        (line["sender"]["kind"], line["text"])
+        for line in timeline.json()["items"]
+        if not line["members_only"]
+    ]
+    asked, answered = said[-2:]
+    assert asked[0] == "CONTACT" and "order 1182 by Friday" in asked[1]
+    assert answered == ("AGENT", "I've asked the team, and will answer here.")
 
 
 async def _file(
@@ -315,10 +332,7 @@ async def test_the_page_lists_what_people_outside_can_be_answered_from(
     await _table(client, pod_id, "price_list", "PUBLIC")
     await _table(client, pod_id, "customers", "POD")
 
-    detail = await client.get(f"/pods/{pod_id}/groups/{group['id']}")
-
-    assert detail.status_code == 200, detail.text
-    public = detail.json()["public"]
+    public = (await _settings(client, pod_id, group["id"]))["public"]
     assert [entry["path"] for entry in public["files"]] == [
         "/changelog.md",
         "/launch/brief.md",
@@ -348,7 +362,7 @@ async def test_switching_outsiders_off_leaves_the_group_to_its_members(
     )
 
     response = await authenticated_client.patch(
-        f"/pods/{pod_id}/groups/{group['id']}", json={"answers_outsiders": False}
+        f"/pods/{pod_id}/sources/{group['id']}", json={"answers_outsiders": False}
     )
     assert response.status_code == 200, response.text
     assert response.json()["welcomes_outsiders"] is False
@@ -361,7 +375,7 @@ async def test_switching_outsiders_off_leaves_the_group_to_its_members(
     assert context is None
 
     response = await authenticated_client.patch(
-        f"/pods/{pod_id}/groups/{group['id']}", json={"answers_outsiders": True}
+        f"/pods/{pod_id}/sources/{group['id']}", json={"answers_outsiders": True}
     )
     assert response.json()["welcomes_outsiders"] is True
 
@@ -385,11 +399,12 @@ async def test_whatsapp_groups_are_started_and_telegram_groups_are_joined(
     )
 
     started = await authenticated_client.post(
-        f"/pods/{pod_id}/groups",
+        f"/pods/{pod_id}/sources/whatsapp-groups",
         json={"surface_name": telegram["name"], "title": "Launch crew"},
     )
     linked = await authenticated_client.post(
-        f"/pods/{pod_id}/groups/links", json={"surface_name": whatsapp["name"]}
+        f"/pods/{pod_id}/sources/telegram-links",
+        json={"surface_name": whatsapp["name"]},
     )
 
     assert started.status_code == 422, started.text
@@ -411,14 +426,13 @@ async def test_a_number_meta_keeps_out_of_groups_is_told_so_not_to_retry(
     )
 
     response = await authenticated_client.post(
-        f"/pods/{pod_id}/groups",
+        f"/pods/{pod_id}/sources/whatsapp-groups",
         json={"surface_name": surface["name"], "title": "Acme order 1182"},
     )
 
     assert response.status_code == 422, response.text
     assert "doesn't let this number start groups" in response.text
-    listed = await authenticated_client.get(f"/pods/{pod_id}/groups")
-    assert listed.json()["items"] == []
+    assert await _groups(authenticated_client, pod_id) == []
 
 
 async def test_a_telegram_group_joins_through_a_one_use_link(
@@ -437,7 +451,7 @@ async def test_a_telegram_group_joins_through_a_one_use_link(
     )
 
     response = await authenticated_client.post(
-        f"/pods/{pod_id}/groups/links", json={"surface_name": surface["name"]}
+        f"/pods/{pod_id}/sources/telegram-links", json={"surface_name": surface["name"]}
     )
     assert response.status_code == 200, response.text
     url = response.json()["url"]
@@ -476,11 +490,13 @@ async def test_a_telegram_group_joins_through_a_one_use_link(
     )
     assert claimed is True
 
-    listed = (await authenticated_client.get(f"/pods/{pod_id}/groups")).json()["items"]
-    [group] = [item for item in listed if item["platform"] == "TELEGRAM"]
-    assert group["title"] == "Launch crew"
-    assert group["owner"]["user_id"] == fixed_test_user["id"]
-    assert group["welcomes_outsiders"] is True
+    [group] = await _groups(authenticated_client, pod_id)
+    assert group["sources"] == [{"platform": "TELEGRAM", "title": "Launch crew"}]
+    detail = await authenticated_client.get(f"/pods/{pod_id}/channels/{group['id']}")
+    [place] = detail.json()["source_places"]
+    settings = await _settings(authenticated_client, pod_id, place["id"])
+    assert settings["owner"]["id"] == fixed_test_user["id"]
+    assert settings["welcomes_outsiders"] is True
 
     # The bot says it is there, in the group.
     sent = await wait_for_messages(message_store, "TELEGRAM", min_count=1)

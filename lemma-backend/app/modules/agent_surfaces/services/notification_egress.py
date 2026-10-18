@@ -18,27 +18,30 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from app.core.authorization.delegation import effective_agent_id, is_pod_default_agent
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
-from app.modules.agent_surfaces.domain.notification import NotificationEntity
 from app.modules.agent_surfaces.domain.ports import (
     ColdEmailThread,
     SurfaceNotificationEgressPort,
 )
 from app.modules.agent_surfaces.services.cold_email_thread import cold_thread_seed_id
 from app.modules.agent_surfaces.services.group_names import sender_name_for
-from app.modules.agent_surfaces.services.channel_lines import ChannelLines
+from app.modules.agent_surfaces.services.channel_lines import (
+    ALREADY_A_LINE,
+    ChannelLines,
+)
 from app.modules.agent_surfaces.services.channel_places import ChannelSeats
-from app.modules.agent_surfaces.services.notification_delivery import DeliveryChannel
+from app.modules.agent_surfaces.services.notification_delivery import (
+    DeliveryChannel,
+    Outbound,
+)
 from app.modules.channels.contracts import (
     MembersHome,
     Place,
-    Principal,
-    Sender,
     SourceKind,
 )
 
@@ -46,7 +49,7 @@ logger = get_logger(__name__)
 
 
 class NotificationEgress:
-    """Resolves the conversation a notification lands in, and sends it."""
+    """Resolves the conversation a line meant for a member lands in, and sends it."""
 
     def __init__(
         self,
@@ -66,7 +69,7 @@ class NotificationEgress:
         channel: DeliveryChannel,
         *,
         conversation_id: UUID,
-        notification: NotificationEntity,
+        outbound: Outbound,
         message: str,
         agent_name: str | None = None,
     ) -> bool:
@@ -85,7 +88,11 @@ class NotificationEgress:
         run acts for does not: ``attribute()`` puts them in the body, which is
         the only place a full name can be read whole.
         """
-        metadata: dict[str, Any] = {"notification_id": str(notification.id)}
+        # The line is in their channel already: carrying it writes no other.
+        metadata: dict[str, Any] = {
+            "notification_id": str(outbound.id),
+            ALREADY_A_LINE: str(outbound.id),
+        }
         # Set only when known. ``SurfaceDelivery.egress_metadata`` fills
         # ``agent_display_name`` from the surface with ``setdefault``, and an
         # explicit None here is a present key — it would win, and every chat
@@ -122,7 +129,7 @@ class NotificationEgress:
         return await self._send_cold_email(
             channel,
             conversation_id=conversation_id,
-            notification=notification,
+            outbound=outbound,
             message=message,
             metadata=metadata,
         )
@@ -132,7 +139,7 @@ class NotificationEgress:
         channel: DeliveryChannel,
         *,
         conversation_id: UUID,
-        notification: NotificationEntity,
+        outbound: Outbound,
         message: str,
         metadata: dict[str, Any],
     ) -> bool:
@@ -147,10 +154,10 @@ class NotificationEgress:
         thread = await self.egress.open_cold_email_thread(
             surface=channel.surface,
             recipient_email=channel.email_address,
-            subject=notification.title,
+            subject=outbound.title,
             message=message,
             thread_seed_id=cold_thread_seed_id(
-                notification_id=notification.id, surface=channel.surface
+                notification_id=outbound.id, surface=channel.surface
             ),
             metadata=metadata,
         )
@@ -159,7 +166,7 @@ class NotificationEgress:
             # endpoint keyed by a message id it does not have.
             logger.info(
                 "agent_surfaces.notification_egress.cold_open_unsupported.observed",
-                notification_id=str(notification.id),
+                notification_id=str(outbound.id),
                 platform=channel.surface.surface_type.value,
             )
             return False
@@ -167,7 +174,7 @@ class NotificationEgress:
             thread,
             channel=channel,
             conversation_id=conversation_id,
-            notification=notification,
+            outbound=outbound,
             message=message,
         )
         return True
@@ -178,7 +185,7 @@ class NotificationEgress:
         *,
         channel: DeliveryChannel,
         conversation_id: UUID,
-        notification: NotificationEntity,
+        outbound: Outbound,
         message: str,
     ) -> None:
         """The thread as a place in the recipient's channel, and the mail as
@@ -192,7 +199,7 @@ class NotificationEgress:
         surface = channel.surface
         address = (channel.email_address or "").strip().lower() or None
         source = await self.seats.source_for(
-            pod_id=notification.pod_id,
+            pod_id=outbound.pod_id,
             place=Place(
                 surface_id=surface.id,
                 platform=surface.surface_type.value,
@@ -200,23 +207,19 @@ class NotificationEgress:
                 external_channel_id=thread.external_thread_id,
                 external_user_id=address,
             ),
-            home=MembersHome(user_id=notification.recipient_user_id),
+            home=MembersHome(user_id=outbound.recipient_user_id),
         )
         await self.seats.addressed_at(source.id, thread.last_event)
         await self.lines.opened(
+            line_id=outbound.id,
             source=source,
-            sender=Sender.agent(
-                effective_agent_id(surface.agent_id, pod_id=notification.pod_id),
-                on_behalf_of=Principal.member(notification.recipient_user_id),
-            ),
-            text=message,
             conversation_id=conversation_id,
             external_message_id=thread.external_message_id,
             external_thread_id=thread.external_thread_id,
         )
 
     async def conversation_for(
-        self, channel: DeliveryChannel, *, notification: NotificationEntity
+        self, channel: DeliveryChannel, *, outbound: Outbound
     ) -> UUID | None:
         """The recipient's conversation this notification lands in.
 
@@ -230,8 +233,8 @@ class NotificationEgress:
         Always a conversation the *recipient* owns, never the asker's, so their
         reply runs under their own permissions.
         """
-        pod_id = notification.pod_id
-        recipient = notification.recipient_user_id
+        pod_id = outbound.pod_id
+        recipient = outbound.recipient_user_id
         channel_id = (
             channel.source.channel_id
             if channel.source is not None
@@ -254,14 +257,14 @@ class NotificationEgress:
         if found is not None:
             return found
         return await self.open_conversation(
-            channel, notification=notification, channel_id=channel_id
+            channel, outbound=outbound, channel_id=channel_id
         )
 
     async def persist_outbound(
         self,
         *,
         conversation_id: UUID,
-        notification: NotificationEntity,
+        outbound: Outbound,
         message: str,
     ) -> None:
         """Write the outbound into the recipient's thread before it is sent.
@@ -275,27 +278,27 @@ class NotificationEgress:
             self.uow,
             conversation_id=conversation_id,
             message=message,
-            notification_id=notification.id,
+            notification_id=outbound.id,
         )
 
     async def open_conversation(
         self,
         channel: DeliveryChannel,
         *,
-        notification: NotificationEntity,
+        outbound: Outbound,
         channel_id: UUID,
     ) -> UUID | None:
         surface = channel.surface
         conversation = await agent_conversations.open_surface_conversation(
             self.uow,
-            pod_id=notification.pod_id,
+            pod_id=outbound.pod_id,
             agent_name=await self.egress.agent_name_for_surface(surface),
-            user_id=notification.recipient_user_id,
+            user_id=outbound.recipient_user_id,
             channel_id=channel_id,
-            title=notification.title,
+            title=outbound.title,
             metadata={
                 "source": "notification",
-                "notification_id": str(notification.id),
+                "channel_message_id": str(outbound.id),
                 "surface_id": str(surface.id),
                 "surface_platform": surface.surface_type.value,
                 "external_user_id": channel.external_user_id,

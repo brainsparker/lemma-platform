@@ -132,6 +132,15 @@ def _page(limit: int) -> int:
     return max(1, min(limit, MAX_LINES))
 
 
+def _nameless(row: ChannelMessageModel) -> bool:
+    """A line said by somebody nobody could name: no member, no contact."""
+    return (
+        row.sender_kind == SenderKind.CONTACT.value
+        and row.sender_contact_id is None
+        and row.sender_user_id is None
+    )
+
+
 class LineRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -167,7 +176,7 @@ class LineRepository:
             )
         inserted = await self.session.scalar(statement.returning(ChannelMessageModel))
         if inserted is None:
-            return await self._heard_before(source_id, line), False
+            return await self._heard_before(source_id, line, sender), False
         await self.session.execute(
             update(ChannelModel)
             .where(ChannelModel.id == channel.id)
@@ -182,7 +191,7 @@ class LineRepository:
         return message_entity(inserted), True
 
     async def _heard_before(
-        self, source_id: UUID | None, line: NewLine
+        self, source_id: UUID | None, line: NewLine, sender: Sender
     ) -> ChannelMessage:
         existing = await self.session.scalar(
             select(ChannelMessageModel).where(
@@ -196,6 +205,15 @@ class LineRepository:
             existing.conversation_id = line.conversation_id
         if existing.reply_ref is None and line.reply_ref is not None:
             existing.reply_ref = dict(line.reply_ref)
+        if _nameless(existing) and (sender.user_id or sender.contact_id):
+            # Logged as it arrived, before anybody knew who wrote it: the
+            # write that knows says so.
+            existing.sender_kind = sender.kind.value
+            existing.sender_user_id = sender.user_id
+            existing.sender_contact_id = sender.contact_id
+            existing.sender_name = existing.sender_name or (
+                sender.display_name[:255] if sender.display_name else None
+            )
         await self.session.flush()
         return message_entity(existing)
 
@@ -220,20 +238,32 @@ class LineRepository:
             await self.session.flush()
         return message_entity(row)
 
-    async def note_delivered_as(
-        self, message_id: UUID, *, external_message_id: str | None
+    async def went_out(
+        self,
+        message_id: UUID,
+        *,
+        source_id: UUID,
+        conversation_id: UUID | None,
+        external_message_id: str | None,
+        external_thread_id: str | None,
     ) -> None:
-        """The platform's id for a line written in Lemma and delivered there,
-        unless the line already has one."""
-        if external_message_id is None:
-            return
+        """A line written in Lemma, delivered at one of its channel's places
+        that the delivery opened: it is that place's first line now, so a reply
+        there continues it. Only a line no place has yet."""
+        values: dict[str, object] = {"source_id": source_id}
+        if conversation_id is not None:
+            values["conversation_id"] = conversation_id
+        if external_message_id is not None:
+            values["external_message_id"] = external_message_id[:255]
+        if external_thread_id is not None:
+            values["external_thread_id"] = external_thread_id[:255]
         await self.session.execute(
             update(ChannelMessageModel)
             .where(
                 ChannelMessageModel.id == message_id,
-                ChannelMessageModel.external_message_id.is_(None),
+                ChannelMessageModel.source_id.is_(None),
             )
-            .values(external_message_id=external_message_id[:255])
+            .values(**values)
         )
 
     # -- reading --------------------------------------------------------------
@@ -258,6 +288,30 @@ class LineRepository:
                 ChannelMessageModel.sender_kind != SenderKind.AGENT.value,
             )
             .order_by(*_NEWEST_FIRST)
+            .limit(1)
+        )
+        return message_entity(row) if row is not None else None
+
+    async def at(self, source_id: UUID, external_message_id: str) -> UUID | None:
+        """The line a platform message became at this source, if it is one."""
+        return await self.session.scalar(
+            select(ChannelMessageModel.id).where(
+                ChannelMessageModel.source_id == source_id,
+                ChannelMessageModel.external_message_id == external_message_id,
+            )
+        )
+
+    async def said_in_run(
+        self, *, channel_id: UUID, agent_run_id: UUID, text: str
+    ) -> ChannelMessage | None:
+        """A line one agent run already wrote here, word for word."""
+        row = await self.session.scalar(
+            select(ChannelMessageModel)
+            .where(
+                ChannelMessageModel.channel_id == channel_id,
+                ChannelMessageModel.agent_run_id == agent_run_id,
+                ChannelMessageModel.text == text,
+            )
             .limit(1)
         )
         return message_entity(row) if row is not None else None
@@ -453,6 +507,37 @@ class LineRepository:
             )
             .values(interaction_state=state.value)
             .returning(ChannelMessageModel)
+        )
+        return [message_entity(row) for row in rows]
+
+    async def open_questions_under(
+        self, prefix: str, *, limit: int = MAX_WAITING
+    ) -> list[ChannelMessage]:
+        """The open questions whose ``ref`` starts with ``prefix``."""
+        rows = await self.session.scalars(
+            select(ChannelMessageModel)
+            .where(
+                ChannelMessageModel.interaction_state == InteractionState.OPEN.value,
+                ChannelMessageModel.interaction["ref"].astext.startswith(prefix),
+            )
+            .order_by(ChannelMessageModel.created_at)
+            .limit(max(1, min(limit, MAX_WAITING)))
+        )
+        return [message_entity(row) for row in rows]
+
+    async def questions_under(
+        self, prefix: str, *, limit: int = MAX_WAITING
+    ) -> list[ChannelMessage]:
+        """Every question whose ``ref`` starts with ``prefix``, open or not,
+        oldest first."""
+        rows = await self.session.scalars(
+            select(ChannelMessageModel)
+            .where(
+                ChannelMessageModel.interaction_kind.is_not(None),
+                ChannelMessageModel.interaction["ref"].astext.startswith(prefix),
+            )
+            .order_by(ChannelMessageModel.created_at)
+            .limit(max(1, min(limit, MAX_WAITING)))
         )
         return [message_entity(row) for row in rows]
 

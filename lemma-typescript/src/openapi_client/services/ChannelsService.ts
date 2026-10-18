@@ -28,6 +28,7 @@ export class ChannelsService {
      * @param podId
      * @param kind
      * @param archived
+     * @param contactId Only this contact's channel.
      * @param limit
      * @param before
      * @returns ChannelListResponse Successful Response
@@ -37,6 +38,7 @@ export class ChannelsService {
         podId: string,
         kind?: (ChannelKind | null),
         archived: boolean = false,
+        contactId?: (string | null),
         limit: number = 50,
         before?: (string | null),
     ): CancelablePromise<ChannelListResponse> {
@@ -49,6 +51,7 @@ export class ChannelsService {
             query: {
                 'kind': kind,
                 'archived': archived,
+                'contact_id': contactId,
                 'limit': limit,
                 'before': before,
             },

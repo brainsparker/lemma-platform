@@ -24,13 +24,12 @@ _NAME_TO_MODULE = {
     "PodApps": "apps",
     "PodFiles": "files",
     "PodFunctions": "functions",
-    "PodGroups": "groups",
+    "PodSources": "sources",
     "PodChannels": "channels",
     "PodContacts": "contacts",
     "PodWebWidgets": "web_widgets",
     "BoundConnectors": "connectors",
     "PodMembers": "members",
-    "PodNotifications": "notifications",
     "PodLinks": "pod_links",
     "BoundOrg": "orgs",
     "Orgs": "orgs",
@@ -54,13 +53,12 @@ if TYPE_CHECKING:
     from .apps import PodApps
     from .files import PodFiles
     from .functions import PodFunctions
-    from .groups import PodGroups
+    from .sources import PodSources
     from .channels import PodChannels
     from .contacts import PodContacts
     from .web_widgets import PodWebWidgets
     from .connectors import BoundConnectors
     from .members import PodMembers
-    from .notifications import PodNotifications
     from .pod_links import PodLinks
     from .orgs import BoundOrg, Orgs
     from .pods import BoundPods
@@ -99,12 +97,11 @@ __all__ = [
     "PodApps",
     "PodFiles",
     "PodFunctions",
-    "PodGroups",
+    "PodSources",
     "PodChannels",
     "PodContacts",
     "PodWebWidgets",
     "PodMembers",
-    "PodNotifications",
     "PodLinks",
     "PodQueries",
     "PodRecords",

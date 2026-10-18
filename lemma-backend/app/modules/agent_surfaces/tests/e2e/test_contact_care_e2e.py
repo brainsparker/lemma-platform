@@ -6,11 +6,15 @@ database, with only the model's next move scripted:
 * forgetting a contact takes their rows, handles, conversations, web chat
   sessions and stored profile, and blanks what of theirs reached a member;
 * exporting one hands over their rows too, a page at a time;
-* past the contacts cap no run starts, the member is told, and the contact
-  hears once that a person will reply;
-* setting the cap is an owner's, and writing first to a contact an editor's,
-  a few times a day at most;
-* an auto-reply is never answered, and "STOP" unsubscribes;
+* past the contacts cap no run starts, the contact's channel waits on a
+  person, the member is told where to look, and the contact hears once that a
+  person will reply;
+* a contact's run that needs a person calls one in with ``ask_a_person``: the
+  channel waits on a person, and the member who looks after them is told;
+* setting the cap is an owner's, and writing to a contact -- a line in their
+  channel, carried to them afterwards -- an editor's, a few times a day at most;
+* an auto-reply is never answered, and "STOP" unsubscribes -- a member's line
+  to them after it stays in Lemma, recorded as not sent and why;
 * a contact's history stays with them when the member looking after contacts
   changes, and a member leaving is told to the pod's admins.
 """
@@ -42,23 +46,12 @@ from app.modules.agent_surfaces.composition import (
     build_surface_turn_starter,
 )
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.contracts.contacts import REDACTED_TITLE
+from app.modules.agent_surfaces.contracts.direct_messages import ask_a_person
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationDeliveryStatus,
-    NotificationEntity,
-    NotificationOriginKind,
-)
-from app.modules.agent_surfaces.infrastructure.models import (
-    AgentSurfaceExternalUser,
-    NotificationModel,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
-    NotificationRepository,
-)
+from app.modules.agent_surfaces.infrastructure.models import AgentSurfaceExternalUser
 from app.modules.contacts.infrastructure.visitor_sessions import (
     VisitorCodeModel,
     VisitorSessionModel,
@@ -67,7 +60,16 @@ from app.modules.agent_surfaces.services.contact_keepers import UNATTENDED_WARNI
 from app.modules.agent_surfaces.tests.e2e.helpers import _resend_payload
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
+    record_model_requests,
     script_text,
+    script_tool_call,
+)
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+    contact_channel_id,
+    deliver_member_posts,
+    deliveries_of_line,
+    direct_lines,
+    member_writes,
 )
 from app.modules.agent_surfaces.tests.e2e.test_email_contacts_e2e import (
     CUSTOMER,
@@ -79,7 +81,7 @@ from app.modules.contacts.infrastructure.models import (
     ContactModel,
 )
 from app.modules.datastore.contracts import contact_rows
-from app.modules.pod.contracts.members import pod_member_id
+from app.modules.channels.infrastructure.models import ChannelModel
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.contacts_cap import contacts_cap_reached
 from app.modules.usage.contracts.metering import check_run_budget
@@ -216,8 +218,8 @@ async def test_forgetting_a_contact_takes_everything_the_pod_held_about_them(
     await _order(authenticated_client, pod_id, dana, "Blue kettle")
     await _order(authenticated_client, pod_id, str(uuid4()), "Somebody else's")
 
-    # A web chat session that named her, with a code, and a question of hers a
-    # bot passed on to the member.
+    # A web chat session that named her, with a code -- and the bot called a
+    # person in for her, which flags her channel and leaves a note there.
     widget = await authenticated_client.post(
         f"/pods/{pod_id}/web-widgets", json={"name": "Shop chat"}
     )
@@ -244,24 +246,6 @@ async def test_forgetting_a_contact_takes_everything_the_pod_held_about_them(
             attempts=0,
         )
     )
-    uow = SqlAlchemyUnitOfWork(db_session)
-    member_id = await pod_member_id(uow, UUID(pod_id), owner)
-    assert member_id is not None
-    question = await NotificationRepository(uow).create(
-        NotificationEntity(
-            pod_id=UUID(pod_id),
-            recipient_user_id=owner,
-            recipient_pod_member_id=member_id,
-            origin_kind=NotificationOriginKind.API,
-            origin_conversation_id=context.conversation_id,
-            from_outside=True,
-            asked_by_name="Dana",
-            title="A question from outside the space",
-            body="Can I change my delivery address to 4 Elm Row?",
-            expects_response=False,
-            delivery_status=NotificationDeliveryStatus.UNDELIVERABLE,
-        )
-    )
     if (
         await db_session.scalar(
             select(AgentSurfaceExternalUser.id).where(
@@ -276,6 +260,16 @@ async def test_forgetting_a_contact_takes_everything_the_pod_held_about_them(
             )
         )
     await db_session.commit()
+    assert await ask_a_person(
+        pod_id=UUID(pod_id),
+        conversation_id=context.conversation_id,
+        keeper_user_id=owner,
+        reason="She wants to change her delivery address.",
+    )
+    her_channel = await db_session.scalar(
+        select(ChannelModel.id).where(ChannelModel.contact_id == UUID(dana))
+    )
+    assert her_channel is not None
 
     forgotten = await authenticated_client.delete(f"/pods/{pod_id}/contacts/{dana}")
     assert forgotten.status_code == 204, forgotten.text
@@ -307,9 +301,8 @@ async def test_forgetting_a_contact_takes_everything_the_pod_held_about_them(
             )
         )
     ) is None
-    note = await db_session.get(NotificationModel, question.id)
-    assert note is not None
-    assert (note.title, note.body, note.asked_by_name) == (REDACTED_TITLE, "", None)
+    # Her channel goes with her: her lines, and the note calling a person in.
+    assert await db_session.get(ChannelModel, her_channel) is None
 
     again = await authenticated_client.delete(f"/pods/{pod_id}/contacts/{dana}")
     assert again.status_code == 404
@@ -501,23 +494,22 @@ async def test_past_the_cap_no_run_starts_and_a_person_takes_over(
     assert len(replies) == 1 and replies[0].startswith("A person from ")
     sent = message_store.get_all("RESEND")[sent_before:]
     assert len(sent) == 1 and "will reply here" in str(sent[0])
-    # The member was told, and has the conversation.
-    notes = (
-        await db_session.scalars(
-            select(NotificationModel).where(
-                NotificationModel.recipient_user_id == owner,
-                NotificationModel.origin_conversation_id == first.conversation_id,
-            )
-        )
-    ).all()
-    assert len(notes) == 1
-    assert "Hello again?" in notes[0].body and "Anyone there?" not in notes[0].body
-    # And both are on Dana's channel, where a member answers them by hand.
+    # The member was told once, in their own channel, where to look -- not
+    # what she wrote: her words stay in her channel, which forgetting her takes.
+    [note] = await direct_lines(db_session, pod_id=pod_id, user_id=owner)
+    assert note.members_only and note.interaction_kind is None
+    assert "Somebody outside the space is waiting for you" in note.body
+    assert "Hello again?" not in note.body and "Anyone there?" not in note.body
+    # Both are on Dana's channel, which waits on a person to answer by hand.
     conversation = await db_session.get(ConversationModel, first.conversation_id)
     assert conversation is not None and conversation.channel_id is not None
-    timeline = await authenticated_client.get(
-        f"/pods/{pod_id}/channels/{conversation.channel_id}/messages"
+    channel = f"/pods/{pod_id}/channels/{conversation.channel_id}"
+    shown = await authenticated_client.get(channel)
+    assert shown.status_code == 200, shown.text
+    assert (
+        shown.json()["attention"]["reason"] == "The monthly cap on answering contacts"
     )
+    timeline = await authenticated_client.get(f"{channel}/messages")
     heard = [
         line["text"]
         for line in timeline.json()["items"]
@@ -584,6 +576,82 @@ async def test_a_member_who_steps_in_answers_alone_until_they_hand_back(
 
     db_session.expire_all()
     assert await _runs(db_session, first.conversation_id) == runs_before + 1
+
+
+async def test_a_contacts_run_calls_a_person_in_and_the_keeper_is_told_where(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """What a contact needs from a person is asked with ``ask_a_person``.
+
+    It used to be a notification to the member, with the contact's question
+    quoted and an answer carried back through an approval card. Now the
+    contact's channel waits on a person -- in Contacts, for every member who
+    sees them -- with a note there to members only, and the member who looks
+    after them is told where to look. Stepping in answers the call. A contact's
+    run has nothing else that reaches a member: no ``channel_post``.
+    """
+    pod_id = test_pod["id"]
+    owner = UUID(fixed_test_user["id"])
+    _surface, address = await _email_bot(
+        authenticated_client,
+        db_session,
+        pod_id=pod_id,
+        user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+        answer="anyone",
+    )
+    seen = record_model_requests(monkeypatch)
+    context = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="resend",
+            payload=_resend_payload(
+                sender_email=CUSTOMER,
+                assistant_address=address,
+                message_id="person-1",
+                text="Can I get a refund on order 1182?",
+            ),
+            headers={},
+        ),
+        script=[
+            script_tool_call(
+                "ask_a_person",
+                {"reason": "A refund on order 1182 is a member's call."},
+                tool_call_id="call-1",
+            ),
+            script_text("Someone from the team will reply here."),
+        ],
+    )
+    assert isinstance(context, SurfaceChatContext)
+
+    assert seen, "the contact's run asked the model nothing"
+    assert all("ask_a_person" in request["tools"] for request in seen)
+    assert all("channel_post" not in request["tools"] for request in seen)
+    conversation = await db_session.get(ConversationModel, context.conversation_id)
+    assert conversation is not None and conversation.channel_id is not None
+    channel = f"/pods/{pod_id}/channels/{conversation.channel_id}"
+    shown = (await authenticated_client.get(channel)).json()
+    assert shown["kind"] == "CONTACT"
+    assert shown["attention"]["reason"] == "A refund on order 1182 is a member's call."
+    timeline = (await authenticated_client.get(f"{channel}/messages")).json()["items"]
+    [called] = [line for line in timeline if line["members_only"]]
+    assert (
+        called["text"]
+        == "This needs a person: A refund on order 1182 is a member's call."
+    )
+    [notice] = await direct_lines(db_session, pod_id=pod_id, user_id=owner)
+    assert notice.members_only and notice.interaction_kind is None
+    assert "A contact you look after needs a person" in notice.body
+
+    taken = await authenticated_client.put(f"{channel}/handler")
+    assert taken.status_code == 200, taken.text
+    assert (await authenticated_client.get(channel)).json()["attention"] is None
 
 
 async def _runs(db_session: AsyncSession, conversation_id: UUID) -> int:
@@ -679,7 +747,8 @@ async def test_only_an_owner_sets_the_contacts_cap(
 # ------------------------------------------------------------ follow-ups
 
 
-async def test_writing_first_to_a_contact_takes_an_editor_and_is_rate_limited(
+@pytest.mark.drives_work
+async def test_writing_to_a_contact_takes_an_editor_and_a_daily_limit(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,
     db_session: AsyncSession,
@@ -690,6 +759,10 @@ async def test_writing_first_to_a_contact_takes_an_editor_and_is_rate_limited(
     message_store,
     monkeypatch,
 ):
+    """A member writes to a contact in the contact's channel; the line goes out
+    afterwards, by ``surface.member_post``. Past the day's limit the line is
+    still the member's, in Lemma -- recorded as not sent, and why -- rather
+    than the post being refused."""
     pod_id = test_pod["id"]
     _surface, address = await _email_bot(
         authenticated_client,
@@ -702,6 +775,7 @@ async def test_writing_first_to_a_contact_takes_an_editor_and_is_rate_limited(
     )
     await _dana_writes(db_session, address, "follow-limit-1")
     dana = await _dana(authenticated_client, pod_id)
+    channel = await contact_channel_id(authenticated_client, pod_id, dana)
     user = await _member(
         authenticated_client,
         async_client,
@@ -712,47 +786,43 @@ async def test_writing_first_to_a_contact_takes_an_editor_and_is_rate_limited(
     )
 
     # A pod user neither sees the contact nor speaks for the pod to them.
-    unseen = await async_client.get(
-        f"/pods/{pod_id}/contacts/{dana}", headers=auth_headers(user)
-    )
+    as_user = auth_headers(user)
+    unseen = await async_client.get(f"/pods/{pod_id}/contacts/{dana}", headers=as_user)
     assert unseen.status_code == 403, unseen.text
-    refused = await async_client.post(
-        f"/pods/{pod_id}/contacts/{dana}/messages",
-        json={"message": "Hello from me"},
-        headers=auth_headers(user),
+    theirs = await async_client.get(
+        f"/pods/{pod_id}/channels", params={"kind": "CONTACT"}, headers=as_user
     )
-    assert refused.status_code == 403, refused.text
+    assert theirs.json()["items"] == []
+    refused = await async_client.post(
+        f"/pods/{pod_id}/channels/{channel}/messages",
+        json={"text": "Hello from me"},
+        headers=as_user,
+    )
+    assert refused.status_code == 404, refused.text
 
     monkeypatch.setattr(
         surface_settings, "surface_contact_follow_ups_per_contact_per_day", 1
     )
-    sent = await authenticated_client.post(
-        f"/pods/{pod_id}/contacts/{dana}/messages",
-        json={"message": "Your order shipped today."},
+    sent_before = len(message_store.get_all("RESEND"))
+    written = await member_writes(
+        authenticated_client, pod_id, channel, "Your order shipped today."
     )
-    assert sent.status_code == 200, sent.text
-    # On Dana's channel as the member's line, not the agent's.
-    listed = await authenticated_client.get(
-        f"/pods/{pod_id}/channels", params={"kind": "CONTACT"}
-    )
-    [channel] = [
-        c for c in listed.json()["items"] if (c["person"] or {}).get("id") == dana
-    ]
-    timeline = await authenticated_client.get(
-        f"/pods/{pod_id}/channels/{channel['id']}/messages"
-    )
-    [written] = [
-        line
-        for line in timeline.json()["items"]
-        if (line["text"] or "").startswith("Your order shipped today.")
-    ]
     assert written["sender"]["kind"] == "MEMBER"
     assert written["sender"]["id"] == fixed_test_user["id"]
-    limited = await authenticated_client.post(
-        f"/pods/{pod_id}/contacts/{dana}/messages",
-        json={"message": "And another thing."},
+    await deliver_member_posts()
+    [delivery] = await deliveries_of_line(written["id"])
+    assert (delivery.platform, delivery.status.value) == ("RESEND", "SENT")
+    mails = message_store.get_all("RESEND")[sent_before:]
+    assert len(mails) == 1 and "Your order shipped today." in str(mails[0])
+
+    limited = await member_writes(
+        authenticated_client, pod_id, channel, "And another thing."
     )
-    assert limited.status_code == 429, limited.text
+    await deliver_member_posts()
+    [held] = await deliveries_of_line(limited["id"])
+    assert held.status.value == "SKIPPED"
+    assert held.error == "That is as many messages as one contact gets in a day"
+    assert len(message_store.get_all("RESEND")) == sent_before + 1
 
 
 async def test_a_follow_up_the_platform_refused_is_never_shown_as_said(
@@ -839,6 +909,7 @@ async def test_an_auto_reply_is_neither_answered_nor_made_a_contact(
     assert listed.json()["items"] == []
 
 
+@pytest.mark.drives_work
 async def test_stop_unsubscribes_the_address_it_came_from(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -879,11 +950,17 @@ async def test_stop_unsubscribes_the_address_it_came_from(
         )
     )
     assert identity is not None and identity.unsubscribed_at is not None
-    refused = await authenticated_client.post(
-        f"/pods/{pod_id}/contacts/{dana}/messages",
-        json={"message": "One more thing."},
+    # A member's line to her afterwards stays in Lemma, recorded as not sent.
+    sent_before = len(message_store.get_all("RESEND"))
+    channel = await contact_channel_id(authenticated_client, pod_id, dana)
+    written = await member_writes(
+        authenticated_client, pod_id, channel, "One more thing."
     )
-    assert refused.status_code == 409, refused.text
+    await deliver_member_posts()
+    [held] = await deliveries_of_line(written["id"])
+    assert held.status.value == "SKIPPED"
+    assert held.error == "The contact asked not to be written to there"
+    assert len(message_store.get_all("RESEND")) == sent_before
 
 
 # ------------------------------------------------------------ who looks after them
@@ -974,12 +1051,7 @@ async def test_a_contacts_history_moves_with_them_to_a_new_keeper(
     await run_until_idle(async_session_maker, classes=[WorkClass.EVENTS])
     shown = await authenticated_client.get(f"/pods/{pod_id}/surfaces/{surface['name']}")
     assert shown.json()["contacts_warning"] == UNATTENDED_WARNING
-    notes = (
-        await db_session.scalars(
-            select(NotificationModel.title).where(
-                NotificationModel.pod_id == UUID(pod_id),
-                NotificationModel.recipient_user_id == UUID(fixed_test_user["id"]),
-            )
-        )
-    ).all()
-    assert "Nobody is looking after contacts" in notes
+    told = await direct_lines(db_session, pod_id=pod_id, user_id=fixed_test_user["id"])
+    [note] = [line for line in told if "has left the space" in line.body]
+    # A note to them alone, in their own channel: nothing waits on an answer.
+    assert note.members_only and note.interaction_kind is None

@@ -78,7 +78,7 @@ class AgentWaitWakeReason(str, Enum):
 
     TIMER = "TIMER"
     CANCELLED = "CANCELLED"
-    # Everything this conversation asked a person with `message_user` has been
+    # Everything this conversation asked a person with `channel_post` has been
     # answered. Unlike TIMER this *does* say something happened.
     ANSWERED = "ANSWERED"
     # The thing being waited on reached a terminal state. Says only that it

@@ -7,6 +7,9 @@ from app.core.registry import LemmaModule
 
 
 def _routers():
+    from app.modules.agent_surfaces.api.controllers.notice_controller import (
+        router as notices,
+    )
     from app.modules.agent_surfaces.api.controllers.surface_controller import (
         router as surface,
     )
@@ -17,11 +20,8 @@ def _routers():
     from app.modules.agent_surfaces.api.controllers.slack_setup_controller import (
         platform_router as surface_platform_setup,
     )
-    from app.modules.agent_surfaces.api.controllers.space_group_controller import (
-        router as space_groups,
-    )
-    from app.modules.agent_surfaces.api.controllers.notification_controller import (
-        router as notifications,
+    from app.modules.agent_surfaces.api.controllers.source_controller import (
+        router as sources,
     )
     from app.modules.agent_surfaces.api.controllers.user_surfaces_controller import (
         router as user_surfaces,
@@ -41,25 +41,23 @@ def _routers():
     from app.modules.agent_surfaces.api.controllers.public_web_controller import (
         router as public_web,
     )
-    from app.modules.agent_surfaces.api.controllers.contact_follow_up_controller import (
+    from app.modules.agent_surfaces.api.controllers.contact_unsubscribe_controller import (
         public_router as public_contacts,
-        router as contact_follow_ups,
     )
 
     return [
+        notices,
         surface,
-        space_groups,
+        sources,
         surface_setup_guide,
         surface_platform_setup,
         surface_catalog,
         telegram_manager,
         user_surfaces,
-        notifications,
         surface_public,
         web_widgets,
         public_page,
         public_web,
-        contact_follow_ups,
         public_contacts,
     ]
 
@@ -113,7 +111,9 @@ def _register_work() -> None:
     # Registers what answering a workflow's form on its line does.
     import app.modules.agent_surfaces.infrastructure.adapters.workflow_notifications  # noqa: F401
     import app.modules.agent_surfaces.events.ingest_work  # noqa: F401
-    import app.modules.agent_surfaces.events.notification_work  # noqa: F401
+    import app.modules.agent_surfaces.events.asked_questions_work  # noqa: F401
+    import app.modules.agent_surfaces.events.member_post_work  # noqa: F401
+    import app.modules.agent_surfaces.events.mobile_work  # noqa: F401
     import app.modules.agent_surfaces.events.pause_lines_work  # noqa: F401
     import app.modules.agent_surfaces.events.periodic_work  # noqa: F401
     import app.modules.agent_surfaces.events.platform_update_work  # noqa: F401

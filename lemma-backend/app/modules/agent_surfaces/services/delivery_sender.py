@@ -249,6 +249,12 @@ class PlatformDeliverySender:
                     message=remainder,
                     already_streamed=bool(display.streamed.strip()),
                 )
+                if finished:
+                    # Shown as the live message, so no envelope records it.
+                    await egress.delivery.note_shown(
+                        target.conversation_id,
+                        text=display.streamed + remainder,
+                    )
         except _send_errors():
             logger.warning(
                 "agent_surfaces.delivery_sender.stream_finish_failed.degraded",

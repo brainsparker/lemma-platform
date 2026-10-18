@@ -15698,40 +15698,17 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * List Groups
-     * Every group the pod's bots are in, most recently changed first.
-     * @param podId
-     * @returns GroupListResponse Successful Response
-     * @throws ApiError
-     */
-    static agentGroupList(podId) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/groups",
-        path: {
-          "pod_id": podId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Start Group
-     * Start a WhatsApp group with the pod's bot in it, answered for by the caller.
-     *
-     * WhatsApp confirms the group moments later: it comes back ``pending``, and
-     * its invite link appears once confirmed. Telegram and Slack cannot create
-     * groups for a bot; add the bot to one of theirs instead.
+     * Send Notice
+     * Tell another member of the pod something, in their own channel.
      * @param podId
      * @param requestBody
-     * @returns GroupResponse Successful Response
+     * @returns NoticeResponse Successful Response
      * @throws ApiError
      */
-    static agentGroupStart(podId, requestBody) {
+    static agentNoticeSend(podId, requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/pods/{pod_id}/groups",
+        url: "/pods/{pod_id}/notices",
         path: {
           "pod_id": podId
         },
@@ -15743,21 +15720,45 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Group Link
+     * List Sources
+     * Every group one bot is in, with each one's settings, newest first.
+     * @param podId
+     * @param surfaceName The bot's surface name.
+     * @returns SourceListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSourceList(podId, surfaceName) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/sources",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "surface_name": surfaceName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Telegram Link
      * A one-use link that adds the pod's Telegram bot to a group the caller picks.
      *
-     * The group is then the caller's to answer for. Which Telegram account is
-     * theirs is still their profile's to say: a link is easily passed on, so the
-     * one that used it is never taken for them. The link works for an hour.
+     * The group becomes a GROUP channel, the caller's to answer for. Which
+     * Telegram account is theirs is still their profile's to say: a link is
+     * easily passed on, so the one that used it is never taken for them. The link
+     * works for an hour.
      * @param podId
      * @param requestBody
-     * @returns GroupLinkResponse Successful Response
+     * @returns TelegramLinkResponse Successful Response
      * @throws ApiError
      */
-    static agentGroupLink(podId, requestBody) {
+    static agentSourceTelegramLinkCreate(podId, requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/pods/{pod_id}/groups/links",
+        url: "/pods/{pod_id}/sources/telegram-links",
         path: {
           "pod_id": podId
         },
@@ -15769,20 +15770,47 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Get Group
-     * One group: who is in it, and what its outsiders are waiting on you for.
+     * Start Whatsapp Group
+     * Start a WhatsApp group with the pod's bot in it, answered for by the caller.
+     *
+     * It is a new GROUP channel's source. WhatsApp confirms the group moments
+     * later: it comes back ``pending``, and its invite link appears once
+     * confirmed. Telegram and Slack cannot create groups for a bot; add the bot
+     * to one of theirs instead.
      * @param podId
-     * @param groupId
-     * @returns GroupDetailResponse Successful Response
+     * @param requestBody
+     * @returns SourceSettingsResponse Successful Response
      * @throws ApiError
      */
-    static agentGroupGet(podId, groupId) {
+    static agentSourceWhatsappGroupStart(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/sources/whatsapp-groups",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Source
+     * A group source's settings: who answers its outsiders, and from what.
+     * @param podId
+     * @param sourceId
+     * @returns SourceSettingsResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSourceGet(podId, sourceId) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/pods/{pod_id}/groups/{group_id}",
+        url: "/pods/{pod_id}/sources/{source_id}",
         path: {
           "pod_id": podId,
-          "group_id": groupId
+          "source_id": sourceId
         },
         errors: {
           422: `Validation Error`
@@ -15790,58 +15818,28 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Update Group
+     * Update Source
      * Switch outsiders on or off in one group, or take it over.
      *
      * The member who answers for the group may; so may anybody who configures the
      * bot when nobody in the pod answers for it, and an admin of the pod, whose
      * change the member is told about.
      * @param podId
-     * @param groupId
+     * @param sourceId
      * @param requestBody
-     * @returns GroupResponse Successful Response
+     * @returns SourceSettingsResponse Successful Response
      * @throws ApiError
      */
-    static agentGroupUpdate(podId, groupId, requestBody) {
+    static agentSourceUpdate(podId, sourceId, requestBody) {
       return request(OpenAPI, {
         method: "PATCH",
-        url: "/pods/{pod_id}/groups/{group_id}",
+        url: "/pods/{pod_id}/sources/{source_id}",
         path: {
           "pod_id": podId,
-          "group_id": groupId
+          "source_id": sourceId
         },
         body: requestBody,
         mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Group Timeline
-     * What was said in the group, oldest first, as far as the pod kept it.
-     *
-     * The group's channel timeline, kept for WhatsApp and Telegram groups. A
-     * Slack channel's history is Slack's; it comes back empty here. An answer the bot made with one member's
-     * own access comes back withheld to everybody else: they may not be able to
-     * see what it was made from.
-     * @param podId
-     * @param groupId
-     * @param limit
-     * @returns GroupTimelineResponse Successful Response
-     * @throws ApiError
-     */
-    static agentGroupTimeline(podId, groupId, limit = 60) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/groups/{group_id}/timeline",
-        path: {
-          "pod_id": podId,
-          "group_id": groupId
-        },
-        query: {
-          "limit": limit
-        },
         errors: {
           422: `Validation Error`
         }
@@ -16350,46 +16348,35 @@ var LemmaClient = (() => {
     }
   };
 
-  // src/namespaces/pod-groups.ts
-  var PodGroupsNamespace = class {
+  // src/namespaces/pod-sources.ts
+  var PodSourcesNamespace = class {
     constructor(client) {
       __publicField(this, "client", client);
     }
-    /** Every group the pod's bots are in, most recently changed first. */
-    list(podId) {
-      return this.client.request(() => AgentSurfacesService.agentGroupList(podId));
+    /** Every group one bot is in, with each one's settings, newest first. */
+    list(podId, surfaceName) {
+      return this.client.request(() => AgentSurfacesService.agentSourceList(podId, surfaceName));
     }
-    /** One group, with the people seen in it and what is waiting on the caller. */
-    get(podId, groupId) {
+    /** A group source's settings: who answers its outsiders, and from what. */
+    get(podId, sourceId) {
+      return this.client.request(() => AgentSurfacesService.agentSourceGet(podId, sourceId));
+    }
+    /** Switch outsiders on or off in one group, or take it over. */
+    update(podId, sourceId, payload) {
       return this.client.request(
-        () => AgentSurfacesService.agentGroupGet(podId, groupId)
+        () => AgentSurfacesService.agentSourceUpdate(podId, sourceId, payload)
       );
     }
-    /** What was said in the group, oldest first (WhatsApp and Telegram groups). */
-    timeline(podId, groupId, options = {}) {
+    /** Start a WhatsApp group with the pod's bot in it: a new group channel. */
+    startWhatsAppGroup(podId, payload) {
       return this.client.request(
-        () => {
-          var _a;
-          return AgentSurfacesService.agentGroupTimeline(podId, groupId, (_a = options.limit) != null ? _a : 60);
-        }
-      );
-    }
-    /** Start a WhatsApp group with the pod's bot in it. */
-    start(podId, payload) {
-      return this.client.request(
-        () => AgentSurfacesService.agentGroupStart(podId, payload)
+        () => AgentSurfacesService.agentSourceWhatsappGroupStart(podId, payload)
       );
     }
     /** A one-use, hour-long Telegram link that adds the bot to a group. */
-    link(podId, surfaceName) {
+    telegramLink(podId, surfaceName) {
       return this.client.request(
-        () => AgentSurfacesService.agentGroupLink(podId, { surface_name: surfaceName })
-      );
-    }
-    /** Switch outsiders on or off in one group, or take it over. */
-    update(podId, groupId, payload) {
-      return this.client.request(
-        () => AgentSurfacesService.agentGroupUpdate(podId, groupId, payload)
+        () => AgentSurfacesService.agentSourceTelegramLinkCreate(podId, { surface_name: surfaceName })
       );
     }
   };
@@ -16537,12 +16524,13 @@ var LemmaClient = (() => {
      * @param podId
      * @param kind
      * @param archived
+     * @param contactId Only this contact's channel.
      * @param limit
      * @param before
      * @returns ChannelListResponse Successful Response
      * @throws ApiError
      */
-    static channelList(podId, kind, archived = false, limit = 50, before) {
+    static channelList(podId, kind, archived = false, contactId, limit = 50, before) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/channels",
@@ -16552,6 +16540,7 @@ var LemmaClient = (() => {
         query: {
           "kind": kind,
           "archived": archived,
+          "contact_id": contactId,
           "limit": limit,
           "before": before
         },
@@ -16986,6 +16975,7 @@ var LemmaClient = (() => {
             podId,
             options.kind,
             (_a = options.archived) != null ? _a : false,
+            options.contactId,
             (_b = options.limit) != null ? _b : 50,
             options.before
           );
@@ -17090,6 +17080,12 @@ var LemmaClient = (() => {
           return ChannelsService.channelMessageSearch(podId, q, (_a = options.limit) != null ? _a : 30);
         }
       );
+    }
+    /** Tell another member of the pod something: a line in their own channel,
+     *  carried on to where they last spoke. `to` is a pod member id, user id or
+     *  email address. */
+    notify(podId, body) {
+      return this.client.request(() => AgentSurfacesService.agentNoticeSend(podId, body));
     }
     /** Note that the caller has read the channel up to now. */
     markRead(podId, channelId) {
@@ -17223,39 +17219,6 @@ var LemmaClient = (() => {
         query: {
           "cursor": cursor
         },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Follow Up Contact
-     * Write to a contact in their most recent conversation, where the channel allows.
-     *
-     * With ``channel: email``, to their verified email address instead, which
-     * reaches a web chat contact who is not on the page.
-     *
-     * Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-     * has closed, when they have never written to the pod, or, for email, when
-     * they have no verified address or the pod no email address answering
-     * contacts; 429 past the day's follow-ups for this contact; 502 when the
-     * platform did not take it, which the conversation then shows as not sent.
-     * @param podId
-     * @param contactId
-     * @param requestBody
-     * @returns FollowUpResponse Successful Response
-     * @throws ApiError
-     */
-    static contactFollowUp(podId, contactId, requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/contacts/{contact_id}/messages",
-        path: {
-          "pod_id": podId,
-          "contact_id": contactId
-        },
-        body: requestBody,
-        mediaType: "application/json",
         errors: {
           422: `Validation Error`
         }
@@ -17684,19 +17647,6 @@ var LemmaClient = (() => {
         () => ContactsService.contactUpdate(podId, contactId, { display_name: displayName })
       );
     }
-    /** Write to a contact in their latest conversation, where the channel allows:
-     *  never where they unsubscribed, on WhatsApp only within 24 hours of their
-     *  last message, and a few times a day at most. Takes `contact.message`.
-     *  `channel: "email"` sends to their verified email address instead, from
-     *  the pod's email address when their latest conversation is a web chat. */
-    followUp(podId, contactId, message, options = {}) {
-      return this.client.request(
-        () => ContactsService.contactFollowUp(podId, contactId, {
-          message,
-          channel: options.channel
-        })
-      );
-    }
     /** One page of everything the pod holds about a contact: handles,
      *  conversations, then rows. Pass `next_cursor` back as `cursor` until absent. */
     export(podId, contactId, options = {}) {
@@ -17720,240 +17670,6 @@ var LemmaClient = (() => {
         () => UsageService.usageOrganizationContactsCapUpdate(organizationId, {
           monthly_limit_usd: monthlyLimitUsd
         })
-      );
-    }
-  };
-
-  // src/openapi_client/services/NotificationsService.ts
-  var NotificationsService = class {
-    /**
-     * List My Notifications
-     * Notifications addressed to the current user in this pod, newest first. Filter with `status` (repeatable). Each item carries everything needed to render its action: `awaiting_response` decides whether to offer one, and `responds_through_action` decides whether it is a free-text reply or the form described by `action`.
-     * @param podId
-     * @param status
-     * @param limit
-     * @param pageToken
-     * @returns NotificationListResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationList(podId, status, limit = 50, pageToken) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/notifications",
-        path: {
-          "pod_id": podId
-        },
-        query: {
-          "status": status,
-          "limit": limit,
-          "page_token": pageToken
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Notify A Pod Member
-     * Reach a pod member on whichever surface they actually use, leaving a copy in their Lemma inbox either way.
-     *
-     * Gated on `conversation.write` rather than an editor permission: this opens a conversation and writes a message into it, which is exactly that grant. Requiring `agent.update` is what left the older `surface.send` endpoint with no caller in the product.
-     *
-     * A 201 with `delivery_status` of `UNDELIVERABLE` is a success, not a failure — the notification exists and the inbox has it. Read `undeliverable_reason` to tell the user what to do about it.
-     * @param podId
-     * @param requestBody
-     * @returns NotificationResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationSend(podId, requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/notifications",
-        path: {
-          "pod_id": podId
-        },
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Mark All My Notifications Read
-     * Returns the remaining unread count, which is always zero.
-     * @param podId
-     * @returns NotificationUnreadCountResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationMarkAllRead(podId) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/notifications/read-all",
-        path: {
-          "pod_id": podId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Count My Unread Notifications
-     * Unread, not unanswered. A notification you have read but not yet acted on has stopped being new.
-     * @param podId
-     * @returns NotificationUnreadCountResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationUnreadCount(podId) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/notifications/unread-count",
-        path: {
-          "pod_id": podId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Acknowledge A Notification
-     * Dismiss a notification that asked for nothing. Returns 409 when a response is owed — dismissing a question is not answering it.
-     * @param podId
-     * @param notificationId
-     * @returns NotificationResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationAcknowledge(podId, notificationId) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/notifications/{notification_id}/acknowledge",
-        path: {
-          "pod_id": podId,
-          "notification_id": notificationId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Mark Notification Read
-     * @param podId
-     * @param notificationId
-     * @returns NotificationResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationMarkRead(podId, notificationId) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/notifications/{notification_id}/read",
-        path: {
-          "pod_id": podId,
-          "notification_id": notificationId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Respond To A Notification
-     * Answer a notification from the app. Produces the same `RESPONDED` an agent-mediated reply on a chat surface produces, so the asking run sees it either way.
-     *
-     * Returns 409 when the notification is answered by completing its `action` instead — a workflow form is submitted through the workflow run endpoint, where it is validated against the node's schema. It also returns 409 if somebody already answered it, rather than overwriting an answer that may already have been acted on.
-     * @param podId
-     * @param notificationId
-     * @param requestBody
-     * @returns NotificationResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationRespond(podId, notificationId, requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/notifications/{notification_id}/respond",
-        path: {
-          "pod_id": podId,
-          "notification_id": notificationId
-        },
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-  };
-
-  // src/namespaces/notifications.ts
-  var NotificationsNamespace = class {
-    constructor(client, podId) {
-      __publicField(this, "client", client);
-      __publicField(this, "podId", podId);
-    }
-    /** My notifications in this pod, newest first. */
-    list(options) {
-      return this.client.request(
-        () => NotificationsService.notificationList(
-          this.podId(),
-          options == null ? void 0 : options.status,
-          options == null ? void 0 : options.limit,
-          options == null ? void 0 : options.pageToken
-        )
-      );
-    }
-    /**
-     * How many I have not read. Keyed on being read, not answered — a badge that
-     * only clears when you finish the work is a badge people stop looking at.
-     */
-    unreadCount() {
-      return this.client.request(
-        () => NotificationsService.notificationUnreadCount(this.podId())
-      );
-    }
-    markRead(notificationId) {
-      return this.client.request(
-        () => NotificationsService.notificationMarkRead(this.podId(), notificationId)
-      );
-    }
-    markAllRead() {
-      return this.client.request(
-        () => NotificationsService.notificationMarkAllRead(this.podId())
-      );
-    }
-    /**
-     * Answer one. Produces the same `RESPONDED` an agent-mediated reply on a chat
-     * surface produces, so the run that asked reads one thing either way.
-     *
-     * Rejects with 409 when the notification is answered by completing its
-     * `action` instead (a workflow form, submitted through the workflow run
-     * endpoint where it is validated against the node's schema), and when
-     * somebody has already answered it.
-     */
-    respond(notificationId, payload) {
-      return this.client.request(
-        () => NotificationsService.notificationRespond(
-          this.podId(),
-          notificationId,
-          payload
-        )
-      );
-    }
-    /** Dismiss one that asked for nothing. 409 when a response is owed. */
-    acknowledge(notificationId) {
-      return this.client.request(
-        () => NotificationsService.notificationAcknowledge(this.podId(), notificationId)
-      );
-    }
-    /**
-     * Reach a pod member wherever they are, leaving a copy in their inbox either
-     * way. A 201 whose `delivery_status` is `UNDELIVERABLE` succeeded; read
-     * `undeliverable_reason` to tell the user what to do about it.
-     */
-    send(payload) {
-      return this.client.request(
-        () => NotificationsService.notificationSend(this.podId(), payload)
       );
     }
   };
@@ -20531,13 +20247,12 @@ var LemmaClient = (() => {
       __publicField(this, "organizations");
       __publicField(this, "podSurfaces");
       /** The WhatsApp, Telegram and Slack groups a pod's bots are in. */
-      __publicField(this, "podGroups");
+      __publicField(this, "podSources");
       /** The other pods a pod can ask, and the pods connected to ask it. */
       __publicField(this, "podLinks");
       __publicField(this, "channels");
       __publicField(this, "contacts");
       /** The caller's own surfaces across all pods (grouped by platform). */
-      __publicField(this, "notifications");
       __publicField(this, "userSurfaces");
       var _a;
       this._config = resolveConfig(overrides);
@@ -20572,7 +20287,6 @@ var LemmaClient = (() => {
       this.agentHost = new AgentHostNamespace(this._generated);
       this.conversations = new ConversationsNamespace(this._http, podIdFn);
       this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
-      this.notifications = new NotificationsNamespace(this._generated, podIdFn);
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
       this.widgets = new WidgetsNamespace(this._http, podIdFn);
       this.workspace = new WorkspaceNamespace(this._http);
@@ -20597,7 +20311,7 @@ var LemmaClient = (() => {
       this.podRoles = new PodRolesNamespace(this._generated, podIdFn);
       this.organizations = new OrganizationsNamespace(this._generated, this._http);
       this.podSurfaces = new PodSurfacesNamespace(this._generated);
-      this.podGroups = new PodGroupsNamespace(this._generated);
+      this.podSources = new PodSourcesNamespace(this._generated);
       this.podLinks = new PodLinksNamespace(this._generated);
       this.channels = new ChannelsNamespace(this._generated);
       this.contacts = new ContactsNamespace(this._generated);

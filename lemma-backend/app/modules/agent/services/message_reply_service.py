@@ -1,6 +1,6 @@
 """Bring an asking conversation back when the people it messaged answer.
 
-``message_user`` does not pause, and should not: a person takes hours, and an
+``channel_post`` does not pause, and should not: a person takes hours, and an
 execution suspended for hours is one that cannot be told anything in the
 meantime. The agent sends, finishes its turn, and the conversation goes quiet.
 
@@ -12,7 +12,7 @@ rule as a person typing, and the same one this module's own
 system-triggered run its prompt.
 
 Which is why an agent no longer has any reason to ``wait_for`` after
-``message_user``. Waiting is for work with a real gap in it — a build, a
+``channel_post``. Waiting is for work with a real gap in it — a build, a
 thing that needs to settle — and it stopped being this feature's business.
 """
 
@@ -42,13 +42,12 @@ REPLY_SOURCE = "message_replies"
 # Deliberately not the answers themselves. Batching them into this text needs a
 # marker for which round has already been delivered, and gets it wrong the first
 # time an agent asks a second question before the first is answered. The ids are
-# in the model's own history next to the `message_user` calls that produced them,
-# and `check_messages` already reads exactly the ones it is given.
+# in the model's own history next to the `channel_post` calls that produced them,
+# and `channel_read(asked_by_me=True)` reads exactly this conversation's.
 REPLIES_ARRIVED = (
-    "Everyone you messaged has now replied, or their time to reply has run "
-    "out. Read where each stands with `check_messages`, using the notification "
-    "ids from your earlier `message_user` calls, then carry on with what you "
-    "were doing."
+    "Everyone you asked has now answered, or can no longer. Read what they said "
+    "with `channel_read(asked_by_me=True)`, then carry on with what you were "
+    "doing."
 )
 
 

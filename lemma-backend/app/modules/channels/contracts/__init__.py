@@ -19,6 +19,7 @@ from app.modules.channels.domain.entities import (
     Interaction,
     InteractionKind,
     InteractionState,
+    NotifyLevel,
     Participant,
     Principal,
     Sender,
@@ -53,6 +54,7 @@ __all__ = [
     "GroupHome",
     "Home",
     "Interaction",
+    "NotifyLevel",
     "InteractionKind",
     "InteractionState",
     "MembersHome",
@@ -68,12 +70,14 @@ __all__ = [
     "SourceKind",
     "Speaker",
     "background",
+    "call_for_person",
     "channel_by_id",
     "contact_channel",
     "direct_channel",
     "handler_of",
     "may_read",
     "withheld_from",
+    "participant_of",
     "participants_of",
     "post",
     "source_by_id",
@@ -96,6 +100,22 @@ async def source_by_id(uow: SqlAlchemyUnitOfWork, source_id: UUID) -> Source | N
 
 async def channel_by_id(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> Channel | None:
     return await ChannelRepository(uow.session).get(channel_id)
+
+
+async def call_for_person(
+    uow: SqlAlchemyUnitOfWork, *, channel_id: UUID, reason: str | None
+) -> None:
+    """The channel asks for a person -- flagged until somebody steps in."""
+    await ChannelRepository(uow.session).call_for_person(channel_id, reason=reason)
+
+
+async def participant_of(
+    uow: SqlAlchemyUnitOfWork, *, channel_id: UUID, principal: Principal
+) -> Participant | None:
+    """Somebody's seat in a channel -- how they hear of it -- if they have one."""
+    return await ChannelRepository(uow.session).participant(
+        channel_id=channel_id, principal=principal
+    )
 
 
 async def direct_channel(

@@ -83,6 +83,12 @@ class _Egress:
         self.posted: list[dict] = []
         self.finish_result = finish_result
         self.progress = _Progress(self)
+        #: What a finished stream records as the channel's line.
+        self.shown: list[str] = []
+        self.delivery = SimpleNamespace(note_shown=self._note_shown)
+
+    async def _note_shown(self, conversation_id, *, text):
+        self.shown.append(text)
 
     async def send_agent_message_for_conversation(self, **kwargs):
         self.posted.append(kwargs)
@@ -177,6 +183,8 @@ async def test_the_answer_closes_the_sealed_stream_with_what_is_left() -> None:
     assert egress.finished[0]["progress_handle"].message_id == STREAM.message_id
     assert egress.finished[0]["already_streamed"] is True
     assert egress.posted == [] and egress.cleared == []
+    # Sent by no envelope, so recorded here: the whole answer, once.
+    assert egress.shown == ["Here is the answer."]
     # Finished: a later look finds nothing left to close.
     assert await take_live_display(run_id, wait_seconds=0) is None
 

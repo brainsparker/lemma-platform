@@ -61,6 +61,7 @@ class Timeline:
         question: NewQuestion | None = None,
         mentions: Sequence[Principal] = (),
         mentioned_agents: Sequence[UUID] = (),
+        deliver: bool = False,
     ) -> ChannelMessage | None:
         """The line, posted; ``None`` when there was nothing to say.
 
@@ -106,6 +107,7 @@ class Timeline:
                 sender_user_id=sender.user_id,
                 mentioned_agent_ids=tuple(agents),
                 thread_root_id=line.thread_root_id,
+                deliver=deliver and source_id is not None and not line.members_only,
             ),
         )
         return message

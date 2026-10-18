@@ -46,7 +46,6 @@ from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.outsiders import (
-    OUTSIDE_ANSWER_TOOL,
     Audience,
 )
 from app.modules.agent.domain.pausing_tools import (
@@ -556,7 +555,6 @@ async def set_conversation_metadata_value(
 __all__ = [
     # The tool an approval card for an answer to someone outside the pod
     # approves; the surface renders that card in its own words.
-    "OUTSIDE_ANSWER_TOOL",
     # Re-exported because `resolve_pending_interaction` takes one, and the enum
     # itself lives in `domain`, which is not a surface another module may reach
     # into. A published function whose argument type is unreachable is not

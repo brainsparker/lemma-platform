@@ -25,10 +25,9 @@ if TYPE_CHECKING:
         PodQueries,
         PodRecords,
         PodSchedules,
-        PodNotifications,
         PodLinks,
         PodSurfaces,
-        PodGroups,
+        PodSources,
         PodChannels,
         PodContacts,
         PodWebWidgets,
@@ -164,22 +163,16 @@ class Pod:
         return self._resource(PodApps)
 
     @cached_property
-    def notifications(self) -> "PodNotifications":
-        from .resources import PodNotifications
-
-        return self._resource(PodNotifications)
-
-    @cached_property
     def surfaces(self) -> "PodSurfaces":
         from .resources import PodSurfaces
 
         return self._resource(PodSurfaces)
 
     @cached_property
-    def groups(self) -> "PodGroups":
-        from .resources import PodGroups
+    def sources(self) -> "PodSources":
+        from .resources import PodSources
 
-        return self._resource(PodGroups)
+        return self._resource(PodSources)
 
     @cached_property
     def channels(self) -> "PodChannels":

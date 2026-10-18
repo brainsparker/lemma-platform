@@ -1,13 +1,13 @@
 """A run paused on the person is never left behind by what comes next.
 
 The approval card and the typed answer both reach only the conversation that
-paused. A notification sent later, or a reply a day later, used to be able to
+paused. A message sent later, or a reply a day later, used to be able to
 start a fresh conversation -- the card's buttons then did nothing, and
 "approve" went to an agent with nothing to approve. A person now has one
 conversation with an agent, so both land where the pause is.
 
-Driven through the same journey harness as the notification tests, over the
-real `NotificationService`, `NotificationEgress` and `ConversationBinder`.
+Driven through the same journey harness as the direct-message tests, over the
+real `DirectMessages`, `NotificationEgress` and `ConversationBinder`.
 """
 
 from __future__ import annotations
@@ -60,16 +60,16 @@ def _paused(monkeypatch, conversation_id: UUID) -> None:
     )
 
 
-async def test_a_notification_lands_in_the_conversation_waiting_on_an_approval(
+async def test_a_message_lands_in_the_conversation_waiting_on_an_approval(
     world, monkeypatch
 ):
     chat = world.had_chatted(hours_ago=1)
     world.agent_side.conversations[chat.id].updated_at = _now() - timedelta(minutes=31)
     _paused(monkeypatch, chat.id)
 
-    notification = await world.ask(title="Standup")
+    asked = await world.ask(title="Standup")
 
-    assert notification.delivery_conversation_id == chat.id
+    assert asked.delivered.conversation_id == chat.id
 
 
 async def test_a_reply_a_day_later_still_reaches_the_paused_conversation(

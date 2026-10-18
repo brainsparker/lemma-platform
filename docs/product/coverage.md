@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 249 | 333 |
+| OpenAPI operations | 250 | 325 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -296,12 +296,12 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused`, `test_connecting_email_does_not_mint_a_second_mailbox`, `test_a_new_pod_already_has_an_address` |
 | `PS-SURF-023` A person reachable from several pods is reached by the right one | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
-| `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications`, `test_removal_closes_the_inbox_it_left_behind` |
-| `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_the_unread_count`, `test_read_all_clears_everything`, `test_read_state_is_personal` |
-| `PS-SURF-032` A person can answer from the notification | `covered` | `test_a_notification_can_be_answered`, `test_a_notification_can_be_acknowledged` |
+| `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_what_names_a_person_arrives_in_their_inbox`, `test_a_line_for_one_person_is_in_their_own_channel`, `test_an_outsider_sees_no_inbox`, `test_removal_closes_the_inbox_it_left_behind` |
+| `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_what_is_new`, `test_read_state_is_personal` |
+| `PS-SURF-032` A person can answer from the notification | `covered` | `test_a_question_is_answered_from_the_inbox`, `test_an_answered_question_refuses_a_second_answer` |
 | `PS-SURF-033` What is meant for one person is not said in a group | `planned` | — |
 | `PS-SURF-040` A pod sees every group its bots are in | `planned` | — |
-| `PS-SURF-041` The member answering for a group sees what its people are waiting on | `planned` | — |
+| `PS-SURF-041` A member steps in for somebody outside the pod the bot cannot help | `planned` | — |
 | `PS-SURF-042` A member adds the pod's Telegram bot to a group from Lemma | `planned` | — |
 | `PS-SURF-043` A Slack channel shared with another company answers that company for the pod | `planned` | — |
 | `PS-SURF-044` People in a group ask the bot by the name they see | `planned` | — |

@@ -19,7 +19,7 @@ it; one typed in Lemma carries no label, and the model reads it as the next line
 of the chat. In the conversation that answers people outside the pod that is
 worse than a muddle: the brief says everyone writing is a stranger, so "ask him
 what's up" from the member who looks after the group was read as the stranger's,
-and passed on with ``message_user`` -- to that same member. So the server stamps
+and passed on with ``channel_post`` -- to that same member. So the server stamps
 where such a message was written (``written_in_lemma``), the history labels it,
 and the run it starts is marked.
 """
@@ -83,8 +83,7 @@ WRITTEN_BY_KEEPER_LABEL = (
     "(Written in Lemma by the member who looks after this conversation -- not "
     "by anybody outside the pod. Nobody in the chat saw this message; only your "
     "answer is posted there, so write it to make sense on its own to the people "
-    "in the chat, and do not quote this message. Do not pass it on with "
-    "`message_user`: that only reaches the member who wrote it.)"
+    "in the chat, and do not quote this message.)"
 )
 
 #: A reply typed in Lemma into a member's own slice of a group.

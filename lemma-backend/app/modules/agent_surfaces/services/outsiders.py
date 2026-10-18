@@ -51,7 +51,9 @@ from app.modules.agent_surfaces.services.chat_context_builder import build_chat_
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.outsider_limits import OutsiderTurnLimiter
 from app.modules.agent_surfaces.services.sender_handles import group_handle
-from app.modules.agent_surfaces.services.slack_groups import answers_slack_outsider
+from app.modules.agent_surfaces.services.workspace_channels import (
+    answers_slack_outsider,
+)
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )

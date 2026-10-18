@@ -42,12 +42,12 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContex
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
-from app.modules.agent_surfaces.infrastructure.models import NotificationModel
 from app.modules.agent_surfaces.platforms.email_authentication import (
     EmailAuthenticationVerdict,
 )
 from app.modules.agent_surfaces.services.contact_windows import ContactWindows
 from app.modules.agent_surfaces.services.contacts import ContactDoor
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import direct_lines
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -187,13 +187,10 @@ class _Pod:
         )
 
     async def notes(self) -> list[str]:
-        return list(
-            await self.db.scalars(
-                select(NotificationModel.title)
-                .where(NotificationModel.pod_id == self.pod_id)
-                .order_by(NotificationModel.created_at)
-            )
-        )
+        """What the owner was told, each note's first line, from their own
+        channel."""
+        lines = await direct_lines(self.db, pod_id=self.pod_id, user_id=self.owner)
+        return [line.body.split("\n", 1)[0] for line in lines]
 
 
 @pytest.fixture

@@ -3,6 +3,7 @@ import type { ChannelKind } from "../openapi_client/models/ChannelKind.js";
 import type { ChannelPostRequest } from "../openapi_client/models/ChannelPostRequest.js";
 import type { ChannelUpdateRequest } from "../openapi_client/models/ChannelUpdateRequest.js";
 import type { NotifyLevel } from "../openapi_client/models/NotifyLevel.js";
+import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 import { ChannelsService } from "../openapi_client/services/ChannelsService.js";
 
 /**
@@ -25,6 +26,8 @@ export class ChannelsNamespace {
     options: {
       kind?: ChannelKind | `${ChannelKind}`;
       archived?: boolean;
+      /** Only this contact's channel. */
+      contactId?: string;
       limit?: number;
       before?: string;
     } = {},
@@ -34,6 +37,7 @@ export class ChannelsNamespace {
         podId,
         options.kind as ChannelKind | undefined,
         options.archived ?? false,
+        options.contactId,
         options.limit ?? 50,
         options.before,
       ),
@@ -152,6 +156,13 @@ export class ChannelsNamespace {
     return this.client.request(() =>
       ChannelsService.channelMessageSearch(podId, q, options.limit ?? 30),
     );
+  }
+
+  /** Tell another member of the pod something: a line in their own channel,
+   *  carried on to where they last spoke. `to` is a pod member id, user id or
+   *  email address. */
+  notify(podId: string, body: { to: string; text: string; title?: string | null }) {
+    return this.client.request(() => AgentSurfacesService.agentNoticeSend(podId, body));
   }
 
   /** Note that the caller has read the channel up to now. */

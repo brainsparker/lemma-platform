@@ -258,7 +258,7 @@ export type { PodPermissionsNamespace } from "./namespaces/pod-permissions.js";
 export type { PodRolesNamespace } from "./namespaces/pod-roles.js";
 export type { PodsNamespace } from "./namespaces/pods.js";
 export type { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
-export type { PodGroupsNamespace } from "./namespaces/pod-groups.js";
+export type { PodSourcesNamespace } from "./namespaces/pod-sources.js";
 export type { PodLinkShares, PodLinksNamespace } from "./namespaces/pod-links.js";
 export type { ChannelsNamespace } from "./namespaces/channels.js";
 export type { ContactsNamespace } from "./namespaces/contacts.js";

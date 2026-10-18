@@ -88,6 +88,7 @@ class MemberLines:
             ),
             mentions=mentions,
             mentioned_agents=post.mentioned_agents,
+            deliver=True,
         )
         if message is None:
             raise LineRefused("Say something first", status_code=422)

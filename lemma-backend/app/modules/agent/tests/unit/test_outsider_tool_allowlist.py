@@ -158,7 +158,7 @@ async def test_an_assembled_strangers_run_is_offered_only_the_allow_list(monkeyp
     assert offered, "the run was offered nothing at all"
     assert offered <= OUTSIDER_TOOL_NAMES, sorted(offered - OUTSIDER_TOOL_NAMES)
     assert "web_fetch" not in offered
-    assert "message_user" in offered
+    assert "ask_a_person" in offered
 
 
 def _tool_names(toolsets) -> set[str]:

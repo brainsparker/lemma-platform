@@ -127,6 +127,20 @@ async def close_questions_under(
     return closed
 
 
+async def open_questions_under(
+    uow: SqlAlchemyUnitOfWork, *, prefix: str
+) -> list[ChannelMessage]:
+    """The lines still waiting whose ``ref`` starts with ``prefix``."""
+    return await LineRepository(uow.session).open_questions_under(prefix)
+
+
+async def questions_under(
+    uow: SqlAlchemyUnitOfWork, *, prefix: str
+) -> list[ChannelMessage]:
+    """Every line whose question's ``ref`` starts with ``prefix``, open or not."""
+    return await LineRepository(uow.session).questions_under(prefix)
+
+
 async def open_questions_in(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> list[ChannelMessage]:
@@ -134,6 +148,46 @@ async def open_questions_in(
     return await LineRepository(uow.session).open_questions_of(
         conversation_id=conversation_id
     )
+
+
+async def waiting_on_member(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, user_id: UUID
+) -> list[ChannelMessage]:
+    """The open questions put to one member in a pod, newest first."""
+    return await LineRepository(uow.session).waiting_on(user_id=user_id, pod_id=pod_id)
+
+
+async def answer_as_member(
+    *, pod_id: UUID, message_id: UUID, user_id: UUID, answer: Mapping[str, object]
+) -> ChannelMessage:
+    """Answer a question put to this member, as they would on its line: through
+    whatever asked it, then the line closes. Raises ``AnswerRefused`` with the
+    reason when it cannot be answered -- not theirs, not open, refused by the
+    asking side.
+    """
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.channels.infrastructure.repository import ChannelRepository
+    from app.modules.channels.services.messages import LineRefused, answer_question
+
+    factory = SessionUnitOfWorkFactory(async_session_maker)
+    async with factory() as uow:
+        line = await LineRepository(uow.session).get(message_id)
+        channel = (
+            await ChannelRepository(uow.session).get(line.channel_id) if line else None
+        )
+    if line is None or channel is None or channel.pod_id != pod_id:
+        raise AnswerRefused("There is no such question", status_code=404)
+    try:
+        return await answer_question(
+            factory,
+            channel=channel,
+            message_id=message_id,
+            user_id=user_id,
+            answer=answer,
+        )
+    except LineRefused as refused:
+        raise AnswerRefused(str(refused), status_code=refused.status_code) from refused
 
 
 async def question_for(uow: SqlAlchemyUnitOfWork, ref: str) -> ChannelMessage | None:
@@ -150,6 +204,8 @@ def _ref_of(line: ChannelMessage) -> str | None:
 
 __all__ = [
     "AnswerHandler",
+    "answer_as_member",
+    "waiting_on_member",
     "announce_closed",
     "AnswerRefused",
     "Answering",
@@ -158,6 +214,8 @@ __all__ = [
     "close_question",
     "close_questions_under",
     "open_questions_in",
+    "open_questions_under",
     "question_for",
+    "questions_under",
     "ref_kind",
 ]

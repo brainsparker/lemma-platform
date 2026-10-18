@@ -7709,9 +7709,9 @@ samp,
     }
 }
 
-/* ── A channel's groups: where people outside the space meet its bot ──
-   Under the channel they belong to, indented past its mark. One row a
-   group: its name, who answers there, and the two things to do about it. */
+/* ── A bot's groups: where people outside the space meet it ──────────
+   Under the bot they belong to, indented past its mark. One row a group:
+   its name, which opens its channel, where everything about it is. */
 .sgroups {
     display: flex;
     flex-direction: column;
@@ -7801,70 +7801,6 @@ samp,
     background: var(--wash-a);
     color: var(--ink);
 }
-.sgroup__acts {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0 14px;
-    margin-top: 2px;
-}
-/* A switch is a checkbox that says so: `role="switch"`, and the accent
-   rather than a second design for on and off. */
-.sgroup__switch {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 32px;
-    font-size: 13px;
-    color: var(--ink-2);
-    cursor: pointer;
-}
-.sgroup__switch input {
-    flex: none;
-    width: 16px;
-    height: 16px;
-    margin: 0;
-    accent-color: var(--accent);
-    cursor: pointer;
-}
-.sgroup__switch:has(input:disabled) {
-    opacity: 0.6;
-    cursor: default;
-}
-.sgroup__switch:has(input:disabled) input {
-    cursor: default;
-}
-.sgroup__take {
-    min-height: 32px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 13px;
-    text-decoration: underline;
-    text-decoration-color: var(--line-2);
-    text-underline-offset: 3px;
-    cursor: pointer;
-}
-.sgroup__take:hover:not(:disabled) {
-    color: var(--ink);
-    text-decoration-color: currentColor;
-}
-.sgroup__take:disabled {
-    opacity: 0.5;
-    cursor: default;
-}
-.sgroup__take:focus-visible,
-.sgroup__switch input:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-}
-.sgroup__problem {
-    font-size: 13px;
-    color: var(--bad);
-}
-
 /* ── A conversation that also lives on a chat platform ─────────────────
    Two ways to send, over the box: a note to the bot alone (the default in a
    group or a channel), or a reply the platform gets (the default in a

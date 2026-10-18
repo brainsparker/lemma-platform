@@ -33,6 +33,9 @@ class ChannelMessagePosted(Fact):
     mentioned_agent_ids: tuple[UUID, ...] = ()
     #: The thread it is a reply in.
     thread_root_id: UUID | None = None
+    #: Written in Lemma for its source: whatever owns that platform carries it
+    #: there. Never set for a line heard on a platform, nor one already sent.
+    deliver: bool = False
 
     def work_namespace(self) -> str:
         return pod_namespace(self.pod_id)

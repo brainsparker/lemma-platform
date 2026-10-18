@@ -24,23 +24,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import UUIDAuditBase
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationDeliveryStatus,
-    NotificationEntity,
-    NotificationOriginKind,
-    NotificationStatus,
-)
 
 
 class NotificationModel(UUIDAuditBase):
-    """Something the pod needs a person to see — see ``domain/notification.py``.
-
-    Lives in ``agent_surfaces`` because delivery is almost entirely surface work
-    (identity resolution, conversation links, platform adapters all live here).
-    The agent and workflow modules reach it through this module's own
-    ``contracts/notifications.py`` and ``contracts/workflow_notifications.py``.
-    It used to be ``app/composition``, which no longer exists.
-    """
+    """Retired: what an agent once told a member is a line in their own channel
+    now (``channels``). Kept defined until a later migration drops the table,
+    so the schema and this metadata agree in the meantime. Nothing reads or
+    writes it."""
 
     __tablename__ = "notifications"
     __table_args__ = (
@@ -129,40 +119,3 @@ class NotificationModel(UUIDAuditBase):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-    def to_entity(self) -> NotificationEntity:
-        return NotificationEntity(
-            id=self.id,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-            pod_id=self.pod_id,
-            recipient_user_id=self.recipient_user_id,
-            recipient_pod_member_id=self.recipient_pod_member_id,
-            actor_user_id=self.actor_user_id,
-            actor_agent_id=self.actor_agent_id,
-            origin_kind=NotificationOriginKind(self.origin_kind),
-            origin_id=self.origin_id,
-            origin_conversation_id=self.origin_conversation_id,
-            from_outside=self.from_outside,
-            origin_group_title=self.origin_group_title,
-            asked_in_private=bool(self.asked_in_private),
-            asked_by_name=self.asked_by_name,
-            title=self.title,
-            body=self.body,
-            background_instruction=self.background_instruction,
-            expects_response=self.expects_response,
-            action=self.action,
-            status=NotificationStatus(self.status),
-            delivery_status=NotificationDeliveryStatus(self.delivery_status),
-            delivery_surface_id=self.delivery_surface_id,
-            delivery_conversation_id=self.delivery_conversation_id,
-            delivery_platform=self.delivery_platform,
-            delivery_error=self.delivery_error,
-            response_summary=self.response_summary,
-            response_data=self.response_data,
-            idempotency_key=self.idempotency_key,
-            expires_at=self.expires_at,
-            delivered_at=self.delivered_at,
-            read_at=self.read_at,
-            responded_at=self.responded_at,
-        )

@@ -2,8 +2,8 @@
 
 Outside the 24-hour customer-service window Meta answers 200 and drops the
 message, then says so in a ``statuses`` webhook (131047). A proactive send is
-refused up front, and a notification the status reports as failed stops being
-recorded as delivered.
+refused up front, and a line the status reports as failed stops being recorded
+as sent.
 """
 
 from __future__ import annotations
@@ -31,11 +31,6 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
-)
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationDeliveryStatus,
-    NotificationEntity,
-    NotificationOriginKind,
 )
 from app.modules.agent_surfaces.platforms.whatsapp import (
     sent_messages,
@@ -86,7 +81,7 @@ def test_a_failed_status_is_read_and_the_others_are_not():
 
 @pytest.fixture
 def sent() -> Iterator[None]:
-    """The Redis that remembers which message carried which notification."""
+    """The Redis that remembers which message carried which line."""
     cache = RedisJsonCache(
         redis_url=settings.redis_url, key_prefix="test:whatsapp-sent", ttl_seconds=60
     )
@@ -95,38 +90,56 @@ def sent() -> Iterator[None]:
         yield
 
 
-async def test_a_notification_meta_reports_undelivered_is_no_longer_delivered(sent):
-    notification = NotificationEntity(
-        pod_id=uuid4(),
-        recipient_user_id=uuid4(),
-        recipient_pod_member_id=uuid4(),
-        origin_kind=NotificationOriginKind.AGENT_RUN,
-        title="Standup",
-        body="What did you ship?",
+async def test_a_line_meta_reports_undelivered_is_no_longer_recorded_as_sent(
+    sent, monkeypatch
+):
+    """The status names Meta's message id; the line it carried is marked failed.
+
+    The line's delivery on WhatsApp was recorded SENT when Meta answered 200,
+    and stays so unless the status webhook is read back to the line.
+    """
+    line_id = uuid4()
+    marked: list[dict[str, Any]] = []
+
+    async def mark_delivery_failed(_uow, **kwargs) -> bool:
+        marked.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        whatsapp_delivery_status, "mark_delivery_failed", mark_delivery_failed
     )
-    notification.mark_delivered(
-        surface_id=uuid4(), conversation_id=uuid4(), platform="WHATSAPP"
-    )
-    repository = SimpleNamespace(
-        get=AsyncMock(return_value=notification),
-        update=AsyncMock(side_effect=lambda entity: entity),
-    )
-    await sent_messages.remember_sent(notification.id, _OUTSIDE_WINDOW["id"])
+    await sent_messages.remember_sent(line_id, _OUTSIDE_WINDOW["id"])
 
     await whatsapp_delivery_status.apply_delivery_statuses(
         SimpleNamespace(session=SimpleNamespace(info={})),  # type: ignore[arg-type]
         SurfacePlatformWebhookIngress(
             source="whatsapp", payload=_statuses(_OUTSIDE_WINDOW)
         ),
-        notifications=repository,  # type: ignore[arg-type]
     )
 
-    saved = repository.update.await_args.args[0]
-    assert saved.delivery_status is NotificationDeliveryStatus.FAILED
-    assert "24 hours" in (saved.delivery_error or "")
+    [failed] = marked
+    assert (failed["message_id"], failed["platform"]) == (line_id, "WHATSAPP")
+    assert "24 hours" in failed["error"]
 
 
-async def test_a_notification_send_remembers_which_message_carried_it(sent):
+async def test_a_status_for_a_message_nobody_remembered_marks_nothing(
+    sent, monkeypatch
+):
+    """A reply's own message, or one older than the cache: no line to correct."""
+    marked = AsyncMock()
+    monkeypatch.setattr(whatsapp_delivery_status, "mark_delivery_failed", marked)
+
+    await whatsapp_delivery_status.apply_delivery_statuses(
+        SimpleNamespace(session=SimpleNamespace(info={})),  # type: ignore[arg-type]
+        SurfacePlatformWebhookIngress(
+            source="whatsapp", payload=_statuses(_OUTSIDE_WINDOW)
+        ),
+    )
+
+    marked.assert_not_awaited()
+
+
+async def test_a_direct_message_send_remembers_which_message_carried_it(sent):
     service = whatsapp_service.WhatsAppPlatformService(
         {"access_token": "t", "phone_number_id": "pn-1"}
     )

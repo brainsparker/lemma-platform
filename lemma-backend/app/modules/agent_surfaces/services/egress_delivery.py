@@ -59,6 +59,7 @@ from app.modules.agent_surfaces.services.channel_lines import (
     WRITTEN_BY_MEMBER,
     ChannelLines,
     ChannelLinesInDatabase,
+    ALREADY_A_LINE,
 )
 from app.modules.agent_surfaces.services.group_names import sender_name_for
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
@@ -131,6 +132,20 @@ class SurfaceDelivery:
         itself is `agent_naming`, shared with routing.
         """
         return await agent_name_for_surface(self.uow, surface)
+
+    async def note_shown(self, conversation_id: UUID, *, text: str) -> None:
+        """An answer the person already sees -- a live message finished in
+        place, sent by no envelope -- as its line in the channel."""
+        if not text.strip():
+            return
+        target = await self.resolve_egress_target(conversation_id)
+        if target is None:
+            return
+        await self.channel_lines.said(
+            target=target,
+            conversation_id=conversation_id,
+            text=text,
+        )
 
     async def resolve_egress_target(
         self, conversation_id: UUID, *, at: Source | None = None
@@ -454,7 +469,7 @@ class SurfaceDelivery:
             envelope=envelope,
             receipt=receipt,
         )
-        if envelope.text:
+        if envelope.text and not metadata.get(ALREADY_A_LINE):
             name = metadata.get("agent_display_name")
             await self.channel_lines.said(
                 target=target,

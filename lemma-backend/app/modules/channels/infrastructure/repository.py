@@ -57,8 +57,9 @@ class ChannelRepository:
         return channel_entity(row) if row else None
 
     async def direct(self, *, pod_id: UUID, user_id: UUID) -> Channel:
-        """The member's DIRECT channel in the pod, made if there is none."""
-        return await self._one_of_a_kind(
+        """The member's DIRECT channel in the pod, made if there is none, with
+        them in it: what is said there is new to them until they read it."""
+        channel = await self._one_of_a_kind(
             ChannelModel.pod_id == pod_id,
             ChannelModel.kind == ChannelKind.DIRECT.value,
             ChannelModel.member_user_id == user_id,
@@ -66,6 +67,8 @@ class ChannelRepository:
                 pod_id=pod_id, kind=ChannelKind.DIRECT.value, member_user_id=user_id
             ),
         )
+        await self.join(channel=channel, principal=Principal.member(user_id))
+        return channel
 
     async def for_contact(self, *, pod_id: UUID, contact_id: UUID) -> Channel:
         """The contact's CONTACT channel in the pod, made if there is none."""
@@ -166,6 +169,7 @@ class ChannelRepository:
         before: tuple[datetime, UUID] | None,
         limit: int,
         archived: bool = False,
+        contact_id: UUID | None = None,
     ) -> list[Channel]:
         """The channels a member of the pod sees, most recently active first.
 
@@ -183,6 +187,8 @@ class ChannelRepository:
             if archived
             else ChannelModel.archived_at.is_(None),
         )
+        if contact_id is not None:
+            statement = statement.where(ChannelModel.contact_id == contact_id)
         activity = func.coalesce(ChannelModel.last_message_at, ChannelModel.created_at)
         if before is not None:
             at, channel_id = before

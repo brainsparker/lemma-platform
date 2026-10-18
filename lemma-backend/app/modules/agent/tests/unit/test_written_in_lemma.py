@@ -3,8 +3,9 @@
 In the thread where the bot answers people outside the pod, the member who looks
 after the group typed "ask him what's up with him". The line carried no sender
 label, the brief said everyone writing was a stranger, and the model read it as
-the stranger's -- so it passed the question on with ``message_user``, which only
-reaches that same member, and told the group it had. These pin each place that
+the stranger's -- so it passed the question on to the member it came from, and
+told the group it had. (Then with ``message_user``; a contact's run now calls a
+person in with ``ask_a_person``, which tells that same member.) These pin each place that
 now says otherwise: the server's stamp, the history's label, the run's mark, the
 refused tool call, the brief, and the group section of the prompt.
 """
@@ -50,8 +51,8 @@ from app.modules.agent.infrastructure.harnesses.user_turn_text import (
 from app.modules.agent.services import conversation_turns as turns
 from app.modules.agent.services.outsider_brief import render_outsider_brief
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.messaging.models import MessageUserRequest
-from app.modules.agent.tools.messaging.pydantic_adapter import message_user
+from app.modules.agent.tools.messaging.models import AskAPersonRequest
+from app.modules.agent.tools.messaging.pydantic_adapter import ask_a_person
 
 pytestmark = pytest.mark.unit
 
@@ -333,7 +334,7 @@ def test_the_keepers_line_reads_as_theirs_beside_a_strangers():
     assert "member who looks after this conversation" in keepers
 
 
-# ------------------------------------------------------------- message_user
+# ------------------------------------------------------------- ask_a_person
 
 
 def _deps(*, keeper_asking: bool) -> BaseAgentContext:
@@ -347,14 +348,49 @@ def _deps(*, keeper_asking: bool) -> BaseAgentContext:
     )
 
 
-async def test_the_keepers_own_question_is_never_passed_back_to_them():
-    result = await message_user(
+async def test_the_keepers_own_question_is_never_passed_back_to_them(monkeypatch):
+    """The member who typed it is the person `ask_a_person` would call in.
+    Flagging the channel and telling them a contact needs a person reports
+    their own words back to them as a stranger's, while the group is told
+    somebody will get back to it."""
+    flagged: list[dict] = []
+
+    async def _ask(**kwargs):
+        flagged.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.contracts.direct_messages.ask_a_person", _ask
+    )
+
+    result = await ask_a_person(
         SimpleNamespace(deps=_deps(keeper_asking=True), tool_call_id="call-1"),
-        MessageUserRequest(to="Deepak", message="P C asks what's up with you"),
+        AskAPersonRequest(reason="P C asks what's up with you"),
     )
 
     assert result.success is False
-    assert "Answer in your reply" in (result.error or "")
+    assert flagged == []
+
+
+async def test_a_strangers_run_still_calls_the_keeper_in(monkeypatch):
+    """The refusal above is about who typed the line, not about the tool."""
+    flagged: list[dict] = []
+
+    async def _ask(**kwargs):
+        flagged.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.contracts.direct_messages.ask_a_person", _ask
+    )
+
+    result = await ask_a_person(
+        SimpleNamespace(deps=_deps(keeper_asking=False), tool_call_id="call-1"),
+        AskAPersonRequest(reason="Wants the price list."),
+    )
+
+    assert result.success is True
+    assert len(flagged) == 1
 
 
 # ---------------------------------------------------------------- the brief
@@ -364,7 +400,7 @@ def test_the_strangers_brief_says_a_lemma_line_is_the_keepers():
     brief = render_outsider_brief(pod_name="Sales", owner_display_name="Priya")
 
     assert "written in Lemma is from Priya" in brief
-    assert "never pass it on to them" in brief
+    assert "Answer it here" in brief
 
 
 # ---------------------------------------------------------------- the group

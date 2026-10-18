@@ -64,19 +64,21 @@ def _no_typing_keepalive(monkeypatch):
 #: once more for the send itself. A read keyed by the conversation and joined to
 #: its lines counts here, against the table the statement names first.
 #:
-#: ``channel_messages`` is the two lines: what they said, and what was said
-#: back.
+#: ``channel_messages`` is the two lines -- what they said, and what was said
+#: back -- and two reads: the questions waiting on the member, which their own
+#: agent is shown (what read the inbox of notifications before), and the line
+#: they last said, which is where the answer goes.
 _FIRST_MESSAGE = {
     "agent_surfaces": 7,
     "channel_sources": 10,
-    "channel_messages": 2,
+    "channel_messages": 4,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }
 _LATER_MESSAGE = {
     "agent_surfaces": 5,
     "channel_sources": 9,
-    "channel_messages": 2,
+    "channel_messages": 4,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }

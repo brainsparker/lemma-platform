@@ -45,16 +45,9 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
 )
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationDeliveryStatus,
-    NotificationEntity,
-    NotificationOriginKind,
-)
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.agent_surfaces.domain.surface_config import ContactAnswer
-from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
-    NotificationRepository,
-)
+from app.modules.agent_surfaces.services.direct_messages import tell_member
 from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.services.chat_context_builder import build_chat_context
 from app.modules.agent_surfaces.services.contact_windows import ContactWindows
@@ -144,15 +137,13 @@ def parked_mail_notice(
     parsed: ParsedInboundSurfaceEvent,
     owner: UUID,
     member_id: UUID,
-) -> NotificationEntity:
-    """The inbox note for one unanswered, unauthenticated email."""
+) -> str:
+    """The note for one unanswered, unauthenticated email."""
+    del owner, member_id
     sender = (parsed.sender_email or parsed.sender_external_user_id or "")[:320]
     subject = str(parsed.metadata.get("subject") or "").strip()
     excerpt = parsed.message_text.strip()[:_PARKED_BODY_CHARS]
     return _inbox_note(
-        surface=surface,
-        owner=owner,
-        member_id=member_id,
         title=f"Unverified email from {sender}",
         body=(
             f"An email to {surface.surface_identity_email or surface.name} could "
@@ -167,12 +158,10 @@ def parked_mail_notice(
 
 def parked_mail_summary(
     *, surface: AgentSurfaceEntity, owner: UUID, member_id: UUID
-) -> NotificationEntity:
+) -> str:
     """The one note that stands for the rest of an hour's unverified email."""
+    del owner, member_id
     return _inbox_note(
-        surface=surface,
-        owner=owner,
-        member_id=member_id,
         title="More unverified email",
         body=(
             f"More email to {surface.surface_identity_email or surface.name} "
@@ -184,24 +173,9 @@ def parked_mail_summary(
     )
 
 
-def _inbox_note(
-    *,
-    surface: AgentSurfaceEntity,
-    owner: UUID,
-    member_id: UUID,
-    title: str,
-    body: str,
-) -> NotificationEntity:
-    return NotificationEntity(
-        pod_id=surface.pod_id,
-        recipient_user_id=owner,
-        recipient_pod_member_id=member_id,
-        origin_kind=NotificationOriginKind.API,
-        title=title[:120],
-        body=body,
-        expects_response=False,
-        delivery_status=NotificationDeliveryStatus.UNDELIVERABLE,
-    )
+def _inbox_note(*, title: str, body: str) -> str:
+    """A notice to the member, as the line it is in their channel."""
+    return f"{title}\n\n{body}"
 
 
 class ContactDoor:
@@ -458,4 +432,4 @@ class ContactDoor:
             if count <= limit
             else parked_mail_summary(surface=surface, owner=owner, member_id=member_id)
         )
-        await NotificationRepository(self.uow).create(note)
+        await tell_member(self.uow, pod_id=surface.pod_id, user_id=owner, text=note)

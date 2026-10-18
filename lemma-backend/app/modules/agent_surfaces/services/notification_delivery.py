@@ -55,6 +55,33 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
 from app.modules.channels.contracts import Source
 
 
+@dataclass(frozen=True, slots=True)
+class Outbound:
+    """A line in a member's own channel, on its way to them on a platform.
+
+    ``id`` is the line's: it seeds a cold email's thread, so the same line
+    re-sent lands in the same thread.
+    """
+
+    id: UUID
+    pod_id: UUID
+    recipient_user_id: UUID
+    title: str
+
+
+@dataclass(frozen=True, slots=True)
+class Delivered:
+    """Where an outbound line went, or why it went nowhere."""
+
+    platform: str | None = None
+    conversation_id: UUID | None = None
+    reason: str | None = None
+
+    @property
+    def sent(self) -> bool:
+        return self.platform is not None
+
+
 # The name an agent uses for "reach them by mail", whichever provider carries it.
 EMAIL_CHANNEL = "email"
 

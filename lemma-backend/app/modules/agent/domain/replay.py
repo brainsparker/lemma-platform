@@ -98,15 +98,17 @@ REPLAY_CLASS: Mapping[str, ReplayClass] = {
     "describe_connector_operation": _SAFE,
     "run_connector_operation": _UNSAFE,
     # Messaging: sends key on the run and call; the rest read.
-    "message_user": _KEYED,
+    "channel_post": _KEYED,
     "ask_teammate": _UNSAFE,
-    "check_messages": _SAFE,
+    "channel_read": _SAFE,
+    "channel_search": _SAFE,
+    "channel_list": _SAFE,
     "list_pod_members": _SAFE,
     "list_teammates": _SAFE,
     # Answering a notification or a workflow form: the second answer is refused
     # by the notification itself, which reports the first.
-    "respond_to_notification": _KEYED,
-    "submit_workflow_form": _KEYED,
+    "answer_question": _KEYED,
+    "ask_a_person": _KEYED,
     # Contacts and the visitor's form.
     "contact_records": _SAFE,
     "contact_function": _KEYED,

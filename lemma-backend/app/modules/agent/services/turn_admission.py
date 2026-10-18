@@ -13,7 +13,7 @@ A pause holds a message in two cases:
   the action can run twice. So the message waits for the resume run, which
   carries both.
 - **The sender is not the person who was asked.** Replies arriving for
-  `message_user` are news, not an answer, and starting a turn would deny a
+  `channel_post` are news, not an answer, and starting a turn would deny a
   question the owner has not decided. A message the person types does supersede
   an open question; that is still `start`'s rule.
 """

@@ -11,7 +11,7 @@ and the "the next message picks it up" comments used to cover.
   wait for it, and results a finishing parent left uncollected.
 * ``pod_ask.deliver`` -- an answer to the pod that asked, or answers this
   conversation was owed while it could not take them.
-* ``agent.replies_arrived`` -- subscribed to surfaces' ``NotificationSettled``:
+* ``agent.replies_arrived`` -- subscribed to surfaces' ``AskedQuestionsSettled``:
   the asking conversation's next turn once every answer is in.
 
 Each locks only the conversation it starts a turn in, in its own transaction,
@@ -58,8 +58,8 @@ from app.modules.agent.events.work_kinds import (
     POD_ASK_DELIVER,
     replies_key,
 )
-from app.modules.agent_surfaces.contracts.notification_facts import (
-    NotificationSettled,
+from app.modules.agent_surfaces.contracts.question_facts import (
+    AskedQuestionsSettled,
 )
 
 logger = get_logger(__name__)
@@ -182,7 +182,7 @@ async def deliver_pod_ask(ctx: JobContext, payload: ConversationWork) -> None:
         raise PermanentFailure(exc.message) from exc
 
 
-async def deliver_replies(ctx: JobContext, payload: NotificationSettled) -> None:
+async def deliver_replies(ctx: JobContext, payload: AskedQuestionsSettled) -> None:
     """Bring a conversation back once everyone it asked has answered."""
     from app.modules.agent.services.message_reply_service import MessageReplyService
 
@@ -219,18 +219,18 @@ def register_run_followup_work(registry: WorkRegistry) -> None:
         kind=AGENT_REPLIES_ARRIVED,
         cls=WorkClass.EVENTS,
         mode=WorkMode.JOB,
-        payload=NotificationSettled,
+        payload=AskedQuestionsSettled,
         retry=FOLLOWUP_RETRY,
     )(deliver_replies)
 
 
-def _conversation_of(fact: NotificationSettled) -> str:
+def _conversation_of(fact: AskedQuestionsSettled) -> str:
     return replies_key(fact.conversation_id)
 
 
 register_run_followup_work(default_registry)
 facts.subscribe(
-    NotificationSettled,
+    AskedQuestionsSettled,
     kind=AGENT_REPLIES_ARRIVED,
     cls=WorkClass.EVENTS,
     dedup=_conversation_of,

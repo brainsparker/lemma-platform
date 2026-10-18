@@ -54,5 +54,23 @@
   ],
   "validDomains": [
     "lemma.work"
-  ]
+  ],
+  "webApplicationInfo": {
+    "id": "c3e201f2-a8ef-4026-bef4-d3da0153b191",
+    "resource": "https://RscBasedStoreApp"
+  },
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "ChannelMessage.Read.Group",
+          "type": "Application"
+        },
+        {
+          "name": "ChatMessage.Read.Chat",
+          "type": "Application"
+        }
+      ]
+    }
+  }
 }

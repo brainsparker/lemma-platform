@@ -65,6 +65,18 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
     "apps": (f"{_CMD}.apps", "app", "App commands.", False),
     "schedule": (f"{_CMD}.schedules", "app", "Schedule commands.", False),
     "schedules": (f"{_CMD}.schedules", "app", "Schedule commands.", False),
+    "channel": (
+        f"{_CMD}.channels",
+        "app",
+        "Channel commands: where a pod's members, contacts and agents talk.",
+        False,
+    ),
+    "channels": (
+        f"{_CMD}.channels",
+        "app",
+        "Channel commands: where a pod's members, contacts and agents talk.",
+        False,
+    ),
     "decision": (
         f"{_CMD}.decisions",
         "app",

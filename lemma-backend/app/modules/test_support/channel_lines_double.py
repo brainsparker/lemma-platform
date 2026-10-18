@@ -16,7 +16,7 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.surface_route_types import (
     SurfaceEgressTarget,
 )
-from app.modules.channels.contracts import Sender, Source
+from app.modules.channels.contracts import Source
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,8 +37,7 @@ class SaidLine:
 class OpenedLine:
     conversation_id: UUID
     source_id: UUID
-    sender: Sender
-    text: str
+    line_id: UUID
     external_message_id: str | None
 
 
@@ -71,13 +70,12 @@ class RecordingChannelLines:
     async def opened(
         self,
         *,
+        line_id: UUID,
         source: Source,
         conversation_id: UUID,
-        sender: Sender,
-        text: str,
         external_message_id: str | None,
         external_thread_id: str | None,
     ) -> None:
         self.opened_lines.append(
-            OpenedLine(conversation_id, source.id, sender, text, external_message_id)
+            OpenedLine(conversation_id, source.id, line_id, external_message_id)
         )

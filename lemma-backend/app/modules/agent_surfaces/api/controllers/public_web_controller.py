@@ -18,13 +18,14 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, JsonValue
 
 from app.core.api.dependencies import get_uow_factory
 from app.core.api.schemas import ErrorResponse
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.public_web import hosted_pages_host
 from app.modules.agent.contracts.visitor_stream import visitor_frames
 from app.modules.agent_surfaces.api.public_dependencies import (
     OptionalVisitorDep,
@@ -34,7 +35,7 @@ from app.modules.agent_surfaces.api.public_dependencies import (
     web_chat,
 )
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.web_widgets import refused
+from app.modules.agent_surfaces.domain.web_widgets import WebChatRefused, refused
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
 from app.modules.agent_surfaces.services.web_chat import MAX_MESSAGE_CHARS, WebChat
 from app.modules.agent_surfaces.services.web_visitors import (
@@ -185,26 +186,76 @@ async def web_challenge(
     return await visitors.visitor_challenge(for_code=purpose == "code")
 
 
+#: How long a page Lemma hosts remembers its visitor's chat.
+KEPT_CHAT_SECONDS = 90 * 24 * 3600
+
+
+def _kept_chat_cookie(public_key: str) -> str:
+    return f"lemma_chat_{public_key}"[:64]
+
+
+def _keeps_chats(request: Request) -> bool:
+    """Whether this is a page Lemma hosts on its own origin, which may keep a
+    visitor's chat in a cookie of its own: first-party, HttpOnly, and so not
+    cleared after a week the way Safari clears what a script stores. A widget
+    on somebody else's site has only its ``localStorage``; a cookie of ours
+    there is a third party's, which browsers block."""
+    host = hosted_pages_host()
+    return host is not None and request.headers.get("host", "").lower() == host
+
+
 @router.post(
     "/{public_key}/session",
     operation_id="public.web.session.start",
     response_model=SessionResponse,
 )
 async def web_start_session(
+    public_key: str,
     body: SessionRequest,
+    request: Request,
+    response: Response,
     widget: PublicWidgetDep,
     address: VisitorAddressDep,
     visitors: WebVisitors = Depends(_visitors),
     chat: WebChat = Depends(web_chat),
 ) -> SessionResponse:
-    """Start a session, or come back to one: either way, a new access token."""
-    started = await visitors.start_visitor_session(
-        widget,
-        secret=body.secret,
-        host_token=body.host_token,
-        altcha=body.altcha,
-        address=address,
-    )
+    """Start a session, or come back to one: either way, a new access token.
+
+    On a page Lemma hosts, a visitor nobody signed in comes back to their chat
+    from its cookie when the page has no secret to send.
+    """
+    keeps = _keeps_chats(request) and body.host_token is None
+    cookie = _kept_chat_cookie(public_key)
+    kept = request.cookies.get(cookie) if keeps and not body.secret else None
+    secret = body.secret or kept
+    try:
+        started = await visitors.start_visitor_session(
+            widget,
+            secret=secret,
+            host_token=body.host_token,
+            altcha=body.altcha,
+            address=address,
+        )
+    except WebChatRefused as ended:
+        if kept is None or ended.code != "no_session":
+            raise
+        # The chat the cookie kept has ended: start a new one, as if none was.
+        started = await visitors.start_visitor_session(
+            widget, secret=None, host_token=None, altcha=body.altcha, address=address
+        )
+    if keeps and started.secret:
+        response.set_cookie(
+            cookie,
+            started.secret,
+            max_age=KEPT_CHAT_SECONDS,
+            path=f"/public/web/{public_key}",
+            secure=True,
+            httponly=True,
+            samesite="lax",
+        )
+    elif _keeps_chats(request) and body.host_token is not None:
+        # Somebody signed in: their chat must not outlive that on this machine.
+        response.delete_cookie(cookie, path=f"/public/web/{public_key}")
     return _session_response(started, title=await chat.widget_title(widget))
 
 

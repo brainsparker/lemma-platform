@@ -1,20 +1,16 @@
 from __future__ import annotations
 
-from typing import Literal
 from uuid import UUID
 
 from ..openapi_client.api.contacts import (
     contact_delete,
     contact_export,
-    contact_follow_up,
     contact_get,
     contact_list,
     contact_update,
 )
 from ..openapi_client.models.contact_export_response import ContactExportResponse
 from ..openapi_client.models.contact_list_response import ContactListResponse
-from ..openapi_client.models.follow_up_request import FollowUpRequest
-from ..openapi_client.models.follow_up_response import FollowUpResponse
 from ..openapi_client.models.contact_response import ContactResponse
 from ..openapi_client.models.contact_update_request import ContactUpdateRequest
 from ..openapi_client.types import UNSET
@@ -60,33 +56,6 @@ class PodContacts(BoundResource):
             as_uuid(contact_id),
             body={"display_name": display_name},
             body_model=ContactUpdateRequest,
-        )
-
-    def follow_up(
-        self,
-        contact_id: str | UUID,
-        message: str,
-        *,
-        channel: Literal["latest", "email"] = "latest",
-    ) -> FollowUpResponse:
-        """Write to a contact in their latest conversation, where the channel allows.
-
-        ``channel="email"`` sends to their verified email address instead: from
-        the pod's email address that answers contacts, in a new thread, when
-        their latest conversation is a web chat or another platform's.
-
-        Takes ``contact.message`` (editors and up). Refused when they
-        unsubscribed there, when WhatsApp's 24-hour window has closed, when
-        they never wrote to the pod, or past the day's follow-ups to them; for
-        email, when they have no verified address or the pod has no email
-        address answering contacts.
-        """
-        return self._call(
-            contact_follow_up,
-            self._pod_uuid(),
-            as_uuid(contact_id),
-            body={"message": message, "channel": channel},
-            body_model=FollowUpRequest,
         )
 
     def export(

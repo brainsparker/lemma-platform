@@ -51,7 +51,14 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     AttachmentIngest,
 )
 from app.modules.agent_surfaces.services.turn_starter import SurfaceTurnStarter
-from app.modules.channels.contracts import Source, SourceKind
+from app.modules.channels.contracts import (
+    ChannelMessage,
+    InteractionState,
+    NotifyLevel,
+    Source,
+    SourceKind,
+)
+from app.modules.channels.contracts.facts import ChannelQuestionClosed
 from app.modules.test_support.surface_routing_double import routing_surfaces_double
 
 #: Where `agent` publishes what a surface does to a conversation, and where the
@@ -769,24 +776,107 @@ def build_turn_starter(
     )
 
 
-class RecordingNotificationWork:
-    """What a notification writes as work, recorded instead of written.
+class MemberChannelDouble:
+    """The channels module's half of a direct message, in memory.
 
-    ``settled`` holds the ``NotificationSettled`` facts; ``events`` (when
-    given) receives them too, for a harness that reads one list.
+    The member's DIRECT channel and the lines posted in it; a question is found
+    again by its ref and stays open until closed, a seat says how its member
+    hears of the channel, and each delivery attempt is recorded instead of
+    written. ``install`` puts it where `DirectMessages`, the dispatch loop and
+    the asked-questions work item call the channels contracts.
     """
 
-    def __init__(self, events: list | None = None) -> None:
-        self.settled_facts: list = []
-        self.armed: list = []
-        self._events = events
+    def __init__(self, seats: InMemoryChannelSeats | None = None) -> None:
+        #: Where the member's DIRECT channel is, when places are kept too: the
+        #: same channel their private chats are sources of.
+        self.seats = seats or InMemoryChannelSeats()
+        self.lines: list[ChannelMessage] = []
+        #: Every question asked, by ref; ``open`` holds those still waiting.
+        self.questions: dict[str, ChannelMessage] = {}
+        self.open: set[str] = set()
+        self.deliveries: list[dict] = []
+        self.notify: NotifyLevel | None = None
 
-    async def arm_expiry(self, uow, notification) -> None:
-        del uow
-        self.armed.append(notification)
+    def install(self, monkeypatch) -> "MemberChannelDouble":
+        from app.modules.agent_surfaces.events import asked_questions_work
+        from app.modules.agent_surfaces.services import (
+            direct_messages,
+            notification_dispatch,
+        )
 
-    async def settled(self, uow, fact) -> None:
-        del uow
-        self.settled_facts.append(fact)
-        if self._events is not None:
-            self._events.append(fact)
+        for name in (
+            "direct_channel",
+            "post",
+            "question_for",
+            "line_said_in_run",
+            "participant_of",
+        ):
+            monkeypatch.setattr(direct_messages, name, getattr(self, name))
+        monkeypatch.setattr(direct_messages, "record_delivery", self.record_delivery)
+        monkeypatch.setattr(
+            notification_dispatch, "record_delivery", self.record_delivery
+        )
+        monkeypatch.setattr(
+            asked_questions_work, "open_questions_under", self.open_questions_under
+        )
+        return self
+
+    async def direct_channel(self, _uow, *, pod_id, user_id):
+        return SimpleNamespace(
+            id=await self.seats.direct_channel(pod_id=pod_id, user_id=user_id)
+        )
+
+    async def post(
+        self, _uow, *, channel_id, sender, text, question=None, agent_run_id=None, **_
+    ):
+        line = ChannelMessage(
+            id=uuid4(),
+            channel_id=channel_id,
+            sender=sender,
+            text=text,
+            agent_run_id=agent_run_id,
+            created_at=datetime.now(timezone.utc),
+        )
+        self.lines.append(line)
+        if question is not None:
+            ref = question.question["ref"]
+            self.questions[ref] = line
+            self.open.add(ref)
+        return line
+
+    async def question_for(self, _uow, ref):
+        return self.questions.get(ref)
+
+    async def line_said_in_run(self, _uow, *, channel_id, agent_run_id, text):
+        return next(
+            (
+                line
+                for line in self.lines
+                if (line.channel_id, line.agent_run_id, line.text)
+                == (channel_id, agent_run_id, text)
+            ),
+            None,
+        )
+
+    async def open_questions_under(self, _uow, *, prefix: str):
+        return [self.questions[ref] for ref in self.open if ref.startswith(prefix)]
+
+    async def participant_of(self, _uow, *, channel_id, principal):
+        return None if self.notify is None else SimpleNamespace(notify=self.notify)
+
+    async def record_delivery(self, _uow, **delivery) -> None:
+        self.deliveries.append(delivery)
+
+    def close(
+        self, line: ChannelMessage, *, pod_id: UUID, state: InteractionState
+    ) -> ChannelQuestionClosed:
+        """Stop the line's question waiting, and announce it as channels does."""
+        ref = next(ref for ref, asked in self.questions.items() if asked is line)
+        self.open.discard(ref)
+        return ChannelQuestionClosed(
+            pod_id=pod_id,
+            channel_id=line.channel_id,
+            message_id=line.id,
+            ref=ref,
+            state=state,
+        )

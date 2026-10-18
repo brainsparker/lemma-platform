@@ -147,7 +147,7 @@ async def test_an_own_whatsapp_number_confirms_logs_and_answers_its_groups(
         db_session, user_id=fixed_test_user["id"], mobile_number=MEMBER
     )
     started = await authenticated_client.post(
-        f"/pods/{pod_id}/groups",
+        f"/pods/{pod_id}/sources/whatsapp-groups",
         json={"surface_name": surface["name"], "title": "Acme order 1182"},
     )
     assert started.status_code == 201, started.text

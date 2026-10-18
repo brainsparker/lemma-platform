@@ -35,17 +35,10 @@ from app.modules.agent.contracts.channel_conversations import (
     channel_of_conversation,
 )
 from app.modules.agent.contracts.contact_conversations import hold_outside_turn
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationDeliveryStatus,
-    NotificationEntity,
-    NotificationOriginKind,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
-    NotificationRepository,
-)
+from app.modules.agent.contracts import channel_conversations
+from app.modules.agent_surfaces.services.direct_messages import tell_member
 from app.modules.agent_surfaces.services.contact_windows import ContactWindows
-from app.modules.agent_surfaces.services.outside_questions import quote
-from app.modules.channels.contracts import handler_of
+from app.modules.channels.contracts import call_for_person, handler_of
 from app.modules.contacts.contracts import (
     answered_contacts_in_organization,
     contact_by_id,
@@ -64,9 +57,6 @@ from app.modules.usage.contracts.contacts_cap import (
 )
 
 logger = get_logger(__name__)
-
-#: The most of their message the member's note quotes.
-_NOTE_QUOTE_CHARS = 500
 
 
 def person_will_reply(space_name: str | None) -> str:
@@ -220,26 +210,29 @@ async def _tell_member(
     conversation_id: UUID,
     text: str,
 ) -> None:
-    """An inbox note pointing at the conversation, so forgetting them redacts it."""
-    member_id = await pod_member_id(uow, pod_id, member)
-    if member_id is None:
+    """Flag the contact's channel as waiting for a person, and tell the member.
+
+    The note says where to look, not what they wrote: their words are in
+    their own channel, which forgetting them takes with it.
+    """
+    del text
+    if await pod_member_id(uow, pod_id, member) is None:
         return
-    await NotificationRepository(uow).create(
-        NotificationEntity(
-            pod_id=pod_id,
-            recipient_user_id=member,
-            recipient_pod_member_id=member_id,
-            origin_kind=NotificationOriginKind.API,
-            origin_conversation_id=conversation_id,
-            title="Somebody outside the space is waiting for you",
-            body=(
-                "The bot has stopped answering people outside the space for "
-                "now: the organization's monthly cap on answering them is "
-                "reached. They were told a person will reply, and the "
-                "conversation is yours to answer. They wrote:\n\n"
-                + quote(text, limit=_NOTE_QUOTE_CHARS)
-            ),
-            expects_response=False,
-            delivery_status=NotificationDeliveryStatus.UNDELIVERABLE,
+    channel_id = await channel_conversations.channel_of_conversation(
+        uow, conversation_id
+    )
+    if channel_id is not None:
+        await call_for_person(
+            uow, channel_id=channel_id, reason="The monthly cap on answering contacts"
         )
+    await tell_member(
+        uow,
+        pod_id=pod_id,
+        user_id=member,
+        text=(
+            "Somebody outside the space is waiting for you. The bot has stopped "
+            "answering people outside the space for now: the organization's "
+            "monthly cap on answering them is reached. They were told a person "
+            "will reply -- their channel is in Contacts, waiting on a person."
+        ),
     )

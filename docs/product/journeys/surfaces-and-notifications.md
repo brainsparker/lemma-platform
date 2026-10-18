@@ -325,8 +325,8 @@ is answered *for the pod*.
 - The system shall treat a group on a pod's own bot or number exactly as one on
   a shared bot.
 
-**Contracts:** `surface.webhook.handle_platform`, `agent.group.list`,
-`agent.group.update`
+**Contracts:** `surface.webhook.handle_platform`, `channel.list`,
+`agent.source.update`
 
 ### PS-SURF-016 — The bot remembers what was said in a group
 **Status:** planned
@@ -433,8 +433,8 @@ by its link.
 - The system shall send a group only what a group can show: questions,
   approvals and links as words.
 
-**Contracts:** `surface.webhook.handle_platform`, `agent.group.list`,
-`agent.group.start`
+**Contracts:** `surface.webhook.handle_platform`, `channel.list`,
+`agent.source.whatsapp_group.start`
 
 ---
 
@@ -540,19 +540,19 @@ by its link.
 - If someone who does not belong to the pod asks for its notifications, then the
   system shall refuse, as it refuses every other read in that pod.
 
-**Contracts:** `notification.list`, `notification.unread_count`, `notification.send`
+**Contracts:** `channel.inbox.get`, `channel.list`, `agent.notice.send`
 
 ### PS-SURF-031 — A person clears what they have dealt with
 **Status:** covered
 
-- When a person reads a notification, the system shall mark it read and shall
-  reflect that in the unread count.
-- When a person marks everything read, the system shall clear the unread count
-  for that pod.
+- When a person reads a channel, the system shall mark it read up to then and
+  shall reflect that in its unread count and the pod's.
 - The system shall keep read state per person, so one person reading something
   does not clear it for everyone.
+- A question waiting on a person stays waiting until they answer it, whether
+  or not they have read the channel it is in.
 
-**Contracts:** `notification.mark_read`, `notification.mark_all_read`, `notification.unread_count`
+**Contracts:** `channel.mark_read`, `channel.list`, `channel.inbox.get`
 
 ### PS-SURF-032 — A person can answer from the notification
 **Status:** covered
@@ -565,7 +565,7 @@ by its link.
   then the system shall say so rather than accepting an answer that goes
   nowhere.
 
-**Contracts:** `notification.respond`, `notification.acknowledge`
+**Contracts:** `channel.message.answer`, `channel.inbox.get`
 
 ### PS-SURF-033 — What is meant for one person is not said in a group
 **Status:** planned
@@ -591,7 +591,7 @@ by its link.
   email thread that copies other people, the system shall send it to that
   person alone.
 
-**Contracts:** `notification.send`
+**Contracts:** `agent.notice.send`
 
 ---
 
@@ -630,20 +630,22 @@ remember where the bot is, who is in there, or what is waiting on them.
   the pod, change it or take it over, and shall tell that member when an admin
   does.
 
-**Contracts:** `agent.group.list`, `agent.group.get`, `agent.group.timeline`,
-`agent.group.update`
+**Contracts:** `channel.list`, `agent.source.get`, `channel.message.list`,
+`agent.source.update`
 
-### PS-SURF-041 — The member answering for a group sees what its people are waiting on
+### PS-SURF-041 — A member steps in for somebody outside the pod the bot cannot help
 **Status:** planned
 
-> Proven at module level by `agent_surfaces/tests/e2e/test_space_groups_e2e.py`.
+> Proven at module level by `agent_surfaces/tests/e2e/test_contact_care_e2e.py`.
 
-- When the bot passes on a question it could not answer somebody outside the
-  pod, the system shall show it on that group's page, to the member it was
-  passed to, until they answer it.
-- When the member answers, the system shall relay the answer in the group.
+- When the bot cannot give somebody outside the pod what they need, the system
+  shall flag that person's channel as waiting on a person and tell the member
+  who answers for them where to look, without quoting them.
+- When a member writes in that channel, the system shall carry it to the
+  person, clear the flag, and keep the bot from answering there until the
+  member hands it back.
 
-**Contracts:** `agent.group.get`, `notification.respond`
+**Contracts:** `channel.handler.take`, `channel.handler.release`
 
 ### PS-SURF-042 — A member adds the pod's Telegram bot to a group from Lemma
 **Status:** planned
@@ -660,7 +662,7 @@ remember where the bot is, who is in there, or what is waiting on them.
 - The system shall not take the Telegram account that used a link for the
   member it was made for: a link is easily passed on.
 
-**Contracts:** `agent.group.link`, `surface.webhook.handle_platform`
+**Contracts:** `agent.source.telegram_link.create`, `surface.webhook.handle_platform`
 
 ### PS-SURF-043 — A Slack channel shared with another company answers that company for the pod
 **Status:** planned
@@ -675,7 +677,7 @@ remember where the bot is, who is in there, or what is waiting on them.
 - The system shall never answer somebody from the pod's own Slack workspace as
   an outsider; one who is not in the pod is told how to join it instead.
 
-**Contracts:** `surface.webhook.handle_platform`, `agent.group.list`
+**Contracts:** `surface.webhook.handle_platform`, `channel.list`
 
 ### PS-SURF-044 — People in a group ask the bot by the name they see
 **Status:** planned
@@ -807,7 +809,7 @@ Public, the way a group's people from outside it are.
 
 > Proven at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`,
 > `test_web_widgets_e2e.py` and `test_contact_email_follow_ups_e2e.py`, and at
-> unit level by `agent_surfaces/tests/unit/test_contact_follow_ups.py`.
+> unit level by `agent_surfaces/tests/unit/test_contact_rules.py`.
 
 - The system shall let a member write to a contact in the contact's most recent
   conversation, on the channel it lives on.
@@ -822,7 +824,7 @@ Public, the way a group's people from outside it are.
 - The system shall not unsubscribe anybody for opening the link; only the
   button on the page it opens does.
 
-**Contracts:** `contact.follow_up`
+**Contracts:** `channel.message.post`
 
 ### PS-SURF-051 — People outside the pod add rows to a table it opened to them
 **Status:** planned

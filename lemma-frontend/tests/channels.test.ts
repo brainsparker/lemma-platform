@@ -1,0 +1,227 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+    addable,
+    answerSummary,
+    asWaitingQuestion,
+    channelTitle,
+    composerChoices,
+    inboxBadge,
+    isMine,
+    joinPages,
+    lineDays,
+    lineMeta,
+    personName,
+    previewOf,
+    questionState,
+    readChannelDetail,
+    readChannelPage,
+    readLine,
+    readLinePage,
+    sayQuestion,
+    sayUnread,
+    sectionsOf,
+    senderLabel,
+    sourceLabel,
+    whoAnswers,
+    withheldNote,
+    withLine,
+    type Channel,
+    type Line,
+} from "../src/channels/model.ts";
+
+const ME = "user-dana";
+const dana = { kind: "MEMBER", id: ME, name: "Dana Jones" };
+const priya = { kind: "MEMBER", id: "user-priya", name: "Priya" };
+const lem = { kind: "AGENT", id: "agent-lem", name: "Lem" };
+const tomas = { kind: "CONTACT", id: "contact-tomas", name: "Tomás" };
+
+const listed = readChannelPage({
+    items: [
+        { id: "c-direct", kind: "DIRECT", person: dana, sources: [{ platform: "whatsapp", title: null }], unread: { lines: 2, waiting: 1 }, created_at: "2026-10-18T09:00:00Z" },
+        {
+            id: "c-launch", kind: "GROUP", title: "launch", topic: "Beta", sources: [{ platform: "SLACK", title: "#launch" }, { platform: "TELEGRAM", title: "Crew" }, { platform: "SLACK", title: "#other" }],
+            last_line: { sender: priya, text: "Thursday\nworks", created_at: "2026-10-18T10:00:00Z" },
+            unread: { lines: 150, mentions: 1 }, created_at: "2026-10-01T09:00:00Z",
+        },
+        { id: "c-contact", kind: "CONTACT", person: tomas, attention: { since: "2026-10-18T10:00:00Z", reason: "Refund" }, created_at: "2026-10-10T09:00:00Z" },
+        { kind: "GROUP", title: "no id, never drawn" },
+    ],
+    next_before: "cursor-2",
+});
+const [direct, launch, contact] = listed.items;
+
+test("reads a page of channels, keeping its cursor and dropping a row without an id", () => {
+    assert.equal(listed.items.length, 3);
+    assert.equal(listed.nextBefore, "cursor-2");
+    assert.equal(direct.sources[0].platform, "WHATSAPP");
+    assert.deepEqual(direct.unread, { lines: 2, mentions: 0, waiting: 1 });
+    assert.deepEqual(contact.attention, { since: "2026-10-18T10:00:00Z", reason: "Refund" });
+    assert.equal(launch.archived, false);
+});
+
+test("names a channel the way its reader sees it", () => {
+    assert.equal(channelTitle(direct, "Marketing"), "You and Marketing");
+    assert.equal(channelTitle(contact, "Marketing"), "Tomás");
+    assert.equal(channelTitle(launch, "Marketing"), "launch");
+    // A group with no title of its own is called where it is.
+    assert.equal(channelTitle({ kind: "GROUP", title: null, person: null, sources: [{ platform: "WHATSAPP", title: "Acme × Northwind" }] }, "M"), "Acme × Northwind");
+    assert.equal(channelTitle({ kind: "GROUP", title: null, person: null, sources: [] }, "M"), "Untitled channel");
+});
+
+test("a row's preview is who said the last line, on one line", () => {
+    assert.equal(previewOf(launch, ME), "Priya: Thursday works");
+    assert.equal(previewOf({ lastLine: { sender: dana, text: "On it", createdAt: "" }, topic: null } as Pick<Channel, "lastLine" | "topic">, ME), "You: On it");
+    assert.equal(previewOf({ lastLine: null, topic: "Beta" }, ME), "Beta");
+    assert.equal(previewOf({ lastLine: null, topic: null }, ME), "Nothing said yet.");
+});
+
+test("cuts the list into the reader's own, the groups and -- for an editor -- the contacts", () => {
+    assert.deepEqual(sectionsOf(listed.items, true).map((section) => [section.key, section.label, section.channels.length]), [
+        ["direct", "Your channel", 1], ["groups", "Groups", 1], ["contacts", "Contacts", 1],
+    ]);
+    assert.deepEqual(sectionsOf(listed.items, false).map((section) => section.key), ["direct", "groups"]);
+    // An empty section is left out.
+    assert.deepEqual(sectionsOf([launch], true).map((section) => section.key), ["groups"]);
+});
+
+test("says what is new, and the sidebar's badge puts questions first", () => {
+    assert.equal(sayUnread(direct.unread), "2 new, a question waiting on you");
+    assert.equal(sayUnread(launch.unread), "100 or more new, mentions you");
+    assert.equal(sayUnread({ lines: 0, mentions: 0, waiting: 0 }), null);
+    assert.deepEqual(inboxBadge({ channels: 3, mentions: 2, waiting: 1 }), { count: 1, tone: "waiting", said: "1 question waiting on you" });
+    assert.deepEqual(inboxBadge({ channels: 3, mentions: 2, waiting: 0 }), { count: 2, tone: "mention", said: "2 mentions of you" });
+    assert.deepEqual(inboxBadge({ channels: 1, mentions: 0, waiting: 0 }), { count: 1, tone: "new", said: "1 channel with something new" });
+    assert.equal(inboxBadge({ channels: 0, mentions: 0, waiting: 0 }), null);
+});
+
+const detail = readChannelDetail({
+    id: "c-launch", kind: "GROUP", title: "launch", created_at: "2026-10-01T09:00:00Z",
+    source_places: [
+        { id: "s-slack", platform: "slack", kind: "SHARED", title: "#acme", surface_id: "surface-1" },
+        { id: "s-tg", platform: "TELEGRAM", kind: "SHARED", title: null },
+        { id: "s-wa", platform: "WHATSAPP", kind: "SHARED", title: "New", pending: true },
+        { platform: "WEB" },
+    ],
+    participants: [{ person: dana, notify: "ALL" }, { person: priya, notify: "LOUD" }, { person: tomas }],
+    me: { notify: "MENTIONS" },
+})!;
+
+test("reads a channel's places, people and the reader's own settings", () => {
+    assert.deepEqual(detail.places.map((place) => [place.id, place.platform, place.pending]), [["s-slack", "SLACK", false], ["s-tg", "TELEGRAM", false], ["s-wa", "WHATSAPP", true]]);
+    assert.equal(detail.places[0].surfaceId, "surface-1");
+    // A level this build does not know reads as the default.
+    assert.deepEqual(detail.participants.map((one) => one.notify), ["ALL", "ALL", "ALL"]);
+    assert.deepEqual(detail.me, { joined: true, notify: "MENTIONS", lastReadAt: null });
+});
+
+test("says where a line was said: its place and platform, or nothing for Lemma", () => {
+    assert.equal(sourceLabel("s-slack", detail.places), "#acme (Slack)");
+    assert.equal(sourceLabel("s-tg", detail.places), "Telegram");
+    assert.equal(sourceLabel(null, detail.places), null);
+    assert.equal(sourceLabel("gone", detail.places), null);
+    const meta = lineMeta({ sourceId: "s-slack", createdAt: "2026-10-18T10:02:00Z" }, detail.places);
+    assert.match(meta, /^#acme \(Slack\) · \d{1,2}[:.]\d{2}/);
+});
+
+test("a composer offers a note to members only where something outside hears, and a place only among several", () => {
+    const choices = composerChoices(detail);
+    assert.equal(choices.notes, true);
+    // The WhatsApp group is not made yet, so it is not somewhere to send.
+    assert.deepEqual(choices.places.map((place) => place.id), ["s-slack", "s-tg"]);
+    assert.deepEqual(composerChoices({ places: [] }), { notes: false, places: [] });
+    assert.deepEqual(composerChoices({ places: [detail.places[0]] }).places, []);
+});
+
+const line = (raw: Record<string, unknown>): Line => readLine({ id: "l", created_at: "2026-10-18T10:00:00Z", sender: dana, ...raw })!;
+
+test("reads a line, and keeps no words of one withheld or deleted", () => {
+    assert.equal(readLine({ text: "no id" }), null);
+    assert.equal(line({ text: "kept", withheld: true }).text, null);
+    assert.equal(line({ text: "kept", deleted: true }).text, null);
+    assert.equal(line({ reply_count: 3 }).replyCount, 3);
+    assert.equal(line({ members_only: true }).membersOnly, true);
+    assert.equal(line({ interaction: { kind: "POLL" } }).interaction, null);
+});
+
+test("an agent's line says whom it acted for", () => {
+    assert.equal(senderLabel(line({ sender: lem, on_behalf_of: priya }), ME), "Lem, for Priya");
+    assert.equal(senderLabel(line({ sender: lem, on_behalf_of: dana }), ME), "Lem, for you");
+    assert.equal(senderLabel(line({ sender: lem }), ME), "Lem");
+    assert.equal(senderLabel(line({ sender: dana }), ME), "You");
+    assert.equal(senderLabel(line({ sender: { kind: "CONTACT" } }), ME), "A contact");
+    assert.equal(personName(null, ME), "Someone");
+});
+
+test("a withheld answer says whom it answered, never what", () => {
+    assert.equal(withheldNote(line({ sender: lem, on_behalf_of: priya, withheld: true }), ME), "Answered Priya — only they can read it");
+    assert.equal(withheldNote(line({ sender: lem, withheld: true }), ME), "Answered someone with their own access — only they can read it");
+    assert.equal(withheldNote(line({ sender: lem, text: "hi" }), ME), null);
+});
+
+test("only the reader's own lines, still there, are theirs to change", () => {
+    assert.equal(isMine(line({ text: "mine" }), ME), true);
+    assert.equal(isMine(line({ sender: priya, text: "hers" }), ME), false);
+    assert.equal(isMine(line({ deleted: true }), ME), false);
+    assert.equal(isMine(line({ text: "mine" }), null), false);
+});
+
+test("a question is the reader's to answer only when it awaits them", () => {
+    const asked = (interaction: Record<string, unknown>) => line({ sender: lem, text: "Which day?", interaction: { kind: "ASK", question: { prompt: "Which day?" }, ...interaction } }).interaction!;
+    assert.deepEqual(questionState(asked({ state: "OPEN", awaits: dana }), ME), { kind: "yours" });
+    assert.equal(sayQuestion(questionState(asked({ state: "OPEN", awaits: priya }), ME)), "Waiting on Priya");
+    assert.equal(sayQuestion(questionState(asked({ state: "ANSWERED", answered_by: dana }), ME)), "Answered by you");
+    assert.equal(sayQuestion(questionState(asked({ state: "ANSWERED" }), ME)), "Answered");
+    assert.equal(sayQuestion(questionState(asked({ state: "EXPIRED" }), ME)), "No longer waiting: it expired");
+    assert.equal(answerSummary({ choice: "Thursday" }), "Thursday");
+    assert.equal(answerSummary({ decision: "DENY" }), "Denied");
+    assert.equal(answerSummary({ decision: "APPROVE_ONCE" }), "Approved");
+    assert.equal(answerSummary({ amount: 3 }), null);
+});
+
+test("a question on a line is answered the way the bell answers one", () => {
+    const asked = line({ id: "q", sender: lem, on_behalf_of: priya, text: "May I?", interaction: { kind: "APPROVAL", state: "OPEN", awaits: dana, question: { prompt: "May I?" } } });
+    assert.deepEqual(asWaitingQuestion(asked, { id: "c-launch", kind: "GROUP", title: "launch" }, ME), {
+        id: "q", channelId: "c-launch", channelTitle: "launch", channelKind: "GROUP", kind: "APPROVAL",
+        text: "May I?", from: "Lem, for Priya", askedAt: "2026-10-18T10:00:00Z", question: { prompt: "May I?" },
+    });
+    assert.equal(asWaitingQuestion(line({}), { id: "c", kind: "GROUP", title: null }, ME), null);
+});
+
+test("pages read back as one run, oldest first, each line once", () => {
+    const newest = readLinePage({ items: [{ id: "c", created_at: "3" }, { id: "d", created_at: "4" }], next_before: "b" });
+    const older = readLinePage({ items: [{ id: "a", created_at: "1" }, { id: "b", created_at: "2" }, { id: "c", created_at: "3" }] });
+    assert.deepEqual(joinPages([newest, older]).map((one) => one.id), ["a", "b", "c", "d"]);
+    // A line posted here joins the newest page; one edited replaces itself.
+    const posted = withLine([newest, older], line({ id: "e" }));
+    assert.deepEqual(joinPages(posted).map((one) => one.id), ["a", "b", "c", "d", "e"]);
+    const edited = withLine(posted, line({ id: "b", text: "changed" }));
+    assert.equal(joinPages(edited).find((one) => one.id === "b")?.text, "changed");
+    assert.deepEqual(withLine([], line({ id: "x" })).map((page) => page.items.length), [1]);
+});
+
+test("cuts a timeline at each day, named the way a chat names them", () => {
+    const now = new Date(2026, 9, 18, 15, 0);
+    const at = (days: number, hour: number) => ({ createdAt: new Date(2026, 9, 18 - days, hour).toISOString() });
+    const days = lineDays([at(9, 10), at(1, 9), at(1, 18), at(0, 8), { createdAt: "not a date" }], now);
+    assert.deepEqual(days.map((day) => [day.label === "Today" || day.label === "Yesterday" ? day.label : "earlier", day.lines.length]), [["earlier", 1], ["Yesterday", 2], ["Today", 1]]);
+});
+
+test("says who answers when nobody is named", () => {
+    assert.equal(whoAnswers({ kind: "DIRECT", handler: null }, "Marketing", ME), "Marketing answers everything you write here.");
+    assert.equal(whoAnswers({ kind: "GROUP", handler: null }, "Marketing", ME), "@mention an agent to have it answer.");
+    assert.equal(whoAnswers({ kind: "CONTACT", handler: null }, "Marketing", ME), "Marketing’s agents answer them here.");
+    assert.equal(whoAnswers({ kind: "CONTACT", handler: { kind: "MEMBER", id: ME, name: null } }, "M", ME), "You are answering here; its agents wait.");
+    assert.equal(whoAnswers({ kind: "CONTACT", handler: priya as never }, "M", ME), "Priya is answering here; its agents wait.");
+});
+
+test("offers to add the space's people not in the channel yet, never a teammate", () => {
+    const members = [
+        { userId: ME, kind: "person", name: "Dana" },
+        { userId: "user-priya", kind: "person", name: "Priya" },
+        { userId: "user-jo", kind: "person", name: "Jo" },
+        { userId: "pod-bot", kind: "teammate", name: "Lem" },
+        { kind: "person", name: "Invited, no account yet" },
+    ];
+    assert.deepEqual(addable(members, detail.participants).map((member) => member.name), ["Jo"]);
+});

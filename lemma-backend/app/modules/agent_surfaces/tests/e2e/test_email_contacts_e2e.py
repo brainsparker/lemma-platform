@@ -30,10 +30,7 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.infrastructure.models import (
-    AgentSurface,
-    NotificationModel,
-)
+from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_surface,
     _ensure_connector_account,
@@ -47,6 +44,13 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     script_text,
     script_tool_call,
+)
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+    contact_channel_id,
+    deliver_member_posts,
+    deliveries_of_line,
+    direct_lines,
+    member_writes,
 )
 from app.modules.agent_surfaces.tests.e2e.test_telegram_group_outsiders_e2e import (
     _table,
@@ -300,19 +304,15 @@ async def test_unauthenticated_mail_is_parked_for_the_member_never_answered(
     assert (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()[
         "items"
     ] == []
-    notices = (
-        (
-            await db_session.execute(
-                select(NotificationModel).where(
-                    NotificationModel.pod_id == UUID(pod_id),
-                    NotificationModel.recipient_user_id == UUID(fixed_test_user["id"]),
-                )
-            )
+    # Parked for the member: a note in their own channel, to them alone.
+    [note] = [
+        line
+        for line in await direct_lines(
+            db_session, pod_id=pod_id, user_id=fixed_test_user["id"]
         )
-        .scalars()
-        .all()
-    )
-    assert any(CUSTOMER in notice.title for notice in notices)
+        if f"Unverified email from {CUSTOMER}" in line.body
+    ]
+    assert note.members_only and note.interaction_kind is None
 
 
 async def test_with_contacts_off_no_stranger_becomes_one(
@@ -774,7 +774,8 @@ async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
     assert await subjects() == []
 
 
-async def test_a_member_follows_up_by_email_until_the_contact_unsubscribes(
+@pytest.mark.drives_work
+async def test_a_members_lines_are_mailed_until_the_contact_unsubscribes(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -818,12 +819,14 @@ async def test_a_member_follows_up_by_email_until_the_contact_unsubscribes(
         0
     ]["id"]
 
-    sent = await authenticated_client.post(
-        f"/pods/{pod_id}/contacts/{dana}/messages",
-        json={"message": "Your order shipped today."},
+    # A member writes in her channel; the line is mailed to her afterwards.
+    channel = await contact_channel_id(authenticated_client, pod_id, dana)
+    sent = await member_writes(
+        authenticated_client, pod_id, channel, "Your order shipped today."
     )
-    assert sent.status_code == 200, sent.text
-    assert sent.json()["delivered"] is True
+    await deliver_member_posts()
+    [delivery] = await deliveries_of_line(sent["id"])
+    assert (delivery.platform, delivery.status.value) == ("RESEND", "SENT")
     mail = json.dumps(
         (await wait_for_messages(message_store, "RESEND", min_count=1))[-1]
     )
@@ -848,16 +851,30 @@ async def test_a_member_follows_up_by_email_until_the_contact_unsubscribes(
     )
     assert done.status_code == 200 and "unsubscribed" in done.text
 
-    refused = await authenticated_client.post(
-        f"/pods/{pod_id}/contacts/{dana}/messages",
-        json={"message": "A second note."},
+    # Her channel keeps the member's next line; it is not mailed, and says why.
+    mailed = len(message_store.get_all("RESEND"))
+    refused = await member_writes(
+        authenticated_client, pod_id, channel, "A second note."
     )
-    assert refused.status_code == 409, refused.text
+    await deliver_member_posts()
+    [held] = await deliveries_of_line(refused["id"])
+    assert held.status.value == "SKIPPED"
+    assert held.error == "The contact asked not to be written to there"
+    assert len(message_store.get_all("RESEND")) == mailed
+
+    # Writing to her took her channel: the member answers her by hand now.
+    shown = await authenticated_client.get(f"/pods/{pod_id}/channels/{channel}")
+    assert shown.json()["handler"]["id"] == fixed_test_user["id"]
+    handed_back = await authenticated_client.delete(
+        f"/pods/{pod_id}/channels/{channel}/handler"
+    )
+    assert handed_back.status_code == 200, handed_back.text
 
     # Writing again is how a contact opts back in.
     await dana_writes("follow-2")
-    again = await authenticated_client.post(
-        f"/pods/{pod_id}/contacts/{dana}/messages",
-        json={"message": "Thanks for writing back."},
+    again = await member_writes(
+        authenticated_client, pod_id, channel, "Thanks for writing back."
     )
-    assert again.status_code == 200, again.text
+    await deliver_member_posts()
+    [delivery] = await deliveries_of_line(again["id"])
+    assert delivery.status.value == "SENT"

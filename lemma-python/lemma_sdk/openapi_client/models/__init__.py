@@ -269,9 +269,6 @@ _NAME_TO_MODULE = {
     'FirstWorkspaceRequest': 'first_workspace_request',
     'FirstWorkspaceResponse': 'first_workspace_response',
     'FirstWorkspaceResponseEntry': 'first_workspace_response_entry',
-    'FollowUpChannel': 'follow_up_channel',
-    'FollowUpRequest': 'follow_up_request',
-    'FollowUpResponse': 'follow_up_response',
     'ForeignKeySpec': 'foreign_key_spec',
     'ForgetResponse': 'forget_response',
     'FormNode': 'form_node',
@@ -308,19 +305,7 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
     'GenerationSettings': 'generation_settings',
-    'GroupDetailResponse': 'group_detail_response',
-    'GroupLineResponse': 'group_line_response',
-    'GroupLinkRequest': 'group_link_request',
-    'GroupLinkResponse': 'group_link_response',
-    'GroupListResponse': 'group_list_response',
-    'GroupOwnerResponse': 'group_owner_response',
-    'GroupPersonResponse': 'group_person_response',
     'GroupPublicResponse': 'group_public_response',
-    'GroupResponse': 'group_response',
-    'GroupStartRequest': 'group_start_request',
-    'GroupTimelineResponse': 'group_timeline_response',
-    'GroupUpdateRequest': 'group_update_request',
-    'GroupWaitingResponse': 'group_waiting_response',
     'HarnessKind': 'harness_kind',
     'HistoryMessage': 'history_message',
     'HistoryResponse': 'history_response',
@@ -376,18 +361,9 @@ _NAME_TO_MODULE = {
     'NavigationOrganizationResponse': 'navigation_organization_response',
     'NavigationPodResponse': 'navigation_pod_response',
     'NavigationResponse': 'navigation_response',
-    'NotificationDeliveryStatus': 'notification_delivery_status',
-    'NotificationListResponse': 'notification_list_response',
-    'NotificationOriginKind': 'notification_origin_kind',
-    'NotificationRespondRequest': 'notification_respond_request',
-    'NotificationRespondRequestDataType0': 'notification_respond_request_data_type_0',
-    'NotificationResponse': 'notification_response',
-    'NotificationResponseActionType0': 'notification_response_action_type_0',
-    'NotificationResponseResponseDataType0': 'notification_response_response_data_type_0',
-    'NotificationStatus': 'notification_status',
-    'NotificationUnreadCountResponse': 'notification_unread_count_response',
+    'NoticeRequest': 'notice_request',
+    'NoticeResponse': 'notice_response',
     'NotifyLevel': 'notify_level',
-    'NotifyMemberRequest': 'notify_member_request',
     'NotifyRequest': 'notify_request',
     'OAuth2DefaultsResponseSchema': 'o_auth_2_defaults_response_schema',
     'OAuth2DefaultsResponseSchemaExtraParams': 'o_auth_2_defaults_response_schema_extra_params',
@@ -537,7 +513,10 @@ _NAME_TO_MODULE = {
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
     'SignedUrlSummary': 'signed_url_summary',
     'SourceKind': 'source_kind',
+    'SourceListResponse': 'source_list_response',
+    'SourceSettingsResponse': 'source_settings_response',
     'SourceSummary': 'source_summary',
+    'SourceUpdateRequest': 'source_update_request',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
@@ -586,6 +565,8 @@ _NAME_TO_MODULE = {
     'TableOpeningResponse': 'table_opening_response',
     'TableResponse': 'table_response',
     'TableSummaryResponse': 'table_summary_response',
+    'TelegramLinkRequest': 'telegram_link_request',
+    'TelegramLinkResponse': 'telegram_link_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
     'TriggerSkipListResponse': 'trigger_skip_list_response',
@@ -656,6 +637,7 @@ _NAME_TO_MODULE = {
     'WebWidgetResponse': 'web_widget_response',
     'WebWidgetSecretResponse': 'web_widget_secret_response',
     'WebWidgetUpdateRequest': 'web_widget_update_request',
+    'WhatsAppGroupRequest': 'whats_app_group_request',
     'WidgetAnswer': 'widget_answer',
     'WidgetEmbedUrlResponse': 'widget_embed_url_response',
     'WorkflowCreateRequest': 'workflow_create_request',
@@ -951,9 +933,6 @@ if TYPE_CHECKING:
     from .first_workspace_request import FirstWorkspaceRequest
     from .first_workspace_response import FirstWorkspaceResponse
     from .first_workspace_response_entry import FirstWorkspaceResponseEntry
-    from .follow_up_channel import FollowUpChannel
-    from .follow_up_request import FollowUpRequest
-    from .follow_up_response import FollowUpResponse
     from .foreign_key_spec import ForeignKeySpec
     from .forget_response import ForgetResponse
     from .form_node import FormNode
@@ -990,19 +969,7 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
     from .generation_settings import GenerationSettings
-    from .group_detail_response import GroupDetailResponse
-    from .group_line_response import GroupLineResponse
-    from .group_link_request import GroupLinkRequest
-    from .group_link_response import GroupLinkResponse
-    from .group_list_response import GroupListResponse
-    from .group_owner_response import GroupOwnerResponse
-    from .group_person_response import GroupPersonResponse
     from .group_public_response import GroupPublicResponse
-    from .group_response import GroupResponse
-    from .group_start_request import GroupStartRequest
-    from .group_timeline_response import GroupTimelineResponse
-    from .group_update_request import GroupUpdateRequest
-    from .group_waiting_response import GroupWaitingResponse
     from .harness_kind import HarnessKind
     from .history_message import HistoryMessage
     from .history_response import HistoryResponse
@@ -1058,18 +1025,9 @@ if TYPE_CHECKING:
     from .navigation_organization_response import NavigationOrganizationResponse
     from .navigation_pod_response import NavigationPodResponse
     from .navigation_response import NavigationResponse
-    from .notification_delivery_status import NotificationDeliveryStatus
-    from .notification_list_response import NotificationListResponse
-    from .notification_origin_kind import NotificationOriginKind
-    from .notification_respond_request import NotificationRespondRequest
-    from .notification_respond_request_data_type_0 import NotificationRespondRequestDataType0
-    from .notification_response import NotificationResponse
-    from .notification_response_action_type_0 import NotificationResponseActionType0
-    from .notification_response_response_data_type_0 import NotificationResponseResponseDataType0
-    from .notification_status import NotificationStatus
-    from .notification_unread_count_response import NotificationUnreadCountResponse
+    from .notice_request import NoticeRequest
+    from .notice_response import NoticeResponse
     from .notify_level import NotifyLevel
-    from .notify_member_request import NotifyMemberRequest
     from .notify_request import NotifyRequest
     from .o_auth_2_defaults_response_schema import OAuth2DefaultsResponseSchema
     from .o_auth_2_defaults_response_schema_extra_params import OAuth2DefaultsResponseSchemaExtraParams
@@ -1219,7 +1177,10 @@ if TYPE_CHECKING:
     from .signed_url_revoke_response import SignedUrlRevokeResponse
     from .signed_url_summary import SignedUrlSummary
     from .source_kind import SourceKind
+    from .source_list_response import SourceListResponse
+    from .source_settings_response import SourceSettingsResponse
     from .source_summary import SourceSummary
+    from .source_update_request import SourceUpdateRequest
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
@@ -1268,6 +1229,8 @@ if TYPE_CHECKING:
     from .table_opening_response import TableOpeningResponse
     from .table_response import TableResponse
     from .table_summary_response import TableSummaryResponse
+    from .telegram_link_request import TelegramLinkRequest
+    from .telegram_link_response import TelegramLinkResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
     from .trigger_skip_list_response import TriggerSkipListResponse
@@ -1338,6 +1301,7 @@ if TYPE_CHECKING:
     from .web_widget_response import WebWidgetResponse
     from .web_widget_secret_response import WebWidgetSecretResponse
     from .web_widget_update_request import WebWidgetUpdateRequest
+    from .whats_app_group_request import WhatsAppGroupRequest
     from .widget_answer import WidgetAnswer
     from .widget_embed_url_response import WidgetEmbedUrlResponse
     from .workflow_create_request import WorkflowCreateRequest
@@ -1646,9 +1610,6 @@ __all__ = [
     'FirstWorkspaceRequest',
     'FirstWorkspaceResponse',
     'FirstWorkspaceResponseEntry',
-    'FollowUpChannel',
-    'FollowUpRequest',
-    'FollowUpResponse',
     'ForeignKeySpec',
     'ForgetResponse',
     'FormNode',
@@ -1685,19 +1646,7 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionType',
     'GenerationSettings',
-    'GroupDetailResponse',
-    'GroupLineResponse',
-    'GroupLinkRequest',
-    'GroupLinkResponse',
-    'GroupListResponse',
-    'GroupOwnerResponse',
-    'GroupPersonResponse',
     'GroupPublicResponse',
-    'GroupResponse',
-    'GroupStartRequest',
-    'GroupTimelineResponse',
-    'GroupUpdateRequest',
-    'GroupWaitingResponse',
     'HarnessKind',
     'HistoryMessage',
     'HistoryResponse',
@@ -1753,18 +1702,9 @@ __all__ = [
     'NavigationOrganizationResponse',
     'NavigationPodResponse',
     'NavigationResponse',
-    'NotificationDeliveryStatus',
-    'NotificationListResponse',
-    'NotificationOriginKind',
-    'NotificationRespondRequest',
-    'NotificationRespondRequestDataType0',
-    'NotificationResponse',
-    'NotificationResponseActionType0',
-    'NotificationResponseResponseDataType0',
-    'NotificationStatus',
-    'NotificationUnreadCountResponse',
+    'NoticeRequest',
+    'NoticeResponse',
     'NotifyLevel',
-    'NotifyMemberRequest',
     'NotifyRequest',
     'OAuth2DefaultsResponseSchema',
     'OAuth2DefaultsResponseSchemaExtraParams',
@@ -1914,7 +1854,10 @@ __all__ = [
     'SignedUrlRevokeResponse',
     'SignedUrlSummary',
     'SourceKind',
+    'SourceListResponse',
+    'SourceSettingsResponse',
     'SourceSummary',
+    'SourceUpdateRequest',
     'StepRecordResponse',
     'StepStatus',
     'SurfaceAdminConsentInfo',
@@ -1963,6 +1906,8 @@ __all__ = [
     'TableOpeningResponse',
     'TableResponse',
     'TableSummaryResponse',
+    'TelegramLinkRequest',
+    'TelegramLinkResponse',
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
     'TriggerSkipListResponse',
@@ -2033,6 +1978,7 @@ __all__ = [
     'WebWidgetResponse',
     'WebWidgetSecretResponse',
     'WebWidgetUpdateRequest',
+    'WhatsAppGroupRequest',
     'WidgetAnswer',
     'WidgetEmbedUrlResponse',
     'WorkflowCreateRequest',

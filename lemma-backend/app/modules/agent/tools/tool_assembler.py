@@ -54,8 +54,8 @@ async def load_agent_grant_summary(
 HostExecutionMode = Literal["native", "sandbox"]
 
 
-def notification_toolset() -> AbstractToolset[ConversationContext]:
-    """The tools that answer an open notification or a workflow's form.
+def question_toolset() -> AbstractToolset[ConversationContext]:
+    """The tool that answers a question waiting on the person.
 
     Wrapped the way the capability wraps them: the transitions they call
     refuse by raising -- answering something already answered, or a form
@@ -63,9 +63,9 @@ def notification_toolset() -> AbstractToolset[ConversationContext]:
     not end its run.
     """
     from app.modules.agent.tools.graceful_toolset import GracefulToolset
-    from app.modules.agent.tools.messaging.respond import respond_toolset
+    from app.modules.agent.tools.messaging.answer import answer_toolset
 
-    return cast(AbstractToolset[ConversationContext], GracefulToolset(respond_toolset))
+    return cast(AbstractToolset[ConversationContext], GracefulToolset(answer_toolset))
 
 
 def _for_host_execution(
@@ -96,16 +96,15 @@ class RunToolAssembler:
         vision_mode: AgentVisionMode | None = None,
         grants: AgentGrantSummary | None = None,
         host_execution: HostExecutionMode | None = None,
-        include_notification_tools: bool = False,
+        include_question_tools: bool = False,
         harness_kind: HarnessKind | None = None,
     ) -> list[AbstractToolset[ConversationContext]]:
         """Every tool this (agent, conversation) can reach.
 
-        ``include_notification_tools`` adds ``respond_to_notification`` and
-        ``submit_workflow_form`` for a run whose harness reaches tools only
-        through this list -- an Agent Host run over MCP. The in-process harness
-        gets them from its open-notifications capability instead, so it leaves
-        this off rather than see them twice. ``harness_kind`` decides it for
+        ``include_question_tools`` adds ``answer_question`` for a run whose
+        harness reaches tools only through this list -- an Agent Host run over
+        MCP. The in-process harness gets it from its open-questions capability
+        instead, so it leaves this off rather than see it twice. ``harness_kind`` decides it for
         the runner: any harness but the in-process one is served over MCP.
 
         ``host_execution`` is set on a run whose commands execute on the
@@ -141,15 +140,15 @@ class RunToolAssembler:
             if host_execution is not None:
                 toolsets = _for_host_execution(toolsets, host_execution)
             if harness_kind is not None and harness_kind != HarnessKind.LEMMA:
-                include_notification_tools = True
-            # Answering somebody's notification is the owner's to do, in their
+                include_question_tools = True
+            # Answering what was asked of somebody is theirs to do, in their
             # own thread; a stranger's turn must not be able to do it for them.
             if (
-                include_notification_tools
+                include_question_tools
                 and conversation is not None
                 and not Audience.of(conversation).answers_outsiders
             ):
-                toolsets = [*toolsets, notification_toolset()]
+                toolsets = [*toolsets, question_toolset()]
             span.set_attribute("lemma.toolsets", len(toolsets))
             return toolsets
 

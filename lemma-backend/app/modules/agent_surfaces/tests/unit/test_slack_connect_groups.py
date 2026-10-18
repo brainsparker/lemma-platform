@@ -25,9 +25,9 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
 from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
-from app.modules.agent_surfaces.services.slack_groups import (
+from app.modules.agent_surfaces.services.workspace_channels import (
     answers_slack_outsider,
-    slack_group_title,
+    workspace_channel_title,
 )
 
 pytestmark = pytest.mark.unit
@@ -197,10 +197,12 @@ async def test_nobody_is_an_outsider_in_the_workspaces_own_channels():
 def test_a_channel_is_listed_under_its_slack_name(channel_name, title):
     route = SurfaceChannelRoute(channel_id=CHANNEL, channel_name=channel_name)
 
-    assert slack_group_title(route, _said(shared=False, sender_team=None)) == title
+    assert (
+        workspace_channel_title(route, _said(shared=False, sender_team=None)) == title
+    )
 
 
 def test_a_group_dm_has_no_name_of_its_own():
     parsed = _said(shared=False, sender_team=None, channel_type="mpim")
 
-    assert slack_group_title(None, parsed) == "Group DM"
+    assert workspace_channel_title(None, parsed) == "Group DM"

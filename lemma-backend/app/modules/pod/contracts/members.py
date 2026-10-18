@@ -26,11 +26,14 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from app.core.authorization.permissions import Permissions
+from app.core.authorization.permissions import Permissions, equivalent_permission_ids
 from app.modules.pod.domain.pod_entities import PodMemberEntity
 from app.modules.pod.domain.roles import PodRole
 from app.modules.pod.infrastructure.models.pod_models import Pod
-from app.modules.pod.infrastructure.pod_administration_queries import members_who_can
+from app.modules.pod.infrastructure.pod_administration_queries import (
+    member_holds,
+    members_who_can,
+)
 from app.modules.pod.infrastructure.pod_repositories import PodMemberRepository
 
 
@@ -43,6 +46,24 @@ async def pod_member_id(uow, pod_id: UUID, user_id: UUID) -> UUID | None:
     """
     member = await PodMemberRepository(uow).get_by_pod_and_user_id(pod_id, user_id)
     return member.id if member is not None else None
+
+
+async def pod_member_holds(
+    uow, pod_id: UUID, user_id: UUID, permission_id: str
+) -> bool:
+    """Whether this member's roles in the pod grant ``permission_id``, or a
+    permission that implies it.
+
+    For deciding what somebody *else* may be given -- the member a contact's
+    chats are to belong to, say -- where there is no request of theirs to
+    authorize. A member's own request is authorized the usual way.
+    """
+    return await member_holds(
+        uow.session,
+        pod_id=pod_id,
+        user_id=user_id,
+        permission_ids=sorted(equivalent_permission_ids(permission_id)),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +255,7 @@ __all__ = [
     "add_pod_member",
     "pod_invitation_details",
     "pod_member_id",
+    "pod_member_holds",
     "pod_name",
     "pod_organization_id",
     "refuse_pod_role_beyond_inviter",

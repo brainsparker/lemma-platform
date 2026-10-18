@@ -7,7 +7,10 @@ cannot drift between them:
 
 * **A member** reads everything: every source, every private note, every
   answer whoever it was made for. What a contact wrote reaches a member's run
-  marked as somebody outside the pod, never as an instruction.
+  marked as somebody outside the pod, never as an instruction. Where a member
+  reads the timeline themselves, though, an answer an agent made with another
+  member's own access is shown as given but not what it said
+  (``withheld_from``): they may not be able to see what it was made from.
 * **A contact** -- a run answering them -- reads only what was said where they
   are: the lines from their own source, and none of those an agent wrote with
   a member's own access. Never a private note.
@@ -20,7 +23,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-from app.modules.channels.domain.entities import ChannelMessage
+from app.modules.channels.domain.entities import ChannelMessage, SenderKind
 
 
 class Reader(BaseModel):
@@ -62,3 +65,20 @@ def readable(
 ) -> list[ChannelMessage]:
     """The messages ``reader`` may see, in the order given."""
     return [message for message in messages if may_read(reader, message)]
+
+
+def withheld_from(message: ChannelMessage, *, user_id: UUID) -> bool:
+    """Whether the member ``user_id``, reading the timeline, is shown only that
+    this answer was given -- not what it said.
+
+    An agent's answer made with one member's own access is that member's to
+    read. It was posted where the people in the chat read it, but a member of
+    the pod reading the timeline need not be one of them, and may not be able
+    to see what it was made from. One whose principal is no longer known is
+    withheld from everybody.
+    """
+    sender = message.sender
+    if sender.kind is not SenderKind.AGENT or not sender.used_a_members_access:
+        return False
+    behalf = sender.on_behalf_of
+    return behalf is None or behalf.user_id != user_id

@@ -5,24 +5,21 @@
 import type { ChannelKind } from './ChannelKind.js';
 import type { ChannelParticipantResponse } from './ChannelParticipantResponse.js';
 import type { ChannelSourceResponse } from './ChannelSourceResponse.js';
+import type { PersonRef } from './PersonRef.js';
 export type ChannelDetailResponse = {
-    /**
-     * Which contact's channel this is.
-     */
-    contact_id?: (string | null);
     created_at: string;
     /**
      * A member answering by hand; agents do not answer meanwhile.
      */
-    handler_user_id?: (string | null);
+    handler?: (PersonRef | null);
     id: string;
     kind: ChannelKind;
     last_message_at?: (string | null);
-    /**
-     * Whose direct channel this is.
-     */
-    member_user_id?: (string | null);
     participants?: Array<ChannelParticipantResponse>;
+    /**
+     * Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP.
+     */
+    person?: (PersonRef | null);
     sources?: Array<ChannelSourceResponse>;
     title?: (string | null);
 };

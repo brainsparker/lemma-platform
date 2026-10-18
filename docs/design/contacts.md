@@ -280,7 +280,9 @@ one:
 
 - **Contacts and identities.** The `contacts` module owns `contacts` and
   `contact_identities`, with `GET`/`PATCH`/`DELETE /pods/{pod_id}/contacts` and
-  `GET .../contacts/{id}/export`. Reading contacts takes `conversation.read`.
+  `GET .../contacts/{id}/export`. Reading contacts -- and their channels -- takes
+  `contact.read`, which editors and admins hold (and `contact.message` implies);
+  a member who only uses the pod sees neither.
   Forgetting a contact deletes their rows in contact-owned tables first (the
   pod's database), then in one main-database transaction their conversations,
   handles, web chat sessions and codes, and the platform profiles stored for
@@ -383,8 +385,8 @@ one:
   `contacts_month` window held to `usage_contacts_caps`
   (`GET /usage/organizations/{id}/contacts-cap` for owners and editors, `PUT`
   for owners). No row is the deployment default
-  (`USAGE_CONTACTS_MONTHLY_DEFAULT_USD`, $50); removing the cap is recorded as
-  no limit. Past the cap a surface starts no run: the person is told once a day
+  (`USAGE_CONTACTS_MONTHLY_DEFAULT_USD`, $50, and `USAGE_CONTACTS_MAX_DEFAULT`,
+  500 contacts answered); removing the cap is recorded as no limit. Past the cap a surface starts no run: the person is told once a day
   that a person will reply, the member is told, and the conversation is handed
   to them for the rest of the month. The web chat is held the same way. Vision,
   titles and history compaction in an outside run count towards the cap, never

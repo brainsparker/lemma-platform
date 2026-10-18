@@ -405,6 +405,7 @@ _NAME_TO_MODULE = {
     'PendingInteractionListResponse': 'pending_interaction_list_response',
     'PendingInteractionResponse': 'pending_interaction_response',
     'PendingSignInResponse': 'pending_sign_in_response',
+    'PersonRef': 'person_ref',
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
     'PodConfig': 'pod_config',
@@ -1059,6 +1060,7 @@ if TYPE_CHECKING:
     from .pending_interaction_list_response import PendingInteractionListResponse
     from .pending_interaction_response import PendingInteractionResponse
     from .pending_sign_in_response import PendingSignInResponse
+    from .person_ref import PersonRef
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
     from .pod_config import PodConfig
@@ -1726,6 +1728,7 @@ __all__ = [
     'PendingInteractionListResponse',
     'PendingInteractionResponse',
     'PendingSignInResponse',
+    'PersonRef',
     'PlanStepResponse',
     'PlanStepResponseDetail',
     'PodConfig',

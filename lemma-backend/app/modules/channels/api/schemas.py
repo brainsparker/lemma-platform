@@ -12,10 +12,30 @@ from app.modules.channels.domain.entities import (
     ChannelKind,
     ChannelMessage,
     Participant,
+    Principal,
     SenderKind,
     Source,
     SourceKind,
 )
+from app.modules.channels.domain.projection import withheld_from
+
+
+class PersonRef(BaseModel):
+    """Somebody in a channel, said one way everywhere: a member of the pod, one
+    of its contacts, or one of its agents. There is nobody else -- everybody
+    outside the pod is a contact."""
+
+    kind: SenderKind
+    id: UUID | None = Field(
+        default=None,
+        description=(
+            "The member's user id, the contact's id or the agent's id; absent "
+            "for a member or an agent since removed."
+        ),
+    )
+    name: str | None = Field(
+        default=None, description="The name they were shown under, where known."
+    )
 
 
 class ChannelSourceResponse(BaseModel):
@@ -30,8 +50,7 @@ class ChannelSourceResponse(BaseModel):
 
 
 class ChannelParticipantResponse(BaseModel):
-    user_id: UUID | None = Field(default=None, description="A member of the pod.")
-    contact_id: UUID | None = Field(default=None, description="One of its contacts.")
+    person: PersonRef = Field(description="A member or a contact.")
     last_read_at: datetime | None = None
 
 
@@ -39,13 +58,14 @@ class ChannelResponse(BaseModel):
     id: UUID
     kind: ChannelKind
     title: str | None = None
-    member_user_id: UUID | None = Field(
-        default=None, description="Whose direct channel this is."
+    person: PersonRef | None = Field(
+        default=None,
+        description=(
+            "Whose channel it is: the member's for a DIRECT one, the contact's "
+            "for a CONTACT one; absent for a GROUP."
+        ),
     )
-    contact_id: UUID | None = Field(
-        default=None, description="Which contact's channel this is."
-    )
-    handler_user_id: UUID | None = Field(
+    handler: PersonRef | None = Field(
         default=None,
         description="A member answering by hand; agents do not answer meanwhile.",
     )
@@ -67,18 +87,24 @@ class ChannelListResponse(BaseModel):
 
 class ChannelMessageResponse(BaseModel):
     id: UUID
-    sender_kind: SenderKind
-    sender_user_id: UUID | None = None
-    sender_contact_id: UUID | None = None
-    sender_agent_id: UUID | None = None
-    sender_name: str | None = None
-    on_behalf_user_id: UUID | None = Field(
-        default=None, description="For an agent's line: the member it acted for."
+    sender: PersonRef
+    on_behalf_of: PersonRef | None = Field(
+        default=None,
+        description=(
+            "For an agent's line: the member or contact it acted for, whose "
+            "access the answer was made with."
+        ),
     )
-    on_behalf_contact_id: UUID | None = Field(
-        default=None, description="For an agent's line: the contact it answered."
+    text: str | None = Field(
+        default=None, description="Absent where the line is withheld from the reader."
     )
-    text: str
+    withheld: bool = Field(
+        default=False,
+        description=(
+            "An answer an agent made with another member's own access: the "
+            "reader sees that it was given, and for whom, not what it said."
+        ),
+    )
     source_id: UUID | None = Field(
         default=None,
         description="Where it was said; absent for a line written in Lemma.",
@@ -101,9 +127,18 @@ def channel_response(channel: Channel) -> ChannelResponse:
         id=channel.id,
         kind=channel.kind,
         title=channel.title,
-        member_user_id=channel.member_user_id,
-        contact_id=channel.contact_id,
-        handler_user_id=channel.handler_user_id,
+        person=(
+            _ref(Principal.member(channel.member_user_id))
+            if channel.member_user_id
+            else _ref(Principal.contact(channel.contact_id))
+            if channel.contact_id
+            else None
+        ),
+        handler=(
+            _ref(Principal.member(channel.handler_user_id))
+            if channel.handler_user_id
+            else None
+        ),
         created_at=channel.created_at,
         last_message_at=channel.last_message_at,
     )
@@ -127,8 +162,7 @@ def detail_response(
         ],
         participants=[
             ChannelParticipantResponse(
-                user_id=participant.principal.user_id,
-                contact_id=participant.principal.contact_id,
+                person=_ref(participant.principal),
                 last_read_at=participant.last_read_at,
             )
             for participant in participants
@@ -136,19 +170,29 @@ def detail_response(
     )
 
 
-def message_response(message: ChannelMessage) -> ChannelMessageResponse:
+def _ref(principal: Principal, *, name: str | None = None) -> PersonRef:
+    if principal.user_id is not None:
+        return PersonRef(kind=SenderKind.MEMBER, id=principal.user_id, name=name)
+    return PersonRef(kind=SenderKind.CONTACT, id=principal.contact_id, name=name)
+
+
+def message_response(
+    message: ChannelMessage, *, reader_id: UUID
+) -> ChannelMessageResponse:
+    """One line as the member ``reader_id`` reads it."""
     sender = message.sender
     behalf = sender.on_behalf_of
+    withheld = withheld_from(message, user_id=reader_id)
     return ChannelMessageResponse(
         id=message.id,
-        sender_kind=sender.kind,
-        sender_user_id=sender.user_id,
-        sender_contact_id=sender.contact_id,
-        sender_agent_id=sender.agent_id,
-        sender_name=sender.display_name,
-        on_behalf_user_id=behalf.user_id if behalf else None,
-        on_behalf_contact_id=behalf.contact_id if behalf else None,
-        text=message.text,
+        sender=PersonRef(
+            kind=sender.kind,
+            id=sender.user_id or sender.contact_id or sender.agent_id,
+            name=sender.display_name,
+        ),
+        on_behalf_of=_ref(behalf) if behalf else None,
+        text=None if withheld else message.text,
+        withheld=withheld,
         source_id=message.source_id,
         members_only=message.members_only,
         created_at=message.created_at,

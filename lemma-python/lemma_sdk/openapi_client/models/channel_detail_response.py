@@ -15,6 +15,7 @@ from ..types import UNSET, Unset
 if TYPE_CHECKING:
     from ..models.channel_participant_response import ChannelParticipantResponse
     from ..models.channel_source_response import ChannelSourceResponse
+    from ..models.person_ref import PersonRef
 
 
 T = TypeVar("T", bound="ChannelDetailResponse")
@@ -27,11 +28,11 @@ class ChannelDetailResponse:
         created_at (datetime.datetime):
         id (UUID):
         kind (ChannelKind):
-        contact_id (None | Unset | UUID): Which contact's channel this is.
-        handler_user_id (None | Unset | UUID): A member answering by hand; agents do not answer meanwhile.
+        handler (None | PersonRef | Unset): A member answering by hand; agents do not answer meanwhile.
         last_message_at (datetime.datetime | None | Unset):
-        member_user_id (None | Unset | UUID): Whose direct channel this is.
         participants (list[ChannelParticipantResponse] | Unset):
+        person (None | PersonRef | Unset): Whose channel it is: the member's for a DIRECT one, the contact's for a
+            CONTACT one; absent for a GROUP.
         sources (list[ChannelSourceResponse] | Unset):
         title (None | str | Unset):
     """
@@ -39,37 +40,30 @@ class ChannelDetailResponse:
     created_at: datetime.datetime
     id: UUID
     kind: ChannelKind
-    contact_id: None | Unset | UUID = UNSET
-    handler_user_id: None | Unset | UUID = UNSET
+    handler: None | PersonRef | Unset = UNSET
     last_message_at: datetime.datetime | None | Unset = UNSET
-    member_user_id: None | Unset | UUID = UNSET
     participants: list[ChannelParticipantResponse] | Unset = UNSET
+    person: None | PersonRef | Unset = UNSET
     sources: list[ChannelSourceResponse] | Unset = UNSET
     title: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.person_ref import PersonRef
+
         created_at = self.created_at.isoformat()
 
         id = str(self.id)
 
         kind = self.kind.value
 
-        contact_id: None | str | Unset
-        if isinstance(self.contact_id, Unset):
-            contact_id = UNSET
-        elif isinstance(self.contact_id, UUID):
-            contact_id = str(self.contact_id)
+        handler: dict[str, Any] | None | Unset
+        if isinstance(self.handler, Unset):
+            handler = UNSET
+        elif isinstance(self.handler, PersonRef):
+            handler = self.handler.to_dict()
         else:
-            contact_id = self.contact_id
-
-        handler_user_id: None | str | Unset
-        if isinstance(self.handler_user_id, Unset):
-            handler_user_id = UNSET
-        elif isinstance(self.handler_user_id, UUID):
-            handler_user_id = str(self.handler_user_id)
-        else:
-            handler_user_id = self.handler_user_id
+            handler = self.handler
 
         last_message_at: None | str | Unset
         if isinstance(self.last_message_at, Unset):
@@ -79,20 +73,20 @@ class ChannelDetailResponse:
         else:
             last_message_at = self.last_message_at
 
-        member_user_id: None | str | Unset
-        if isinstance(self.member_user_id, Unset):
-            member_user_id = UNSET
-        elif isinstance(self.member_user_id, UUID):
-            member_user_id = str(self.member_user_id)
-        else:
-            member_user_id = self.member_user_id
-
         participants: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.participants, Unset):
             participants = []
             for participants_item_data in self.participants:
                 participants_item = participants_item_data.to_dict()
                 participants.append(participants_item)
+
+        person: dict[str, Any] | None | Unset
+        if isinstance(self.person, Unset):
+            person = UNSET
+        elif isinstance(self.person, PersonRef):
+            person = self.person.to_dict()
+        else:
+            person = self.person
 
         sources: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.sources, Unset):
@@ -116,16 +110,14 @@ class ChannelDetailResponse:
                 "kind": kind,
             }
         )
-        if contact_id is not UNSET:
-            field_dict["contact_id"] = contact_id
-        if handler_user_id is not UNSET:
-            field_dict["handler_user_id"] = handler_user_id
+        if handler is not UNSET:
+            field_dict["handler"] = handler
         if last_message_at is not UNSET:
             field_dict["last_message_at"] = last_message_at
-        if member_user_id is not UNSET:
-            field_dict["member_user_id"] = member_user_id
         if participants is not UNSET:
             field_dict["participants"] = participants
+        if person is not UNSET:
+            field_dict["person"] = person
         if sources is not UNSET:
             field_dict["sources"] = sources
         if title is not UNSET:
@@ -137,6 +129,7 @@ class ChannelDetailResponse:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.channel_participant_response import ChannelParticipantResponse
         from ..models.channel_source_response import ChannelSourceResponse
+        from ..models.person_ref import PersonRef
 
         d = dict(src_dict)
         created_at = isoparse(d.pop("created_at"))
@@ -145,39 +138,22 @@ class ChannelDetailResponse:
 
         kind = ChannelKind(d.pop("kind"))
 
-        def _parse_contact_id(data: object) -> None | Unset | UUID:
+        def _parse_handler(data: object) -> None | PersonRef | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
             try:
-                if not isinstance(data, str):
+                if not isinstance(data, dict):
                     raise TypeError()
-                contact_id_type_0 = UUID(data)
+                handler_type_0 = PersonRef.from_dict(data)
 
-                return contact_id_type_0
+                return handler_type_0
             except TypeError, ValueError, AttributeError, KeyError:
                 pass
-            return cast(None | Unset | UUID, data)
+            return cast(None | PersonRef | Unset, data)
 
-        contact_id = _parse_contact_id(d.pop("contact_id", UNSET))
-
-        def _parse_handler_user_id(data: object) -> None | Unset | UUID:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                handler_user_id_type_0 = UUID(data)
-
-                return handler_user_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | Unset | UUID, data)
-
-        handler_user_id = _parse_handler_user_id(d.pop("handler_user_id", UNSET))
+        handler = _parse_handler(d.pop("handler", UNSET))
 
         def _parse_last_message_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
@@ -196,23 +172,6 @@ class ChannelDetailResponse:
 
         last_message_at = _parse_last_message_at(d.pop("last_message_at", UNSET))
 
-        def _parse_member_user_id(data: object) -> None | Unset | UUID:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                member_user_id_type_0 = UUID(data)
-
-                return member_user_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | Unset | UUID, data)
-
-        member_user_id = _parse_member_user_id(d.pop("member_user_id", UNSET))
-
         _participants = d.pop("participants", UNSET)
         participants: list[ChannelParticipantResponse] | Unset = UNSET
         if _participants is not UNSET:
@@ -223,6 +182,23 @@ class ChannelDetailResponse:
                 )
 
                 participants.append(participants_item)
+
+        def _parse_person(data: object) -> None | PersonRef | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                person_type_0 = PersonRef.from_dict(data)
+
+                return person_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | PersonRef | Unset, data)
+
+        person = _parse_person(d.pop("person", UNSET))
 
         _sources = d.pop("sources", UNSET)
         sources: list[ChannelSourceResponse] | Unset = UNSET
@@ -246,11 +222,10 @@ class ChannelDetailResponse:
             created_at=created_at,
             id=id,
             kind=kind,
-            contact_id=contact_id,
-            handler_user_id=handler_user_id,
+            handler=handler,
             last_message_at=last_message_at,
-            member_user_id=member_user_id,
             participants=participants,
+            person=person,
             sources=sources,
             title=title,
         )

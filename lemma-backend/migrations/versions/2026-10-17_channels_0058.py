@@ -13,6 +13,14 @@ keeps what answers it in place (`reply_ref`). **`channel_participants`** and
 **`agent_conversations.channel_id`** places a conversation in its channel, and
 a person has one conversation per agent there.
 
+Also here, unused until the channel app and its agent tools are built, so that
+work needs no migration of its own: a line's files, thread, edits and run; a
+question on a line that waits for one person's answer (`ask_user`, an
+approval, a workflow form) -- what the app shows as waiting on them;
+**`channel_mentions`**, who a line names, read or not; **`channel_message_deliveries`**,
+each place a line was sent out to and what became of it; a participant's notify
+preference; and a channel's topic, archiving and call for a person.
+
 `agent_surface_conversation_links`, `agent_surface_groups` and
 `agent_surface_group_messages` go: sources replace them. Groups and web chat
 were unreleased, so nothing is carried over.
@@ -81,6 +89,16 @@ def _create_tables() -> None:
             nullable=True,
         ),
         sa.Column("last_message_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("topic", sa.String(500), nullable=True),
+        sa.Column(
+            "created_by_user_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("attention_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("attention_reason", sa.String(255), nullable=True),
         sa.CheckConstraint(
             "(kind = 'DIRECT') = (member_user_id IS NOT NULL)"
             " AND (kind = 'CONTACT') = (contact_id IS NOT NULL)",
@@ -103,6 +121,12 @@ def _create_tables() -> None:
     )
     op.create_index(
         "ix_channels_pod_activity", "channels", ["pod_id", "last_message_at", "id"]
+    )
+    op.create_index(
+        "ix_channels_pod_attention",
+        "channels",
+        ["pod_id", "attention_at"],
+        postgresql_where=sa.text("attention_at IS NOT NULL"),
     )
 
     op.create_table(
@@ -133,6 +157,8 @@ def _create_tables() -> None:
             nullable=True,
         ),
         sa.Column("last_read_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("notify", sa.String(10), nullable=False, server_default="ALL"),
+        sa.Column("notify_via", JSONB(), nullable=True),
         sa.CheckConstraint(
             "num_nonnulls(user_id, contact_id) = 1",
             name="ck_channel_participants_one_person",
@@ -314,6 +340,61 @@ def _create_tables() -> None:
         sa.Column("external_message_id", sa.String(255), nullable=True),
         sa.Column("external_thread_id", sa.String(255), nullable=True),
         sa.Column("reply_ref", JSONB(), nullable=True),
+        sa.Column("parts", JSONB(), nullable=True),
+        sa.Column(
+            "agent_run_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("agent_runs.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column(
+            "reply_to_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("channel_messages.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column(
+            "thread_root_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("channel_messages.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column("edited_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("interaction_kind", sa.String(12), nullable=True),
+        sa.Column("interaction", JSONB(), nullable=True),
+        sa.Column("interaction_state", sa.String(12), nullable=True),
+        sa.Column(
+            "awaits_user_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column(
+            "awaits_contact_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("contacts.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column("answer", JSONB(), nullable=True),
+        sa.Column("answered_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "answered_by_user_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column(
+            "answered_by_contact_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("contacts.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.CheckConstraint(
+            "(interaction_kind IS NULL) = (interaction_state IS NULL)"
+            " AND num_nonnulls(awaits_user_id, awaits_contact_id) <= 1",
+            name="ck_channel_messages_interaction_shape",
+        ),
         sa.CheckConstraint(
             "num_nonnulls(sender_user_id, sender_contact_id, sender_agent_id) <= 1",
             name="ck_channel_messages_one_sender",
@@ -345,6 +426,140 @@ def _create_tables() -> None:
     op.execute(
         "CREATE INDEX ix_channel_messages_search ON channel_messages "
         "USING gin (to_tsvector('simple', body))"
+    )
+    op.create_index(
+        "ix_channel_messages_thread",
+        "channel_messages",
+        ["thread_root_id", "created_at", "id"],
+        postgresql_where=sa.text("thread_root_id IS NOT NULL"),
+    )
+    # What is waiting on one person: the questions put to them, still open.
+    op.create_index(
+        "ix_channel_messages_awaiting_member",
+        "channel_messages",
+        ["awaits_user_id", "pod_id", "created_at"],
+        postgresql_where=sa.text("interaction_state = 'OPEN'"),
+    )
+    op.create_index(
+        "ix_channel_messages_awaiting_contact",
+        "channel_messages",
+        ["awaits_contact_id", "created_at"],
+        postgresql_where=sa.text("interaction_state = 'OPEN'"),
+    )
+
+    op.create_table(
+        "channel_mentions",
+        *_audit(),
+        sa.Column(
+            "message_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("channel_messages.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "channel_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("channels.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "pod_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("pods.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "user_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column(
+            "contact_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("contacts.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column(
+            "agent_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("agents.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column("read_at", sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint(
+            "num_nonnulls(user_id, contact_id, agent_id) = 1",
+            name="ck_channel_mentions_one_named",
+        ),
+    )
+    op.execute(
+        "CREATE UNIQUE INDEX uq_channel_mentions_named ON channel_mentions "
+        "(message_id, coalesce(user_id, contact_id, agent_id))"
+    )
+    op.create_index(
+        "ix_channel_mentions_unread_member",
+        "channel_mentions",
+        ["user_id", "pod_id", "created_at"],
+        postgresql_where=sa.text("read_at IS NULL AND user_id IS NOT NULL"),
+    )
+    op.create_index("ix_channel_mentions_channel", "channel_mentions", ["channel_id"])
+
+    op.create_table(
+        "channel_message_deliveries",
+        *_audit(),
+        sa.Column(
+            "message_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("channel_messages.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "pod_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("pods.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "source_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("channel_sources.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column("platform", sa.String(20), nullable=False),
+        sa.Column(
+            "recipient_user_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column(
+            "recipient_contact_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("contacts.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column("status", sa.String(12), nullable=False),
+        sa.Column("error", sa.Text(), nullable=True),
+        sa.Column("external_message_id", sa.String(255), nullable=True),
+        sa.Column("delivered_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.create_index(
+        "ix_channel_message_deliveries_message",
+        "channel_message_deliveries",
+        ["message_id"],
+    )
+    # A reply on a platform names the message it answers: back to the line.
+    op.create_index(
+        "ix_channel_message_deliveries_external",
+        "channel_message_deliveries",
+        ["platform", "external_message_id"],
+        postgresql_where=sa.text("external_message_id IS NOT NULL"),
+    )
+    op.create_index(
+        "ix_channel_message_deliveries_pending",
+        "channel_message_deliveries",
+        ["pod_id", "created_at"],
+        postgresql_where=sa.text("status = 'PENDING'"),
     )
 
 
@@ -471,6 +686,8 @@ def downgrade() -> None:
         )
     op.drop_column("agent_conversations", "channel_id")
     for table in (
+        "channel_message_deliveries",
+        "channel_mentions",
         "channel_messages",
         "channel_sources",
         "channel_agents",

@@ -79,6 +79,7 @@ class Permissions:
     CONVERSATION_READ: ClassVar[str] = "conversation.read"
     CONVERSATION_WRITE: ClassVar[str] = "conversation.write"
 
+    CONTACT_READ: ClassVar[str] = "contact.read"
     CONTACT_MESSAGE: ClassVar[str] = "contact.message"
 
     CONNECTOR_USE: ClassVar[str] = "connector.use"
@@ -284,6 +285,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "Create and update conversations",
     ),
     PermissionDefinition(
+        Permissions.CONTACT_READ,
+        PermissionScope.POD,
+        "contact",
+        "See the pod's contacts and their chats",
+    ),
+    PermissionDefinition(
         Permissions.CONTACT_MESSAGE,
         PermissionScope.POD,
         "contact",
@@ -385,6 +392,9 @@ POD_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
         # person who did not ask, on a channel whose sender reputation the pod
         # shares. Writing in one's own conversations does not; this does.
         Permissions.CONTACT_MESSAGE,
+        # Who the pod's contacts are, and what they said to it, is theirs and
+        # the pod's -- not every member's. Those who answer for the pod see it.
+        Permissions.CONTACT_READ,
     }
 )
 POD_ADMIN_PERMISSIONS: frozenset[str] = frozenset(
@@ -449,6 +459,8 @@ IMPLIED_PERMISSIONS: dict[str, frozenset[str]] = {
         {Permissions.CONNECTOR_ACCOUNT_USE}
     ),
     Permissions.CONVERSATION_WRITE: frozenset({Permissions.CONVERSATION_READ}),
+    # Writing to a contact is done looking at who they are and what they said.
+    Permissions.CONTACT_MESSAGE: frozenset({Permissions.CONTACT_READ}),
     # Executing a workload requires reading its definition (an agent's
     # instructions, a function's source) to run it at all, so execute-only
     # grants must satisfy read checks. Read does NOT imply execute.
@@ -477,6 +489,9 @@ def pod_principal_may_hold(permission_id: str) -> bool:
     """Whether another pod may ever hold ``permission_id`` here.
 
     Reading, and running this pod's assistant -- the link itself. Nothing that
-    changes anything, whatever a grant row says.
+    changes anything, whatever a grant row says. Nor the pod's contacts: people
+    who wrote to this pod did not write to the pods it is linked to.
     """
+    if permission_id == Permissions.CONTACT_READ:
+        return False
     return permission_id.endswith(".read") or permission_id == Permissions.AGENT_EXECUTE

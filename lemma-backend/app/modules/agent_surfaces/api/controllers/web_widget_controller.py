@@ -33,7 +33,7 @@ from app.modules.agent_surfaces.domain.web_widgets import (
     parse_origin,
 )
 from app.modules.agent_surfaces.services.web_widget_admin import WebWidgetAdmin
-from app.modules.pod.contracts.members import pod_member_id
+from app.modules.pod.contracts.members import pod_member_holds
 
 router = APIRouter(prefix="/pods/{pod_id}/web-widgets", tags=["Agent Surfaces"])
 
@@ -120,10 +120,14 @@ def _response(widget: WebWidget) -> WebWidgetResponse:
 
 
 async def _require_member(uow: UoWDep, pod_id: UUID, user_id: UUID | None) -> None:
-    if user_id is not None and await pod_member_id(uow, pod_id, user_id) is None:
+    """The member a widget's chats belong to: one who may see the pod's
+    contacts, since every chat it opens is a contact's."""
+    if user_id is not None and not await pod_member_holds(
+        uow, pod_id, user_id, Permissions.CONTACT_READ
+    ):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="A widget must be looked after by a member of this pod",
+            detail=("A widget must be looked after by an editor or admin of this pod"),
         )
 
 

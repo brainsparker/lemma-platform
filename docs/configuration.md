@@ -840,6 +840,10 @@ the default does not apply to them.
 ```dotenv
 # USD a month. Unset (empty) means no default ceiling.
 USAGE_CONTACTS_MONTHLY_DEFAULT_USD=50
+# How many contacts the organization's bots may answer at all -- people an
+# agent has replied to, not everybody in a group. Unset (empty) means no
+# default ceiling.
+USAGE_CONTACTS_MAX_DEFAULT=500
 ```
 
 ### When the cost of the work cannot be established

@@ -30,6 +30,8 @@ from app.modules.channels.domain.entities import (
 )
 from app.modules.channels.infrastructure.models import (
     ChannelAgentModel,
+    ChannelMentionModel,
+    ChannelMessageDeliveryModel,
     ChannelMessageModel,
     ChannelModel,
     ChannelParticipantModel,
@@ -224,8 +226,9 @@ class ChannelRepository:
         """A contact turned out to be another: their channel becomes the survivor's.
 
         Moved rather than copied -- sources, lines and people -- and the merged
-        contact's channel goes once it holds nothing. A conversation that named
-        it loses the pointer and is placed again on its next message.
+        contact's channel goes once it holds nothing. A conversation that was
+        in it loses the pointer: the person's next word continues the
+        survivor's conversation there, or places this one when there is none.
         """
         merged = await self.session.scalar(
             select(ChannelModel).where(
@@ -238,7 +241,7 @@ class ChannelRepository:
         if merged is None:
             return
         survivor = await self.for_contact(pod_id=pod_id, contact_id=survivor_id)
-        for table in (ChannelSourceModel, ChannelMessageModel):
+        for table in (ChannelSourceModel, ChannelMessageModel, ChannelMentionModel):
             await self.session.execute(
                 update(table)
                 .where(table.channel_id == merged.id)
@@ -260,10 +263,35 @@ class ChannelRepository:
             .where(ChannelMessageModel.sender_contact_id == merged_id)
             .values(sender_contact_id=survivor_id)
         )
+        for column in (
+            ChannelMessageModel.on_behalf_contact_id,
+            ChannelMessageModel.awaits_contact_id,
+            ChannelMessageModel.answered_by_contact_id,
+        ):
+            await self.session.execute(
+                update(ChannelMessageModel)
+                .where(column == merged_id)
+                .values({column.key: survivor_id})
+            )
         await self.session.execute(
-            update(ChannelMessageModel)
-            .where(ChannelMessageModel.on_behalf_contact_id == merged_id)
-            .values(on_behalf_contact_id=survivor_id)
+            update(ChannelMessageDeliveryModel)
+            .where(ChannelMessageDeliveryModel.recipient_contact_id == merged_id)
+            .values(recipient_contact_id=survivor_id)
+        )
+        # A line naming both keeps the survivor's mention.
+        named = select(ChannelMentionModel.message_id).where(
+            ChannelMentionModel.contact_id == survivor_id
+        )
+        await self.session.execute(
+            delete(ChannelMentionModel).where(
+                ChannelMentionModel.contact_id == merged_id,
+                ChannelMentionModel.message_id.in_(named),
+            )
+        )
+        await self.session.execute(
+            update(ChannelMentionModel)
+            .where(ChannelMentionModel.contact_id == merged_id)
+            .values(contact_id=survivor_id)
         )
         # A seat both already hold in one channel keeps the survivor's.
         held = select(ChannelParticipantModel.channel_id).where(

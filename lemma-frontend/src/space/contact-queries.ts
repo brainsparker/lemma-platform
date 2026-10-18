@@ -2,6 +2,9 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
+import { SEE_CONTACTS } from "@/data/pod-roles";
+import { lemma } from "@/session/client";
+import { isLandingPreview } from "@/marketing/preview-mode";
 import type { WidgetAnswer, WidgetDraft } from "@/data/contacts";
 
 /** The keys every view of a space's contacts reads under. */
@@ -9,6 +12,25 @@ export const contactsKey = (podId: string) => ["contacts", podId] as const;
 export const widgetsKey = (podId: string) => ["web-widgets", podId] as const;
 export const reachKey = (podId: string) => ["contact-reach", podId] as const;
 export const capKey = (orgId: string) => ["contacts-cap", orgId] as const;
+
+/** Whether the signed-in person may see this space's contacts at all.
+ *
+ *  Asked of `podPermissions.me`, under the key the rest of the app asks it
+ *  with, rather than read off a role. Unknown counts as no, so the place is
+ *  not offered while the question is in flight. The sample source and the
+ *  landing's preview have no server to ask, and show everything. */
+export function useMaySeeContacts(podId: string): boolean {
+    const offline = isLandingPreview() || source.label === "sample";
+    const permissions = useQuery({
+        queryKey: ["pod-permissions", podId],
+        queryFn: () => lemma(podId).podPermissions.me(podId),
+        enabled: !offline,
+        staleTime: 60_000,
+    });
+    if (offline) return true;
+    const held = permissions.data?.actions ?? [];
+    return SEE_CONTACTS.some((action) => held.includes(action));
+}
 
 export function useContacts(podId: string, enabled = true) {
     return useQuery({

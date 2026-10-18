@@ -2,8 +2,10 @@
 
 Reading a channel takes what reading the pod's conversations takes: a channel
 is where people talk with the pod, and its lines are as private as what was
-said. A member sees their own direct channel and every contact's and group's.
-Stepping in to answer a contact by hand takes what writing to a contact takes.
+said. A member sees their own direct channel and every group's. A contact's
+channel takes seeing the pod's contacts too -- an editor's or an admin's, not
+every member's. Stepping in to answer a contact by hand takes what writing to a
+contact takes.
 """
 
 from __future__ import annotations
@@ -14,6 +16,8 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep
+from app.core.authorization.context import ResourceRef
+from app.core.authorization.current import get_current_context
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
 from app.modules.channels.api.schemas import (
@@ -53,19 +57,29 @@ def _bad_cursor() -> HTTPException:
     )
 
 
+async def _sees_contacts(pod_id: UUID) -> bool:
+    """Whether this member may see the pod's contacts, and so their channels."""
+    ctx = get_current_context()
+    return ctx is not None and await ctx.can(
+        Permissions.CONTACT_READ, ResourceRef.pod(pod_id)
+    )
+
+
 async def _visible(
     channels: ChannelRepository, *, pod_id: UUID, channel_id: UUID, user_id: UUID
 ) -> Channel:
     """The channel, if the pod has it and this member may read it.
 
-    Another member's direct channel answers as missing, exactly as a channel
-    that does not exist: whether it does is not this member's to learn.
+    Another member's direct channel, or a contact's to a member who may not see
+    contacts, answers as missing, exactly as a channel that does not exist:
+    whether it does is not this member's to learn.
     """
     channel = await channels.get(channel_id)
     if (
         channel is None
         or channel.pod_id != pod_id
         or (channel.kind is ChannelKind.DIRECT and channel.member_user_id != user_id)
+        or (channel.kind is ChannelKind.CONTACT and not await _sees_contacts(pod_id))
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Channel not found")
     return channel
@@ -86,10 +100,15 @@ async def list_channels(
     before: str | None = Query(default=None, max_length=100),
 ) -> ChannelListResponse:
     """The pod's channels this member sees, most recently active first."""
+    kinds = (kind,) if kind else _ALL_KINDS
+    if ChannelKind.CONTACT in kinds and not await _sees_contacts(pod_id):
+        kinds = tuple(each for each in kinds if each is not ChannelKind.CONTACT)
+    if not kinds:
+        return ChannelListResponse(items=[], next_before=None)
     channels = await ChannelRepository(uow.session).list_for_member(
         pod_id=pod_id,
         user_id=user.id,
-        kinds=(kind,) if kind else _ALL_KINDS,
+        kinds=kinds,
         before=_cursor(before),
         limit=limit,
     )
@@ -147,7 +166,7 @@ async def list_channel_messages(
     lines = await channels.recent(channel.id, limit=limit, before=_cursor(before))
     first = lines[0] if len(lines) == limit else None
     return ChannelMessagesResponse(
-        items=[message_response(line) for line in lines],
+        items=[message_response(line, reader_id=user.id) for line in lines],
         next_before=f"{first.created_at.isoformat()}|{first.id}" if first else None,
     )
 

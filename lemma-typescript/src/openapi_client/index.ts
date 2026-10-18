@@ -314,6 +314,7 @@ export { PendingInteractionKind } from './models/PendingInteractionKind.js';
 export type { PendingInteractionListResponse } from './models/PendingInteractionListResponse.js';
 export type { PendingInteractionResponse } from './models/PendingInteractionResponse.js';
 export type { PendingSignInResponse } from './models/PendingSignInResponse.js';
+export type { PersonRef } from './models/PersonRef.js';
 export type { PlanStepResponse } from './models/PlanStepResponse.js';
 export type { PodConfig } from './models/PodConfig.js';
 export type { PodCreateRequest } from './models/PodCreateRequest.js';

@@ -145,7 +145,7 @@ def _list_cursor(before: str | None) -> ContactCursor | None:
     "",
     operation_id="contact.list",
     response_model=ContactListResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CONTACT_READ)],
 )
 async def list_contacts(
     pod_id: UUID,
@@ -168,7 +168,7 @@ async def list_contacts(
     "/{contact_id}",
     operation_id="contact.get",
     response_model=ContactResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CONTACT_READ)],
 )
 async def get_contact(pod_id: UUID, contact_id: UUID, uow: UoWDep) -> ContactResponse:
     return _response(await _found(uow, pod_id=pod_id, contact_id=contact_id))

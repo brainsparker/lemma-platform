@@ -61,6 +61,7 @@ from app.modules.channels.contracts import (
     Speaker,
     background,
     speakers_in,
+    withheld_from,
 )
 
 
@@ -392,9 +393,7 @@ def timeline_line(
         created_at=line.created_at,
         answered_name=names.get(behalf) if behalf else None,
         answered_from_public=from_agent and not sender.used_a_members_access,
-        withheld=from_agent
-        and sender.used_a_members_access
-        and (behalf is None or behalf.user_id != viewer_id),
+        withheld=withheld_from(line, user_id=viewer_id),
     )
 
 

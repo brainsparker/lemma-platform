@@ -28,7 +28,7 @@ EXPECTED = [
     # The contacts cap an organization has until an owner sets its own.
     ("usage_contacts_monthly_default_usd", "USAGE_CONTACTS_MONTHLY_DEFAULT_USD", 50),
     # How many contacts its bots may answer, until an owner sets a number.
-    ("usage_contacts_max_default", "USAGE_CONTACTS_MAX_DEFAULT", None),
+    ("usage_contacts_max_default", "USAGE_CONTACTS_MAX_DEFAULT", 500),
     # What a limit does when the cost of the work cannot be established.
     ("usage_unpriced_limit_policy", "USAGE_UNPRICED_LIMIT_POLICY", "allow"),
 ]

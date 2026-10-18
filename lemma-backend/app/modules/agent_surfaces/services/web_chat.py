@@ -224,12 +224,22 @@ class WebChat:
         widget. Opened under the same lock, and in the same order, as an
         inbound message opens one (``ConversationBinder``): authorized first,
         since that commits, then locked, looked for again, and opened.
+
+        The session's own conversation is continued while it is in the
+        channel. One that lost its seat when this contact was merged into
+        another is not: the survivor's conversation there is the one to
+        continue, and the session's is placed again only when there is none.
         """
         contact_id = await _visitor_contact_id(uow, session)
-        if session.conversation_id is not None and await _session_answers(
-            uow, session.conversation_id, contact_id
+        kept = session.conversation_id
+        if kept is not None and not await _session_answers(uow, kept, contact_id):
+            kept = None
+        if (
+            kept is not None
+            and await channel_conversations.channel_of_conversation(uow, kept)
+            is not None
         ):
-            return session.conversation_id, contact_id
+            return kept, contact_id
         place = await source_for(
             uow,
             pod_id=widget.pod_id,
@@ -247,6 +257,7 @@ class WebChat:
                 place,
                 owner=owner,
                 contact_id=contact_id,
+                kept=kept,
             )
         await attach_visitor_conversation(uow, session.id, conversation_id=found)
         return found, contact_id
@@ -321,6 +332,7 @@ class WebChat:
         *,
         owner: UUID,
         contact_id: UUID,
+        kept: UUID | None,
     ) -> UUID:
         agent_name = await agent_name_for_id(uow.session, widget.agent_id)
         name = await self._display_name(uow, session)
@@ -345,6 +357,11 @@ class WebChat:
             )
             if found is not None:
                 return found
+            if kept is not None:
+                await channel_conversations.place_in_channel(
+                    uow, conversation_id=kept, channel_id=place.channel_id
+                )
+                return kept
             conversation = await agent_conversations.open_surface_conversation(
                 uow,
                 pod_id=widget.pod_id,

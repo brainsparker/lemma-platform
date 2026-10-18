@@ -6,6 +6,7 @@ import { source, type Pod, type SpaceView, type Tab } from "@/data";
 import { AppsIcon, ContactsIcon, FileIcon, FolderIcon, GroupsIcon, PlusIcon, TableIcon, WorkflowIcon } from "@/ui/icons";
 import { sayWaiting, waitingTotal } from "@/data/groups";
 import { useGroups } from "./group-queries";
+import { useMaySeeContacts } from "./contact-queries";
 import { useFeature } from "@/site/analytics/flags";
 
 const VIEWS: { view: SpaceView; label: string; icon: React.ReactNode }[] = [
@@ -49,7 +50,9 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
     /* Questions people outside the space are waiting on you for, in any of
        its groups — the list the Groups page reads, under its key. */
     const groupsOn = useFeature("groups");
-    const contactsOn = useFeature("contacts");
+    const contactsFlag = useFeature("contacts");
+    const maySeeContacts = useMaySeeContacts(pod.id);
+    const contactsOn = contactsFlag && maySeeContacts;
     const groups = useGroups(pod.id, false, groupsOn);
     const waiting = waitingTotal(groups.data ?? []);
 

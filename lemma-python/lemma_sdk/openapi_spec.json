@@ -3311,36 +3311,21 @@
       },
       "ChannelDetailResponse": {
         "properties": {
-          "contact_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Which contact's channel this is.",
-            "title": "Contact Id"
-          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
             "type": "string"
           },
-          "handler_user_id": {
+          "handler": {
             "anyOf": [
               {
-                "format": "uuid",
-                "type": "string"
+                "$ref": "#/components/schemas/PersonRef"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "A member answering by hand; agents do not answer meanwhile.",
-            "title": "Handler User Id"
+            "description": "A member answering by hand; agents do not answer meanwhile."
           },
           "id": {
             "format": "uuid",
@@ -3362,25 +3347,23 @@
             ],
             "title": "Last Message At"
           },
-          "member_user_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Whose direct channel this is.",
-            "title": "Member User Id"
-          },
           "participants": {
             "items": {
               "$ref": "#/components/schemas/ChannelParticipantResponse"
             },
             "title": "Participants",
             "type": "array"
+          },
+          "person": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP."
           },
           "sources": {
             "items": {
@@ -3463,81 +3446,19 @@
             "title": "Members Only",
             "type": "boolean"
           },
-          "on_behalf_contact_id": {
+          "on_behalf_of": {
             "anyOf": [
               {
-                "format": "uuid",
-                "type": "string"
+                "$ref": "#/components/schemas/PersonRef"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "For an agent's line: the contact it answered.",
-            "title": "On Behalf Contact Id"
+            "description": "For an agent's line: the member or contact it acted for, whose access the answer was made with."
           },
-          "on_behalf_user_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "For an agent's line: the member it acted for.",
-            "title": "On Behalf User Id"
-          },
-          "sender_agent_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sender Agent Id"
-          },
-          "sender_contact_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sender Contact Id"
-          },
-          "sender_kind": {
-            "$ref": "#/components/schemas/SenderKind"
-          },
-          "sender_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sender Name"
-          },
-          "sender_user_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sender User Id"
+          "sender": {
+            "$ref": "#/components/schemas/PersonRef"
           },
           "source_id": {
             "anyOf": [
@@ -3553,14 +3474,27 @@
             "title": "Source Id"
           },
           "text": {
-            "title": "Text",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent where the line is withheld from the reader.",
+            "title": "Text"
+          },
+          "withheld": {
+            "default": false,
+            "description": "An answer an agent made with another member's own access: the reader sees that it was given, and for whom, not what it said.",
+            "title": "Withheld",
+            "type": "boolean"
           }
         },
         "required": [
           "id",
-          "sender_kind",
-          "text",
+          "sender",
           "created_at"
         ],
         "title": "ChannelMessageResponse",
@@ -3597,19 +3531,6 @@
       },
       "ChannelParticipantResponse": {
         "properties": {
-          "contact_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "One of its contacts.",
-            "title": "Contact Id"
-          },
           "last_read_at": {
             "anyOf": [
               {
@@ -3622,55 +3543,34 @@
             ],
             "title": "Last Read At"
           },
-          "user_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "A member of the pod.",
-            "title": "User Id"
+          "person": {
+            "$ref": "#/components/schemas/PersonRef",
+            "description": "A member or a contact."
           }
         },
+        "required": [
+          "person"
+        ],
         "title": "ChannelParticipantResponse",
         "type": "object"
       },
       "ChannelResponse": {
         "properties": {
-          "contact_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Which contact's channel this is.",
-            "title": "Contact Id"
-          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
             "type": "string"
           },
-          "handler_user_id": {
+          "handler": {
             "anyOf": [
               {
-                "format": "uuid",
-                "type": "string"
+                "$ref": "#/components/schemas/PersonRef"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "A member answering by hand; agents do not answer meanwhile.",
-            "title": "Handler User Id"
+            "description": "A member answering by hand; agents do not answer meanwhile."
           },
           "id": {
             "format": "uuid",
@@ -3692,18 +3592,16 @@
             ],
             "title": "Last Message At"
           },
-          "member_user_id": {
+          "person": {
             "anyOf": [
               {
-                "format": "uuid",
-                "type": "string"
+                "$ref": "#/components/schemas/PersonRef"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Whose direct channel this is.",
-            "title": "Member User Id"
+            "description": "Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP."
           },
           "title": {
             "anyOf": [
@@ -13913,6 +13811,44 @@
           "reason"
         ],
         "title": "PendingSignInResponse",
+        "type": "object"
+      },
+      "PersonRef": {
+        "description": "Somebody in a channel, said one way everywhere: a member of the pod, one\nof its contacts, or one of its agents. There is nobody else -- everybody\noutside the pod is a contact.",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The member's user id, the contact's id or the agent's id; absent for a member or an agent since removed.",
+            "title": "Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SenderKind"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The name they were shown under, where known.",
+            "title": "Name"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "PersonRef",
         "type": "object"
       },
       "PlanStepResponse": {

@@ -34,6 +34,18 @@ channel: they are private workspaces, not shared places.
 | `channel_agents` | The agents that have answered there. An agent is a sender, never a participant |
 | `channel_sources` | The outside places a channel is fed by, keyed by surface, platform, chat and -- for a private chat -- the person's platform id. `surface_id` is kept `SET NULL` so history survives a removed bot. `last_inbound_at` is when somebody last wrote there |
 | `channel_messages` | The timeline. `sender_kind` (`MEMBER`, `CONTACT`, `AGENT`) with the sender's id; for an agent, `on_behalf_user_id` or `on_behalf_contact_id` -- whom it answered, and so whose access the answer was made with. `source_id` is where it was said (absent for a line written in Lemma); `members_only` marks a note that is never delivered and never shown outside. A platform message is one line however often it is delivered (unique on source and external message id) |
+| `channel_mentions` | Who a line names -- a member, a contact or an agent -- and when they read it: the unread mentions a member is shown |
+| `channel_message_deliveries` | Each place a line was sent out to (a source, or a member's own platform for a notification), its status, and the platform's id for it, so a reply there finds the line |
+
+Built for the channel app and its agent tools, and unused until they are, so
+that work needs no migration: a line's `parts` (files), `reply_to_id` and
+`thread_root_id` (threads), `edited_at` / `deleted_at`, `agent_run_id`; a
+question a line puts to one person -- `interaction_kind` (`ASK`, `APPROVAL`,
+`FORM`), `interaction`, `interaction_state` (`OPEN` …), `awaits_user_id` /
+`awaits_contact_id`, and its `answer` -- which is what the app shows as waiting
+on them; a participant's `notify` (`ALL`, `MENTIONS`, `NONE`) and `notify_via`;
+and a channel's `topic`, `created_by_user_id`, `archived_at` and
+`attention_at` / `attention_reason`, a call for a person.
 
 An agent's working -- tool calls, reasoning -- is never a channel message. It
 stays in the conversation (`agent_messages`).
@@ -54,10 +66,12 @@ One rule, in `domain/projection.py`, which every reader asks:
 
 - `GET` lists the channels the caller may see, most recently active first,
   optionally by `kind`; pages with an opaque `before` / `next_before`.
-  Another member's `DIRECT` channel is never listed, and reads as not found.
+  Another member's `DIRECT` channel is never listed, and reads as not found;
+  nor is a `CONTACT` channel, to a member without `contact.read` (editors and
+  admins hold it).
 - `GET /{id}` with its sources and participants; `GET /{id}/messages`, the
   timeline oldest first, paged backwards; `POST /{id}/read` marks it read.
-  All take `conversation.read`.
+  All take `conversation.read`, and a contact's channel `contact.read` too.
 - `PUT /{id}/handler` steps in on a contact's channel and `DELETE` releases
   it; take `contact.message`.
 

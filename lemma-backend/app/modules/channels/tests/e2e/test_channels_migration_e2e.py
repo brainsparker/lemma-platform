@@ -3,8 +3,10 @@
 Groups and web chat were never released, and a member's private chat starts
 afresh in their direct channel, so nothing is carried over: the upgrade drops
 the link and group tables and makes the channel ones, and the downgrade makes
-the old tables again, empty. What is checked is the schema each way -- and the
-index that keeps one conversation per person, agent and channel.
+the old tables again, empty. What is checked is the schema each way -- the
+index that keeps one conversation per person, agent and channel, and the
+columns and tables the channel app will build on without a migration of its
+own.
 """
 
 from __future__ import annotations
@@ -35,6 +37,8 @@ _NEW = (
     "channel_participants",
     "channel_sources",
     "channel_messages",
+    "channel_mentions",
+    "channel_message_deliveries",
 )
 
 
@@ -97,6 +101,38 @@ def test_channels_replace_links_and_groups_and_roll_back_cleanly() -> None:
             "request_id",
         } <= columns("channel_sources")
         assert "reply_ref" in columns("channel_messages")
+        # What the channel app builds on, there before it is: threads, edits,
+        # files, a question waiting on one person, notify preferences, and a
+        # channel calling for a person.
+        assert {
+            "parts",
+            "agent_run_id",
+            "reply_to_id",
+            "thread_root_id",
+            "edited_at",
+            "deleted_at",
+            "interaction_kind",
+            "interaction",
+            "interaction_state",
+            "awaits_user_id",
+            "awaits_contact_id",
+            "answer",
+            "answered_at",
+            "answered_by_user_id",
+            "answered_by_contact_id",
+        } <= columns("channel_messages")
+        assert {"notify", "notify_via", "last_read_at"} <= columns(
+            "channel_participants"
+        )
+        assert {
+            "topic",
+            "created_by_user_id",
+            "archived_at",
+            "attention_at",
+            "attention_reason",
+        } <= columns("channels")
+        assert index("ix_channel_messages_awaiting_member") is not None
+        assert index("ix_channel_mentions_unread_member") is not None
         assert "channel_id" in columns("agent_conversations")
         one_each = index("uq_agent_conversations_channel_person")
         assert one_each is not None and "UNIQUE" in one_each, one_each

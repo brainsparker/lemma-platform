@@ -711,11 +711,11 @@ async def test_writing_first_to_a_contact_takes_an_editor_and_is_rate_limited(
         prefix="follow-user",
     )
 
-    # A pod user can read the contact, but not speak for the pod to them.
-    seen = await async_client.get(
+    # A pod user neither sees the contact nor speaks for the pod to them.
+    unseen = await async_client.get(
         f"/pods/{pod_id}/contacts/{dana}", headers=auth_headers(user)
     )
-    assert seen.status_code == 200, seen.text
+    assert unseen.status_code == 403, unseen.text
     refused = await async_client.post(
         f"/pods/{pod_id}/contacts/{dana}/messages",
         json={"message": "Hello from me"},
@@ -910,6 +910,24 @@ async def test_a_contacts_history_moves_with_them_to_a_new_keeper(
         answer="anyone",
     )
     first = await _dana_writes(db_session, address, "keeper-1", "Order 1182?")
+    # Contacts' chats are an editor's or an admin's to see, so a member who
+    # only uses the pod cannot be the one they belong to.
+    user = await _member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        pod_id=pod_id,
+        role="POD_USER",
+        prefix="user",
+    )
+    refused = await authenticated_client.patch(
+        f"/pods/{pod_id}/surfaces/{surface['name']}",
+        json={
+            "config": {"contacts": {"answer": "anyone", "looked_after_by": user["id"]}}
+        },
+    )
+    assert refused.status_code in (400, 422), refused.text
+    assert "editor or admin" in refused.text
     keeper = await _member(
         authenticated_client,
         async_client,

@@ -52,6 +52,9 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.work import WorkClass, WorkRegistry
 from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.agent.events.contact_merged_work import register_contact_merged_work
+from app.modules.channels.events.contact_merged_work import (
+    register_contact_merged_work as register_channels_contact_merged_work,
+)
 from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
 from app.modules.contacts.infrastructure.models import (
     ContactIdentityModel,
@@ -1174,6 +1177,7 @@ async def test_a_session_whose_conversation_names_nobody_is_given_its_own(
     assert await _contact_of(db_session, again) == contact
 
 
+@pytest.mark.drives_work
 async def test_a_visitor_writing_right_after_proving_who_they_are_keeps_their_chat(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -1199,6 +1203,111 @@ async def test_a_visitor_writing_right_after_proving_who_they_are_keeps_their_ch
     )
 
     assert again == proved.conversation_id
+
+    # Once the merge's work has run, the contact they were has no channel left;
+    # the customer had no chat of their own, so this one takes its seat in
+    # theirs rather than a new one being opened beside it.
+    await _carry_out_merges()
+    later = await _say(
+        authenticated_client,
+        db_session,
+        key=proved.key,
+        visitor=proved.visitor,
+        text="And the red one?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Not yet.")],
+    )
+    assert later == proved.conversation_id
+    db_session.expire_all()
+    seated = await db_session.get(ConversationModel, later)
+    assert seated is not None and seated.channel_id is not None
+
+
+@pytest.mark.drives_work
+async def test_two_browsers_that_prove_one_email_carry_on_in_one_conversation(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """Two browsers chat, then both prove one email: one contact, one channel,
+    and one conversation in it. The second browser's conversation lost its seat
+    to the first's when their channels became one; its next word continues the
+    conversation that holds the seat, rather than claiming it a second time."""
+    pod_id = test_pod["id"]
+    owner = UUID(fixed_test_user["id"])
+    widget = await _widget(authenticated_client, pod_id, name="Two browsers")
+    key = widget["public_key"]
+    email = f"two-{widget['id'][:8]}@client.example"
+    laptop = await _session(authenticated_client, key)
+    phone = await _session(authenticated_client, key)
+    on_laptop = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=laptop,
+        text="Hi from my laptop",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Hello.")],
+    )
+    on_phone = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=phone,
+        text="Hi from my phone",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Hello again.")],
+    )
+    assert on_phone != on_laptop
+    for visitor in (laptop, phone):
+        sent = await authenticated_client.post(
+            f"/public/web/{key}/code", json={"email": email}, headers=_as(visitor)
+        )
+        assert sent.status_code == 200, sent.text
+        verified = await authenticated_client.post(
+            f"/public/web/{key}/code/verify",
+            json={"email": email, "code": _latest_code(email)},
+            headers=_as(visitor),
+        )
+        assert verified.status_code == 200, verified.text
+    await _carry_out_merges()
+
+    again = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=phone,
+        text="Still me",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Yes.")],
+    )
+
+    assert again == on_laptop
+    db_session.expire_all()
+    seated = await db_session.get(ConversationModel, on_laptop)
+    assert seated is not None and seated.channel_id is not None
+    in_channel = await db_session.scalars(
+        select(ConversationModel.id).where(
+            ConversationModel.channel_id == seated.channel_id
+        )
+    )
+    assert list(in_channel) == [on_laptop]
+
+
+async def _carry_out_merges() -> None:
+    """Run the work each module queued when two contacts became one."""
+    registry = WorkRegistry()
+    register_contact_merged_work(registry)
+    register_datastore_contact_merged_work(registry)
+    register_channels_contact_merged_work(registry)
+    await run_until_idle(
+        async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
+    )
 
 
 @pytest.mark.drives_work

@@ -25,6 +25,7 @@ import {
     useCreateWidget,
     useFollowUp,
     useForgetContact,
+    useMaySeeContacts,
     useReach,
     useReachChange,
     useRemoveWidget,
@@ -43,6 +44,17 @@ import { SecretSheet, WidgetPlaces } from "./widget-places";
  *  functions opened to them. */
 export function ContactsPage({ pod }: { pod: Pod }) {
     const [open, setOpen] = useState<Contact | null>(null);
+    const maySee = useMaySeeContacts(pod.id);
+    if (!maySee) {
+        return (
+            <div className="all contacts">
+                <header className="contacts__head">
+                    <h1>Contacts</h1>
+                    <p>{pod.name}’s contacts, and what they said to it, are for its editors and admins.</p>
+                </header>
+            </div>
+        );
+    }
     return (
         <div className="all contacts">
             <header className="contacts__head">

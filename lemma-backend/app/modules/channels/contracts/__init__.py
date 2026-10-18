@@ -23,7 +23,7 @@ from app.modules.channels.domain.entities import (
     Source,
     SourceKind,
 )
-from app.modules.channels.domain.projection import Reader, may_read
+from app.modules.channels.domain.projection import Reader, may_read, withheld_from
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.speakers import (
     MAX_SPEAKERS,
@@ -64,6 +64,7 @@ __all__ = [
     "direct_channel",
     "handler_of",
     "may_read",
+    "withheld_from",
     "participants_of",
     "post",
     "source_by_id",

@@ -1439,34 +1439,39 @@ async def test_a_hosted_page_keeps_its_visitors_chat_in_a_cookie_of_its_own(
         "Origin": "https://pages.example",
         "Authorization": "",
     }
-    cookie = f"lemma_chat_{key}"
+    cookie = f"lemma_chat_{UUID(widget['id']).hex}"
 
     first = await authenticated_client.post(
         f"/public/web/{key}/session", json={}, headers=on_pages
     )
     assert first.status_code == 200, first.text
     set_cookie = first.headers["set-cookie"]
-    assert set_cookie.startswith(f"{cookie}={first.json()['secret']}")
+    assert set_cookie.startswith(f"{cookie}=")
     assert "HttpOnly" in set_cookie and "Secure" in set_cookie
-    assert f"Path=/public/web/{key}" in set_cookie
+    assert "Path=/public/web" in set_cookie
+    # Sealed, never the secret itself.
+    sealed = first.cookies.get(cookie) or set_cookie.split(";")[0].split("=", 1)[1]
+    assert first.json()["secret"] not in set_cookie
 
     # The page lost its storage; the cookie brings the visitor back.
     back = await authenticated_client.post(
         f"/public/web/{key}/session",
         json={},
-        headers={**on_pages, "Cookie": f"{cookie}={first.json()['secret']}"},
+        headers={**on_pages, "Cookie": f"{cookie}={sealed}"},
     )
     assert back.status_code == 200, back.text
     assert _session_id(back.json()) == _session_id(first.json())
 
-    # A chat that has ended is not a dead end: a new one starts.
-    ended = await authenticated_client.post(
-        f"/public/web/{key}/session",
-        json={},
-        headers={**on_pages, "Cookie": f"{cookie}=not-a-live-secret"},
-    )
-    assert ended.status_code == 200, ended.text
-    assert _session_id(ended.json()) != _session_id(first.json())
+    # A cookie this deployment did not seal is as if there were none: the
+    # bare secret, or anything else, starts a new chat.
+    for forged in (first.json()["secret"], "not-a-live-secret"):
+        fresh = await authenticated_client.post(
+            f"/public/web/{key}/session",
+            json={},
+            headers={**on_pages, "Cookie": f"{cookie}={forged}"},
+        )
+        assert fresh.status_code == 200, fresh.text
+        assert _session_id(fresh.json()) != _session_id(first.json())
 
     monkeypatch.setattr(public_web_settings, "public_pages_url", None)
     embedded = await authenticated_client.post(

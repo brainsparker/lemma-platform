@@ -141,7 +141,12 @@ async def _ready(
         handles = await contact_handles(
             uow, pod_id=channel.pod_id, contact_id=channel.contact_id
         )
-    handle = handle_on(source.platform, handles, datetime.now(timezone.utc))
+    handle = handle_on(
+        source.platform,
+        handles,
+        datetime.now(timezone.utc),
+        at=source.external_user_id,
+    )
     await within_the_days_lines(windows or ContactWindows(), channel.contact_id)
     if handle is not None and handle.kind is IdentityKind.EMAIL:
         return line.text + unsubscribe_line(handle)

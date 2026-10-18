@@ -73,9 +73,18 @@ def unsubscribe_line(handle: ContactHandle) -> str:
 
 
 def handle_on(
-    platform: str, handles: list[ContactHandle], now: datetime
+    platform: str,
+    handles: list[ContactHandle],
+    now: datetime,
+    *,
+    at: str | None = None,
 ) -> ContactHandle | None:
-    """The handle a follow-up goes to on this platform, or a refusal."""
+    """The handle a member's line goes to on this platform, or a refusal.
+
+    ``at`` is the address of the place it is carried to, where the place names
+    one: that handle decides. Otherwise the contact's most recent live handle
+    there does -- one address they unsubscribed silences only that address.
+    """
     kind = _KIND_FOR_PLATFORM.get(platform)
     if kind is None:
         return None
@@ -84,12 +93,14 @@ def handle_on(
         raise ContactRefused(
             "The contact has no handle on that channel", code="no_handle"
         )
-    if any(handle.unsubscribed_at is not None for handle in mine):
+    there = [handle for handle in mine if at and _same(handle.value, at)]
+    live = [handle for handle in there or mine if handle.unsubscribed_at is None]
+    if not live:
         raise ContactRefused(
             "The contact asked not to be written to there", code="unsubscribed"
         )
     latest = max(
-        mine,
+        live,
         key=lambda handle: (
             handle.last_inbound_at or datetime.min.replace(tzinfo=timezone.utc)
         ),
@@ -103,6 +114,15 @@ def handle_on(
             code="outside_window",
         )
     return latest
+
+
+def _same(value: str, address: str) -> bool:
+    """One handle, however the platform and the contact spell it: an email
+    in any case, a number with or without its ``+`` and spacing."""
+    if "@" in value or "@" in address:
+        return value.strip().lower() == address.strip().lower()
+    digits = "".join(ch for ch in value if ch.isdigit())
+    return bool(digits) and digits == "".join(ch for ch in address if ch.isdigit())
 
 
 async def within_the_days_lines(windows: ContactWindows, contact_id: UUID) -> None:

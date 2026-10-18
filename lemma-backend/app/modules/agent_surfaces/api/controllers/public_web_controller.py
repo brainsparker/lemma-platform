@@ -25,8 +25,8 @@ from pydantic import BaseModel, Field, JsonValue
 from app.core.api.dependencies import get_uow_factory
 from app.core.api.schemas import ErrorResponse
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.public_web import hosted_pages_host
 from app.modules.agent.contracts.visitor_stream import visitor_frames
+from app.modules.agent_surfaces.api import kept_chats
 from app.modules.agent_surfaces.api.public_dependencies import (
     OptionalVisitorDep,
     PublicVisitorDep,
@@ -186,31 +186,12 @@ async def web_challenge(
     return await visitors.visitor_challenge(for_code=purpose == "code")
 
 
-#: How long a page Lemma hosts remembers its visitor's chat.
-KEPT_CHAT_SECONDS = 90 * 24 * 3600
-
-
-def _kept_chat_cookie(public_key: str) -> str:
-    return f"lemma_chat_{public_key}"[:64]
-
-
-def _keeps_chats(request: Request) -> bool:
-    """Whether this is a page Lemma hosts on its own origin, which may keep a
-    visitor's chat in a cookie of its own: first-party, HttpOnly, and so not
-    cleared after a week the way Safari clears what a script stores. A widget
-    on somebody else's site has only its ``localStorage``; a cookie of ours
-    there is a third party's, which browsers block."""
-    host = hosted_pages_host()
-    return host is not None and request.headers.get("host", "").lower() == host
-
-
 @router.post(
     "/{public_key}/session",
     operation_id="public.web.session.start",
     response_model=SessionResponse,
 )
 async def web_start_session(
-    public_key: str,
     body: SessionRequest,
     request: Request,
     response: Response,
@@ -224,9 +205,11 @@ async def web_start_session(
     On a page Lemma hosts, a visitor nobody signed in comes back to their chat
     from its cookie when the page has no secret to send.
     """
-    keeps = _keeps_chats(request) and body.host_token is None
-    cookie = _kept_chat_cookie(public_key)
-    kept = request.cookies.get(cookie) if keeps and not body.secret else None
+    on_pages = kept_chats.keeps_chats(request)
+    keeps = on_pages and body.host_token is None
+    kept = (
+        kept_chats.kept_secret(request, widget) if keeps and not body.secret else None
+    )
     secret = body.secret or kept
     try:
         started = await visitors.start_visitor_session(
@@ -244,18 +227,10 @@ async def web_start_session(
             widget, secret=None, host_token=None, altcha=body.altcha, address=address
         )
     if keeps and started.secret:
-        response.set_cookie(
-            cookie,
-            started.secret,
-            max_age=KEPT_CHAT_SECONDS,
-            path=f"/public/web/{public_key}",
-            secure=True,
-            httponly=True,
-            samesite="lax",
-        )
-    elif _keeps_chats(request) and body.host_token is not None:
+        kept_chats.keep(response, widget, started.secret)
+    elif on_pages and body.host_token is not None:
         # Somebody signed in: their chat must not outlive that on this machine.
-        response.delete_cookie(cookie, path=f"/public/web/{public_key}")
+        kept_chats.forget(response, widget)
     return _session_response(started, title=await chat.widget_title(widget))
 
 

@@ -50,6 +50,7 @@ NOW = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
 def _handle(
     kind: IdentityKind,
     *,
+    value: str = "x",
     wrote=None,
     unsubscribed=None,
     strength=IdentityStrength.CHANNEL,
@@ -59,7 +60,7 @@ def _handle(
         id=uuid4(),
         contact_id=uuid4(),
         kind=kind,
-        value="x",
+        value=value,
         strength=strength,
         verified_at=verified_at,
         last_inbound_at=wrote,
@@ -97,6 +98,30 @@ def test_nobody_is_written_to_where_they_unsubscribed():
             "RESEND", [_handle(IdentityKind.EMAIL, wrote=NOW, unsubscribed=NOW)], NOW
         )
     assert refused.value.code == "unsubscribed"
+
+
+def test_one_unsubscribed_address_silences_only_that_address():
+    """Unsubscribed at an old work address, still reading a personal one."""
+    work = _handle(
+        IdentityKind.EMAIL, value="dana@old.example", wrote=NOW, unsubscribed=NOW
+    )
+    personal = _handle(IdentityKind.EMAIL, value="dana@home.example", wrote=NOW)
+
+    assert handle_on("RESEND", [work, personal], NOW) == personal
+    assert handle_on("RESEND", [work, personal], NOW, at="Dana@Home.example") == (
+        personal
+    )
+    # A place that writes to the address they left is still refused.
+    with pytest.raises(ContactRefused) as refused:
+        handle_on("RESEND", [work, personal], NOW, at="dana@old.example")
+    assert refused.value.code == "unsubscribed"
+
+
+def test_a_place_names_its_number_however_it_is_spelled():
+    old = _handle(IdentityKind.PHONE, value="+44 7700 900001", wrote=NOW)
+    new = _handle(IdentityKind.PHONE, value="+447700900002", wrote=NOW)
+
+    assert handle_on("WHATSAPP", [old, new], NOW, at="447700900001") == old
 
 
 def test_a_channel_the_contact_has_no_handle_on_is_refused():

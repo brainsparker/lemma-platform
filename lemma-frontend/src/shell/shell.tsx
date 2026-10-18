@@ -154,6 +154,16 @@ function Pane({ hidden, onStage, children, ...rest }: HTMLAttributes<HTMLDivElem
     return <div hidden={hidden} {...rest}><PaneVisibleContext.Provider value={!hidden && onStage}>{children}</PaneVisibleContext.Provider></div>;
 }
 
+/** A place behind a flag that is off, reached by its address: said, rather
+ *  than an empty pane nobody can tell from a broken one. */
+function NotSwitchedOn({ what }: { what: string }) {
+    return (
+        <section className="empty empty--compact" aria-label={what}>
+            <h2 className="empty__title">{what} isn’t switched on for this space yet.</h2>
+        </section>
+    );
+}
+
 const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["channels", "Channels"], ["contacts", "Contacts"], ["about", "About"]] as [SpaceView, string][])
     .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
 
@@ -1941,9 +1951,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     ) : tab.view === "workflows" ? (
                                         <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} onLearn={() => setGuideOpen(true)} />
                                     ) : tab.view === "channels" ? (
-                                        channelsOn && <ChannelsPage pod={pod} onOpenChannel={openChannel} onConnect={() => setReaching(true)} />
+                                        channelsOn ? <ChannelsPage pod={pod} onOpenChannel={openChannel} onConnect={() => setReaching(true)} /> : <NotSwitchedOn what="Channels" />
                                     ) : tab.view === "contacts" ? (
-                                        contactsOn && <ContactsPage pod={pod} />
+                                        contactsOn ? <ContactsPage pod={pod} /> : <NotSwitchedOn what="Contacts" />
                                     ) : <AllView
                                         podId={pod.id}
                                         spaceName={pod.name}

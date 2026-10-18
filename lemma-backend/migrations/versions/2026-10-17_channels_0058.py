@@ -7,8 +7,8 @@ also the address a surface writes back to (`delivery_ref`) and, for a group,
 its settings: who answers for its outsiders, whether they are answered, the
 link people join by, and a creation the bot asked a platform for.
 **`channel_messages`** is the timeline; a line a person said on a platform
-keeps what answers it in place (`reply_ref`). **`channel_participants`** and
-**`channel_agents`** are who is in a channel and which agents speak there.
+keeps what answers it in place (`reply_ref`). **`channel_participants`** are
+the members and contacts in a channel; an agent is a sender there, never one.
 
 **`agent_conversations.channel_id`** places a conversation in its channel, and
 a person has one conversation per agent there.
@@ -190,22 +190,6 @@ def _create_tables() -> None:
         "ix_channel_participants_member",
         "channel_participants",
         ["user_id", "pod_id"],
-    )
-
-    op.create_table(
-        "channel_agents",
-        sa.Column(
-            "channel_id",
-            UUID(as_uuid=True),
-            sa.ForeignKey("channels.id", ondelete="CASCADE"),
-            primary_key=True,
-        ),
-        sa.Column(
-            "agent_id",
-            UUID(as_uuid=True),
-            sa.ForeignKey("agents.id", ondelete="CASCADE"),
-            primary_key=True,
-        ),
     )
 
     op.create_table(
@@ -698,7 +682,6 @@ def downgrade() -> None:
         "channel_mentions",
         "channel_messages",
         "channel_sources",
-        "channel_agents",
         "channel_participants",
         "channels",
     ):

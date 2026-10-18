@@ -24,7 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.infrastructure.db.base import Base, UUIDAuditBase
+from app.core.infrastructure.db.base import UUIDAuditBase
 
 
 class ChannelModel(UUIDAuditBase):
@@ -141,19 +141,6 @@ class ChannelParticipantModel(UUIDAuditBase):
     #: Where those lines go -- the platforms they chose -- or ``None`` for the
     #: pod's rule.
     notify_via: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
-
-
-class ChannelAgentModel(Base):
-    """An agent that answers in a channel."""
-
-    __tablename__ = "channel_agents"
-
-    channel_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channels.id", ondelete="CASCADE"), primary_key=True
-    )
-    agent_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True
-    )
 
 
 class ChannelSourceModel(UUIDAuditBase):

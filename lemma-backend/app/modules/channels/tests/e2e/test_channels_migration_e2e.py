@@ -33,7 +33,6 @@ _OLD = (
 )
 _NEW = (
     "channels",
-    "channel_agents",
     "channel_participants",
     "channel_sources",
     "channel_messages",

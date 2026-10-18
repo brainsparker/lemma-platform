@@ -440,6 +440,22 @@ class LineRepository:
         )
         return [message_entity(row) for row in rows]
 
+    async def cancel_questions_under(
+        self, prefix: str, *, state: InteractionState
+    ) -> list[ChannelMessage]:
+        """End every open question whose ``ref`` starts with ``prefix`` -- all of
+        one workflow run's forms, say."""
+        rows = await self.session.scalars(
+            update(ChannelMessageModel)
+            .where(
+                ChannelMessageModel.interaction_state == InteractionState.OPEN.value,
+                ChannelMessageModel.interaction["ref"].astext.startswith(prefix),
+            )
+            .values(interaction_state=state.value)
+            .returning(ChannelMessageModel)
+        )
+        return [message_entity(row) for row in rows]
+
     async def open_questions_of(
         self, *, conversation_id: UUID, limit: int = MAX_WAITING
     ) -> list[ChannelMessage]:

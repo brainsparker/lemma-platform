@@ -115,6 +115,27 @@ async def announce_closed(uow: SqlAlchemyUnitOfWork, line: ChannelMessage) -> No
     )
 
 
+async def close_questions_under(
+    uow: SqlAlchemyUnitOfWork, *, prefix: str, state: InteractionState
+) -> list[ChannelMessage]:
+    """Stop every open line whose ``ref`` starts with ``prefix`` from waiting."""
+    closed = await LineRepository(uow.session).cancel_questions_under(
+        prefix, state=state
+    )
+    for line in closed:
+        await announce_closed(uow, line)
+    return closed
+
+
+async def open_questions_in(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+) -> list[ChannelMessage]:
+    """The lines a conversation asked that still wait for an answer."""
+    return await LineRepository(uow.session).open_questions_of(
+        conversation_id=conversation_id
+    )
+
+
 async def question_for(uow: SqlAlchemyUnitOfWork, ref: str) -> ChannelMessage | None:
     """The newest line asking ``ref``, open or not."""
     return await LineRepository(uow.session).question(ref)
@@ -135,6 +156,8 @@ __all__ = [
     "answerer",
     "answers_for",
     "close_question",
+    "close_questions_under",
+    "open_questions_in",
     "question_for",
     "ref_kind",
 ]

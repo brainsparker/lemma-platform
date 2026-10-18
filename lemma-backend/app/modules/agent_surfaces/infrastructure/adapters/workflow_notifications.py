@@ -1,39 +1,16 @@
 """Telling a person a workflow is waiting on them.
 
-A ``FORM`` node assigned to a pod member was, until this existed, a pure pull
-queue: the wait row existed, ``workflow.run.waiting_assigned_to_me`` listed it,
-and the flows page rendered it — but nothing ever told the assignee. A workflow
-could sit for three days on somebody who had no idea.
+A ``FORM`` node assigned to a pod member puts a line in that member's own
+channel asking for it: in their inbox beside every other question put to
+them, answered in place or in the workflow's own screen. The engine validates
+whatever is submitted and closes the line through ``close_form_notification``;
+a cancelled run cancels its lines.
 
-This is `agent_surfaces`' half of that bridge, and it lives here rather than in
-`app/composition` because it is made entirely of this module's own service. It
-is published as a factory from `contracts/workflow_notifications.py`, so
-`workflow` names the port and never this class.
-
-**On the degradation.** A workflow must not fail because a Slack token expired,
-and it does not — but the catch that guarantees that is narrow, and it has to
-be, because `NotificationService.deliver` already handles that exact case one
-layer down. It catches `(AgentSurfaceError, HTTPError, OSError)` per channel,
-marks the notification undeliverable, and returns; a platform outage never
-reaches this file at all. What used to sit here was a bare ``except Exception``
-on each of three methods, layered on top of that precise one -- so the only
-failures it uniquely swallowed were the ones the service deliberately lets
-through: our own bugs. An ``AttributeError`` here read as "the notification
-didn't go", and the run carried on.
-
-So each method catches what genuinely must not fail a run:
-
-* ``AgentSurfaceError`` -- this module's own refusals, and the reason the
-  broadest of them is wanted: ``notify`` fails closed when the assignee is no
-  longer a member of the pod, and a form assigned to somebody who has left must
-  leave the run standing (unnotified, in the queue, exactly as before this
-  bridge existed) rather than break it. Rate limits arrive as this too.
-* ``SQLAlchemyError`` / ``OSError`` / ``HTTPError`` -- infrastructure. A
-  notification is an enhancement to a mechanism that already worked, and a blip
-  reaching it must not become a new way for runs to die.
-
-Everything else propagates, and every catch logs with ``exc_info`` so that what
-was swallowed leaves a traceback rather than a one-line ``error=``.
+`agent_surfaces`' half of the bridge: published as a factory from
+`contracts/workflow_notifications.py`, so `workflow` names the port and never
+this class. Each method catches only what must not fail a run -- this module's
+refusals and infrastructure blips -- and logs it with ``exc_info``; anything
+else is a bug and propagates.
 """
 
 from __future__ import annotations
@@ -46,9 +23,30 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.composition import build_notification_service
+from app.core.authorization.delegation import effective_agent_id
+from app.modules.agent.contracts.agents import agent_name_for_id
+from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
+    SqlAlchemySurfaceRoutingResolutionAdapter,
+)
+from app.modules.channels.contracts import (
+    InteractionKind,
+    InteractionState,
+    NewQuestion,
+    Principal,
+    Sender,
+    direct_channel,
+    post,
+)
+from app.modules.channels.contracts.questions import (
+    AnswerRefused,
+    Answering,
+    answers_for,
+    close_question,
+    close_questions_under,
+    question_for,
+)
+from app.modules.workflow.contracts.forms import submit_workflow_form
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
-from app.modules.agent_surfaces.domain.notification import NotificationOriginKind
 
 logger = get_logger(__name__)
 
@@ -56,6 +54,8 @@ logger = get_logger(__name__)
 #: the module docstring: not `Exception`, because the platform failures that
 #: reason names are already handled inside `NotificationService.deliver`.
 _SURVIVABLE = (AgentSurfaceError, SQLAlchemyError, OSError, HTTPError)
+#: What a form's question ``ref`` starts with.
+FORM_REF = "wf"
 
 
 def describe_fields(schema: dict[str, object] | None) -> str:
@@ -107,18 +107,22 @@ def build_form_instruction(fields: str) -> str:
     )
 
 
+def form_ref(run_id: UUID, node_id: str) -> str:
+    """The ref of the line asking for a run's form at one node."""
+    return f"{FORM_REF}:{run_id}:{node_id}"
+
+
 class WorkflowNotificationAdapter:
-    """Creates and closes the notification that mirrors a human wait."""
+    """Posts, and closes, the line that asks somebody to fill a workflow's form.
+
+    The line is in the assignee's own channel, waiting on them: in their inbox
+    beside every other question put to them, answered in place
+    (``answer_form``) or in the workflow's own screen -- either way the engine
+    validates it, and closes the line here.
+    """
 
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
         self._uow = uow
-
-    def _service(self):
-        # A plain factory despite its FastAPI ``Depends`` annotation; calling it
-        # directly is how the other contracts here build the same service
-        # outside a request. It no longer takes a `ConversationService` -- see
-        # `agent/contracts/conversations_for_surfaces.py`.
-        return build_notification_service(self._uow)
 
     async def notify_form_assignee(
         self,
@@ -133,47 +137,15 @@ class WorkflowNotificationAdapter:
         actor_user_id: UUID | None,
     ) -> None:
         try:
-            service = self._service()
-            recipient_user_id = await service.membership.resolve_pod_recipient(
-                pod_id=pod_id, reference=str(assigned_pod_member_id)
-            )
-            if recipient_user_id is None:
-                logger.warning(
-                    "workflow.notifications.assignee_unresolved.degraded",
-                    run_id=str(run_id),
-                    node_id=node_id,
-                )
-                return
-
-            fields = describe_fields(schema)
-            title = f"{flow_name or 'A workflow'} needs your input"
-            body = f"{title}.\n\nStep: {node_id}." + (
-                f"\nIt asks for: {fields}." if fields else ""
-            )
-            await service.notify(
+            await self._ask(
                 pod_id=pod_id,
-                recipient_user_id=recipient_user_id,
-                title=title,
-                body=body,
-                origin_kind=NotificationOriginKind.WORKFLOW_FORM,
-                origin_id=run_id,
+                run_id=run_id,
+                flow_id=flow_id,
+                node_id=node_id,
+                assigned_pod_member_id=assigned_pod_member_id,
+                flow_name=flow_name,
+                schema=schema,
                 actor_user_id=actor_user_id,
-                background_instruction=build_form_instruction(fields),
-                expects_response=True,
-                action={
-                    "type": "WORKFLOW_FORM",
-                    "run_id": str(run_id),
-                    "flow_id": str(flow_id),
-                    "node_id": node_id,
-                    # The concrete, template-resolved schema the executor already
-                    # put on the wait — so the inbox can render the real form
-                    # instead of deep-linking away to find it.
-                    "schema": schema,
-                },
-                # One per (run, node). A retried worker job, or a run that
-                # re-enters the same node, must not stack duplicates in
-                # somebody's inbox.
-                idempotency_key=f"wf:{run_id}:{node_id}",
             )
         except _SURVIVABLE as exc:
             raise_if_database_unavailable(exc)
@@ -185,6 +157,66 @@ class WorkflowNotificationAdapter:
                 exc_info=True,
             )
 
+    async def _ask(
+        self,
+        *,
+        pod_id: UUID,
+        run_id: UUID,
+        flow_id: UUID,
+        node_id: str,
+        assigned_pod_member_id: UUID,
+        flow_name: str | None,
+        schema: dict[str, object] | None,
+        actor_user_id: UUID | None,
+    ) -> None:
+        recipient_user_id = await SqlAlchemySurfaceRoutingResolutionAdapter(
+            self._uow
+        ).resolve_pod_recipient(pod_id=pod_id, reference=str(assigned_pod_member_id))
+        if recipient_user_id is None:
+            logger.warning(
+                "workflow.notifications.assignee_unresolved.degraded",
+                run_id=str(run_id),
+                node_id=node_id,
+            )
+            return
+        ref = form_ref(run_id, node_id)
+        # One per (run, node): a retried job, or a run re-entering the node,
+        # must not stack a second question on the person.
+        asked = await question_for(self._uow, ref)
+        if asked is not None and asked.interaction and asked.interaction.is_open:
+            return
+        fields = describe_fields(schema)
+        title = f"{flow_name or 'A workflow'} needs your input"
+        channel = await direct_channel(
+            self._uow, pod_id=pod_id, user_id=recipient_user_id
+        )
+        agent_id = effective_agent_id(None, pod_id=pod_id)
+        await post(
+            self._uow,
+            channel_id=channel.id,
+            sender=Sender.agent(
+                agent_id,
+                on_behalf_of=Principal.member(actor_user_id or recipient_user_id),
+                display_name=await agent_name_for_id(self._uow.session, agent_id),
+            ),
+            text=f"{title}." + (f" It asks for: {fields}." if fields else ""),
+            question=NewQuestion(
+                kind=InteractionKind.FORM,
+                question={
+                    "ref": ref,
+                    "tool": "workflow_form",
+                    "prompt": title,
+                    "run_id": str(run_id),
+                    "flow_id": str(flow_id),
+                    "node_id": node_id,
+                    # The concrete, template-resolved schema on the wait, so
+                    # the form renders where it is asked.
+                    "schema": schema,
+                },
+                awaits=Principal.member(recipient_user_id),
+            ),
+        )
+
     async def close_form_notification(
         self,
         *,
@@ -194,22 +226,15 @@ class WorkflowNotificationAdapter:
         summary: str,
         data: dict[str, object] | None = None,
     ) -> None:
-        """Close the notification when the form it pointed at is submitted.
-
-        Goes through ``resolve_through_action``, the only path allowed to close
-        an action-backed notification — by this point the submission has been
-        through the node's schema validation and the assignee check, which is
-        exactly what a free-text ``respond`` would have bypassed.
-        """
+        """The form was submitted -- validated against its schema, by its
+        assignee -- so the line asking for it is answered with what was sent."""
+        del pod_id, summary
         try:
-            service = self._service()
-            existing = await service.notifications.get_by_idempotency_key(
-                pod_id=pod_id, idempotency_key=f"wf:{run_id}:{node_id}"
-            )
-            if existing is None:
-                return
-            await service.resolve_through_action(
-                notification_id=existing.id, summary=summary, data=data
+            await close_question(
+                self._uow,
+                ref=form_ref(run_id, node_id),
+                state=InteractionState.ANSWERED,
+                answer=dict(data or {}),
             )
         except _SURVIVABLE as exc:
             logger.warning(
@@ -221,11 +246,12 @@ class WorkflowNotificationAdapter:
             )
 
     async def cancel_for_run(self, *, run_id: UUID) -> None:
-        """A cancelled run leaves nothing outstanding in anyone's inbox."""
+        """A cancelled run leaves nothing waiting on anybody."""
         try:
-            await self._service().cancel_for_origin(
-                origin_kind=NotificationOriginKind.WORKFLOW_FORM,
-                origin_id=run_id,
+            await close_questions_under(
+                self._uow,
+                prefix=f"{FORM_REF}:{run_id}:",
+                state=InteractionState.CANCELLED,
             )
         except _SURVIVABLE as exc:
             logger.warning(
@@ -236,4 +262,34 @@ class WorkflowNotificationAdapter:
             )
 
 
-__all__ = ["WorkflowNotificationAdapter", "build_form_instruction", "describe_fields"]
+@answers_for(FORM_REF)
+async def answer_form(answering: Answering) -> None:
+    """A form answered on its line: submitted through the engine, which checks
+    it is theirs and validates it, then closes the line."""
+    question = (
+        answering.message.interaction.question if answering.message.interaction else {}
+    )
+    try:
+        run_id = UUID(str(question.get("run_id")))
+    except ValueError:
+        raise AnswerRefused(
+            "This form cannot be answered here", status_code=404
+        ) from None
+    submitted, said = await submit_workflow_form(
+        run_id=run_id,
+        node_id=str(question.get("node_id") or ""),
+        inputs=dict(answering.answer),
+        requester_user_id=answering.user_id,
+    )
+    if not submitted:
+        raise AnswerRefused(said, status_code=422)
+
+
+__all__ = [
+    "FORM_REF",
+    "WorkflowNotificationAdapter",
+    "answer_form",
+    "build_form_instruction",
+    "describe_fields",
+    "form_ref",
+]

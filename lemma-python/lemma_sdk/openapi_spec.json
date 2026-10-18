@@ -2695,6 +2695,31 @@
         "title": "AskablePodResponse",
         "type": "object"
       },
+      "AttentionResponse": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since"
+        ],
+        "title": "AttentionResponse",
+        "type": "object"
+      },
       "AuthConfigCreateSchema": {
         "properties": {
           "config": {
@@ -3309,8 +3334,76 @@
         "title": "BundleSourceKind",
         "type": "string"
       },
+      "ChannelAnswerRequest": {
+        "properties": {
+          "answer": {
+            "additionalProperties": true,
+            "description": "The answer, in the question's terms: `{choice}` or `{text}` for a question, `{decision, note?}` for an approval, the form's fields for a form.",
+            "title": "Answer",
+            "type": "object"
+          }
+        },
+        "required": [
+          "answer"
+        ],
+        "title": "ChannelAnswerRequest",
+        "type": "object"
+      },
+      "ChannelCreateRequest": {
+        "properties": {
+          "members": {
+            "description": "Members to add, by user id.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Members",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "ChannelCreateRequest",
+        "type": "object"
+      },
       "ChannelDetailResponse": {
         "properties": {
+          "archived": {
+            "default": false,
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "attention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttentionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The channel asks for a person, and why."
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -3335,6 +3428,16 @@
           "kind": {
             "$ref": "#/components/schemas/ChannelKind"
           },
+          "last_line": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LinePreview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "last_message_at": {
             "anyOf": [
               {
@@ -3346,6 +3449,9 @@
               }
             ],
             "title": "Last Message At"
+          },
+          "me": {
+            "$ref": "#/components/schemas/MyChannelSettings"
           },
           "participants": {
             "items": {
@@ -3365,9 +3471,17 @@
             ],
             "description": "Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP."
           },
-          "sources": {
+          "source_places": {
             "items": {
               "$ref": "#/components/schemas/ChannelSourceResponse"
+            },
+            "title": "Source Places",
+            "type": "array"
+          },
+          "sources": {
+            "description": "The outside places feeding it.",
+            "items": {
+              "$ref": "#/components/schemas/SourceSummary"
             },
             "title": "Sources",
             "type": "array"
@@ -3382,6 +3496,20 @@
               }
             ],
             "title": "Title"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "unread": {
+            "$ref": "#/components/schemas/UnreadResponse"
           }
         },
         "required": [
@@ -3390,6 +3518,21 @@
           "created_at"
         ],
         "title": "ChannelDetailResponse",
+        "type": "object"
+      },
+      "ChannelEditRequest": {
+        "properties": {
+          "text": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ChannelEditRequest",
         "type": "object"
       },
       "ChannelKind": {
@@ -3431,15 +3574,67 @@
       },
       "ChannelMessageResponse": {
         "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For an agent's line: the conversation it came from.",
+            "title": "Conversation Id"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
             "type": "string"
           },
+          "deleted": {
+            "default": false,
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "edited_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edited At"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "interaction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InteractionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_reply_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Reply At"
           },
           "members_only": {
             "default": false,
@@ -3456,6 +3651,32 @@
               }
             ],
             "description": "For an agent's line: the member or contact it acted for, whose access the answer was made with."
+          },
+          "parts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Parts",
+            "type": "array"
+          },
+          "reply_count": {
+            "default": 0,
+            "description": "On a thread's first line.",
+            "title": "Reply Count",
+            "type": "integer"
+          },
+          "reply_to_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reply To Id"
           },
           "sender": {
             "$ref": "#/components/schemas/PersonRef"
@@ -3482,8 +3703,21 @@
                 "type": "null"
               }
             ],
-            "description": "Absent where the line is withheld from the reader.",
+            "description": "Absent where the line is withheld from the reader, or deleted.",
             "title": "Text"
+          },
+          "thread_root_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The line this one is a reply in the thread of.",
+            "title": "Thread Root Id"
           },
           "withheld": {
             "default": false,
@@ -3543,6 +3777,10 @@
             ],
             "title": "Last Read At"
           },
+          "notify": {
+            "$ref": "#/components/schemas/NotifyLevel",
+            "default": "ALL"
+          },
           "person": {
             "$ref": "#/components/schemas/PersonRef",
             "description": "A member or a contact."
@@ -3554,8 +3792,97 @@
         "title": "ChannelParticipantResponse",
         "type": "object"
       },
+      "ChannelPostRequest": {
+        "properties": {
+          "members_only": {
+            "default": false,
+            "description": "A note to the pod's members: never sent outside.",
+            "title": "Members Only",
+            "type": "boolean"
+          },
+          "mentions": {
+            "items": {
+              "$ref": "#/components/schemas/Mention"
+            },
+            "maxItems": 50,
+            "title": "Mentions",
+            "type": "array"
+          },
+          "parts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 20,
+            "title": "Parts",
+            "type": "array"
+          },
+          "reply_to_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reply To Id"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which outside place it goes to; by default the one the channel last heard from.",
+            "title": "Source Id"
+          },
+          "text": {
+            "default": "",
+            "maxLength": 20000,
+            "title": "Text",
+            "type": "string"
+          },
+          "thread_root_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Reply in the thread of this line.",
+            "title": "Thread Root Id"
+          }
+        },
+        "title": "ChannelPostRequest",
+        "type": "object"
+      },
       "ChannelResponse": {
         "properties": {
+          "archived": {
+            "default": false,
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "attention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttentionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The channel asks for a person, and why."
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -3580,6 +3907,16 @@
           "kind": {
             "$ref": "#/components/schemas/ChannelKind"
           },
+          "last_line": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LinePreview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "last_message_at": {
             "anyOf": [
               {
@@ -3603,6 +3940,14 @@
             ],
             "description": "Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP."
           },
+          "sources": {
+            "description": "The outside places feeding it.",
+            "items": {
+              "$ref": "#/components/schemas/SourceSummary"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
           "title": {
             "anyOf": [
               {
@@ -3613,6 +3958,20 @@
               }
             ],
             "title": "Title"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "unread": {
+            "$ref": "#/components/schemas/UnreadResponse"
           }
         },
         "required": [
@@ -3645,8 +4004,14 @@
             ],
             "title": "Last Inbound At"
           },
+          "pending": {
+            "default": false,
+            "description": "A group the bot asked the platform for, not confirmed yet.",
+            "title": "Pending",
+            "type": "boolean"
+          },
           "platform": {
-            "description": "Where it is: TELEGRAM, WHATSAPP, SLACK, RESEND, WEB\u2026",
+            "description": "Where it is: TELEGRAM, WHATSAPP, SLACK, TEAMS, RESEND, WEB\u2026",
             "title": "Platform",
             "type": "string"
           },
@@ -3680,6 +4045,48 @@
           "kind"
         ],
         "title": "ChannelSourceResponse",
+        "type": "object"
+      },
+      "ChannelUpdateRequest": {
+        "properties": {
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          }
+        },
+        "title": "ChannelUpdateRequest",
         "type": "object"
       },
       "CodeRequest": {
@@ -11272,6 +11679,52 @@
         "title": "ImportStatusResponse",
         "type": "object"
       },
+      "InboxResponse": {
+        "properties": {
+          "totals": {
+            "$ref": "#/components/schemas/InboxTotals"
+          },
+          "waiting": {
+            "description": "What is waiting on the reader, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/WaitingItem"
+            },
+            "title": "Waiting",
+            "type": "array"
+          }
+        },
+        "required": [
+          "totals"
+        ],
+        "title": "InboxResponse",
+        "type": "object"
+      },
+      "InboxTotals": {
+        "properties": {
+          "channels": {
+            "description": "Channels with something new.",
+            "title": "Channels",
+            "type": "integer"
+          },
+          "mentions": {
+            "description": "Unread lines naming the reader.",
+            "title": "Mentions",
+            "type": "integer"
+          },
+          "waiting": {
+            "description": "Questions waiting on the reader's answer.",
+            "title": "Waiting",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channels",
+          "mentions",
+          "waiting"
+        ],
+        "title": "InboxTotals",
+        "type": "object"
+      },
       "InstallRequestInitiateSchema": {
         "description": "Which account still needs its provider-side installation.",
         "properties": {
@@ -11423,6 +11876,94 @@
         "title": "InstalledAppSummary",
         "type": "object"
       },
+      "InteractionKind": {
+        "description": "What a line asks of the one person it waits on.",
+        "enum": [
+          "ASK",
+          "APPROVAL",
+          "FORM"
+        ],
+        "title": "InteractionKind",
+        "type": "string"
+      },
+      "InteractionResponse": {
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "answered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answered At"
+          },
+          "answered_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "awaits": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The one person who may answer it."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/InteractionKind"
+          },
+          "question": {
+            "additionalProperties": true,
+            "description": "What is asked: a `prompt`, and `choices` or a `form` where the asking side offers them.",
+            "title": "Question",
+            "type": "object"
+          },
+          "state": {
+            "$ref": "#/components/schemas/InteractionState"
+          }
+        },
+        "required": [
+          "kind",
+          "state",
+          "question"
+        ],
+        "title": "InteractionResponse",
+        "type": "object"
+      },
+      "InteractionState": {
+        "enum": [
+          "OPEN",
+          "ANSWERED",
+          "CANCELLED",
+          "EXPIRED"
+        ],
+        "title": "InteractionState",
+        "type": "string"
+      },
       "JsonObject": {
         "additionalProperties": {
           "$ref": "#/components/schemas/JsonValue"
@@ -11430,6 +11971,30 @@
         "type": "object"
       },
       "JsonValue": {},
+      "LinePreview": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "sender": {
+            "$ref": "#/components/schemas/PersonRef"
+          },
+          "text": {
+            "description": "The start of what was said.",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sender",
+          "text",
+          "created_at"
+        ],
+        "title": "LinePreview",
+        "type": "object"
+      },
       "ListeningResponse": {
         "description": "How a schedule on a connected MCP server's event is hearing from it.",
         "properties": {
@@ -11750,6 +12315,24 @@
         "title": "McpEndpointResponse",
         "type": "object"
       },
+      "Mention": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SenderKind"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "Mention",
+        "type": "object"
+      },
       "MessageKind": {
         "description": "Discriminates the flat message body.\n\nA message carries exactly one kind. Textual kinds use ``text``; tool kinds\nuse ``tool_name``/``tool_call_id`` plus ``tool_args`` (call) or\n``tool_result`` (return). There is no nested ``content`` object.",
         "enum": [
@@ -11954,6 +12537,48 @@
           "message"
         ],
         "title": "MessageResponseSchema",
+        "type": "object"
+      },
+      "MyChannelSettings": {
+        "properties": {
+          "joined": {
+            "default": false,
+            "title": "Joined",
+            "type": "boolean"
+          },
+          "last_read_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Read At"
+          },
+          "notify": {
+            "$ref": "#/components/schemas/NotifyLevel",
+            "default": "ALL"
+          },
+          "notify_via": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where lines reach them outside the app; absent for the pod's rule.",
+            "title": "Notify Via"
+          }
+        },
+        "title": "MyChannelSettings",
         "type": "object"
       },
       "MyUsageLimitsResponse": {
@@ -12469,6 +13094,16 @@
         "title": "NotificationUnreadCountResponse",
         "type": "object"
       },
+      "NotifyLevel": {
+        "description": "Which lines of a channel reach a participant outside the app.",
+        "enum": [
+          "ALL",
+          "MENTIONS",
+          "NONE"
+        ],
+        "title": "NotifyLevel",
+        "type": "string"
+      },
       "NotifyMemberRequest": {
         "additionalProperties": false,
         "description": "Send a notification to one pod member.",
@@ -12525,6 +13160,33 @@
           "body"
         ],
         "title": "NotifyMemberRequest",
+        "type": "object"
+      },
+      "NotifyRequest": {
+        "properties": {
+          "notify": {
+            "$ref": "#/components/schemas/NotifyLevel"
+          },
+          "notify_via": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notify Via"
+          }
+        },
+        "required": [
+          "notify"
+        ],
+        "title": "NotifyRequest",
         "type": "object"
       },
       "OAuth2DefaultsResponseSchema": {
@@ -13659,6 +14321,25 @@
         "title": "PartialApplyResponse",
         "type": "object"
       },
+      "ParticipantsAddRequest": {
+        "properties": {
+          "members": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Members",
+            "type": "array"
+          }
+        },
+        "required": [
+          "members"
+        ],
+        "title": "ParticipantsAddRequest",
+        "type": "object"
+      },
       "PendingInteractionKind": {
         "description": "What the person is being asked for.",
         "enum": [
@@ -13841,7 +14522,7 @@
                 "type": "null"
               }
             ],
-            "description": "The name they were shown under, where known.",
+            "description": "What to call them, where known.",
             "title": "Name"
           }
         },
@@ -16556,6 +17237,24 @@
         "title": "SearchFreshness",
         "type": "string"
       },
+      "SearchHit": {
+        "properties": {
+          "channel_id": {
+            "format": "uuid",
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/components/schemas/ChannelMessageResponse"
+          }
+        },
+        "required": [
+          "channel_id",
+          "message"
+        ],
+        "title": "SearchHit",
+        "type": "object"
+      },
       "SearchMethod": {
         "enum": [
           "VECTOR",
@@ -16564,6 +17263,22 @@
         ],
         "title": "SearchMethod",
         "type": "string"
+      },
+      "SearchResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SearchResponse",
+        "type": "object"
       },
       "SearchResult": {
         "properties": {
@@ -17056,6 +17771,30 @@
         ],
         "title": "SourceKind",
         "type": "string"
+      },
+      "SourceSummary": {
+        "properties": {
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "platform"
+        ],
+        "title": "SourceSummary",
+        "type": "object"
       },
       "StepRecordResponse": {
         "properties": {
@@ -18774,6 +19513,30 @@
           "at"
         ],
         "title": "TriggerSkipResponse",
+        "type": "object"
+      },
+      "UnreadResponse": {
+        "properties": {
+          "lines": {
+            "default": 0,
+            "description": "New lines since the reader last read it; stops at 100.",
+            "title": "Lines",
+            "type": "integer"
+          },
+          "mentions": {
+            "default": 0,
+            "description": "Lines naming the reader, unread.",
+            "title": "Mentions",
+            "type": "integer"
+          },
+          "waiting": {
+            "default": 0,
+            "description": "Questions here waiting on the reader's answer.",
+            "title": "Waiting",
+            "type": "integer"
+          }
+        },
+        "title": "UnreadResponse",
         "type": "object"
       },
       "UpdateAgentHostRuntimeProfileRequest": {
@@ -20915,6 +21678,22 @@
           "config"
         ],
         "title": "WaitUntilNodeResponse",
+        "type": "object"
+      },
+      "WaitingItem": {
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/ChannelResponse"
+          },
+          "message": {
+            "$ref": "#/components/schemas/ChannelMessageResponse"
+          }
+        },
+        "required": [
+          "channel",
+          "message"
+        ],
+        "title": "WaitingItem",
         "type": "object"
       },
       "WebLoginListResponse": {
@@ -29772,7 +30551,7 @@
     },
     "/pods/{pod_id}/channels": {
       "get": {
-        "description": "The pod's channels this member sees, most recently active first.",
+        "description": "The pod's channels this member sees, most recently active first, each\nwith what is new in it for them and its last line.",
         "operationId": "channel.list",
         "parameters": [
           {
@@ -29799,6 +30578,16 @@
                 }
               ],
               "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Archived",
+              "type": "boolean"
             }
           },
           {
@@ -29864,11 +30653,147 @@
           "result": "collection",
           "verb": "list"
         }
+      },
+      "post": {
+        "description": "A channel made in Lemma, with its maker and the members they named in it.",
+        "operationId": "channel.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Channel",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/search": {
+      "get": {
+        "description": "Lines matching every word, newest first, in the channels the reader sees.",
+        "operationId": "channel.message.search",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Channels",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "channel.message",
+          "result": "collection",
+          "verb": "search"
+        }
       }
     },
     "/pods/{pod_id}/channels/{channel_id}": {
       "get": {
-        "description": "One channel, with the places it is fed from and the people in it.",
+        "description": "One channel, with the places it is fed from, the people in it, and how\nthe reader hears of it.",
         "operationId": "channel.get",
         "parameters": [
           {
@@ -29924,6 +30849,78 @@
           "resource": "channel",
           "result": "entity",
           "verb": "get"
+        }
+      },
+      "patch": {
+        "description": "Rename, re-describe or archive a group.",
+        "operationId": "channel.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Channel",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel",
+          "result": "entity",
+          "verb": "update"
         }
       }
     },
@@ -30053,9 +31050,83 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/{channel_id}/me": {
+      "put": {
+        "description": "How the reader hears of this channel's lines outside the app.",
+        "operationId": "channel.notify.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set My Notify",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.notify"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.notify",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
     "/pods/{pod_id}/channels/{channel_id}/messages": {
       "get": {
-        "description": "The channel's timeline: who said what, when and where, oldest first.",
+        "description": "The channel's timeline, oldest first: who said what, when and where.\nA thread's replies are not in it; its first line counts them.",
         "operationId": "channel.message.list",
         "parameters": [
           {
@@ -30141,11 +31212,557 @@
           "result": "collection",
           "verb": "list"
         }
+      },
+      "post": {
+        "description": "Write in the channel. It goes to one outside place -- the one named, or\nthe one the channel last heard from -- unless it is a note to members.",
+        "operationId": "channel.message.post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelPostRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelMessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Channel Message",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.message"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.message",
+          "result": "entity",
+          "verb": "post"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}": {
+      "delete": {
+        "description": "Delete one's own line: it stays in its place, saying nothing.",
+        "operationId": "channel.message.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Channel Message",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.message"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.message",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
+      "patch": {
+        "description": "Change what one's own line says. A copy already sent outside stays as sent.",
+        "operationId": "channel.message.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelEditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelMessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit Channel Message",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.message"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.message",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer": {
+      "post": {
+        "description": "Answer what this line asks the reader: a question, an approval, a form.\n\nNo session is held across the answer: what asked the question takes it in\nits own -- a run resumed, a form submitted -- and may call out to do so.",
+        "operationId": "channel.message.answer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelAnswerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelMessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Answer Channel Question",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.message"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.message",
+          "result": "entity",
+          "verb": "answer"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread": {
+      "get": {
+        "description": "A thread's replies, oldest first, the newest page of them.",
+        "operationId": "channel.message.thread",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelMessagesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Thread",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "channel.message",
+          "result": "entity",
+          "verb": "thread"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/participants": {
+      "post": {
+        "description": "Add members of the pod to a group.",
+        "operationId": "channel.participant.add",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParticipantsAddRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Participants",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.participant"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.participant",
+          "result": "entity",
+          "verb": "add"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/participants/{member_id}": {
+      "delete": {
+        "description": "Leave a channel, or -- for who may change it -- take somebody out.",
+        "operationId": "channel.participant.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Member Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Participant",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.participant"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.participant",
+          "result": "void",
+          "verb": "remove"
+        }
       }
     },
     "/pods/{pod_id}/channels/{channel_id}/read": {
       "post": {
-        "description": "Everything in the channel up to now has been read by this member.",
+        "description": "Everything in the channel up to now has been read by this member, and\nevery line naming them.",
         "operationId": "channel.mark_read",
         "parameters": [
           {
@@ -36169,6 +37786,57 @@
           "resource": "agent.group",
           "result": "entity",
           "verb": "timeline"
+        }
+      }
+    },
+    "/pods/{pod_id}/inbox": {
+      "get": {
+        "description": "What is new for the reader across the pod, and every question waiting\non them, newest first.",
+        "operationId": "channel.inbox.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Inbox",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "channel.inbox",
+          "result": "entity",
+          "verb": "get"
         }
       }
     },

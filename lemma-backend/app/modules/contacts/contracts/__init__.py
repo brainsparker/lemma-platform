@@ -14,6 +14,7 @@ browser's session (``open_anonymous_contact``), until they prove a handle
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -47,6 +48,7 @@ __all__ = [
     "UnusableHandle",
     "answered_contacts_in_organization",
     "contact_by_id",
+    "contact_names",
     "contact_handles",
     "find_contact",
     "is_stop_request",
@@ -189,6 +191,15 @@ async def contact_by_id(
     if contact is not None and contact.merged_into_id is not None:
         contact = await repository.get(pod_id=pod_id, contact_id=contact.merged_into_id)
     return _ref(contact)
+
+
+async def contact_names(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_ids: Sequence[UUID]
+) -> dict[UUID, str | None]:
+    """What to call each of this pod's contacts named, in one read."""
+    return await ContactRepository(uow.session).names(
+        pod_id=pod_id, contact_ids=contact_ids
+    )
 
 
 async def note_answered(

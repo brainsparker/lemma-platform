@@ -22,7 +22,7 @@ from app.modules.channels.infrastructure.models import (
     ChannelMessageModel,
     ChannelSourceModel,
 )
-from app.modules.channels.infrastructure.repository import source_entity
+from app.modules.channels.infrastructure.rows import source_entity
 
 #: The most places one lookup returns. A chat is heard by a handful of pods'
 #: bots; a person writes from a handful of numbers.

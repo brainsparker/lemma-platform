@@ -8,7 +8,7 @@ lists a pod's channels -- that is a member's, through this module's API.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -16,6 +16,9 @@ from app.modules.channels.domain.entities import (
     Channel,
     ChannelKind,
     ChannelMessage,
+    Interaction,
+    InteractionKind,
+    InteractionState,
     Participant,
     Principal,
     Sender,
@@ -24,6 +27,7 @@ from app.modules.channels.domain.entities import (
     SourceKind,
 )
 from app.modules.channels.domain.projection import Reader, may_read, withheld_from
+from app.modules.channels.infrastructure.lines import NewLine, NewQuestion
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.speakers import (
     MAX_SPEAKERS,
@@ -48,7 +52,12 @@ __all__ = [
     "ContactsHome",
     "GroupHome",
     "Home",
+    "Interaction",
+    "InteractionKind",
+    "InteractionState",
     "MembersHome",
+    "NewLine",
+    "NewQuestion",
     "Participant",
     "Place",
     "Principal",
@@ -117,11 +126,19 @@ async def post(
     external_message_id: str | None = None,
     external_thread_id: str | None = None,
     reply_ref: Mapping[str, object] | None = None,
+    parts: Sequence[Mapping[str, object]] = (),
+    agent_run_id: UUID | None = None,
+    reply_to_id: UUID | None = None,
+    thread_root_id: UUID | None = None,
+    question: NewQuestion | None = None,
+    mentions: Sequence[Principal] = (),
+    mentioned_agents: Sequence[UUID] = (),
 ) -> ChannelMessage | None:
     """Add a line to the channel's timeline; the same platform message once.
 
     ``None`` for a line with nothing in it. Raises ``ChannelNotFound`` when the
-    channel is gone.
+    channel is gone. ``question`` makes the line ask one person something,
+    which they answer in place (``answer_question``).
     """
     channel = await ChannelRepository(uow.session).get(channel_id)
     if channel is None:
@@ -131,11 +148,20 @@ async def post(
         sender=sender,
         text=text,
         source_id=source_id,
-        members_only=members_only,
-        conversation_id=conversation_id,
-        external_message_id=external_message_id,
-        external_thread_id=external_thread_id,
-        reply_ref=reply_ref,
+        line=NewLine(
+            members_only=members_only,
+            conversation_id=conversation_id,
+            external_message_id=external_message_id,
+            external_thread_id=external_thread_id,
+            reply_ref=reply_ref,
+            parts=tuple(parts),
+            agent_run_id=agent_run_id,
+            reply_to_id=reply_to_id,
+            thread_root_id=thread_root_id,
+        ),
+        question=question,
+        mentions=mentions,
+        mentioned_agents=mentioned_agents,
     )
 
 

@@ -8,7 +8,11 @@ export type ChannelSourceResponse = {
     kind: SourceKind;
     last_inbound_at?: (string | null);
     /**
-     * Where it is: TELEGRAM, WHATSAPP, SLACK, RESEND, WEB…
+     * A group the bot asked the platform for, not confirmed yet.
+     */
+    pending?: boolean;
+    /**
+     * Where it is: TELEGRAM, WHATSAPP, SLACK, TEAMS, RESEND, WEB…
      */
     platform: string;
     surface_id?: (string | null);

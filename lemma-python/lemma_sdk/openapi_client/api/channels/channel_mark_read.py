@@ -64,7 +64,8 @@ def sync_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Mark Channel Read
 
-     Everything in the channel up to now has been read by this member.
+     Everything in the channel up to now has been read by this member, and
+    every line naming them.
 
     Args:
         pod_id (UUID):
@@ -98,7 +99,8 @@ def sync(
 ) -> Any | ErrorResponse | None:
     """Mark Channel Read
 
-     Everything in the channel up to now has been read by this member.
+     Everything in the channel up to now has been read by this member, and
+    every line naming them.
 
     Args:
         pod_id (UUID):
@@ -127,7 +129,8 @@ async def asyncio_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Mark Channel Read
 
-     Everything in the channel up to now has been read by this member.
+     Everything in the channel up to now has been read by this member, and
+    every line naming them.
 
     Args:
         pod_id (UUID):
@@ -159,7 +162,8 @@ async def asyncio(
 ) -> Any | ErrorResponse | None:
     """Mark Channel Read
 
-     Everything in the channel up to now has been read by this member.
+     Everything in the channel up to now has been read by this member, and
+    every line naming them.
 
     Args:
         pod_id (UUID):

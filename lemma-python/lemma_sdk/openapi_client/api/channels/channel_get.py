@@ -66,7 +66,8 @@ def sync_detailed(
 ) -> Response[ChannelDetailResponse | ErrorResponse]:
     """Get Channel
 
-     One channel, with the places it is fed from and the people in it.
+     One channel, with the places it is fed from, the people in it, and how
+    the reader hears of it.
 
     Args:
         pod_id (UUID):
@@ -100,7 +101,8 @@ def sync(
 ) -> ChannelDetailResponse | ErrorResponse | None:
     """Get Channel
 
-     One channel, with the places it is fed from and the people in it.
+     One channel, with the places it is fed from, the people in it, and how
+    the reader hears of it.
 
     Args:
         pod_id (UUID):
@@ -129,7 +131,8 @@ async def asyncio_detailed(
 ) -> Response[ChannelDetailResponse | ErrorResponse]:
     """Get Channel
 
-     One channel, with the places it is fed from and the people in it.
+     One channel, with the places it is fed from, the people in it, and how
+    the reader hears of it.
 
     Args:
         pod_id (UUID):
@@ -161,7 +164,8 @@ async def asyncio(
 ) -> ChannelDetailResponse | ErrorResponse | None:
     """Get Channel
 
-     One channel, with the places it is fed from and the people in it.
+     One channel, with the places it is fed from, the people in it, and how
+    the reader hears of it.
 
     Args:
         pod_id (UUID):

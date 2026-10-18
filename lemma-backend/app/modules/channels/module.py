@@ -4,9 +4,15 @@ from app.core.registry import LemmaModule
 
 
 def _routers():
-    from app.modules.channels.api.controller import router
+    from app.modules.channels.api.controller import router as channels
+    from app.modules.channels.api.message_controller import (
+        inbox_router,
+        router as lines,
+    )
 
-    return [router]
+    # The inbox and search have fixed segments where a channel's id would go,
+    # so they are matched first.
+    return [inbox_router, channels, lines]
 
 
 def _register_work() -> None:

@@ -90,6 +90,20 @@ class ContactRepository:
             return None
         return _contact(row, await self._identities_of([row.id]))
 
+    async def names(
+        self, *, pod_id: UUID, contact_ids: Sequence[UUID]
+    ) -> dict[UUID, str | None]:
+        """What to call each of these contacts: the name they were given, if any."""
+        if not contact_ids:
+            return {}
+        rows = await self.session.execute(
+            select(ContactModel.id, ContactModel.display_name).where(
+                ContactModel.pod_id == pod_id,
+                ContactModel.id.in_(list(contact_ids)),
+            )
+        )
+        return dict(rows.tuples().all())
+
     async def find_by_handle(
         self, *, pod_id: UUID, kind: IdentityKind, value: str
     ) -> Contact | None:

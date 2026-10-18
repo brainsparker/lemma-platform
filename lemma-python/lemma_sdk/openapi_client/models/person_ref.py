@@ -23,7 +23,7 @@ class PersonRef:
             kind (SenderKind):
             id (None | Unset | UUID): The member's user id, the contact's id or the agent's id; absent for a member or an
                 agent since removed.
-            name (None | str | Unset): The name they were shown under, where known.
+            name (None | str | Unset): What to call them, where known.
     """
 
     kind: SenderKind

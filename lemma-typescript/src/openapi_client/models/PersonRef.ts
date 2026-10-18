@@ -15,7 +15,7 @@ export type PersonRef = {
     id?: (string | null);
     kind: SenderKind;
     /**
-     * The name they were shown under, where known.
+     * What to call them, where known.
      */
     name?: (string | null);
 };

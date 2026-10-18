@@ -23,7 +23,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-from app.modules.channels.domain.entities import ChannelMessage, SenderKind
+from app.modules.channels.domain.entities import (
+    ChannelMessage,
+    Principal,
+    SenderKind,
+)
 
 
 class Reader(BaseModel):
@@ -67,7 +71,9 @@ def readable(
     return [message for message in messages if may_read(reader, message)]
 
 
-def withheld_from(message: ChannelMessage, *, user_id: UUID) -> bool:
+def withheld_from(
+    message: ChannelMessage, *, user_id: UUID, in_their_direct: bool = False
+) -> bool:
     """Whether the member ``user_id``, reading the timeline, is shown only that
     this answer was given -- not what it said.
 
@@ -75,10 +81,17 @@ def withheld_from(message: ChannelMessage, *, user_id: UUID) -> bool:
     read. It was posted where the people in the chat read it, but a member of
     the pod reading the timeline need not be one of them, and may not be able
     to see what it was made from. One whose principal is no longer known is
-    withheld from everybody.
+    withheld from everybody. Never withheld: a line in the reader's own direct
+    channel, which the agent posted there to tell them, and a question put to
+    the reader, which they have to read to answer.
     """
     sender = message.sender
     if sender.kind is not SenderKind.AGENT or not sender.used_a_members_access:
+        return False
+    if in_their_direct:
+        return False
+    interaction = message.interaction
+    if interaction is not None and interaction.awaits == Principal.member(user_id):
         return False
     behalf = sender.on_behalf_of
     return behalf is None or behalf.user_id != user_id

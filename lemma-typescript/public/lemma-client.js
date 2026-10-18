@@ -16532,15 +16532,17 @@ var LemmaClient = (() => {
   var ChannelsService = class {
     /**
      * List Channels
-     * The pod's channels this member sees, most recently active first.
+     * The pod's channels this member sees, most recently active first, each
+     * with what is new in it for them and its last line.
      * @param podId
      * @param kind
+     * @param archived
      * @param limit
      * @param before
      * @returns ChannelListResponse Successful Response
      * @throws ApiError
      */
-    static channelList(podId, kind, limit = 50, before) {
+    static channelList(podId, kind, archived = false, limit = 50, before) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/channels",
@@ -16549,6 +16551,7 @@ var LemmaClient = (() => {
         },
         query: {
           "kind": kind,
+          "archived": archived,
           "limit": limit,
           "before": before
         },
@@ -16558,8 +16561,56 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Create Channel
+     * A channel made in Lemma, with its maker and the members they named in it.
+     * @param podId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Search Channels
+     * Lines matching every word, newest first, in the channels the reader sees.
+     * @param podId
+     * @param q
+     * @param limit
+     * @returns SearchResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageSearch(podId, q, limit = 30) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/search",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "q": q,
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Channel
-     * One channel, with the places it is fed from and the people in it.
+     * One channel, with the places it is fed from, the people in it, and how
+     * the reader hears of it.
      * @param podId
      * @param channelId
      * @returns ChannelDetailResponse Successful Response
@@ -16573,6 +16624,30 @@ var LemmaClient = (() => {
           "pod_id": podId,
           "channel_id": channelId
         },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Channel
+     * Rename, re-describe or archive a group.
+     * @param podId
+     * @param channelId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelUpdate(podId, channelId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/channels/{channel_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        body: requestBody,
+        mediaType: "application/json",
         errors: {
           422: `Validation Error`
         }
@@ -16621,8 +16696,33 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Set My Notify
+     * How the reader hears of this channel's lines outside the app.
+     * @param podId
+     * @param channelId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelNotifyUpdate(podId, channelId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/channels/{channel_id}/me",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Channel Messages
-     * The channel's timeline: who said what, when and where, oldest first.
+     * The channel's timeline, oldest first: who said what, when and where.
+     * A thread's replies are not in it; its first line counts them.
      * @param podId
      * @param channelId
      * @param limit
@@ -16648,8 +16748,188 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Post Channel Message
+     * Write in the channel. It goes to one outside place -- the one named, or
+     * the one the channel last heard from -- unless it is a note to members.
+     * @param podId
+     * @param channelId
+     * @param requestBody
+     * @returns ChannelMessageResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessagePost(podId, channelId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Delete Channel Message
+     * Delete one's own line: it stays in its place, saying nothing.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @returns void
+     * @throws ApiError
+     */
+    static channelMessageDelete(podId, channelId, messageId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Edit Channel Message
+     * Change what one's own line says. A copy already sent outside stays as sent.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param requestBody
+     * @returns ChannelMessageResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageUpdate(podId, channelId, messageId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Answer Channel Question
+     * Answer what this line asks the reader: a question, an approval, a form.
+     *
+     * No session is held across the answer: what asked the question takes it in
+     * its own -- a run resumed, a form submitted -- and may call out to do so.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param requestBody
+     * @returns ChannelMessageResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageAnswer(podId, channelId, messageId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Thread
+     * A thread's replies, oldest first, the newest page of them.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param limit
+     * @param before
+     * @returns ChannelMessagesResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageThread(podId, channelId, messageId, limit = 50, before) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        query: {
+          "limit": limit,
+          "before": before
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Add Participants
+     * Add members of the pod to a group.
+     * @param podId
+     * @param channelId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelParticipantAdd(podId, channelId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/participants",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Remove Participant
+     * Leave a channel, or -- for who may change it -- take somebody out.
+     * @param podId
+     * @param channelId
+     * @param memberId
+     * @returns void
+     * @throws ApiError
+     */
+    static channelParticipantRemove(podId, channelId, memberId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}/participants/{member_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "member_id": memberId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Mark Channel Read
-     * Everything in the channel up to now has been read by this member.
+     * Everything in the channel up to now has been read by this member, and
+     * every line naming them.
      * @param podId
      * @param channelId
      * @returns void
@@ -16668,6 +16948,26 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Get Inbox
+     * What is new for the reader across the pod, and every question waiting
+     * on them, newest first.
+     * @param podId
+     * @returns InboxResponse Successful Response
+     * @throws ApiError
+     */
+    static channelInboxGet(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/inbox",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/channels.ts
@@ -16675,32 +16975,119 @@ var LemmaClient = (() => {
     constructor(client) {
       __publicField(this, "client", client);
     }
-    /** The pod's channels, most recently active first. Pass the opaque
-     *  `next_before` back as `before` for the next page. */
+    /** The pod's channels, most recently active first, each with what is new in
+     *  it for the caller and its last line. Pass the opaque `next_before` back
+     *  as `before` for the next page. */
     list(podId, options = {}) {
       return this.client.request(
         () => {
-          var _a;
+          var _a, _b;
           return ChannelsService.channelList(
             podId,
             options.kind,
+            (_a = options.archived) != null ? _a : false,
+            (_b = options.limit) != null ? _b : 50,
+            options.before
+          );
+        }
+      );
+    }
+    /** Make a channel in Lemma, with the caller and the members named in it. */
+    create(podId, body) {
+      return this.client.request(
+        () => ChannelsService.channelCreate(podId, { members: [], ...body })
+      );
+    }
+    /** One channel, with its sources, participants and the caller's settings. */
+    get(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelGet(podId, channelId));
+    }
+    /** Rename, re-describe or archive a group. Who made it, or an admin. */
+    update(podId, channelId, body) {
+      return this.client.request(() => ChannelsService.channelUpdate(podId, channelId, body));
+    }
+    /** Add members of the pod to a group. */
+    addMembers(podId, channelId, members) {
+      return this.client.request(
+        () => ChannelsService.channelParticipantAdd(podId, channelId, { members })
+      );
+    }
+    /** Leave a channel (the caller's own id), or take somebody out of it. */
+    removeMember(podId, channelId, memberId) {
+      return this.client.request(
+        () => ChannelsService.channelParticipantRemove(podId, channelId, memberId)
+      );
+    }
+    /** How the caller hears of this channel's lines outside the app. */
+    setNotify(podId, channelId, notify, via) {
+      return this.client.request(
+        () => ChannelsService.channelNotifyUpdate(podId, channelId, {
+          notify,
+          notify_via: via != null ? via : null
+        })
+      );
+    }
+    /** The channel's timeline, oldest first: who said what, when and where. A
+     *  thread's replies are left out and counted on its first line. The newest
+     *  page unless `before` is the previous page's `next_before`. */
+    messages(podId, channelId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelMessageList(podId, channelId, (_a = options.limit) != null ? _a : 50, options.before);
+        }
+      );
+    }
+    /** A thread's replies, oldest first. */
+    thread(podId, channelId, messageId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelMessageThread(
+            podId,
+            channelId,
+            messageId,
             (_a = options.limit) != null ? _a : 50,
             options.before
           );
         }
       );
     }
-    /** One channel, with its sources and participants. */
-    get(podId, channelId) {
-      return this.client.request(() => ChannelsService.channelGet(podId, channelId));
+    /** Write in a channel. It goes to one outside place -- `source_id`, or the
+     *  one the channel last heard from -- unless `members_only` makes it a note
+     *  to members. A named agent answers. */
+    post(podId, channelId, body) {
+      return this.client.request(() => ChannelsService.channelMessagePost(podId, channelId, body));
     }
-    /** The channel's timeline, oldest first: who said what, when and where. The
-     *  newest page unless `before` is the previous page's `next_before`. */
-    messages(podId, channelId, options = {}) {
+    /** Change what one of the caller's own lines says. */
+    edit(podId, channelId, messageId, text) {
+      return this.client.request(
+        () => ChannelsService.channelMessageUpdate(podId, channelId, messageId, { text })
+      );
+    }
+    /** Delete one of the caller's own lines; it keeps its place, empty. */
+    delete(podId, channelId, messageId) {
+      return this.client.request(
+        () => ChannelsService.channelMessageDelete(podId, channelId, messageId)
+      );
+    }
+    /** Answer what a line asks the caller: `{choice}` or `{text}` for a
+     *  question, `{decision}` for an approval, a form's fields. */
+    answer(podId, channelId, messageId, answer) {
+      return this.client.request(
+        () => ChannelsService.channelMessageAnswer(podId, channelId, messageId, { answer })
+      );
+    }
+    /** What is new for the caller across the pod, and what waits on them. */
+    inbox(podId) {
+      return this.client.request(() => ChannelsService.channelInboxGet(podId));
+    }
+    /** Lines matching every word, newest first, in the channels the caller sees. */
+    search(podId, q, options = {}) {
       return this.client.request(
         () => {
           var _a;
-          return ChannelsService.channelMessageList(podId, channelId, (_a = options.limit) != null ? _a : 50, options.before);
+          return ChannelsService.channelMessageSearch(podId, q, (_a = options.limit) != null ? _a : 30);
         }
       );
     }

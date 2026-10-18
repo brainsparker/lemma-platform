@@ -128,11 +128,23 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/handler` | `channel.handler.release` | Release Channel |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.delete` | Delete Channel Message |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/participants/{member_id}` | `channel.participant.remove` | Remove Participant |
 | GET | `/pods/{pod_id}/channels` | `channel.list` | List Channels |
+| GET | `/pods/{pod_id}/channels/search` | `channel.message.search` | Search Channels |
 | GET | `/pods/{pod_id}/channels/{channel_id}` | `channel.get` | Get Channel |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.list` | List Channel Messages |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread` | `channel.message.thread` | List Thread |
+| GET | `/pods/{pod_id}/inbox` | `channel.inbox.get` | Get Inbox |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}` | `channel.update` | Update Channel |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.update` | Edit Channel Message |
+| POST | `/pods/{pod_id}/channels` | `channel.create` | Create Channel |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.post` | Post Channel Message |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer` | `channel.message.answer` | Answer Channel Question |
+| POST | `/pods/{pod_id}/channels/{channel_id}/participants` | `channel.participant.add` | Add Participants |
 | POST | `/pods/{pod_id}/channels/{channel_id}/read` | `channel.mark_read` | Mark Channel Read |
 | PUT | `/pods/{pod_id}/channels/{channel_id}/handler` | `channel.handler.take` | Take Channel |
+| PUT | `/pods/{pod_id}/channels/{channel_id}/me` | `channel.notify.update` | Set My Notify |
 
 ## connectors
 

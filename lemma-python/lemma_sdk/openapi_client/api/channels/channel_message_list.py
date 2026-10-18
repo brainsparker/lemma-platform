@@ -85,7 +85,8 @@ def sync_detailed(
 ) -> Response[ChannelMessagesResponse | ErrorResponse]:
     """List Channel Messages
 
-     The channel's timeline: who said what, when and where, oldest first.
+     The channel's timeline, oldest first: who said what, when and where.
+    A thread's replies are not in it; its first line counts them.
 
     Args:
         pod_id (UUID):
@@ -125,7 +126,8 @@ def sync(
 ) -> ChannelMessagesResponse | ErrorResponse | None:
     """List Channel Messages
 
-     The channel's timeline: who said what, when and where, oldest first.
+     The channel's timeline, oldest first: who said what, when and where.
+    A thread's replies are not in it; its first line counts them.
 
     Args:
         pod_id (UUID):
@@ -160,7 +162,8 @@ async def asyncio_detailed(
 ) -> Response[ChannelMessagesResponse | ErrorResponse]:
     """List Channel Messages
 
-     The channel's timeline: who said what, when and where, oldest first.
+     The channel's timeline, oldest first: who said what, when and where.
+    A thread's replies are not in it; its first line counts them.
 
     Args:
         pod_id (UUID):
@@ -198,7 +201,8 @@ async def asyncio(
 ) -> ChannelMessagesResponse | ErrorResponse | None:
     """List Channel Messages
 
-     The channel's timeline: who said what, when and where, oldest first.
+     The channel's timeline, oldest first: who said what, when and where.
+    A thread's replies are not in it; its first line counts them.
 
     Args:
         pod_id (UUID):

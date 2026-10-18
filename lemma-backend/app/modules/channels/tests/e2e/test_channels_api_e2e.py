@@ -198,10 +198,9 @@ async def test_an_answer_made_with_a_members_own_access_is_theirs_to_read(
     assert theirs["withheld"] and theirs["text"] is None
     for line in (mine, theirs):
         assert line["sender"] == {"kind": "AGENT", "id": str(agent_id), "name": "Lem"}
-        assert line["on_behalf_of"] == {
+        assert {k: line["on_behalf_of"][k] for k in ("kind", "id")} == {
             "kind": "MEMBER",
             "id": str(owner),
-            "name": None,
         }
 
 
@@ -216,11 +215,8 @@ async def test_a_contacts_channel_is_answered_by_hand_by_who_may_write_to_contac
 
     taken = await client.put(handler, headers=auth_headers(pod.editor))
     assert taken.status_code == 200, taken.text
-    assert taken.json()["handler"] == {
-        "kind": "MEMBER",
-        "id": pod.editor["id"],
-        "name": None,
-    }
+    assert taken.json()["handler"]["kind"] == "MEMBER"
+    assert taken.json()["handler"]["id"] == pod.editor["id"]
 
     released = await client.delete(handler, headers=auth_headers(pod.editor))
     assert released.json()["handler"] is None

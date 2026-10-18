@@ -49,6 +49,34 @@ class SenderKind(StrEnum):
     AGENT = "AGENT"
 
 
+class NotifyLevel(StrEnum):
+    """Which lines of a channel reach a participant outside the app."""
+
+    ALL = "ALL"
+    MENTIONS = "MENTIONS"
+    NONE = "NONE"
+
+
+class InteractionKind(StrEnum):
+    """What a line asks of the one person it waits on."""
+
+    #: A question, with choices or free text (``ask_user``).
+    ASK = "ASK"
+    #: Whether an agent may go ahead (``request_approval``).
+    APPROVAL = "APPROVAL"
+    #: A workflow's form.
+    FORM = "FORM"
+
+
+class InteractionState(StrEnum):
+    OPEN = "OPEN"
+    ANSWERED = "ANSWERED"
+    #: The run that asked ended or was stopped before an answer came.
+    CANCELLED = "CANCELLED"
+    #: Its deadline passed.
+    EXPIRED = "EXPIRED"
+
+
 class Principal(BaseModel):
     """A person: a member of the pod, or one of its contacts. Exactly one."""
 
@@ -91,6 +119,13 @@ class Channel(BaseModel):
     handler_user_id: UUID | None = None
     created_at: datetime
     last_message_at: datetime | None = None
+    #: What it is for, in a line; a channel made in Lemma has one.
+    topic: str | None = None
+    created_by_user_id: UUID | None = None
+    archived_at: datetime | None = None
+    #: Since when it has asked for a person, and why; cleared on stepping in.
+    attention_at: datetime | None = None
+    attention_reason: str | None = None
 
 
 class Source(BaseModel):
@@ -143,6 +178,9 @@ class Participant(BaseModel):
     channel_id: UUID
     principal: Principal
     last_read_at: datetime | None = None
+    notify: NotifyLevel = NotifyLevel.ALL
+    #: The platforms they chose to be reached on, or ``None`` for the pod's rule.
+    notify_via: tuple[str, ...] | None = None
 
 
 class Sender(BaseModel):
@@ -211,6 +249,30 @@ class Sender(BaseModel):
         )
 
 
+class Interaction(BaseModel):
+    """What a line asks of one person, and -- once given -- their answer.
+
+    ``question`` is the asking side's own shape: the choices or the form, and
+    what an answer resumes (a paused tool call, a workflow's wait). Nothing in
+    this module reads inside it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: InteractionKind
+    state: InteractionState
+    question: dict[str, object]
+    #: The one person who may answer it.
+    awaits: Principal | None = None
+    answer: dict[str, object] | None = None
+    answered_at: datetime | None = None
+    answered_by: Principal | None = None
+
+    @property
+    def is_open(self) -> bool:
+        return self.state is InteractionState.OPEN
+
+
 class ChannelMessage(BaseModel):
     """One line of a channel's timeline."""
 
@@ -220,6 +282,7 @@ class ChannelMessage(BaseModel):
     channel_id: UUID
     sender: Sender
     text: str
+    pod_id: UUID | None = None
     created_at: datetime
     #: Where it was said, or ``None`` for a line written in Lemma.
     source_id: UUID | None = None
@@ -231,3 +294,19 @@ class ChannelMessage(BaseModel):
     #: On a line a person said on a platform: what its surface needs to answer
     #: it in place.
     reply_ref: dict[str, object] | None = None
+    #: Files, resources and voice beside the text, in the envelope's shape.
+    parts: tuple[dict[str, object], ...] = ()
+    agent_run_id: UUID | None = None
+    reply_to_id: UUID | None = None
+    #: The line a thread hangs from, on every reply in it.
+    thread_root_id: UUID | None = None
+    edited_at: datetime | None = None
+    deleted_at: datetime | None = None
+    interaction: Interaction | None = None
+    #: On a thread's root, as read with it: how many replies, and the last's time.
+    reply_count: int = 0
+    last_reply_at: datetime | None = None
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None

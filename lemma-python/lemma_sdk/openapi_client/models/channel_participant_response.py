@@ -8,6 +8,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
+from ..models.notify_level import NotifyLevel
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
@@ -25,10 +26,12 @@ class ChannelParticipantResponse:
             of its contacts, or one of its agents. There is nobody else -- everybody
             outside the pod is a contact.
         last_read_at (datetime.datetime | None | Unset):
+        notify (NotifyLevel | Unset): Which lines of a channel reach a participant outside the app.
     """
 
     person: PersonRef
     last_read_at: datetime.datetime | None | Unset = UNSET
+    notify: NotifyLevel | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -42,6 +45,10 @@ class ChannelParticipantResponse:
         else:
             last_read_at = self.last_read_at
 
+        notify: str | Unset = UNSET
+        if not isinstance(self.notify, Unset):
+            notify = self.notify.value
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -51,6 +58,8 @@ class ChannelParticipantResponse:
         )
         if last_read_at is not UNSET:
             field_dict["last_read_at"] = last_read_at
+        if notify is not UNSET:
+            field_dict["notify"] = notify
 
         return field_dict
 
@@ -78,9 +87,17 @@ class ChannelParticipantResponse:
 
         last_read_at = _parse_last_read_at(d.pop("last_read_at", UNSET))
 
+        _notify = d.pop("notify", UNSET)
+        notify: NotifyLevel | Unset
+        if isinstance(_notify, Unset):
+            notify = UNSET
+        else:
+            notify = NotifyLevel(_notify)
+
         channel_participant_response = cls(
             person=person,
             last_read_at=last_read_at,
+            notify=notify,
         )
 
         channel_participant_response.additional_properties = d

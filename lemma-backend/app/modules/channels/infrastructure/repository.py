@@ -1,4 +1,6 @@
-"""Reading and writing channels, their sources, people and timeline.
+"""Reading and writing channels, their sources and people.
+
+A channel's lines are ``lines.LineRepository``'s.
 
 Every find-or-create here runs its insert in a savepoint behind a unique index,
 the way contacts open: two first messages from one place arrive together often
@@ -8,8 +10,8 @@ instead of failing or making a second one.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, and_, delete, func, or_, select, update
@@ -20,13 +22,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.channels.domain.entities import (
     Channel,
     ChannelKind,
-    ChannelMessage,
+    NotifyLevel,
     Participant,
     Principal,
-    Sender,
-    SenderKind,
     Source,
     SourceKind,
+)
+from app.modules.channels.infrastructure.rows import (
+    MAX_LINES,
+    channel_entity,
+    now,
+    participant_entity,
+    source_entity,
 )
 from app.modules.channels.infrastructure.models import (
     ChannelAgentModel,
@@ -38,81 +45,6 @@ from app.modules.channels.infrastructure.models import (
     ChannelSourceModel,
 )
 
-#: The most lines one read of a timeline returns.
-MAX_LINES = 200
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _channel(row: ChannelModel) -> Channel:
-    return Channel(
-        id=row.id,
-        pod_id=row.pod_id,
-        kind=ChannelKind(row.kind),
-        title=row.title,
-        member_user_id=row.member_user_id,
-        contact_id=row.contact_id,
-        handler_user_id=row.handler_user_id,
-        created_at=row.created_at,
-        last_message_at=row.last_message_at,
-    )
-
-
-def source_entity(row: ChannelSourceModel) -> Source:
-    return Source(
-        id=row.id,
-        channel_id=row.channel_id,
-        pod_id=row.pod_id,
-        surface_id=row.surface_id,
-        platform=row.platform,
-        kind=SourceKind(row.kind),
-        external_channel_id=row.external_channel_id,
-        external_user_id=row.external_user_id,
-        title=row.title,
-        last_inbound_at=row.last_inbound_at,
-        delivery_ref=row.delivery_ref,
-        owner_user_id=row.owner_user_id,
-        answers_outsiders=row.answers_outsiders,
-        shared_externally=row.shared_externally,
-        invite_link=row.invite_link,
-        request_id=row.request_id,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
-
-
-def _principal(user_id: UUID | None, contact_id: UUID | None) -> Principal | None:
-    if user_id is not None:
-        return Principal.member(user_id)
-    if contact_id is not None:
-        return Principal.contact(contact_id)
-    return None
-
-
-def _message(row: ChannelMessageModel) -> ChannelMessage:
-    return ChannelMessage(
-        id=row.id,
-        channel_id=row.channel_id,
-        sender=Sender(
-            kind=SenderKind(row.sender_kind),
-            user_id=row.sender_user_id,
-            contact_id=row.sender_contact_id,
-            agent_id=row.sender_agent_id,
-            on_behalf_of=_principal(row.on_behalf_user_id, row.on_behalf_contact_id),
-            display_name=row.sender_name,
-        ),
-        text=row.body,
-        created_at=row.created_at,
-        source_id=row.source_id,
-        members_only=row.members_only,
-        conversation_id=row.conversation_id,
-        external_message_id=row.external_message_id,
-        external_thread_id=row.external_thread_id,
-        reply_ref=row.reply_ref,
-    )
-
 
 class ChannelRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -122,7 +54,7 @@ class ChannelRepository:
 
     async def get(self, channel_id: UUID) -> Channel | None:
         row = await self.session.get(ChannelModel, channel_id)
-        return _channel(row) if row else None
+        return channel_entity(row) if row else None
 
     async def direct(self, *, pod_id: UUID, user_id: UUID) -> Channel:
         """The member's DIRECT channel in the pod, made if there is none."""
@@ -146,11 +78,55 @@ class ChannelRepository:
             ),
         )
 
-    async def open_group(self, *, pod_id: UUID, title: str | None) -> Channel:
-        row = ChannelModel(pod_id=pod_id, kind=ChannelKind.GROUP.value, title=title)
+    async def open_group(
+        self,
+        *,
+        pod_id: UUID,
+        title: str | None,
+        topic: str | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> Channel:
+        row = ChannelModel(
+            pod_id=pod_id,
+            kind=ChannelKind.GROUP.value,
+            title=title,
+            topic=topic,
+            created_by_user_id=created_by_user_id,
+        )
         self.session.add(row)
         await self.session.flush()
-        return _channel(row)
+        return channel_entity(row)
+
+    async def change(
+        self,
+        channel_id: UUID,
+        *,
+        title: str | None = None,
+        topic: str | None = None,
+        archived: bool | None = None,
+    ) -> Channel | None:
+        """Rename, re-describe or archive a channel; ``None`` leaves a field be."""
+        row = await self.session.get(ChannelModel, channel_id)
+        if row is None:
+            return None
+        if title is not None:
+            row.title = title
+        if topic is not None:
+            row.topic = topic or None
+        if archived is not None:
+            row.archived_at = now() if archived else None
+        await self.session.flush()
+        return channel_entity(row)
+
+    async def call_for_person(self, channel_id: UUID, *, reason: str | None) -> None:
+        """The channel asks for a person, until somebody steps in."""
+        await self.session.execute(
+            update(ChannelModel)
+            .where(ChannelModel.id == channel_id, ChannelModel.attention_at.is_(None))
+            .values(
+                attention_at=now(), attention_reason=reason[:255] if reason else None
+            )
+        )
 
     async def _one_of_a_kind(
         self, *where: ColumnElement[bool], make: Callable[[], ChannelModel]
@@ -158,24 +134,27 @@ class ChannelRepository:
         statement = select(ChannelModel).where(*where)
         found = await self.session.scalar(statement)
         if found is not None:
-            return _channel(found)
+            return channel_entity(found)
         try:
             async with self.session.begin_nested():
                 row = make()
                 self.session.add(row)
                 await self.session.flush()
-                return _channel(row)
+                return channel_entity(row)
         except IntegrityError:
             winner = await self.session.scalar(statement)
             if winner is None:
                 raise
-            return _channel(winner)
+            return channel_entity(winner)
 
     async def set_handler(self, channel_id: UUID, user_id: UUID | None) -> None:
+        """Somebody answers by hand now, or nobody does. Stepping in answers a
+        call for a person."""
+        values: dict[str, object] = {"handler_user_id": user_id}
+        if user_id is not None:
+            values |= {"attention_at": None, "attention_reason": None}
         await self.session.execute(
-            update(ChannelModel)
-            .where(ChannelModel.id == channel_id)
-            .values(handler_user_id=user_id)
+            update(ChannelModel).where(ChannelModel.id == channel_id).values(**values)
         )
 
     async def list_for_member(
@@ -186,6 +165,7 @@ class ChannelRepository:
         kinds: tuple[ChannelKind, ...],
         before: tuple[datetime, UUID] | None,
         limit: int,
+        archived: bool = False,
     ) -> list[Channel]:
         """The channels a member of the pod sees, most recently active first.
 
@@ -199,6 +179,9 @@ class ChannelRepository:
                 ChannelModel.kind != ChannelKind.DIRECT.value,
                 ChannelModel.member_user_id == user_id,
             ),
+            ChannelModel.archived_at.is_not(None)
+            if archived
+            else ChannelModel.archived_at.is_(None),
         )
         activity = func.coalesce(ChannelModel.last_message_at, ChannelModel.created_at)
         if before is not None:
@@ -211,7 +194,7 @@ class ChannelRepository:
                 max(1, min(limit, MAX_LINES))
             )
         )
-        return [_channel(row) for row in rows]
+        return [channel_entity(row) for row in rows]
 
     async def attach_agent(self, *, channel_id: UUID, agent_id: UUID) -> None:
         await self.session.execute(
@@ -367,6 +350,23 @@ class ChannelRepository:
         row = await self.session.get(ChannelSourceModel, source_id)
         return source_entity(row) if row else None
 
+    async def sources_of_many(
+        self, channel_ids: list[UUID]
+    ) -> dict[UUID, list[Source]]:
+        """The sources of each of these channels, in one read."""
+        if not channel_ids:
+            return {}
+        rows = await self.session.scalars(
+            select(ChannelSourceModel)
+            .where(ChannelSourceModel.channel_id.in_(channel_ids[:MAX_LINES]))
+            .order_by(ChannelSourceModel.created_at)
+            .limit(MAX_LINES * 4)
+        )
+        found: dict[UUID, list[Source]] = {}
+        for row in rows:
+            found.setdefault(row.channel_id, []).append(source_entity(row))
+        return found
+
     async def sources_of(self, channel_id: UUID) -> list[Source]:
         rows = await self.session.scalars(
             select(ChannelSourceModel)
@@ -398,19 +398,63 @@ class ChannelRepository:
             .order_by(ChannelParticipantModel.created_at)
             .limit(MAX_LINES)
         )
-        return [
-            Participant(
-                channel_id=row.channel_id,
-                principal=Principal(user_id=row.user_id, contact_id=row.contact_id),
-                last_read_at=row.last_read_at,
+        return [participant_entity(row) for row in rows]
+
+    async def leave(self, *, channel_id: UUID, principal: Principal) -> None:
+        await self.session.execute(
+            delete(ChannelParticipantModel).where(
+                ChannelParticipantModel.channel_id == channel_id,
+                ChannelParticipantModel.user_id.is_not_distinct_from(principal.user_id),
+                ChannelParticipantModel.contact_id.is_not_distinct_from(
+                    principal.contact_id
+                ),
             )
-            for row in rows
-        ]
+        )
+
+    async def set_notify(
+        self,
+        *,
+        channel: Channel,
+        user_id: UUID,
+        notify: NotifyLevel,
+        notify_via: tuple[str, ...] | None,
+    ) -> None:
+        """How a member hears of this channel's lines -- joining it to say so."""
+        via = list(notify_via) if notify_via is not None else None
+        await self.session.execute(
+            insert(ChannelParticipantModel)
+            .values(
+                channel_id=channel.id,
+                pod_id=channel.pod_id,
+                user_id=user_id,
+                notify=notify.value,
+                notify_via=via,
+            )
+            .on_conflict_do_update(
+                index_elements=["channel_id", "user_id"],
+                index_where=ChannelParticipantModel.user_id.is_not(None),
+                set_={"notify": notify.value, "notify_via": via},
+            )
+        )
+
+    async def participant(
+        self, *, channel_id: UUID, principal: Principal
+    ) -> Participant | None:
+        row = await self.session.scalar(
+            select(ChannelParticipantModel).where(
+                ChannelParticipantModel.channel_id == channel_id,
+                ChannelParticipantModel.user_id.is_not_distinct_from(principal.user_id),
+                ChannelParticipantModel.contact_id.is_not_distinct_from(
+                    principal.contact_id
+                ),
+            )
+        )
+        return participant_entity(row) if row else None
 
     async def mark_read(self, *, channel: Channel, user_id: UUID) -> None:
         """The member has read the channel up to now -- joining it if they only
         ever read it, so the mark has a row to live on."""
-        read_at = _now()
+        read_at = now()
         await self.session.execute(
             insert(ChannelParticipantModel)
             .values(
@@ -425,133 +469,3 @@ class ChannelRepository:
                 set_={"last_read_at": read_at},
             )
         )
-
-    # -- the timeline ---------------------------------------------------------
-
-    async def append(
-        self,
-        *,
-        channel: Channel,
-        sender: Sender,
-        text: str,
-        source_id: UUID | None,
-        members_only: bool,
-        conversation_id: UUID | None,
-        external_message_id: str | None,
-        external_thread_id: str | None,
-        reply_ref: Mapping[str, object] | None = None,
-    ) -> tuple[ChannelMessage, bool]:
-        """Add a line, or return the one this platform message already made.
-
-        A platform that delivers a message twice -- a retried webhook, a
-        replayed poll -- names it the same both times, and the second writes
-        nothing. Says which: ``True`` only for a line written now. A line
-        logged before anyone answered it -- a group's -- takes the conversation
-        that answers it, and what answers it in place, the second time.
-        """
-        behalf = sender.on_behalf_of
-        values = {
-            "channel_id": channel.id,
-            "pod_id": channel.pod_id,
-            "source_id": source_id,
-            "sender_kind": sender.kind.value,
-            "sender_user_id": sender.user_id,
-            "sender_contact_id": sender.contact_id,
-            "sender_agent_id": sender.agent_id,
-            "on_behalf_user_id": behalf.user_id if behalf else None,
-            "on_behalf_contact_id": behalf.contact_id if behalf else None,
-            "sender_name": sender.display_name[:255] if sender.display_name else None,
-            "body": text,
-            "members_only": members_only,
-            "conversation_id": conversation_id,
-            "external_message_id": external_message_id,
-            "external_thread_id": external_thread_id,
-            "reply_ref": dict(reply_ref) if reply_ref is not None else None,
-        }
-        statement = insert(ChannelMessageModel).values(**values)
-        if external_message_id is not None and source_id is not None:
-            statement = statement.on_conflict_do_nothing(
-                index_elements=["source_id", "external_message_id"],
-                index_where=ChannelMessageModel.external_message_id.is_not(None),
-            )
-        inserted = await self.session.scalar(statement.returning(ChannelMessageModel))
-        if inserted is None:
-            existing = await self.session.scalar(
-                select(ChannelMessageModel).where(
-                    ChannelMessageModel.source_id == source_id,
-                    ChannelMessageModel.external_message_id == external_message_id,
-                )
-            )
-            if existing is None:  # pragma: no cover - the conflict named it
-                raise LookupError("A duplicate line vanished")
-            if existing.conversation_id is None and conversation_id is not None:
-                existing.conversation_id = conversation_id
-            if existing.reply_ref is None and reply_ref is not None:
-                existing.reply_ref = dict(reply_ref)
-            await self.session.flush()
-            return _message(existing), False
-        await self.session.execute(
-            update(ChannelModel)
-            .where(ChannelModel.id == channel.id)
-            .values(last_message_at=inserted.created_at)
-        )
-        if source_id is not None and sender.kind is not SenderKind.AGENT:
-            await self.session.execute(
-                update(ChannelSourceModel)
-                .where(ChannelSourceModel.id == source_id)
-                .values(last_inbound_at=inserted.created_at)
-            )
-        return _message(inserted), True
-
-    async def recent(
-        self,
-        channel_id: UUID,
-        *,
-        limit: int,
-        before: tuple[datetime, UUID] | None = None,
-        source_id: UUID | None = None,
-    ) -> list[ChannelMessage]:
-        """The newest lines, oldest first; ``source_id`` keeps one source's."""
-        statement = select(ChannelMessageModel).where(
-            ChannelMessageModel.channel_id == channel_id
-        )
-        if source_id is not None:
-            statement = statement.where(ChannelMessageModel.source_id == source_id)
-        if before is not None:
-            at, message_id = before
-            statement = statement.where(
-                or_(
-                    ChannelMessageModel.created_at < at,
-                    and_(
-                        ChannelMessageModel.created_at == at,
-                        ChannelMessageModel.id < message_id,
-                    ),
-                )
-            )
-        rows = list(
-            await self.session.scalars(
-                statement.order_by(
-                    ChannelMessageModel.created_at.desc(),
-                    ChannelMessageModel.id.desc(),
-                ).limit(max(1, min(limit, MAX_LINES)))
-            )
-        )
-        return [_message(row) for row in reversed(rows)]
-
-    async def search(
-        self, *, channel_ids: list[UUID], words: str, limit: int
-    ) -> list[ChannelMessage]:
-        """Lines in these channels matching every word, newest first."""
-        if not channel_ids or not words.strip():
-            return []
-        query = func.plainto_tsquery("simple", words)
-        rows = await self.session.scalars(
-            select(ChannelMessageModel)
-            .where(
-                ChannelMessageModel.channel_id.in_(channel_ids),
-                func.to_tsvector("simple", ChannelMessageModel.body).op("@@")(query),
-            )
-            .order_by(ChannelMessageModel.created_at.desc())
-            .limit(max(1, min(limit, MAX_LINES)))
-        )
-        return [_message(row) for row in rows]

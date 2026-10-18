@@ -21,8 +21,9 @@ class ChannelSourceResponse:
     Attributes:
         id (UUID):
         kind (SourceKind): Whether a source is read by one person outside the pod or by several.
-        platform (str): Where it is: TELEGRAM, WHATSAPP, SLACK, RESEND, WEB…
+        platform (str): Where it is: TELEGRAM, WHATSAPP, SLACK, TEAMS, RESEND, WEB…
         last_inbound_at (datetime.datetime | None | Unset):
+        pending (bool | Unset): A group the bot asked the platform for, not confirmed yet. Default: False.
         surface_id (None | Unset | UUID):
         title (None | str | Unset):
     """
@@ -31,6 +32,7 @@ class ChannelSourceResponse:
     kind: SourceKind
     platform: str
     last_inbound_at: datetime.datetime | None | Unset = UNSET
+    pending: bool | Unset = False
     surface_id: None | Unset | UUID = UNSET
     title: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -49,6 +51,8 @@ class ChannelSourceResponse:
             last_inbound_at = self.last_inbound_at.isoformat()
         else:
             last_inbound_at = self.last_inbound_at
+
+        pending = self.pending
 
         surface_id: None | str | Unset
         if isinstance(self.surface_id, Unset):
@@ -75,6 +79,8 @@ class ChannelSourceResponse:
         )
         if last_inbound_at is not UNSET:
             field_dict["last_inbound_at"] = last_inbound_at
+        if pending is not UNSET:
+            field_dict["pending"] = pending
         if surface_id is not UNSET:
             field_dict["surface_id"] = surface_id
         if title is not UNSET:
@@ -108,6 +114,8 @@ class ChannelSourceResponse:
 
         last_inbound_at = _parse_last_inbound_at(d.pop("last_inbound_at", UNSET))
 
+        pending = d.pop("pending", UNSET)
+
         def _parse_surface_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -139,6 +147,7 @@ class ChannelSourceResponse:
             kind=kind,
             platform=platform,
             last_inbound_at=last_inbound_at,
+            pending=pending,
             surface_id=surface_id,
             title=title,
         )

@@ -17,6 +17,7 @@ def _get_kwargs(
     pod_id: UUID,
     *,
     kind: ChannelKind | None | Unset = UNSET,
+    archived: bool | Unset = False,
     limit: int | Unset = 50,
     before: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
@@ -31,6 +32,8 @@ def _get_kwargs(
     else:
         json_kind = kind
     params["kind"] = json_kind
+
+    params["archived"] = archived
 
     params["limit"] = limit
 
@@ -89,16 +92,19 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    archived: bool | Unset = False,
     limit: int | Unset = 50,
     before: None | str | Unset = UNSET,
 ) -> Response[ChannelListResponse | ErrorResponse]:
     """List Channels
 
-     The pod's channels this member sees, most recently active first.
+     The pod's channels this member sees, most recently active first, each
+    with what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        archived (bool | Unset):  Default: False.
         limit (int | Unset):  Default: 50.
         before (None | str | Unset):
 
@@ -113,6 +119,7 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         kind=kind,
+        archived=archived,
         limit=limit,
         before=before,
     )
@@ -129,16 +136,19 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    archived: bool | Unset = False,
     limit: int | Unset = 50,
     before: None | str | Unset = UNSET,
 ) -> ChannelListResponse | ErrorResponse | None:
     """List Channels
 
-     The pod's channels this member sees, most recently active first.
+     The pod's channels this member sees, most recently active first, each
+    with what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        archived (bool | Unset):  Default: False.
         limit (int | Unset):  Default: 50.
         before (None | str | Unset):
 
@@ -154,6 +164,7 @@ def sync(
         pod_id=pod_id,
         client=client,
         kind=kind,
+        archived=archived,
         limit=limit,
         before=before,
     ).parsed
@@ -164,16 +175,19 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    archived: bool | Unset = False,
     limit: int | Unset = 50,
     before: None | str | Unset = UNSET,
 ) -> Response[ChannelListResponse | ErrorResponse]:
     """List Channels
 
-     The pod's channels this member sees, most recently active first.
+     The pod's channels this member sees, most recently active first, each
+    with what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        archived (bool | Unset):  Default: False.
         limit (int | Unset):  Default: 50.
         before (None | str | Unset):
 
@@ -188,6 +202,7 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         kind=kind,
+        archived=archived,
         limit=limit,
         before=before,
     )
@@ -202,16 +217,19 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    archived: bool | Unset = False,
     limit: int | Unset = 50,
     before: None | str | Unset = UNSET,
 ) -> ChannelListResponse | ErrorResponse | None:
     """List Channels
 
-     The pod's channels this member sees, most recently active first.
+     The pod's channels this member sees, most recently active first, each
+    with what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        archived (bool | Unset):  Default: False.
         limit (int | Unset):  Default: 50.
         before (None | str | Unset):
 
@@ -228,6 +246,7 @@ async def asyncio(
             pod_id=pod_id,
             client=client,
             kind=kind,
+            archived=archived,
             limit=limit,
             before=before,
         )

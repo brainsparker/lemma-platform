@@ -44,8 +44,10 @@ question a line puts to one person -- `interaction_kind` (`ASK`, `APPROVAL`,
 `FORM`), `interaction`, `interaction_state` (`OPEN` …), `awaits_user_id` /
 `awaits_contact_id`, and its `answer` -- which is what the app shows as waiting
 on them; a participant's `notify` (`ALL`, `MENTIONS`, `NONE`) and `notify_via`;
-and a channel's `topic`, `created_by_user_id`, `archived_at` and
-`attention_at` / `attention_reason`, a call for a person.
+a channel's `topic`, `created_by_user_id`, `archived_at` and
+`attention_at` / `attention_reason`, a call for a person; and its `settings`, a
+JSON object of the channel's own switches (whether its agents answer a contact,
+and the like), each key absent until it is set.
 
 An agent's working -- tool calls, reasoning -- is never a channel message. It
 stays in the conversation (`agent_messages`).

@@ -99,6 +99,14 @@ def _create_tables() -> None:
         sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("attention_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("attention_reason", sa.String(255), nullable=True),
+        # The channel's own settings -- whether its agents answer, and the
+        # like -- validated by the channels module; absent keys are defaults.
+        sa.Column(
+            "settings",
+            JSONB(),
+            nullable=False,
+            server_default=sa.text("'{}'::jsonb"),
+        ),
         sa.CheckConstraint(
             "(kind = 'DIRECT') = (member_user_id IS NOT NULL)"
             " AND (kind = 'CONTACT') = (contact_id IS NOT NULL)",

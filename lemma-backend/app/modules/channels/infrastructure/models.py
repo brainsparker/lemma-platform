@@ -88,6 +88,11 @@ class ChannelModel(UUIDAuditBase):
         DateTime(timezone=True), nullable=True
     )
     attention_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: The channel's own settings (``domain.entities.ChannelSettings``); a key
+    #: that is absent is its default.
+    settings: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
 
 
 class ChannelParticipantModel(UUIDAuditBase):

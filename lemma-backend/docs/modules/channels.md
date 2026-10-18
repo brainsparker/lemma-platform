@@ -32,7 +32,6 @@ channel: they are private workspaces, not shared places.
 | --- | --- |
 | `channels` | One place per pod: `kind`, a `title`, whose it is (`member_user_id` for `DIRECT`, `contact_id` for `CONTACT`, each unique per pod), `handler_user_id` -- a member who stepped in, while agents stay quiet -- and `last_message_at` |
 | `channel_participants` | The members and contacts in a channel, each with `last_read_at`. Anybody who says something there joins it |
-| `channel_agents` | The agents that have answered there. An agent is a sender, never a participant |
 | `channel_sources` | The outside places a channel is fed by, keyed by surface, platform, chat and -- for a private chat -- the person's platform id. `surface_id` is kept `SET NULL` so history survives a removed bot. `last_inbound_at` is when somebody last wrote there |
 | `channel_messages` | The timeline. `sender_kind` (`MEMBER`, `CONTACT`, `AGENT`) with the sender's id; for an agent, `on_behalf_user_id` or `on_behalf_contact_id` -- whom it answered, and so whose access the answer was made with. `source_id` is where it was said (absent for a line written in Lemma); `members_only` marks a note that is never delivered and never shown outside. A platform message is one line however often it is delivered (unique on source and external message id) |
 | `channel_mentions` | Who a line names -- a member, a contact or an agent -- and when they read it: the unread mentions a member is shown |

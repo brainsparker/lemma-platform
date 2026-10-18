@@ -36,7 +36,6 @@ from app.modules.channels.infrastructure.rows import (
     source_entity,
 )
 from app.modules.channels.infrastructure.models import (
-    ChannelAgentModel,
     ChannelMentionModel,
     ChannelMessageDeliveryModel,
     ChannelMessageModel,
@@ -206,13 +205,6 @@ class ChannelRepository:
             )
         )
         return [channel_entity(row) for row in rows]
-
-    async def attach_agent(self, *, channel_id: UUID, agent_id: UUID) -> None:
-        await self.session.execute(
-            insert(ChannelAgentModel)
-            .values(channel_id=channel_id, agent_id=agent_id)
-            .on_conflict_do_nothing()
-        )
 
     async def fold_contact(
         self, *, pod_id: UUID, merged_id: UUID, survivor_id: UUID

@@ -124,10 +124,6 @@ class Timeline:
         speaker = _principal_of(sender)
         if speaker is not None:
             await self.channels.join(channel=channel, principal=speaker)
-        elif sender.agent_id is not None:
-            await self.channels.attach_agent(
-                channel_id=channel.id, agent_id=sender.agent_id
-            )
         named = _unique([*mentions, *([question.awaits] if question else [])])
         for person in named[:MAX_MENTIONS]:
             await self.channels.join(channel=channel, principal=person)

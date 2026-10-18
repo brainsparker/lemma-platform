@@ -46,7 +46,9 @@ a question to one person -- `interaction_kind` `ASK`, `APPROVAL` or `FORM`,
 `ANSWERED`, `CANCELLED` or `EXPIRED` -- which is what the app shows as waiting
 on them. A participant hears of a channel outside the app as their `notify`
 says (`ALL`, `MENTIONS`, `NONE`). A channel can be archived, and can ask for a
-person (`attention_at`, `attention_reason`) until a member steps in.
+person (`attention_at`, `attention_reason`) until a member steps in. Its `settings` are a JSON
+object of the channel's own switches -- whether its agents answer a contact,
+how long a member who stepped in holds it -- each key absent until it is set.
 
 An agent's working -- tool calls, reasoning -- is never a channel message. It
 stays in the conversation (`agent_messages`).

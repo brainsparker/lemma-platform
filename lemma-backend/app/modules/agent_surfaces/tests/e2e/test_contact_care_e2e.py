@@ -521,7 +521,7 @@ async def test_past_the_cap_no_run_starts_and_a_person_takes_over(
     heard = [
         line["text"]
         for line in timeline.json()["items"]
-        if line["sender_kind"] == "CONTACT"
+        if line["sender"]["kind"] == "CONTACT"
     ]
     assert {"Hello again?", "Anyone there?"} <= set(heard)
 
@@ -568,7 +568,7 @@ async def test_a_member_who_steps_in_answers_alone_until_they_hand_back(
 
     taken = await authenticated_client.put(f"{channel}/handler")
     assert taken.status_code == 200, taken.text
-    assert taken.json()["handler_user_id"] == fixed_test_user["id"]
+    assert taken.json()["handler"]["id"] == fixed_test_user["id"]
     runs_before = await _runs(db_session, first.conversation_id)
 
     await write("step-2", "Can a person look at this?")
@@ -578,7 +578,7 @@ async def test_a_member_who_steps_in_answers_alone_until_they_hand_back(
 
     released = await authenticated_client.delete(f"{channel}/handler")
     assert released.status_code == 200, released.text
-    assert released.json()["handler_user_id"] is None
+    assert released.json()["handler"] is None
 
     await write("step-3", "Thanks, back to the bot.")
 
@@ -735,17 +735,19 @@ async def test_writing_first_to_a_contact_takes_an_editor_and_is_rate_limited(
     listed = await authenticated_client.get(
         f"/pods/{pod_id}/channels", params={"kind": "CONTACT"}
     )
-    [channel] = [c for c in listed.json()["items"] if c["contact_id"] == dana]
+    [channel] = [
+        c for c in listed.json()["items"] if (c["person"] or {}).get("id") == dana
+    ]
     timeline = await authenticated_client.get(
         f"/pods/{pod_id}/channels/{channel['id']}/messages"
     )
     [written] = [
         line
         for line in timeline.json()["items"]
-        if line["text"].startswith("Your order shipped today.")
+        if (line["text"] or "").startswith("Your order shipped today.")
     ]
-    assert written["sender_kind"] == "MEMBER"
-    assert written["sender_user_id"] == fixed_test_user["id"]
+    assert written["sender"]["kind"] == "MEMBER"
+    assert written["sender"]["id"] == fixed_test_user["id"]
     limited = await authenticated_client.post(
         f"/pods/{pod_id}/contacts/{dana}/messages",
         json={"message": "And another thing."},

@@ -24,6 +24,7 @@ from app.modules.agent.contracts import channel_conversations
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
+from app.modules.agent.contracts.agents import agent_name_for_id
 from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.surface_route_types import (
@@ -31,6 +32,7 @@ from app.modules.agent_surfaces.services.surface_route_types import (
 )
 from app.modules.channels.contracts.places import reply_address
 from app.modules.channels.contracts import (
+    ChannelMessage,
     ContactsHome,
     Place,
     Principal,
@@ -282,6 +284,35 @@ async def note_answered_on(
         text=text,
         source_id=source.id,
         conversation_id=conversation_id,
+    )
+
+
+async def note_answered_in_lemma(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    line: ChannelMessage,
+    conversation_id: UUID,
+    run_id: UUID,
+    text: str,
+) -> None:
+    """An answer to a line written in Lemma, as the agent's line beside it: in
+    its thread, said for the person the conversation answers."""
+    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
+    if conversation is None:
+        return
+    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
+    await post(
+        uow,
+        channel_id=line.channel_id,
+        sender=Sender.agent(
+            agent_id,
+            on_behalf_of=answered_for(conversation.audience, conversation.user_id),
+            display_name=await agent_name_for_id(uow.session, agent_id),
+        ),
+        text=text,
+        conversation_id=conversation_id,
+        agent_run_id=run_id,
+        thread_root_id=line.thread_root_id,
     )
 
 

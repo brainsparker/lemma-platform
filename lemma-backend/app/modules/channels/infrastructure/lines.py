@@ -238,6 +238,30 @@ class LineRepository:
 
     # -- reading --------------------------------------------------------------
 
+    async def claim(self, message_id: UUID, *, conversation_id: UUID) -> None:
+        """The conversation answering a line, once one is: the first claims it."""
+        await self.session.execute(
+            update(ChannelMessageModel)
+            .where(
+                ChannelMessageModel.id == message_id,
+                ChannelMessageModel.conversation_id.is_(None),
+            )
+            .values(conversation_id=conversation_id)
+        )
+
+    async def last_heard(self, conversation_id: UUID) -> ChannelMessage | None:
+        """The latest line a person said in a conversation, wherever they said it."""
+        row = await self.session.scalar(
+            select(ChannelMessageModel)
+            .where(
+                ChannelMessageModel.conversation_id == conversation_id,
+                ChannelMessageModel.sender_kind != SenderKind.AGENT.value,
+            )
+            .order_by(*_NEWEST_FIRST)
+            .limit(1)
+        )
+        return message_entity(row) if row is not None else None
+
     async def get(self, message_id: UUID) -> ChannelMessage | None:
         row = await self.session.get(ChannelMessageModel, message_id)
         return message_entity(row) if row else None

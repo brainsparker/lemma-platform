@@ -375,6 +375,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.identity.email_sender_failed_authentication.degraded': EventSpec('warning', frozenset({'platform', 'sender_email'})),
     'agent_surfaces.identity.email_sender_unauthenticated.degraded': EventSpec('warning', frozenset({'platform', 'resolved', 'sender_email'})),
     'agent_surfaces.identity.unverified_phone_match_used.observed': EventSpec('warning', frozenset()),
+    'agent_surfaces.in_app_turn.refused.observed': EventSpec('warning', frozenset({'agent_id', 'channel_id', 'pod_id', 'reason'})),
     'agent_surfaces.inbound.classified': EventSpec('info', frozenset({'platform', 'reason', 'verdict'})),
     'agent_surfaces.inbound.duplicate_delivery.observed': EventSpec('info', frozenset({'platform', 'receiver_scope'})),
     'agent_surfaces.ingest.after_routing_failed.degraded': EventSpec('warning', frozenset({'item_id'})),

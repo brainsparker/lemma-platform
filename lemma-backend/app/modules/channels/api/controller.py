@@ -78,6 +78,11 @@ async def list_channels(
     if not kinds:
         return ChannelListResponse(items=[], next_before=None)
     repository = ChannelRepository(uow.session)
+    if ChannelKind.DIRECT in kinds and before is None and not archived:
+        # Everybody has a channel with the pod, as everybody has a DM with its
+        # bot: it is there before they first write in it.
+        await repository.direct(pod_id=pod_id, user_id=user.id)
+        await uow.commit()
     channels = await repository.list_for_member(
         pod_id=pod_id,
         user_id=user.id,

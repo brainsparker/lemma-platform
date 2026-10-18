@@ -13,7 +13,9 @@ is one row however late it goes.
 
 An answer to something asked in the web chat is not a platform's to send: the
 widget shows it, and it goes on the channel's timeline here instead -- never
-to a platform thread the same conversation also has.
+to a platform thread the same conversation also has. Nor is one to something
+asked in Lemma itself: it is a line in the channel it was asked in, in the
+same thread.
 
 FAST: one run row, one link row, one insert. No network in this module.
 """
@@ -43,7 +45,11 @@ from app.modules.agent_surfaces.events.work_kinds import (
     SURFACE_REPLY_FOR_RUN,
     run_reply_key,
 )
-from app.modules.agent_surfaces.services.channel_lines import note_answered_on
+from app.modules.agent_surfaces.services.channel_lines import (
+    note_answered_in_lemma,
+    note_answered_on,
+)
+from app.modules.channels.contracts.lines import last_heard_line
 from app.modules.agent_surfaces.services.surface_deliveries import (
     conversation_destination,
     run_reply_idempotency_key,
@@ -78,6 +84,8 @@ async def stage_run_reply(ctx: FastContext, payload: RunReplyPayload) -> None:
         return
     failed = payload.status == "FAILED"
     if not failed and not material.answer:
+        return
+    if await _answered_in_lemma(ctx, payload, material.answer):
         return
     address = await reply_address(ctx.uow, payload.conversation_id)
     answering = address.source if address is not None else None
@@ -115,6 +123,25 @@ async def stage_run_reply(ctx: FastContext, payload: RunReplyPayload) -> None:
         agent_run_id=payload.run_id,
         work=ctx.work,
     )
+
+
+async def _answered_in_lemma(
+    ctx: FastContext, payload: RunReplyPayload, answer: str | None
+) -> bool:
+    """Whether the run answers something asked in Lemma -- answered there, in
+    the same thread, and nowhere else."""
+    heard = await last_heard_line(ctx.uow, payload.conversation_id)
+    if heard is None or heard.source_id is not None:
+        return False
+    if answer:
+        await note_answered_in_lemma(
+            ctx.uow,
+            line=heard,
+            conversation_id=payload.conversation_id,
+            run_id=payload.run_id,
+            text=answer,
+        )
+    return True
 
 
 def register_reply_for_run_work(registry: WorkRegistry) -> None:

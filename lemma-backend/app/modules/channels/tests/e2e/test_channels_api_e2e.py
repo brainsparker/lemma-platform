@@ -125,7 +125,9 @@ async def test_another_members_direct_channel_is_missing_to_them(pod):
     theirs = (await editor.get(_base(pod), headers=as_editor)).json()["items"]
 
     assert {c["kind"] for c in mine} == {"DIRECT", "CONTACT", "GROUP"}
-    assert {c["kind"] for c in theirs} == {"CONTACT", "GROUP"}
+    # Their own channel with the pod, made for them; never the owner's.
+    assert {c["kind"] for c in theirs} == {"DIRECT", "CONTACT", "GROUP"}
+    assert pod.direct.channel_id not in {UUID(c["id"]) for c in theirs}
     assert (await owner.get(direct)).status_code == 200
     for path in (direct, f"{direct}/messages"):
         refused = await editor.get(path, headers=as_editor)
@@ -145,7 +147,7 @@ async def test_contacts_and_their_channels_are_for_editors_and_admins(pod):
         headers = auth_headers(member)
         listed = await client.get(_base(pod), headers=headers)
         assert listed.status_code == 200, listed.text
-        assert {c["kind"] for c in listed.json()["items"]} == {"GROUP"}
+        assert {c["kind"] for c in listed.json()["items"]} == {"DIRECT", "GROUP"}
         only_contacts = await client.get(
             _base(pod), params={"kind": "CONTACT"}, headers=headers
         )

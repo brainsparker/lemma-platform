@@ -18,6 +18,8 @@ SURFACE_INGEST: Final = "surface.ingest"
 SURFACE_REPLY: Final = "surface.reply"
 #: Writes the delivery row for a finished run's answer (an ``AgentRunFinished`` subscriber).
 SURFACE_REPLY_FOR_RUN: Final = "surface.reply_for_run"
+#: Starts the turn an agent answers a member's line in Lemma with.
+SURFACE_IN_APP_TURN: Final = "surface.in_app_turn"
 #: A perpetual poller for one credential (Telegram, Slack socket, Resend).
 SURFACE_RECEIVER: Final = "surface.receiver"
 #: Provider-side follow-ups of a webhook that is not a message (statuses, lifecycle).
@@ -40,6 +42,10 @@ def run_reply_key(run_id: UUID) -> str:
     return f"run-reply:{run_id}"
 
 
+def in_app_turn_key(message_id: UUID) -> str:
+    return f"in-app-turn:{message_id}"
+
+
 def receiver_key(credential_key: str) -> str:
     return f"receiver:{credential_key}"
 
@@ -52,12 +58,14 @@ __all__ = [
     "NOTIFICATION_EXPIRE",
     "ONBOARDING_CLEANUP_PERIODIC",
     "RECEIVERS_RECONCILE_PERIODIC",
+    "SURFACE_IN_APP_TURN",
     "SURFACE_INGEST",
     "SURFACE_MOBILE_CHANGED",
     "SURFACE_PLATFORM_UPDATE",
     "SURFACE_RECEIVER",
     "SURFACE_REPLY",
     "SURFACE_REPLY_FOR_RUN",
+    "in_app_turn_key",
     "ingest_key",
     "notification_expire_key",
     "receiver_key",

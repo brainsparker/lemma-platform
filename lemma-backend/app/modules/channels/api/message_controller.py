@@ -210,10 +210,13 @@ async def post_channel_message(
         if m.kind is not SenderKind.AGENT
     ]
     agents = [m.id for m in body.mentions if m.kind is SenderKind.AGENT]
+    poster = Principal.member(user.id)
+    named = await Names(uow).of(pod_id=pod_id, people=[poster])
     try:
         line = await MemberLines(uow).post(
             channel,
             user_id=user.id,
+            display_name=named.get(poster),
             post=MemberPost(
                 text=body.text,
                 members_only=body.members_only,

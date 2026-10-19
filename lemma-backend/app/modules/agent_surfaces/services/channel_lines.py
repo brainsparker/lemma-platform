@@ -24,8 +24,10 @@ from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.line_markup import Bot, LineMarkup
+from app.modules.channels.contracts.deliveries import deliveries_of, delivery_sent
 from app.modules.channels.contracts.lines import thread_root_at
 from app.modules.channels.contracts import (
+    ChannelMessage,
     ContactsHome,
     NewLine,
     Place,
@@ -205,3 +207,17 @@ def answered_for(audience: Audience, user_id: UUID) -> Principal:
     if audience.contact_id is not None:
         return Principal.contact(audience.contact_id)
     return Principal.member(user_id)
+
+
+async def shown_on_web(
+    uow: SqlAlchemyUnitOfWork, line: ChannelMessage, source: Source
+) -> None:
+    """A line for a web chat, which shows it from the conversation: its
+    delivery there is ``SENT`` at once, and nothing is sent. Every line for a
+    place has its delivery row, so the line says where it went the same way
+    whatever the platform."""
+    for delivery in await deliveries_of(uow, [line.id]):
+        if delivery.source_id == source.id:
+            await delivery_sent(
+                uow, delivery.id, platform=source.platform, external_message_id=None
+            )

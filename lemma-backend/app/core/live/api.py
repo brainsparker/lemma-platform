@@ -28,6 +28,7 @@ from app.core.live.limits import (
 )
 from app.core.live.presence import mark_offline, mark_online
 from app.core.live.protocol import CLOSE_TOO_MANY_SOCKETS, ready_frame
+from app.core.live.sessions import SessionWatch, end_for_session
 from app.core.live.socket import (
     LiveDispatcher,
     accept_and_authenticate,
@@ -53,9 +54,10 @@ async def _require_pod_access(pod_id: UUID, user_id: UUID) -> None:
 
 @router.websocket("/pods/{pod_id}/live")
 async def pod_live_ws(websocket: WebSocket, pod_id: UUID) -> None:
-    user_id = await accept_and_authenticate(websocket)
-    if user_id is None:
+    session = await accept_and_authenticate(websocket)
+    if session is None:
         return
+    user_id = session.user_id
     try:
         await _require_pod_access(pod_id, user_id)
     except DomainError as exc:
@@ -78,7 +80,12 @@ async def pod_live_ws(websocket: WebSocket, pod_id: UUID) -> None:
         )
         return
 
+    watch = SessionWatch(session)
+
     async def keep() -> None:
+        if not await watch.still_valid():
+            end_for_session(connection)
+            return
         await refresh_socket_slot(pod_id, user_id, connection.id)
         await mark_online(pod_id, user_id)
 
@@ -95,7 +102,13 @@ async def pod_live_ws(websocket: WebSocket, pod_id: UUID) -> None:
         dispatcher = LiveDispatcher(
             max_subscriptions=limits.subscriptions_per_socket, registry=registry
         )
-        await serve(websocket, connection, handle=dispatcher.handle, keep=keep)
+        await serve(
+            websocket,
+            connection,
+            handle=dispatcher.handle,
+            session=session,
+            keep=keep,
+        )
     finally:
         await release_socket_slot(pod_id, user_id, connection.id)
         await mark_offline(pod_id, user_id)

@@ -23,6 +23,8 @@ export interface WaitingQuestion {
     from: string;
     askedAt: string;
     question: Record<string, unknown>;
+    /** The thread it was asked in, when it is a reply: opening it opens that. */
+    threadRootId: string | null;
 }
 
 /** A line naming the reader that they have not read yet. */
@@ -35,6 +37,8 @@ export interface MentionItem {
     from: string;
     text: string;
     at: string;
+    /** The thread it was said in, when it is a reply. */
+    threadRootId: string | null;
 }
 
 export interface Inbox {
@@ -54,6 +58,10 @@ function sender(line: Wire): string {
     const who = record(line.sender);
     if (typeof who.name === "string" && who.name) return who.name;
     return who.kind === "AGENT" ? "An agent" : who.kind === "CONTACT" ? "A contact" : "A member";
+}
+
+function threadOf(line: Wire): string | null {
+    return typeof line.thread_root_id === "string" && line.thread_root_id ? line.thread_root_id : null;
 }
 
 /** The inbox as the API returns it, read into what the app draws. */
@@ -76,6 +84,7 @@ export function readInbox(raw: unknown): Inbox {
             from: sender(line),
             askedAt: String(line.created_at ?? ""),
             question: record(interaction.question),
+            threadRootId: threadOf(line),
         });
     }
     const mentioned: MentionItem[] = [];
@@ -92,6 +101,7 @@ export function readInbox(raw: unknown): Inbox {
             from: sender(line),
             text: line.withheld === true ? "" : typeof line.text === "string" ? line.text : "",
             at: String(line.created_at ?? ""),
+            threadRootId: threadOf(line),
         });
     }
     return {

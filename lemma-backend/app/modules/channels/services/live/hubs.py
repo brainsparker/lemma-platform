@@ -7,7 +7,7 @@ import contextlib
 import time
 from uuid import UUID
 
-from app.core.authorization.authz_epoch import pod_authz_epoch
+from app.core.authorization.authz_epoch import pod_grants_epoch
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.live.config import LiveSettings, live_settings
@@ -34,7 +34,7 @@ class ChannelsHubs:
                 uow_factory=SessionUnitOfWorkFactory(async_session_maker),
                 listeners=signal_listeners(),
                 streams=live_registry(),
-                epoch_of=pod_authz_epoch,
+                epoch_of=pod_grants_epoch,
                 settings=self._settings,
                 on_idle=self._schedule_reap,
             )

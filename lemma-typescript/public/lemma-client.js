@@ -16372,6 +16372,8 @@ var LemmaClient = (() => {
      * what is new in it for them and its last line.
      * @param podId
      * @param kind
+     * @param visibility Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.
+     * @param q Only channels whose title holds these words, in any case.
      * @param archived
      * @param contactId Only this contact's channel.
      * @param assignee `me`, or a member's user id: contacts' channels assigned to them.
@@ -16385,7 +16387,7 @@ var LemmaClient = (() => {
      * @returns ChannelListResponse Successful Response
      * @throws ApiError
      */
-    static channelList(podId, kind, archived = false, contactId, assignee, unassigned = false, status, needsPerson = false, joined = false, sourceSurface, cursor, limit = 50) {
+    static channelList(podId, kind, visibility, q, archived = false, contactId, assignee, unassigned = false, status, needsPerson = false, joined = false, sourceSurface, cursor, limit = 50) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/channels",
@@ -16394,6 +16396,8 @@ var LemmaClient = (() => {
         },
         query: {
           "kind": kind,
+          "visibility": visibility,
+          "q": q,
           "archived": archived,
           "contact_id": contactId,
           "assignee": assignee,
@@ -16544,6 +16548,34 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Members
+     * Who is in a channel -- members, contacts and agents -- in the order
+     * they joined, a page at a time.
+     * @param podId
+     * @param channelId
+     * @param cursor
+     * @param limit
+     * @returns ChannelMemberListResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMemberList(podId, channelId, cursor, limit = 100) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/members",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        query: {
+          "cursor": cursor,
+          "limit": limit
+        },
         errors: {
           422: `Validation Error`
         }
@@ -16813,7 +16845,9 @@ var LemmaClient = (() => {
     /**
      * Answer Question
      * Answer what this line asks the reader: a question, an approval (which
-     * needs a `decision`), a form. Only the person it waits on may.
+     * needs a `decision`), a form. Only the person it waits on may -- and an
+     * approval, or an agent's paused question, only by their own hand: an agent
+     * calling with a token delegated by them is refused, as its tool is.
      *
      * No session is held across the answer: what asked takes it in its own -- a
      * run resumed, a form submitted -- and may call out to do so.
@@ -16993,17 +17027,23 @@ var LemmaClient = (() => {
     /**
      * Search
      * Lines matching every word, newest first, in the channels the reader
-     * sees -- or in one of them. An answer withheld from the reader is not found
-     * by what it said.
+     * sees -- or in one of them -- each with its rank and the words around the
+     * match. An answer withheld from the reader is not found by what it said.
      * @param podId
      * @param q
      * @param channelId
+     * @param kind Only channels of this kind.
+     * @param senderKind Only lines said by this person: with `sender_id`.
+     * @param senderId A member's user id, a contact's id or an agent's id.
+     * @param since Said at or after.
+     * @param until Said before.
+     * @param archived Search archived channels too.
      * @param cursor
      * @param limit
      * @returns SearchResponse Successful Response
      * @throws ApiError
      */
-    static channelSearch(podId, q, channelId, cursor, limit = 30) {
+    static channelSearch(podId, q, channelId, kind, senderKind, senderId, since, until, archived = false, cursor, limit = 30) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/search",
@@ -17013,6 +17053,12 @@ var LemmaClient = (() => {
         query: {
           "q": q,
           "channel_id": channelId,
+          "kind": kind,
+          "sender_kind": senderKind,
+          "sender_id": senderId,
+          "since": since,
+          "until": until,
+          "archived": archived,
           "cursor": cursor,
           "limit": limit
         },
@@ -17157,6 +17203,11 @@ var LemmaClient = (() => {
           return ChannelsService.channelList(
             podId,
             void 0,
+            // kind
+            void 0,
+            // visibility
+            void 0,
+            // q
             false,
             void 0,
             void 0,
@@ -17228,6 +17279,8 @@ var LemmaClient = (() => {
           return ChannelsService.channelList(
             podId,
             options.kind,
+            options.visibility,
+            options.q,
             (_a = options.archived) != null ? _a : false,
             options.contactId,
             options.assignee,
@@ -17430,17 +17483,41 @@ var LemmaClient = (() => {
       return this.client.request(() => ChannelsService.channelInboxGet(podId));
     }
     /** Lines matching every word, newest first, in the channels the caller sees
-     *  -- or in one of them. Page with `next_cursor`. */
+     *  -- or in one of them -- each with its `rank` and a plain-text `snippet`.
+     *  `sender` keeps lines one member, contact or agent said; `since`/`until`
+     *  (ISO times) bound when; `archived` searches archived channels too. Page
+     *  with `next_cursor`. */
     search(podId, q, options = {}) {
       return this.client.request(
         () => {
-          var _a;
+          var _a, _b, _c, _d;
           return ChannelsService.channelSearch(
             podId,
             q,
             options.channelId,
+            options.kind,
+            (_a = options.sender) == null ? void 0 : _a.kind,
+            (_b = options.sender) == null ? void 0 : _b.id,
+            options.since,
+            options.until,
+            (_c = options.archived) != null ? _c : false,
             options.cursor,
-            (_a = options.limit) != null ? _a : 30
+            (_d = options.limit) != null ? _d : 30
+          );
+        }
+      );
+    }
+    /** Who is in a channel -- members, contacts and agents -- in the order they
+     *  joined. Page with `next_cursor`. */
+    members(podId, channelId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelMemberList(
+            podId,
+            channelId,
+            options.cursor,
+            (_a = options.limit) != null ? _a : 100
           );
         }
       );

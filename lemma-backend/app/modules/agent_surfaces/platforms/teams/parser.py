@@ -11,6 +11,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
+from app.modules.agent_surfaces.domain.place_privacy import CHANNEL_MEMBERSHIP_KEY
 from app.modules.agent_surfaces.platforms.common import (
     payload_any,
     payload_first,
@@ -385,6 +386,13 @@ class TeamsMessageParser:
             reply_to_id=routing.reply_to_id,
             attachments=attachments,
         )
+        # Teams names a team channel's membership on some activities and not
+        # others; where it does, it settles whether the place is open to the
+        # team (``domain/place_privacy``).
+        channel = payload_section(channel_data, "channel")
+        membership = payload_first(channel, "membershipType", "type")
+        if membership:
+            meta[CHANNEL_MEMBERSHIP_KEY] = membership
         return ParsedInboundSurfaceEvent(
             platform=self.platform,
             conversation_type=routing.conversation_type,

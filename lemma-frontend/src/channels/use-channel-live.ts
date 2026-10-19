@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { liveAvailable, podLive, useLapsing, useLiveStatus, useLiveTopic } from "@/live/pod-live";
 import type { LiveStatus } from "@/live/socket";
@@ -12,14 +12,15 @@ import {
     upsertThread,
     upsertTimeline,
     withChannel,
-    withLastLine,
+    withLastLinePages,
     withReadSeq,
     type Answering,
     type ChannelEvent,
 } from "./live";
-import { senderLabel, type Channel, type ChannelDetail, type Line, type LinePage, type Page } from "./model";
+import { senderLabel, type Channel, type ChannelDetail, type Line, type LinePage, type Page, type ThreadPage } from "./model";
 import { channelKey, inboxKey, linesKey, refreshLists, threadKey } from "./queries";
 import type { PersonRef } from "./waiting";
+import { HeldUpdates } from "./held-updates";
 
 /** Where each channel's subscription had got to, so a channel left and
  *  opened again resumes from its cursor -- the server replays what changed
@@ -31,14 +32,21 @@ const TYPING_SHOWN_MS = 5_000;
 /** The least time between two typing notes from this composer. */
 export const TYPING_EVERY_MS = 3_000;
 
+/** Somebody typing, and where: the channel itself, or one thread of it. */
+export interface Typist {
+    who: PersonRef;
+    threadRootId: string | null;
+}
+
 export interface ChannelLive {
     status: LiveStatus;
-    typing: PersonRef[];
+    typing: Typist[];
     answering: Answering[];
     /** The last new line from somebody else, said for a screen reader. */
     announced: string;
-    /** "I am typing here", at most every few seconds. */
-    typed(): void;
+    /** "I am typing here" -- in the channel, or in one thread of it -- at
+     *  most every few seconds. */
+    typed(threadRootId?: string | null): void;
     /** "I have seen this channel up to line `seq`": over the socket, or
      *  over REST when it is down. Resolves to the read position kept. */
     markRead(seq: number): Promise<number>;
@@ -50,23 +58,26 @@ export interface ChannelLive {
 export function useChannelLive(podId: string, channel: ChannelDetail, visible: boolean, me: string | null): ChannelLive {
     const cache = useQueryClient();
     const status = useLiveStatus(podId);
-    const [typing, heardTyping] = useLapsing<PersonRef>(TYPING_SHOWN_MS);
+    const [typing, heardTyping] = useLapsing<Typist>(TYPING_SHOWN_MS);
     const [answering, setAnswering] = useState<Answering[]>([]);
     const [announced, setAnnounced] = useState("");
     const lastTyped = useRef(0);
     const key = podId + ":" + channel.id;
+    /* Lines heard while the timeline's first read is out wait for it. */
+    const [held] = useState(() => new HeldUpdates());
+    useEffect(() => held.watch(cache), [held, cache]);
 
     const applyLine = (event: Extract<ChannelEvent, { line: Line }>) => {
         const line = event.line;
         /* A reply goes into its thread; its first line comes again as
            `line.edited` with the new `reply_count`, so nothing is counted here. */
         if (line.threadRootId) {
-            cache.setQueryData<LinePage>(threadKey(podId, channel.id, line.threadRootId), (was) => was ? upsertThread(was, line) : was);
+            held.apply<InfiniteData<ThreadPage>>(cache, threadKey(podId, channel.id, line.threadRootId), (was) => ({ ...was, pages: upsertThread(was.pages, line) }));
         } else {
-            cache.setQueryData<InfiniteData<LinePage>>(linesKey(podId, channel.id), (was) => was ? { ...was, pages: upsertTimeline(was.pages, line).pages } : was);
+            held.apply<InfiniteData<LinePage>>(cache, linesKey(podId, channel.id), (was) => ({ ...was, pages: upsertTimeline(was.pages, line).pages }));
             if (event.type === "line.created") {
                 cache.setQueriesData<InfiniteData<Page<Channel>>>({ queryKey: ["channel", podId, "list"] }, (was) => was
-                    ? { ...was, pages: was.pages.map((page) => ({ ...page, items: withLastLine(page.items, channel.id, line) })) }
+                    ? { ...was, pages: withLastLinePages(was.pages, channel.id, line) }
                     : was);
             }
         }
@@ -101,7 +112,9 @@ export function useChannelLive(podId: string, channel: ChannelDetail, visible: b
                 cache.setQueryData<ChannelDetail>(channelKey(podId, channel.id), (was) => was ? withReadSeq(was, event.readSeq) : was);
                 return;
             case "typing":
-                if (!(event.user.kind === "MEMBER" && event.user.id === me)) heardTyping(event.user, event.user.kind + ":" + (event.user.id ?? event.user.name ?? ""));
+                if (!(event.user.kind === "MEMBER" && event.user.id === me)) {
+                    heardTyping({ who: event.user, threadRootId: event.threadRootId }, event.user.kind + ":" + (event.user.id ?? event.user.name ?? "") + ":" + (event.threadRootId ?? ""));
+                }
                 return;
             case "answering.started":
             case "answering.finished":
@@ -120,10 +133,13 @@ export function useChannelLive(podId: string, channel: ChannelDetail, visible: b
     const fresh = useRef(false);
     useLiveTopic(podId, "channel", visible ? { channel_id: channel.id } : null, {
         /* Subscribed with no cursor to resume from: anything written between
-           the REST read and now was not replayed, so a timeline already held
-           is read once more. */
+           the REST read and now was not replayed. A timeline already held is
+           read once more; a first read still out is begun again -- the one
+           out may have started before the subscription listened -- and what
+           the socket says meanwhile waits for it (`held`). */
         onSubscribed: () => {
-            if (fresh.current && cache.getQueryData(linesKey(podId, channel.id))) reread();
+            const state = cache.getQueryState(linesKey(podId, channel.id));
+            if (fresh.current && (state?.data !== undefined || state?.fetchStatus === "fetching")) reread();
             fresh.current = false;
         },
         onEvents: (events) => {
@@ -141,12 +157,16 @@ export function useChannelLive(podId: string, channel: ChannelDetail, visible: b
         },
     }, { since: () => { const held = cursors.get(key) ?? null; fresh.current = held === null; return held; }, onCursor: (cursor) => cursors.set(key, cursor) });
 
-    const typed = useCallback(() => {
+    const lastTypedIn = useRef<string | null>(null);
+    const typed = useCallback((threadRootId: string | null = null) => {
         if (!liveAvailable()) return;
         const now = Date.now();
-        if (now - lastTyped.current < TYPING_EVERY_MS) return;
+        /* Moving from the channel to a thread is a new note, not a repeat. */
+        if (now - lastTyped.current < TYPING_EVERY_MS && lastTypedIn.current === threadRootId) return;
         lastTyped.current = now;
-        podLive(podId).call("typing", { channel_id: channel.id }).catch(() => { /* a typing note is worth nothing late */ });
+        lastTypedIn.current = threadRootId;
+        podLive(podId).call("typing", { channel_id: channel.id, ...(threadRootId ? { thread_root_id: threadRootId } : {}) })
+            .catch(() => { /* a typing note is worth nothing late */ });
     }, [podId, channel.id]);
 
     const markRead = useCallback(async (seq: number) => {

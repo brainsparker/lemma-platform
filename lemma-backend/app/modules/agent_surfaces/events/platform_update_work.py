@@ -1,7 +1,8 @@
 """``surface.platform_update``: a webhook about the app or a group, not a message.
 
 The bot joined a channel, somebody opened the app home, WhatsApp created (or
-refused) a group the bot asked for, a send Meta now says failed. Each used to
+refused) a group the bot asked for, somebody left a group or the bot was taken
+out of one, a send Meta now says failed. Each used to
 be applied inline in the one serial consumer every pod's messages waited
 behind; now each is its own small item, written by the request that received
 it. A JOB: an app home is published back to Slack, a group's invite link is
@@ -39,9 +40,12 @@ async def apply_platform_update(
     request = payload.request
     adapters = SurfacePlatformAdapterRegistry()
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        # First, and whatever else the body is: the bot added back to a channel
+        # is both a group's mirror resuming and a moment to offer set-up.
+        await apply_group_updates(uow, request, adapters=adapters)
+        await uow.commit()
         if await build_app_event_handler(uow).try_handle_lifecycle(request):
             return
-        await apply_group_updates(uow, request, adapters=adapters)
         await apply_delivery_statuses(uow, request)
         await uow.commit()
 

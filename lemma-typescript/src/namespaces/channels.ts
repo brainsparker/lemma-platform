@@ -60,6 +60,11 @@ export class ChannelsNamespace {
     podId: string,
     options: {
       kind?: ChannelKind | `${ChannelKind}`;
+      /** Only public, or only private, channels (a member's and a contact's
+       *  own are private). */
+      visibility?: Visibility | `${Visibility}`;
+      /** Only channels whose title holds these words, in any case. */
+      q?: string;
       archived?: boolean;
       /** Only this contact's channel. */
       contactId?: string;
@@ -80,6 +85,8 @@ export class ChannelsNamespace {
       ChannelsService.channelList(
         podId,
         options.kind as ChannelKind | undefined,
+        options.visibility as Visibility | undefined,
+        options.q,
         options.archived ?? false,
         options.contactId,
         options.assignee,
@@ -340,19 +347,54 @@ export class ChannelsNamespace {
   }
 
   /** Lines matching every word, newest first, in the channels the caller sees
-   *  -- or in one of them. Page with `next_cursor`. */
+   *  -- or in one of them -- each with its `rank` and a plain-text `snippet`.
+   *  `sender` keeps lines one member, contact or agent said; `since`/`until`
+   *  (ISO times) bound when; `archived` searches archived channels too. Page
+   *  with `next_cursor`. */
   search(
     podId: string,
     q: string,
-    options: { channelId?: string; cursor?: string; limit?: number } = {},
+    options: {
+      channelId?: string;
+      kind?: ChannelKind | `${ChannelKind}`;
+      sender?: { kind: SenderKind | `${SenderKind}`; id: string };
+      since?: string;
+      until?: string;
+      archived?: boolean;
+      cursor?: string;
+      limit?: number;
+    } = {},
   ) {
     return this.client.request(() =>
       ChannelsService.channelSearch(
         podId,
         q,
         options.channelId,
+        options.kind as ChannelKind | undefined,
+        options.sender?.kind as SenderKind | undefined,
+        options.sender?.id,
+        options.since,
+        options.until,
+        options.archived ?? false,
         options.cursor,
         options.limit ?? 30,
+      ),
+    );
+  }
+
+  /** Who is in a channel -- members, contacts and agents -- in the order they
+   *  joined. Page with `next_cursor`. */
+  members(
+    podId: string,
+    channelId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ) {
+    return this.client.request(() =>
+      ChannelsService.channelMemberList(
+        podId,
+        channelId,
+        options.cursor,
+        options.limit ?? 100,
       ),
     );
   }

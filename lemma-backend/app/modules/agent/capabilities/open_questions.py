@@ -47,8 +47,8 @@ def render_form_fields(schema: object) -> list[str]:
 
     Without this the agent is told a form is owed and given only a run id and a
     node id — it has to collect "structured values" whose shape it cannot see.
-    The resolved schema was already stored on the notification when the
-    assignment was created; it just never reached the prompt.
+    The resolved schema is stored on the question when the form is asked; this
+    is what brings it to the prompt.
 
     Names, types, enums and requiredness only — no descriptions or defaults,
     which are usually prose and would crowd out the conversation itself.

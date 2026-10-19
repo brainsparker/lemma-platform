@@ -19,6 +19,19 @@ export function liveAvailable(): boolean {
     return !isLandingPreview() && source.label !== "sample" && hasApiUrl();
 }
 
+/** Back online, or the tab in front again: the moments a socket that died
+ *  quietly is worth noticing at once rather than at its next ping. */
+function browserWakeups(wake: () => void): () => void {
+    if (typeof window === "undefined" || typeof document === "undefined") return () => {};
+    const visible = () => { if (document.visibilityState === "visible") wake(); };
+    window.addEventListener("online", wake);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+        window.removeEventListener("online", wake);
+        document.removeEventListener("visibilitychange", visible);
+    };
+}
+
 export function podLive(podId: string): LiveSocket {
     const held = sockets.get(podId);
     if (held && held.status !== "closed") return held;
@@ -38,6 +51,7 @@ export function podLive(podId: string): LiveSocket {
             refresh: async () => { await client.auth.refreshAccessToken(); },
         },
         open: (url) => new WebSocket(url) as unknown as WebSocketLike,
+        wakeups: browserWakeups,
     });
     sockets.set(podId, made);
     return made;

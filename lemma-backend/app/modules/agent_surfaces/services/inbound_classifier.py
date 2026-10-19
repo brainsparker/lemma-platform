@@ -33,6 +33,9 @@ from typing import Any
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.platforms.slack.group_updates import (
+    SLACK_GROUP_UPDATE_EVENTS,
+)
 
 logger = get_logger(__name__)
 
@@ -137,7 +140,7 @@ def classify_slack(payload: Mapping[str, Any]) -> Verdict:
         return drop(f"slack_{kind or 'untyped'}")
     event = _dict(envelope.get("event"))
     event_type = event.get("type")
-    if event_type in _SLACK_LIFECYCLE:
+    if event_type in _SLACK_LIFECYCLE or event_type in SLACK_GROUP_UPDATE_EVENTS:
         return Verdict(platform_update=True)
     if event_type not in {"message", "app_mention"}:
         # reaction_added, user_change, channel_created, file_shared, ...
@@ -185,6 +188,9 @@ def classify_telegram(payload: Mapping[str, Any]) -> Verdict:
     message = _dict(payload.get("message"))
     if not message:
         return drop("telegram_not_a_message")
+    if message.get("left_chat_member"):
+        # A service message: somebody left the group, nothing was said.
+        return Verdict(platform_update=True)
     if _dict(message.get("from")).get("is_bot"):
         return drop("bot_echo")
     return Verdict(message=True)

@@ -34,7 +34,11 @@ from app.modules.channels.contracts.places import (
     find_place,
     forget_chat,
     forget_pending_group,
+    left_place,
     open_pending_group,
+    place_became_private,
+    place_resumed,
+    place_stopped,
     owned_place,
     places_hearing,
     shared_places_of_pod,
@@ -266,3 +270,19 @@ class SurfaceGroupRepository:
 
     async def set_shared_externally(self, group_id: UUID, *, shared: bool) -> None:
         await change_place(self.uow, group_id, {"shared_externally": shared})
+
+    async def became_private(self, group_id: UUID) -> bool:
+        """The platform now keeps the group to its members; so does Lemma."""
+        return await place_became_private(self.uow, group_id)
+
+    async def member_left(self, group_id: UUID, principal: Principal) -> bool:
+        """Somebody the platform says left the group is out of its channel."""
+        return await left_place(self.uow, group_id, principal)
+
+    async def bot_removed(self, group_id: UUID) -> bool:
+        """The bot was taken out of the group: its channel is archived."""
+        return await place_stopped(self.uow, group_id)
+
+    async def bot_returned(self, group_id: UUID) -> bool:
+        """The bot is back in the group: its channel is brought back."""
+        return await place_resumed(self.uow, group_id)

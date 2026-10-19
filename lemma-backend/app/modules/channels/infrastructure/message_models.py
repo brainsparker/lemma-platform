@@ -54,6 +54,11 @@ class ChannelMessageModel(UUIDAuditBase):
             " OR num_nonnulls(on_behalf_user_id, on_behalf_contact_id) = 0)",
             name="ck_channel_messages_only_an_agent_acts_for_someone",
         ),
+        # Heard at a place, or carried to one from Lemma: never both.
+        CheckConstraint(
+            "num_nonnulls(source_id, target_source_id) <= 1",
+            name="ck_channel_messages_heard_or_carried",
+        ),
         ForeignKeyConstraint(
             ["channel_id", "pod_id"],
             ["channels.id", "channels.pod_id"],
@@ -82,7 +87,8 @@ class ChannelMessageModel(UUIDAuditBase):
         ),
         Index("ix_channel_messages_conversation", "conversation_id", "seq"),
         Index("ix_channel_messages_rev", "channel_id", "rev"),
-        Index("ix_channel_messages_search", "search", postgresql_using="gin"),
+        # Searched within a pod: ``pod_id`` in the same GIN (``btree_gin``).
+        Index("ix_channel_messages_search", "pod_id", "search", postgresql_using="gin"),
         Index(
             "ix_channel_messages_sender_user",
             "sender_user_id",
@@ -118,10 +124,18 @@ class ChannelMessageModel(UUIDAuditBase):
             "reply_to_id",
             postgresql_where=text("reply_to_id IS NOT NULL"),
         ),
+        # The latest line heard at a place (``conversation_at``, ``reply_address``).
         Index(
             "ix_channel_messages_source",
             "source_id",
+            "seq",
             postgresql_where=text("source_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_channel_messages_target",
+            "target_source_id",
+            "seq",
+            postgresql_where=text("target_source_id IS NOT NULL"),
         ),
     )
 
@@ -133,15 +147,23 @@ class ChannelMessageModel(UUIDAuditBase):
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     #: What a client named the line it wrote, so a retry is the same line.
     client_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: Where it was heard: the place a person said it, on a platform.
     source_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("channel_sources.id", ondelete="SET NULL"), nullable=True
+    )
+    #: Where a line written in Lemma was carried: the place it went to.
+    target_source_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("channel_sources.id", ondelete="SET NULL"), nullable=True
     )
     sender_kind: Mapped[str] = mapped_column(String(10), nullable=False)
     sender_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    #: Forgetting a contact empties their lines in place (``contact_channels``);
+    #: SET NULL is what is left of the line's sender, so others' replies keep
+    #: their thread and the timeline its numbers.
     sender_contact_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
+        ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
     )
     sender_agent_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
@@ -150,7 +172,7 @@ class ChannelMessageModel(UUIDAuditBase):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     on_behalf_contact_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
+        ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
     )
     sender_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
@@ -181,7 +203,7 @@ class ChannelMessageModel(UUIDAuditBase):
     )
     #: The line a thread hangs from, on every reply in it.
     thread_root_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("channel_messages.id", ondelete="CASCADE"), nullable=True
+        ForeignKey("channel_messages.id", ondelete="SET NULL"), nullable=True
     )
     edited_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -280,17 +302,29 @@ class ChannelQuestionModel(Base):
             "ix_channel_questions_waiting_member",
             "awaits_user_id",
             "pod_id",
-            postgresql_where=text("state = 'OPEN' AND awaits_user_id IS NOT NULL"),
+            postgresql_where=text(
+                "state IN ('OPEN', 'ANSWERING') AND awaits_user_id IS NOT NULL"
+            ),
         ),
         Index(
             "ix_channel_questions_waiting_contact",
             "awaits_contact_id",
-            postgresql_where=text("state = 'OPEN' AND awaits_contact_id IS NOT NULL"),
+            postgresql_where=text(
+                "state IN ('OPEN', 'ANSWERING') AND awaits_contact_id IS NOT NULL"
+            ),
         ),
         Index(
             "ix_channel_questions_expiry",
             "expires_at",
-            postgresql_where=text("state = 'OPEN' AND expires_at IS NOT NULL"),
+            postgresql_where=text(
+                "state IN ('OPEN', 'ANSWERING') AND expires_at IS NOT NULL"
+            ),
+        ),
+        # A claim the sweeper may have to put back: few, and short-lived.
+        Index(
+            "ix_channel_questions_claimed",
+            "claimed_at",
+            postgresql_where=text("state = 'ANSWERING'"),
         ),
         Index(
             "ix_channel_questions_batch",

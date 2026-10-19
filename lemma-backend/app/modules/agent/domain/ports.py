@@ -177,6 +177,7 @@ class ConversationRepository(Protocol):
         search: str | None = None,
         cursor: ConversationListCursor | None = None,
         limit: int = 20,
+        in_channel: bool | None = None,
     ) -> tuple[list[Conversation], ConversationListCursor | None]: ...
 
     async def cursor_after(

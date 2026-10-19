@@ -253,8 +253,16 @@ class InboxResponse(BaseModel):
     )
 
 
+class SearchItem(InboxItem):
+    rank: float = Field(description="How closely the line matches the words.")
+    snippet: str | None = Field(
+        default=None,
+        description="The words around the match, as plain text.",
+    )
+
+
 class SearchResponse(BaseModel):
-    items: list[InboxItem]
+    items: list[SearchItem]
     next_cursor: str | None = None
 
 
@@ -382,7 +390,7 @@ def message_response(
         withheld=hidden,
         parts=[] if hidden else _parts(message, names, agents or {}),
         client_message_id=message.client_message_id,
-        source_id=message.source_id,
+        source_id=message.place_id,
         members_only=message.members_only,
         conversation_id=message.conversation_id,
         reply_to_id=message.reply_to_id,

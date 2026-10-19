@@ -98,6 +98,7 @@ class NotificationChannelResolver:
         origin_surface_id: UUID | None = None,
         agent_name: str | None = None,
         channel: str | None = None,
+        allow_email: bool = True,
     ) -> tuple[list[DeliveryChannel], str]:
         """Every way this agent can reach this person, best first.
 
@@ -105,6 +106,9 @@ class NotificationChannelResolver:
 
         ``channel`` narrows the whole thing to one channel the agent chose. It
         is a filter, not a preference: nothing outside it is tried.
+
+        ``allow_email=False`` keeps it to chat apps -- for a line not worth an
+        email (a plain line in a group) -- and so mints no mailbox either.
         """
         # ``list_by_pod`` is paginated and returns ``(items, next_cursor)``. A pod
         # with more surfaces than one page is not a real shape — they are bots a
@@ -134,6 +138,14 @@ class NotificationChannelResolver:
                 recipient_user_id=recipient_user_id,
                 actor_agent_id=actor_agent_id,
                 agent_name=agent_name,
+                origin_surface_id=origin_surface_id,
+            )
+
+        if not allow_email:
+            return await self._resolve_without_email(
+                surfaces,
+                pod_id=pod_id,
+                recipient_user_id=recipient_user_id,
                 origin_surface_id=origin_surface_id,
             )
 
@@ -226,6 +238,26 @@ class NotificationChannelResolver:
                 pod_id=pod_id,
             ),
         )
+
+    async def _resolve_without_email(
+        self,
+        surfaces: list[AgentSurfaceEntity],
+        *,
+        pod_id: UUID,
+        recipient_user_id: UUID,
+        origin_surface_id: UUID | None,
+    ) -> tuple[list[DeliveryChannel], str]:
+        """The chat apps that reach them, or why none does: no mailbox, no
+        fallback to one."""
+        chats = [surface for surface in surfaces if not can_cold_open(surface)]
+        candidates, _, window_closed = await self._channels_from(
+            chats, recipient_user_id, pod_id=pod_id
+        )
+        if candidates:
+            return rank_candidates(candidates, origin_surface_id=origin_surface_id), ""
+        if window_closed:
+            return [], UndeliverableReason.REPLY_WINDOW_CLOSED
+        return [], UndeliverableReason.NOT_WORTH_AN_EMAIL
 
     @staticmethod
     def _refusal_cause(

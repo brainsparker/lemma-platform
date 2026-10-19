@@ -20,6 +20,8 @@ SURFACE_REPLY: Final = "surface.reply"
 SURFACE_REPLY_FOR_RUN: Final = "surface.reply_for_run"
 #: Sends one channel delivery: a line to a place, or a push to a member.
 SURFACE_CHANNEL_DELIVERY: Final = "surface.channel_delivery"
+#: Tells a member, in one message, of the pushes the hourly budget held.
+SURFACE_PUSH_DIGEST: Final = "surface.push_digest"
 #: A perpetual poller for one credential (Telegram, Slack socket, Resend).
 SURFACE_RECEIVER: Final = "surface.receiver"
 #: Provider-side follow-ups of a webhook that is not a message (statuses, lifecycle).
@@ -44,6 +46,15 @@ def channel_delivery_key(delivery_id: UUID) -> str:
     return f"channel-delivery:{delivery_id}"
 
 
+def channel_delivery_target_key(target: str, delivery_id: UUID) -> str:
+    """One target's sends run one at a time (``Delivery.target_key``)."""
+    return f"channel-delivery-target:{target or delivery_id}"
+
+
+def push_digest_key(recipient_user_id: UUID, channel_id: UUID) -> str:
+    return f"push-digest:{recipient_user_id}:{channel_id}"
+
+
 def receiver_key(credential_key: str) -> str:
     return f"receiver:{credential_key}"
 
@@ -55,11 +66,14 @@ __all__ = [
     "SURFACE_CHANNEL_DELIVERY",
     "SURFACE_MOBILE_CHANGED",
     "SURFACE_PLATFORM_UPDATE",
+    "SURFACE_PUSH_DIGEST",
     "SURFACE_RECEIVER",
     "SURFACE_REPLY",
     "SURFACE_REPLY_FOR_RUN",
     "ingest_key",
     "channel_delivery_key",
+    "channel_delivery_target_key",
+    "push_digest_key",
     "receiver_key",
     "run_reply_key",
 ]

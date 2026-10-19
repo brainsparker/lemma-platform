@@ -92,6 +92,16 @@ class LiveSettings(BaseSettings):
             "``LIVE_AUTHZ_CHECK_SECONDS``."
         ),
     )
+    live_authz_recheck_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description=(
+            "How often a hub re-checks every subscription's access whether or "
+            "not the authorization epoch moved: the bound on how long a lost "
+            "epoch bump lets a reader keep a subscription it lost the right "
+            "to. Env: ``LIVE_AUTHZ_RECHECK_SECONDS``."
+        ),
+    )
     live_typing_calls_per_minute: int = Field(
         default=30,
         ge=1,

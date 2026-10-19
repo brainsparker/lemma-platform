@@ -108,6 +108,21 @@ def _slots_key(pod_id: UUID, user_id: UUID) -> str:
     return f"live:sockets:{pod_id}:{user_id}"
 
 
+#: Lapsed claims dropped, the rest counted, and this one added -- or not, past
+#: the limit -- in one step: two sockets opening together cannot both see a
+#: free slot and both take it.
+_CLAIM_SLOT_LUA = """
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+if redis.call('ZSCORE', KEYS[1], ARGV[4]) == false
+    and redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then
+    return 0
+end
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[4])
+redis.call('EXPIRE', KEYS[1], ARGV[5])
+return 1
+"""
+
+
 async def claim_socket_slot(
     pod_id: UUID, user_id: UUID, connection_id: str, limit: int
 ) -> bool:
@@ -121,12 +136,16 @@ async def claim_socket_slot(
     now = time.time()
     redis = get_redis(url=core_settings.redis_url)
     try:
-        await redis.zremrangebyscore(key, "-inf", now)
-        held = await redis.zcard(key)
-        if held >= limit:
-            return False
-        await redis.zadd(key, {connection_id: now + SLOT_TTL_SECONDS})
-        await redis.expire(key, int(SLOT_TTL_SECONDS) + 1)
+        taken = await redis.eval(
+            _CLAIM_SLOT_LUA,
+            1,
+            key,
+            now,
+            now + SLOT_TTL_SECONDS,
+            limit,
+            connection_id,
+            int(SLOT_TTL_SECONDS) + 1,
+        )
     except (RedisError, OSError) as exc:
         logger.warning(
             "live.socket_slot_unavailable.degraded",
@@ -134,7 +153,7 @@ async def claim_socket_slot(
             exc_info=True,
         )
         return True
-    return True
+    return int(taken) == 1
 
 
 async def refresh_socket_slot(pod_id: UUID, user_id: UUID, connection_id: str) -> None:

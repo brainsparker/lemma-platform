@@ -197,8 +197,11 @@ test("only the reader's own lines, still there, are theirs to change", () => {
 test("a question is the reader's to answer only when it awaits them", () => {
     const asked = (question: Record<string, unknown>) => line({ sender: lem, text: "Which day?", question: { kind: "ASK", question: { prompt: "Which day?" }, ...question } }).interaction!;
     assert.deepEqual(questionState(asked({ state: "OPEN", awaits: dana }), ME), { kind: "yours" });
-    // While somebody's answer is being taken, it is not open to another.
-    assert.equal(sayQuestion(questionState(asked({ state: "ANSWERING", awaits: dana }), ME)), "Being answered");
+    /* While an answer is being taken it is still the reader's: a claim that
+       lapsed puts it back, so its buttons never go dead. Anybody else is told
+       it is being answered. */
+    assert.deepEqual(questionState(asked({ state: "ANSWERING", awaits: dana }), ME), { kind: "yours", answering: true });
+    assert.equal(sayQuestion(questionState(asked({ state: "ANSWERING", awaits: priya }), ME)), "Being answered");
     assert.equal(sayQuestion(questionState(asked({ state: "OPEN", awaits: priya }), ME)), "Waiting on Priya");
     assert.equal(sayQuestion(questionState(asked({ state: "ANSWERED", answered_by: dana }), ME)), "Answered by you");
     assert.equal(sayQuestion(questionState(asked({ state: "ANSWERED" }), ME)), "Answered");
@@ -213,7 +216,7 @@ test("a question on a line is answered the way the bell answers one", () => {
     const asked = line({ id: "q", sender: lem, on_behalf_of: priya, text: "May I?", question: { kind: "APPROVAL", state: "OPEN", awaits: dana, question: { prompt: "May I?" } } });
     assert.deepEqual(asWaitingQuestion(asked, { id: "c-launch", kind: "GROUP", title: "launch" }, ME), {
         id: "q", channelId: "c-launch", channelTitle: "launch", channelKind: "GROUP", kind: "APPROVAL",
-        text: "May I?", from: "Lem, for Priya", askedAt: "2026-10-18T10:00:00Z", question: { prompt: "May I?" },
+        text: "May I?", from: "Lem, for Priya", askedAt: "2026-10-18T10:00:00Z", question: { prompt: "May I?" }, threadRootId: null,
     });
     assert.equal(asWaitingQuestion(line({}), { id: "c", kind: "GROUP", title: null }, ME), null);
 });

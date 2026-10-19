@@ -35,6 +35,7 @@ from app.modules.agent.domain.agent_host_permissions import (
     agent_host_permission_request,
 )
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.approvals import expired_unanswered
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.run_budget_pause import is_budget_pause
@@ -78,6 +79,26 @@ def _budget_decision_return(decision: AgentRunApprovalDecision) -> dict[str, obj
     }
 
 
+def _unanswered_message(response: dict[str, object]) -> str:
+    if expired_unanswered(response):
+        return (
+            "Nobody answered these questions in the time they had, and they "
+            "expired. Do not assume an answer: carry on without one, or ask "
+            "again if you still need it."
+        )
+    return "User dismissed the questions without answering."
+
+
+def _denied_message(inner_tool: str, response: dict[str, object]) -> str:
+    if expired_unanswered(response):
+        return (
+            f"Nobody decided whether to run {inner_tool} in the time the request "
+            "had, so it expired and did not run. Treat it as not approved; ask "
+            "again if it is still needed."
+        )
+    return f"User denied running {inner_tool}."
+
+
 class ResumeToolReturnBuilder:
     """Builds the synthesized tool return that unblocks a resumed run."""
 
@@ -119,7 +140,7 @@ class ResumeToolReturnBuilder:
             if decision == AgentRunApprovalDecision.DENY:
                 content = AskUserResponse(
                     success=False,
-                    message="User dismissed the questions without answering.",
+                    message=_unanswered_message(response),
                 )
             else:
                 answers: dict[str, object] = {}
@@ -177,7 +198,7 @@ class ResumeToolReturnBuilder:
         if decision == AgentRunApprovalDecision.DENY:
             content = RequestApprovalResponse(
                 success=False,
-                message=f"User denied running {inner_tool}.",
+                message=_denied_message(inner_tool, response),
                 decision=decision,
                 executed=False,
                 response=response,

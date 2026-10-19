@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SocketUnavailable, socketRunStream, sseFrame, type LiveTopicSource, type RunStreamDeps } from "../src/live/conversation-stream.ts";
+import { SocketUnavailable, socketCarries, socketRunStream, sseFrame, type LiveTopicSource, type RunStreamDeps } from "../src/live/conversation-stream.ts";
 import type { LiveHandlers, LiveStatus } from "../src/live/socket.ts";
 
 /** The conversation pane's run, read off the live socket as the SSE bytes
@@ -150,4 +150,22 @@ test("a send the server refuses is the caller's error, as the SSE route's would 
     const refused = Object.assign(new Error("Usage limit"), { statusCode: 429 });
     await assert.rejects(socketRunStream(deps(fake.live, { append: async () => { throw refused; } }), { conversationId: "conv-1", send: { content: "x" } }), refused);
     assert.equal(fake.closed(), true);
+});
+
+test("a socket that is down sends the caller to SSE at once, without waiting out the subscribe timeout", async () => {
+    for (const status of ["reconnecting", "closed"] as const) {
+        const fake = fakeLive({ silent: true });
+        let subscribed = false;
+        const live: LiveTopicSource = { ...fake.live, status, subscribe: (...args) => { subscribed = true; return fake.live.subscribe(...args); } };
+        let timers = 0;
+        await assert.rejects(
+            socketRunStream(deps(live, { setTimeout: () => { timers += 1; return 0; }, clearTimeout: () => {} }), { conversationId: "conv-1", send: { content: "x" } }),
+            SocketUnavailable,
+        );
+        assert.equal(subscribed, false, status + ": nothing subscribed");
+        assert.equal(timers, 0, status + ": no wait armed");
+    }
+    assert.equal(socketCarries("idle"), true, "a socket not yet opened is opened by the subscription");
+    assert.equal(socketCarries("connecting"), true);
+    assert.equal(socketCarries("open"), true);
 });

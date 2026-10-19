@@ -15,7 +15,10 @@ from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.domain.access import Viewer
 from app.modules.channels.domain.entities import Question
-from app.modules.channels.infrastructure.questions import QuestionRepository
+from app.modules.channels.infrastructure.questions import (
+    BatchProgress,
+    QuestionRepository,
+)
 from app.modules.channels.services.questions import (
     APPROVAL_DECISIONS,
     AnswerHandler,
@@ -32,6 +35,7 @@ from app.modules.channels.services.questions import (
 
 __all__ = [
     "APPROVAL_DECISIONS",
+    "BatchProgress",
     "AnswerHandler",
     "AnswerRefused",
     "Answering",
@@ -41,7 +45,7 @@ __all__ = [
     "close",
     "close_ref",
     "expire_overdue",
-    "open_in_batch",
+    "batch_progress",
     "question_by_ref",
     "question_of",
     "questions_under",
@@ -74,11 +78,11 @@ async def questions_under(
     )
 
 
-async def open_in_batch(
+async def batch_progress(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, batch_id: str
-) -> int:
-    """How many questions sent together are still waiting."""
-    return await QuestionRepository(uow.session).open_in_batch(
+) -> BatchProgress:
+    """How many questions were sent together, and how many still wait."""
+    return await QuestionRepository(uow.session).batch_progress(
         pod_id=pod_id, batch_id=batch_id
     )
 

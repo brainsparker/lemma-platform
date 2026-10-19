@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import JsonValue
@@ -107,6 +108,24 @@ async def pod_heads(uow: SqlAlchemyUnitOfWork, pod_id: UUID) -> dict[UUID, Head]
             ChannelModel.last_seq,
             ChannelModel.changed_rev,
         ).where(ChannelModel.pod_id == pod_id)
+    )
+    return {row[0]: Head(int(row[1]), int(row[2]), int(row[3])) for row in rows}
+
+
+async def changed_heads(
+    uow: SqlAlchemyUnitOfWork, pod_id: UUID, since: datetime
+) -> dict[UUID, Head]:
+    """The heads of the pod's channels whose change counter may have moved
+    since ``since`` (by the database's clock): every change number is taken
+    with the channel's ``updated_at`` (``infrastructure.revisions``), so this
+    reads the few channels that moved rather than every channel of the pod."""
+    rows = await uow.session.execute(
+        select(
+            ChannelModel.id,
+            ChannelModel.last_rev,
+            ChannelModel.last_seq,
+            ChannelModel.changed_rev,
+        ).where(ChannelModel.pod_id == pod_id, ChannelModel.updated_at > since)
     )
     return {row[0]: Head(int(row[1]), int(row[2]), int(row[3])) for row in rows}
 
@@ -263,8 +282,12 @@ def question_waiting(view: LinesView, reader_id: UUID) -> list[str]:
     return waiting
 
 
-def typing_event(channel_id: UUID, user: JsonValue) -> str:
-    return _event("typing", channel_id=str(channel_id), user=user)
+def typing_event(
+    channel_id: UUID, user: JsonValue, thread_root_id: JsonValue = None
+) -> str:
+    return _event(
+        "typing", channel_id=str(channel_id), user=user, thread_root_id=thread_root_id
+    )
 
 
 def answering_event(
@@ -313,6 +336,7 @@ __all__ = [
     "Head",
     "LinesView",
     "answering_event",
+    "changed_heads",
     "channel_updated",
     "cursor_of",
     "heads_of",

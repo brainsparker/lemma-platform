@@ -304,13 +304,95 @@ async def name_contact_on_conversation(
 async def repoint_merged_contact(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, merged_id: UUID, survivor_id: UUID
 ) -> int:
-    """Conversations with a contact since merged are the survivor's now."""
+    """Conversations with a contact since merged are the survivor's now.
+
+    A person has one live conversation per agent in a channel: where the
+    survivor already has one with the same agent in the same channel, it
+    keeps the seat, and the merged contact's loses it -- it leaves the
+    channel, as a surface expects of a conversation a merge unseated, and the
+    person's next message continues the one that kept it.
+    """
+    conversation, theirs = ConversationModel, aliased(ConversationModel)
+    await uow.session.execute(
+        update(conversation)
+        .where(
+            *_theirs(pod_id, merged_id),
+            _live_in_a_channel(conversation),
+            select(theirs.id)
+            .where(
+                _live_in_a_channel(theirs),
+                theirs.channel_id == conversation.channel_id,
+                _same_agent(theirs, conversation),
+                theirs.contact_id == survivor_id,
+            )
+            .exists(),
+        )
+        .values(channel_id=None)
+        .execution_options(synchronize_session=False)
+    )
     result = await uow.session.execute(
         update(ConversationModel)
         .where(*_theirs(pod_id, merged_id))
         .values(contact_id=survivor_id)
+        .execution_options(synchronize_session=False)
     )
     return result.rowcount or 0
+
+
+async def move_channel_conversations(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    pod_id: UUID,
+    from_channel_id: UUID,
+    to_channel_id: UUID,
+) -> int:
+    """A channel folded into another: the conversations working in it work in
+    that one now, before the emptied channel is dropped and unplaces them.
+
+    Where the person already has a live conversation with the same agent
+    there, that one keeps the seat and this one stays behind, unseated when
+    the channel goes (``repoint_merged_contact``). Returns how many moved.
+    """
+    conversation, theirs = ConversationModel, aliased(ConversationModel)
+    here = (
+        conversation.pod_id == pod_id,
+        conversation.channel_id == from_channel_id,
+    )
+    seated_there = (
+        select(theirs.id)
+        .where(
+            _live_in_a_channel(theirs),
+            theirs.channel_id == to_channel_id,
+            _same_agent(theirs, conversation),
+            func.coalesce(theirs.contact_id, theirs.user_id)
+            == func.coalesce(conversation.contact_id, conversation.user_id),
+        )
+        .exists()
+    )
+    result = await uow.session.execute(
+        update(conversation)
+        .where(*here, ~(_live_in_a_channel(conversation) & seated_there))
+        .values(channel_id=to_channel_id)
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)
+
+
+def _live_in_a_channel(conversation: type[ConversationModel]) -> ColumnElement[bool]:
+    """What ``uq_agent_conversations_channel_person`` holds to one per person."""
+    return (
+        conversation.channel_id.is_not(None)
+        & conversation.parent_id.is_(None)
+        & conversation.is_archived.is_(False)
+    )
+
+
+def _same_agent(
+    one: type[ConversationModel], other: type[ConversationModel]
+) -> ColumnElement[bool]:
+    return func.coalesce(one.agent_id, one.pod_id) == func.coalesce(
+        other.agent_id, other.pod_id
+    )
 
 
 async def move_contact_conversation(
@@ -379,13 +461,16 @@ async def append_follow_up(
     message: str,
     sent_by_user_id: UUID,
     delivered: bool | None = None,
+    line_id: UUID | None = None,
 ) -> None:
     """Write a member's follow-up into a contact's conversation.
 
     Belongs to no run, like a notification: it is so the agent, and the
     contact reading the thread, see what was sent and can answer it.
     ``delivered`` is False for one the platform refused, so nothing reads it
-    as having reached them.
+    as having reached them. One follow-up per channel line (``line_id``): a
+    retried send brings its ``delivered`` up to date rather than adding a
+    second copy.
     """
     from app.modules.agent.infrastructure.repositories.conversation_repository import (
         ConversationRepository,
@@ -395,10 +480,46 @@ async def append_follow_up(
         "follow_up": True,
         "sent_by_user_id": str(sent_by_user_id),
     }
+    if line_id is not None:
+        metadata["line_id"] = str(line_id)
+        earlier = await notification_keyed(
+            uow, conversation_id, key="line_id", value=str(line_id)
+        )
+        if earlier is not None:
+            if delivered is not None:
+                earlier.message_metadata = {
+                    **(earlier.message_metadata or {}),
+                    "delivered": delivered,
+                }
+                await uow.session.flush()
+            return
     if delivered is not None:
         metadata["delivered"] = delivered
     await ConversationRepository(uow).append_message(
         conversation_id=conversation_id,
         agent_run_id=None,
         draft=MessageDraft.of_notification(message, metadata=metadata),
+    )
+
+
+async def notification_keyed(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, *, key: str, value: str
+) -> MessageModel | None:
+    """The conversation's notification whose metadata has ``key`` = ``value``,
+    read under the conversation's row lock -- the lock every append takes --
+    so two sends of one line cannot both find none and both append."""
+    await uow.session.execute(
+        select(ConversationModel.id)
+        .where(ConversationModel.id == conversation_id)
+        .with_for_update()
+    )
+    return await uow.session.scalar(
+        select(MessageModel)
+        .where(
+            MessageModel.conversation_id == conversation_id,
+            MessageModel.kind == MessageKind.NOTIFICATION.value,
+            MessageModel.message_metadata[key].astext == value,
+        )
+        .order_by(MessageModel.sequence.desc())
+        .limit(1)
     )

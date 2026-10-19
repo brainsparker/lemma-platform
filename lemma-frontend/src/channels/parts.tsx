@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileIcon, LinkIcon } from "@/ui/icons";
 import { channelApi } from "./api";
@@ -53,18 +53,32 @@ export function LineParts({ podId, channelId, line }: { podId: string; channelId
     );
 }
 
-function FileChip({ podId, channelId, lineId, file }: { podId: string; channelId: string; lineId: string; file: Extract<Part, { type: "file" }> }) {
+/** An object URL for `blob` for as long as this component shows it. */
+export function useObjectUrl(blob: Blob | null): string | null {
+    const [url, setUrl] = useState<string | null>(null);
+    useEffect(() => {
+        if (!blob) { setUrl(null); return; }
+        const made = URL.createObjectURL(blob);
+        setUrl(made);
+        return () => URL.revokeObjectURL(made);
+    }, [blob]);
+    return url;
+}
+
+export function FileChip({ podId, channelId, lineId, file }: { podId: string; channelId: string; lineId: string; file: Extract<Part, { type: "file" }> }) {
     const image = isInlineImage(file.mimeType) && file.fileId !== null;
+    /* The bytes are cached, not a URL for them: a URL is this mount's, made
+       here and let go when it goes, so a chip drawn again -- scrolled back
+       to, a thread reopened -- never shows one already revoked. */
     const preview = useQuery({
         queryKey: ["channel", podId, "file", channelId, lineId, file.fileId] as const,
         enabled: image,
         staleTime: Infinity,
         gcTime: 5 * 60_000,
         retry: false,
-        queryFn: async () => URL.createObjectURL(await channelApi(podId).file(channelId, lineId, file.fileId as string)),
+        queryFn: () => channelApi(podId).file(channelId, lineId, file.fileId as string),
     });
-    /* An object URL holds its bytes until it is let go. */
-    useEffect(() => () => { if (preview.data) URL.revokeObjectURL(preview.data); }, [preview.data]);
+    const shown = useObjectUrl(preview.data ?? null);
     const save = useMutation({
         mutationFn: async () => {
             const blob = await channelApi(podId).file(channelId, lineId, file.fileId as string);
@@ -83,7 +97,7 @@ function FileChip({ podId, channelId, lineId, file }: { podId: string; channelId
     }
     return (
         <span className="chfile__wrap">
-            {image && preview.data && <img className="chfile__preview" src={preview.data} alt={file.name} loading="lazy" />}
+            {image && shown && <img className="chfile__preview" src={shown} alt={file.name} loading="lazy" />}
             <button type="button" className="chfile" disabled={save.isPending} onClick={() => save.mutate()} title={"Save " + file.name}>
                 <FileIcon size={15} aria-hidden="true" />
                 <span className="chfile__name">{file.name}</span>

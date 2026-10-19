@@ -6,6 +6,7 @@ import {
     readChannelPage,
     readLine,
     readLinePage,
+    readThreadPage,
     type AgentAnswers,
     type Channel,
     type ChannelDetail,
@@ -16,6 +17,7 @@ import {
     type NotifyLevel,
     type Page,
     type Part,
+    type ThreadPage,
     type Visibility,
 } from "./model";
 import { readSearchPage, type SearchHit } from "./search-model";
@@ -23,6 +25,7 @@ import type { ListFilter } from "./views";
 import { readInbox, type Inbox, type PersonRef } from "./waiting";
 import { readSourceSettings, type SourceChange, type SourceSettings } from "./sources";
 import type { Mention } from "./mentions";
+import { attachmentFolder } from "./compose-model";
 
 /** A group one bot is in, with whether the reader is in it: an admin is
  *  listed the bot's private groups they are not in, to join on request. */
@@ -60,8 +63,9 @@ export interface ChannelApi {
     get(channelId: string): Promise<ChannelDetail>;
     /** The newest page of top-level lines, or the one before line `beforeSeq`. */
     lines(channelId: string, beforeSeq?: number): Promise<LinePage>;
-    /** A thread's replies, oldest first. */
-    thread(channelId: string, rootId: string): Promise<LinePage>;
+    /** A page of a thread's replies, oldest first: the first page, or the
+     *  one after reply `afterSeq`. */
+    thread(channelId: string, rootId: string, afterSeq?: number): Promise<ThreadPage>;
     post(channelId: string, body: PostBody): Promise<Line>;
     edit(channelId: string, lineId: string, text: string): Promise<Line>;
     remove(channelId: string, lineId: string): Promise<void>;
@@ -85,10 +89,11 @@ export interface ChannelApi {
     /** A contact's channel: switch its agent on (handing them back now) or off. */
     setAgentAnswers(channelId: string, on: boolean): Promise<ChannelDetail>;
     retryDelivery(channelId: string, lineId: string, deliveryId: string): Promise<void>;
-    /** A file for a line to share: uploaded to the writer's own files, and
-     *  named as a part. The server checks the writer may read it and keeps
-     *  its own copy of the part. */
-    attach(channelId: string, file: File): Promise<Extract<Part, { type: "file" }>>;
+    /** A file for a line to share: uploaded to the writer's own files, in
+     *  the line's own folder (`clientMessageId`) under `name`, and named as
+     *  a part. The server checks the writer may read it and keeps its own
+     *  copy of the part. */
+    attach(channelId: string, file: File, line: { clientMessageId: string; name: string }): Promise<Extract<Part, { type: "file" }>>;
     /** A file a line shares, read through the line: its channel's
      *  visibility and withholding decide, not the file's own path. */
     file(channelId: string, lineId: string, fileId: string): Promise<Blob>;
@@ -118,14 +123,6 @@ type Channels = LemmaClient["channels"];
 function must<T>(value: T | null, what: string): T {
     if (value === null) throw new Error("The " + what + " came back without an id.");
     return value;
-}
-
-/** Where a line's attachment is uploaded: the writer's own files, private
- *  to them, for every channel. Readers reach it through the line, which the
- *  server serves as the writer can read it -- a pod folder would let
- *  everybody with file access read a private group's files. */
-export function attachmentFolder(channelId: string): string {
-    return "/me/channels/" + channelId;
 }
 
 /** The post as the API takes it: mentions and files as typed parts. */
@@ -175,8 +172,8 @@ function liveApi(podId: string): ChannelApi {
         async lines(channelId, beforeSeq) {
             return readLinePage(await client().channels.messages(podId, channelId, { limit: 50, beforeSeq }));
         },
-        async thread(channelId, rootId) {
-            return readLinePage(await client().channels.thread(podId, channelId, rootId, { limit: 100 }));
+        async thread(channelId, rootId, afterSeq) {
+            return readThreadPage(await client().channels.thread(podId, channelId, rootId, { limit: 100, afterSeq }));
         },
         async post(channelId, body) {
             return must(readLine(await client().channels.post(podId, channelId, postRequest(body))), "line");
@@ -227,9 +224,9 @@ function liveApi(podId: string): ChannelApi {
         async retryDelivery(channelId, lineId, deliveryId) {
             await client().channels.retryDelivery(podId, channelId, lineId, deliveryId);
         },
-        async attach(channelId, file) {
-            const written = await client().files.upload(file, { name: file.name, directoryPath: attachmentFolder(channelId), searchEnabled: true });
-            return { type: "file", path: written.path, name: written.name ?? file.name, mimeType: file.type || null, size: file.size, fileId: null };
+        async attach(channelId, file, line) {
+            const written = await client().files.upload(file, { name: line.name, directoryPath: attachmentFolder(channelId, line.clientMessageId), searchEnabled: true });
+            return { type: "file", path: written.path, name: written.name ?? line.name, mimeType: file.type || null, size: file.size, fileId: null };
         },
         async file(channelId, lineId, fileId) {
             return (await client().channels.file(podId, channelId, lineId, fileId)) as Blob;

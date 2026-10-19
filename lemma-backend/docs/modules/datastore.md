@@ -62,8 +62,12 @@ A lost wake costs latency only: the hub also reads on an idle poll.
 
 - **Visibility**: table read permission is checked at subscribe. RLS rows reach
   only their owner (the change row carries `owner_user_id`). When the pod's
-  authorization epoch moves, the hub re-checks every subscription and ends the
-  ones that lost their table with `unsubscribed`.
+  grants epoch moves (file writes do not move it), and every
+  `LIVE_AUTHZ_RECHECK_SECONDS` regardless, the hub re-checks every
+  subscription and ends the ones that lost their table with `unsubscribed`. A
+  re-check that fails is made again on the next pass. The previous
+  `/datastore/changes` socket has no `unsubscribed` frame, so there losing the
+  table closes the socket with `4403`.
 - **`when`**: a subscription on one table may carry `when` conditions in the
   trigger grammar (`app/core/domain/record_conditions.py`, the one evaluator
   both use), limited to its value operators (`equals`, `not_equals`, `in`,

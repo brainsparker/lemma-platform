@@ -3,7 +3,8 @@
 
 A question's ref is ``msg:{asking conversation}:{key}`` (``-`` for none) and
 every question one run asks shares a batch -- the run -- so the asking
-conversation is woken once, when the last of that batch closes.
+conversation is woken once: when the run has finished and the last of its
+batch has closed.
 """
 
 from __future__ import annotations
@@ -50,7 +51,19 @@ def line_client_id(key: str) -> str:
 
 def batch_of(run_id: UUID | None) -> str | None:
     """The batch a run's questions share."""
-    return str(run_id) if run_id is not None else None
+    return batch_of_run(run_id) if run_id is not None else None
+
+
+def batch_of_run(run_id: UUID) -> str:
+    return str(run_id)
+
+
+def run_of_batch(batch_id: str) -> UUID | None:
+    """The run that asked a batch."""
+    try:
+        return UUID(batch_id)
+    except ValueError:
+        return None
 
 
 __all__ = [
@@ -58,6 +71,8 @@ __all__ = [
     "asked_by_prefix",
     "asking_conversation",
     "batch_of",
+    "batch_of_run",
     "line_client_id",
     "message_ref",
+    "run_of_batch",
 ]

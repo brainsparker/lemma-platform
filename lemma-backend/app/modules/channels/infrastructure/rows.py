@@ -122,6 +122,7 @@ def member_entity(row: ChannelMemberModel) -> Member:
         muted_until=row.muted_until,
         answers=AgentAnswers(row.answers) if row.answers else None,
         joined_at=row.created_at,
+        seat_id=row.id,
     )
 
 
@@ -182,6 +183,7 @@ def message_entity(
         created_at=row.created_at,
         client_message_id=row.client_message_id,
         source_id=row.source_id,
+        target_source_id=row.target_source_id,
         members_only=row.members_only,
         parts=read_parts(row.parts),
         conversation_id=row.conversation_id,

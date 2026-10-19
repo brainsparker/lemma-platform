@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from app.core.authorization.authz_epoch import pod_authz_epoch
+from app.core.authorization.authz_epoch import pod_grants_epoch
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.live.config import live_settings
 from app.modules.datastore.services.live.access import TableLiveAccess
@@ -29,7 +29,7 @@ def live_hubs() -> LiveHubRegistry:
             feed_factory=ChangeLogFeed,
             access_factory=TableLiveAccess,
             channel_factory=get_channel_service,
-            epoch_of=pod_authz_epoch,
+            epoch_of=pod_grants_epoch,
             settings=live_settings,
         )
         _registry_loop = loop

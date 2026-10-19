@@ -72,6 +72,14 @@ class NotifyLevel(StrEnum):
     MENTIONS = "MENTIONS"
     NONE = "NONE"
 
+    @classmethod
+    def default_in(cls, kind: ChannelKind) -> NotifyLevel:
+        """How a member seated in a channel of this kind hears of it until
+        they choose: every line of their own channel and a contact's, only
+        what names or asks them in a group -- a busy group read by push is
+        noise that buries the questions."""
+        return cls.MENTIONS if kind is ChannelKind.GROUP else cls.ALL
+
 
 class MemberRole(StrEnum):
     OWNER = "owner"
@@ -267,6 +275,8 @@ class Member(BaseModel):
     #: An agent's: when it answers here.
     answers: AgentAnswers | None = None
     joined_at: datetime | None = None
+    #: The seat's own id: what a page of members is cut at.
+    seat_id: UUID | None = None
 
     @property
     def principal(self) -> Principal | None:
@@ -377,8 +387,9 @@ class Question(BaseModel):
     created_at: datetime | None = None
 
     @property
-    def is_open(self) -> bool:
-        return self.state is QuestionState.OPEN
+    def is_waiting(self) -> bool:
+        """Not closed: open, or being answered -- a claim that may yet lapse."""
+        return self.state in (QuestionState.OPEN, QuestionState.ANSWERING)
 
     @property
     def asker(self) -> str:
@@ -399,8 +410,11 @@ class ChannelMessage(BaseModel):
     text: str
     created_at: datetime
     client_message_id: str | None = None
-    #: Where it was said, or ``None`` for a line written in Lemma.
+    #: Where it was heard: the place a person said it, on a platform.
+    #: ``None`` for a line written in Lemma, wherever it then went.
     source_id: UUID | None = None
+    #: Where a line written in Lemma was carried: the place it went to.
+    target_source_id: UUID | None = None
     #: A note for the pod's members only: never delivered, never shown outside.
     members_only: bool = False
     parts: tuple[Part, ...] = ()
@@ -425,6 +439,16 @@ class ChannelMessage(BaseModel):
     def is_deleted(self) -> bool:
         return self.deleted_at is not None
 
+    @property
+    def place_id(self) -> UUID | None:
+        """The place outside Lemma the line is at: heard there, or carried there."""
+        return self.source_id or self.target_source_id
+
+    @property
+    def heard_outside(self) -> bool:
+        """Said on a platform and heard here -- not written in Lemma."""
+        return self.source_id is not None
+
 
 class Delivery(BaseModel):
     """One send of a line outside Lemma, and what became of it."""
@@ -446,3 +470,11 @@ class Delivery(BaseModel):
     claimed_at: datetime | None = None
     sent_at: datetime | None = None
     created_at: datetime | None = None
+
+    @property
+    def target_key(self) -> str:
+        """Where it goes, as one key: one place's (or one member's) sends run
+        one at a time, in the order their lines were written."""
+        if self.source_id is not None:
+            return f"place:{self.source_id}"
+        return f"member:{self.recipient_user_id}"

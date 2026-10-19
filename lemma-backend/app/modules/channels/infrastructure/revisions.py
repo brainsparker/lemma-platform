@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from uuid import UUID
 
-from sqlalchemy import Select, select, text, update
+from sqlalchemy import Select, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.live.signals import signal_after_commit
@@ -44,7 +44,12 @@ async def next_rev(
     ``channel_changed``: the change is to the channel's own fields or its
     members, which subscribers are sent as ``channel.updated``.
     """
-    values: dict[str, object] = {"last_rev": ChannelModel.last_rev + 1}
+    # ``updated_at`` by the database's clock, with every change number: a hub's
+    # idle poll finds the channels that moved by it (``live.events.changed_heads``).
+    values: dict[str, object] = {
+        "last_rev": ChannelModel.last_rev + 1,
+        "updated_at": func.now(),
+    }
     if channel_changed:
         values["changed_rev"] = ChannelModel.last_rev + 1
     found = (
@@ -79,6 +84,7 @@ async def touch_channels(
         .values(
             last_rev=ChannelModel.last_rev + 1,
             changed_rev=ChannelModel.last_rev + 1,
+            updated_at=func.now(),
         )
         .returning(ChannelModel.id, ChannelModel.pod_id)
         .execution_options(synchronize_session=False)
@@ -119,7 +125,7 @@ async def touch_lines(session: AsyncSession, message_ids: Collection[UUID]) -> N
 _TOUCH_LINE = text(
     """
     WITH bumped AS (
-        UPDATE channels SET last_rev = channels.last_rev + 1
+        UPDATE channels SET last_rev = channels.last_rev + 1, updated_at = now()
         FROM channel_messages AS line
         WHERE line.id = :message_id AND channels.id = line.channel_id
         RETURNING channels.id, channels.pod_id, channels.last_rev

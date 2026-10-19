@@ -61,8 +61,10 @@ def _no_typing_keepalive(monkeypatch):
 #: notes what it heard there; the heard line marks when they last wrote; and
 #: the answer's way out asks where the conversation's reply goes -- once to
 #: post the answer as a line at that place, once for the typing indicator,
-#: once for the place its delivery names, and once more for the send itself. A read keyed by the conversation and joined to
-#: its lines counts here, against the table the statement names first.
+#: once for the place its delivery names, and once more for the send itself;
+#: and each of the two lines checks, as it is written, that the place it was
+#: heard at or goes to feeds this channel. A read keyed by the conversation and
+#: joined to its lines counts here, against the table the statement names first.
 #:
 #: The first message also makes the place: its insert, and the read that
 #: returns it with the account's surface.
@@ -76,14 +78,14 @@ def _no_typing_keepalive(monkeypatch):
 #: questions waiting on the member are ``channel_questions`` now.)
 _FIRST_MESSAGE = {
     "agent_surfaces": 7,
-    "channel_sources": 11,
+    "channel_sources": 13,
     "channel_messages": 8,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }
 _LATER_MESSAGE = {
     "agent_surfaces": 5,
-    "channel_sources": 9,
+    "channel_sources": 11,
     "channel_messages": 8,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,

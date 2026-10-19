@@ -80,7 +80,9 @@ def sync_detailed(
     """Answer Question
 
      Answer what this line asks the reader: a question, an approval (which
-    needs a `decision`), a form. Only the person it waits on may.
+    needs a `decision`), a form. Only the person it waits on may -- and an
+    approval, or an agent's paused question, only by their own hand: an agent
+    calling with a token delegated by them is refused, as its tool is.
 
     No session is held across the answer: what asked takes it in its own -- a
     run resumed, a form submitted -- and may call out to do so.
@@ -124,7 +126,9 @@ def sync(
     """Answer Question
 
      Answer what this line asks the reader: a question, an approval (which
-    needs a `decision`), a form. Only the person it waits on may.
+    needs a `decision`), a form. Only the person it waits on may -- and an
+    approval, or an agent's paused question, only by their own hand: an agent
+    calling with a token delegated by them is refused, as its tool is.
 
     No session is held across the answer: what asked takes it in its own -- a
     run resumed, a form submitted -- and may call out to do so.
@@ -163,7 +167,9 @@ async def asyncio_detailed(
     """Answer Question
 
      Answer what this line asks the reader: a question, an approval (which
-    needs a `decision`), a form. Only the person it waits on may.
+    needs a `decision`), a form. Only the person it waits on may -- and an
+    approval, or an agent's paused question, only by their own hand: an agent
+    calling with a token delegated by them is refused, as its tool is.
 
     No session is held across the answer: what asked takes it in its own -- a
     run resumed, a form submitted -- and may call out to do so.
@@ -205,7 +211,9 @@ async def asyncio(
     """Answer Question
 
      Answer what this line asks the reader: a question, an approval (which
-    needs a `decision`), a form. Only the person it waits on may.
+    needs a `decision`), a form. Only the person it waits on may -- and an
+    approval, or an agent's paused question, only by their own hand: an agent
+    calling with a token delegated by them is refused, as its tool is.
 
     No session is held across the answer: what asked takes it in its own -- a
     run resumed, a form submitted -- and may call out to do so.

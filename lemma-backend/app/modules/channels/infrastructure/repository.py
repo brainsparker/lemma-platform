@@ -17,19 +17,15 @@ from app.modules.channels.domain.entities import (
     ChannelKind,
     ContactStatus,
     MemberRole,
+    NotifyLevel,
     Visibility,
 )
 from app.modules.channels.infrastructure.access import visible_to
 from app.modules.channels.infrastructure.models import (
     ChannelMemberModel,
-    ChannelMentionModel,
-    ChannelMessageModel,
     ChannelModel,
-    ChannelQuestionModel,
-    ChannelReadStateModel,
-    ChannelSourceModel,
 )
-from app.modules.channels.infrastructure.revisions import next_rev, touch_channel
+from app.modules.channels.infrastructure.revisions import touch_channel
 from app.modules.channels.infrastructure.rows import MAX_LINES, channel_entity, now
 
 #: What a caller may change on a channel through ``change``.
@@ -212,6 +208,7 @@ class ChannelRepository:
                 user_id=user_id,
                 contact_id=contact_id,
                 role=role.value,
+                notify=NotifyLevel.default_in(channel.kind).value,
             )
             .on_conflict_do_nothing()
         )
@@ -256,11 +253,62 @@ class ChannelRepository:
             update(ChannelModel).where(ChannelModel.id == channel_id).values(**values)
         )
 
-    async def note_assignee_wrote(self, channel_id: UUID, *, at: datetime) -> None:
-        """The assignee wrote to the contact: the hand-back window runs from now."""
+    async def assign_if_free(self, channel_id: UUID, user_id: UUID) -> bool:
+        """Assign ``user_id`` only while nobody is: of two members writing to
+        an unanswered contact at once, the first takes it. Whether they did."""
+        c = ChannelModel
+        taken = await self.session.scalar(
+            update(c)
+            .where(c.id == channel_id, c.assignee_user_id.is_(None))
+            .values(
+                assignee_user_id=user_id,
+                assigned_at=now(),
+                assignee_last_line_at=None,
+                attention_at=None,
+                attention_reason=None,
+                status=ContactStatus.OPEN.value,
+            )
+            .returning(c.id)
+        )
+        if taken is None:
+            return False
+        await touch_channel(self.session, channel_id)
+        return True
+
+    async def hand_back(
+        self, channel_id: UUID, *, user_id: UUID, quiet_since: datetime
+    ) -> bool:
+        """Let go of an assignee who has not written since ``quiet_since``
+        (counted from being assigned until they first write), in one
+        conditional write: a member writing meanwhile keeps it, and of two
+        turns letting go at once only one does. Whether this one did."""
+        c = ChannelModel
+        let_go = await self.session.scalar(
+            update(c)
+            .where(
+                c.id == channel_id,
+                c.assignee_user_id == user_id,
+                func.coalesce(c.assignee_last_line_at, c.assigned_at) < quiet_since,
+            )
+            .values(assignee_user_id=None, assigned_at=None, assignee_last_line_at=None)
+            .returning(c.id)
+        )
+        if let_go is None:
+            return False
+        await touch_channel(self.session, channel_id)
+        return True
+
+    async def note_assignee_wrote(
+        self, channel_id: UUID, *, at: datetime, user_id: UUID | None = None
+    ) -> None:
+        """The assignee wrote to the contact: the hand-back window runs from
+        now. With ``user_id``, only while they are the assignee."""
+        where = [ChannelModel.id == channel_id]
+        if user_id is not None:
+            where.append(ChannelModel.assignee_user_id == user_id)
         await self.session.execute(
             update(ChannelModel)
-            .where(ChannelModel.id == channel_id)
+            .where(*where)
             .values(
                 assignee_last_line_at=func.greatest(
                     func.coalesce(ChannelModel.assignee_last_line_at, at), at
@@ -331,6 +379,8 @@ class ChannelRepository:
         viewer: Viewer,
         *,
         kind: ChannelKind | None = None,
+        visibility: Visibility | None = None,
+        titled: str | None = None,
         archived: bool = False,
         contact_id: UUID | None = None,
         assignee_user_id: UUID | None = None,
@@ -344,8 +394,9 @@ class ChannelRepository:
         before: tuple[datetime, UUID] | None = None,
     ) -> list[Channel]:
         """The channels ``viewer`` may see, most recently active first --
-        among ``channel_ids``, when given. ``every_group``: the pod's private
-        groups too, seen or not (a pod admin's view of a bot's groups)."""
+        among ``channel_ids``, when given. ``titled``: whose title holds these
+        words, in any case. ``every_group``: the pod's private groups too, seen
+        or not (a pod admin's view of a bot's groups)."""
         if channel_ids is not None and not channel_ids:
             return []
         channel = ChannelModel
@@ -366,18 +417,19 @@ class ChannelRepository:
             if archived
             else channel.archived_at.is_(None),
         )
-        if kind is not None:
-            statement = statement.where(channel.kind == kind.value)
+        statement = statement.where(
+            *_fields_match(
+                kind=kind,
+                visibility=visibility,
+                titled=titled,
+                contact_id=contact_id,
+                assignee_user_id=assignee_user_id,
+                unassigned=unassigned,
+                status=status,
+            )
+        )
         if channel_ids is not None:
             statement = statement.where(channel.id.in_(list(channel_ids)))
-        if contact_id is not None:
-            statement = statement.where(channel.contact_id == contact_id)
-        if assignee_user_id is not None:
-            statement = statement.where(channel.assignee_user_id == assignee_user_id)
-        if unassigned:
-            statement = statement.where(channel.assignee_user_id.is_(None))
-        if status is not None:
-            statement = statement.where(channel.status == status.value)
         if needs_person:
             # A contact waiting on somebody: open, nobody on it, and either
             # the agent is off or it asked for a person.
@@ -423,95 +475,39 @@ class ChannelRepository:
         )
         return [channel_entity(row) for row in rows]
 
-    # -- a contact who turned out to be another -------------------------------
 
-    async def fold_contact(
-        self, *, pod_id: UUID, merged_id: UUID, survivor_id: UUID
-    ) -> None:
-        """The merged contact's channel becomes the survivor's.
+def _like_literal(words: str) -> str:
+    """``words`` matched as typed: LIKE's own wildcards are escaped."""
+    return words.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
-        Its sources and lines move, the lines numbered on after the
-        survivor's; the merged channel goes once it holds nothing.
-        """
-        merged = await self.session.scalar(
-            select(ChannelModel).where(
-                ChannelModel.pod_id == pod_id,
-                ChannelModel.kind == ChannelKind.CONTACT.value,
-                ChannelModel.contact_id == merged_id,
-            )
-        )
-        await self._rename_contact(merged_id=merged_id, survivor_id=survivor_id)
-        if merged is None:
-            return
-        survivor = await self.for_contact(pod_id=pod_id, contact_id=survivor_id)
-        head = await self.lock(survivor.id)
-        assert head is not None
-        moved = await self.session.scalar(
-            select(func.count()).where(ChannelMessageModel.channel_id == merged.id)
-        )
-        # The survivor's subscribers are sent the lines it gained; the merged
-        # channel's find it gone.
-        rev = await next_rev(self.session, survivor.id)
-        await touch_channel(self.session, merged.id)
-        renumbered = (
-            select(
-                ChannelMessageModel.id.label("id"),
-                (
-                    head.last_seq
-                    + func.row_number().over(order_by=ChannelMessageModel.seq)
-                ).label("seq"),
-            )
-            .where(ChannelMessageModel.channel_id == merged.id)
-            .subquery()
-        )
-        await self.session.execute(
-            update(ChannelMessageModel)
-            .where(ChannelMessageModel.id == renumbered.c.id)
-            .values(channel_id=survivor.id, seq=renumbered.c.seq, rev=rev or 0)
-        )
-        for table in (ChannelSourceModel, ChannelMentionModel, ChannelQuestionModel):
-            await self.session.execute(
-                update(table)
-                .where(table.channel_id == merged.id)
-                .values(channel_id=survivor.id)
-            )
-        head.last_seq = head.last_seq + int(moved or 0)
-        head.last_line_at = func.greatest(head.last_line_at, merged.last_line_at)
-        await self.session.execute(
-            delete(ChannelReadStateModel).where(
-                ChannelReadStateModel.channel_id == merged.id
-            )
-        )
-        await self.session.delete(merged)
-        await self.session.flush()
 
-    async def _rename_contact(self, *, merged_id: UUID, survivor_id: UUID) -> None:
-        """Lines, questions, mentions and seats that name the merged contact
-        name the survivor; where both are named, the survivor's stays."""
-        message = ChannelMessageModel
-        for column in (message.sender_contact_id, message.on_behalf_contact_id):
-            await self.session.execute(
-                update(message)
-                .where(column == merged_id)
-                .values({column.key: survivor_id})
-            )
-        question = ChannelQuestionModel
-        for column in (question.awaits_contact_id, question.answered_by_contact_id):
-            await self.session.execute(
-                update(question)
-                .where(column == merged_id)
-                .values({column.key: survivor_id})
-            )
-        for table, key in (
-            (ChannelMentionModel, ChannelMentionModel.message_id),
-            (ChannelMemberModel, ChannelMemberModel.channel_id),
-        ):
-            both = select(key).where(table.contact_id == survivor_id)
-            await self.session.execute(
-                delete(table).where(table.contact_id == merged_id, key.in_(both))
-            )
-            await self.session.execute(
-                update(table)
-                .where(table.contact_id == merged_id)
-                .values(contact_id=survivor_id)
-            )
+def _fields_match(
+    *,
+    kind: ChannelKind | None,
+    visibility: Visibility | None,
+    titled: str | None,
+    contact_id: UUID | None,
+    assignee_user_id: UUID | None,
+    unassigned: bool,
+    status: ContactStatus | None,
+) -> list[ColumnElement[bool]]:
+    """A channel list's narrowing by the channel's own fields; none for a
+    field not asked about."""
+    channel = ChannelModel
+    conditions: list[ColumnElement[bool]] = []
+    if kind is not None:
+        conditions.append(channel.kind == kind.value)
+    if visibility is not None:
+        conditions.append(channel.visibility == visibility.value)
+    if titled is not None and titled.strip():
+        words = _like_literal(titled.strip())
+        conditions.append(channel.title.ilike(f"%{words}%", escape="\\"))
+    if contact_id is not None:
+        conditions.append(channel.contact_id == contact_id)
+    if assignee_user_id is not None:
+        conditions.append(channel.assignee_user_id == assignee_user_id)
+    if unassigned:
+        conditions.append(channel.assignee_user_id.is_(None))
+    if status is not None:
+        conditions.append(channel.status == status.value)
+    return conditions

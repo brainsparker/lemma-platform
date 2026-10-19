@@ -33,11 +33,18 @@ is a close frame the client can read, never a failed upgrade:
 
 | Close code | Meaning | Client should |
 | --- | --- | --- |
-| `4401` | No session, or it expired | Refresh the session, then reconnect |
+| `4401` | No session, or it expired; or, on an open socket, the session it was opened with ended (signed out, revoked, expired) | Refresh the session, then reconnect |
 | `4403` | The caller may not read the pod (`pod.read`) | Stop |
 | `4404` | No such pod | Stop |
 | `4429` | The user already holds `LIVE_MAX_SOCKETS_PER_USER_PER_POD` sockets on this pod | Close another, or wait |
 | `1011` | Server error | Reconnect with backoff |
+
+A socket ends with its session. Signing out, or anything that revokes a
+user's sessions (a password reset, a deactivated account), closes every live
+socket opened with them, in every API process, with `4401`. Once the access
+token a socket was opened with has expired, its session is also looked up
+every 5 minutes and the socket closed with `4401` if it is gone; a session
+that lives on keeps its socket, whatever the token's age.
 
 Once the session is taken the server sends `ready`. Only `ready` -- not the
 socket's `open` event -- says the connection is usable; (re)send every
@@ -93,9 +100,9 @@ for the previous SDK.
 
 | `reason` | |
 | --- | --- |
-| `cursor_expired` | `since` is not a cursor this topic gave out |
+| `cursor_expired` | `since` is not a cursor this topic gave out, or is ahead of what it covers |
 | `too_many` | More changes than `LIVE_MAX_CHANGES_PER_BATCH` to send one by one |
-| `permission_changed` | What the subscription covers changed under it (the pod's grants moved) |
+| `permission_changed` | What the subscription covers changed under it (the reader's own access in the pod moved) |
 | `overflow` | The socket fell behind and its queued batches were dropped |
 | `no_replay` | The topic keeps no history (`inbox`, `conversation`) and `since` was given |
 
@@ -150,7 +157,7 @@ with who said it.
 | `question.closed` | `channel_id`, `message_id`, `state` (`ANSWERED`, `CANCELLED`, `EXPIRED`) | Sent after the `line.edited` that shows the closed question; not sent where the line is withheld |
 | `channel.updated` | `channel` (`ChannelResponse`, as the channel list shows it, with the reader's `unread`) | Title, topic, visibility, archive, agent switch, assignee, status, members changed |
 | `read.updated` | `channel_id`, `read_seq` | The reader's own read position moved (another tab, the `read` call, `POST …/read`) |
-| `typing` | `channel_id`, `user` (`PersonRef`) | Somebody else is typing. Show it for ~5 s; it is not repeated by the server |
+| `typing` | `channel_id`, `user` (`PersonRef`), `thread_root_id` (or `null`) | Somebody else is typing -- in the thread with that root, or in the channel. Show it for ~5 s; it is not repeated by the server |
 | `answering.started` | `channel_id`, `message_id` (the line being answered), `agent_id`; for the member it answers, also `conversation_id`, `agent_run_id` | "Lem is answering…" |
 | `answering.finished` | `channel_id`, `message_id`, `agent_id` | The run ended (answer posted, failed, stopped or paused) |
 | `line.streaming` | `channel_id`, `message_id`, `agent_id`, `agent_run_id`, `kind`, `delta` | A piece of the answer as it is written -- only to the member it answers, since the finished line is withheld from everyone else. `kind` is the run's token kind (`text`, `thinking`, `stream_reset` …), or `snapshot`: the answer's text so far, in one piece, replacing whatever the client had built for it. Display only: the answer arrives as its `line.created` |
@@ -196,7 +203,11 @@ being one they may see -- taken out of a private group, a grant gone, the
 channel deleted -- is sent once more as `inbox.updated` with every count at 0
 (and the totals now), so its badge clears; after that it is not named to them
 again. Each change is counted for a reader in a fixed number of reads,
-however many channels moved.
+however many channels moved. A reader whose own access in the pod changes --
+a role, `contact.read` -- is sent `resync` (`permission_changed`) to refetch
+`/inbox`; one taken out of the pod, or losing `channel.read`, is sent
+`unsubscribed` (`access_revoked`). A grant moving elsewhere in the pod, or a
+file written, costs other readers nothing.
 
 ## Topic `conversation`
 
@@ -211,7 +222,10 @@ event is exactly an SSE frame's JSON of
 `status`, `completed`, `error`, `stopped`, `title` … -- with its
 `agent_run_id`. Subscribe first, then read the conversation's messages over
 REST: the server is listening before it says `subscribed`. Runs are not
-replayed; with `since`, `resync` (`no_replay`).
+replayed; with `since`, `resync` (`no_replay`). Access is decided again when
+the pod's grants move, and every `LIVE_AUTHZ_RECHECK_SECONDS` regardless: a
+subscriber who may no longer read the conversation is sent `unsubscribed`
+(`access_revoked`).
 
 Right after `subscribed` comes one `run` event, `{"type": "run",
 "agent_run_id", "status"}`: the run being watched -- `agent_run_id` if the
@@ -228,9 +242,9 @@ moves the watch to it.
 
 | Method | `params` | `result` | Needs |
 | --- | --- | --- | --- |
-| `typing` | `channel_id` | `{}` | `channel.write`, may see the channel, and `contact.message` in a CONTACT channel. Reaches the channel's other subscribers, never the caller's own sockets. Send at most every ~3 s while typing |
+| `typing` | `channel_id`, `thread_root_id` (optional: typing in that thread) | `{}` | `channel.write`, may see the channel, and `contact.message` in a CONTACT channel. Reaches the channel's other subscribers, never the caller's own sockets. Send at most every ~3 s while typing |
 | `read` | `channel_id`, `seq` (≥ 0) | `{channel_id, read_seq}` | `POST /channels/{c}/read`, the same rule and the same write: it never goes back, and never past the newest line. Other sockets hear `read.updated` and `inbox.updated` |
-| `presence` | | `{online: [user_id, …]}` | A socket on the pod. Users with a socket open now (claims lapse after 90 s without one) |
+| `presence` | | `{online: [user_id, …]}` | A socket on the pod. Users with a socket open now (claims lapse after 90 s without one). The same record says who had the app open lately (`core/live/presence.seen_within`), which channels reads to hold back a push the member would have read in the app ([channels.md](channels.md#posting-a-line)); with Redis unreachable it says nobody, so the push goes |
 
 ## Limits
 
@@ -245,6 +259,8 @@ moves the watch to it.
 | `LIVE_TYPING_CALLS_PER_USER_PER_MINUTE` | 60 | Per user per pod, across their sockets and every API process (Redis); past it, `error {code: "limit"}` |
 | `LIVE_READ_CALLS_PER_MINUTE` | 120 | Per socket |
 | `LIVE_ANSWER_STREAM_SECONDS` | 900 | Longest an answer is relayed as `line.streaming` |
+| `LIVE_AUTHZ_CHECK_SECONDS` | 2 | How often a hub looks at the pod's grants epoch |
+| `LIVE_AUTHZ_RECHECK_SECONDS` | 60 | How often every subscription's access is re-checked whether or not the epoch moved: the bound on a lost epoch bump |
 
 A batch frame is at most 256 KiB; a larger batch is split.
 
@@ -264,8 +280,12 @@ flowchart LR
   (`app/core/live/signals.py`): `channel` (its change counter moved), `read`,
   and the ephemeral `typing` and `answering`. A hub that hears one reads what
   changed from Postgres. A lost signal costs latency, never a change: each hub
-  also polls every `LIVE_IDLE_POLL_SECONDS`, and after its Redis listener
-  reconnects compares every head it watches.
+  also polls every `LIVE_IDLE_POLL_SECONDS` -- the channels it watches, and
+  of the pod's other channels only those whose change counter moved since the
+  last poll (every change number stamps the channel's `updated_at`), so a poll
+  costs the same however many channels and contacts the pod has -- and after
+  its Redis listener reconnects, or a read fails, compares every head of the
+  pod.
 - **One hub per pod per process** reads each change once and projects it once
   per kind of reader, so database work grows with watched channels and writes,
   not with sockets. The datastore's `records` hub works the same way over the
@@ -275,12 +295,26 @@ flowchart LR
 - **A hub outlives its own faults.** A read that fails -- the database or
   Redis away, or a bug -- is logged (`channels.live.hub_drain_failed`,
   `channels.live.hub_loop_failed`) and retried after a backoff (1 s doubling
-  to 30 s), comparing everything it watches; its cursors only move past what
-  it sent, so nothing is skipped. Metrics: `lemma.live.channels.reads`,
+  to 30 s), comparing everything it watches; its cursors -- a head per
+  channel, the inbox's heads -- move only once every subscription has been
+  offered the changes before them, so a read failing part way is read again
+  and nothing is skipped. Metrics: `lemma.live.channels.reads`,
   `lemma.live.channels.drain_seconds`, `lemma.live.channels.hub_loop_failures`,
   `lemma.live.resyncs`.
 - **Authorization** is checked per subscription and per call, and again when
-  the pod's authorization epoch moves (`LIVE_AUTHZ_CHECK_SECONDS`).
+  the pod's grants epoch moves (`app/core/authorization/authz_epoch.py`,
+  looked at every `LIVE_AUTHZ_CHECK_SECONDS`) and every
+  `LIVE_AUTHZ_RECHECK_SECONDS` regardless, so a bump lost to Redis delays a
+  revocation, never cancels it. The epoch is taken as seen only once every
+  re-check has gone through: one that fails is made again. A `channel`
+  subscription's visibility is decided under the hub's lock, after its head is
+  read, so a removal racing the subscribe is not missed. File writes move a
+  separate files epoch (what a search may reach), not the grants one, so an
+  upload re-checks no socket.
+- **Sessions.** Every open socket is held by its session handle
+  (`app/core/live/sessions.py`); a revocation is announced on Redis
+  (`live:sessions:ended`) by the session recipe's revoke functions and each
+  process closes the sockets it holds for it.
 
 ## Writing a topic
 

@@ -615,6 +615,7 @@ def _schema_template(postgres: Any) -> tuple[str, list[str]]:
                 try:
                     with engine.begin() as schema:
                         schema.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                        schema.execute(text("CREATE EXTENSION IF NOT EXISTS btree_gin"))
                         Base.metadata.create_all(schema, tables=tables)
                 finally:
                     engine.dispose()
@@ -1342,6 +1343,7 @@ async def _ensure_schema_once(database_url: str) -> None:
                     text("SELECT pg_advisory_xact_lock(:key)"), {"key": 0x6C656D6D61}
                 )
                 await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS btree_gin"))
         async with manager.engine.begin() as conn:
             await conn.run_sync(
                 Base.metadata.create_all, tables=pending, checkfirst=True

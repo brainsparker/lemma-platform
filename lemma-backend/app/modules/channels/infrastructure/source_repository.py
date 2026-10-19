@@ -138,6 +138,20 @@ class SourceRepository:
         )
         return _sources(rows)
 
+    async def in_channel(
+        self, channel_id: UUID, source_ids: Collection[UUID]
+    ) -> set[UUID]:
+        """Which of ``source_ids`` are places of this channel."""
+        if not source_ids:
+            return set()
+        rows = await self.session.scalars(
+            select(ChannelSourceModel.id).where(
+                ChannelSourceModel.channel_id == channel_id,
+                ChannelSourceModel.id.in_(sorted(source_ids)),
+            )
+        )
+        return set(rows)
+
     async def of_channels(
         self, channel_ids: Collection[UUID]
     ) -> dict[UUID, list[Source]]:
@@ -339,7 +353,7 @@ class SourceRepository:
 
         The place of the latest line a person said in it, with what its
         account kept to answer that line; else the latest line with a place
-        at all, and that place's last word. None for a conversation said
+        at all -- heard there or carried there -- and that place's last word. None for a conversation said
         nowhere outside Lemma.
         """
         message = ChannelMessageModel
@@ -362,7 +376,11 @@ class SourceRepository:
         placed = (
             await self.session.execute(
                 _with_surface()
-                .join(message, message.source_id == ChannelSourceModel.id)
+                .join(
+                    message,
+                    func.coalesce(message.source_id, message.target_source_id)
+                    == ChannelSourceModel.id,
+                )
                 .where(message.conversation_id == conversation_id)
                 .order_by(message.seq.desc())
                 .limit(1)
@@ -535,3 +553,18 @@ class SourceRepository:
                 _scope(surface_ids, platform),
             )
         )
+
+    async def became_private(self, source_id: UUID) -> bool:
+        """The platform now keeps this place to its members. True if it was
+        open before -- never the reverse: only the platform makes one private,
+        and nobody here makes one public behind its back."""
+        result = await self.session.execute(
+            update(ChannelSourceModel)
+            .where(
+                ChannelSourceModel.id == source_id,
+                ChannelSourceModel.is_private.is_(False),
+            )
+            .values(is_private=True, updated_at=now())
+            .returning(ChannelSourceModel.id)
+        )
+        return result.first() is not None

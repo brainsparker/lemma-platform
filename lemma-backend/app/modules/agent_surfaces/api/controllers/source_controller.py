@@ -15,10 +15,10 @@ Here rather than in ``channels`` because it talks to the platforms. Its router
 is included before the channels module's, so the literal segments are matched
 before ``/channels/{channel_id}``.
 
-Reading takes what reading the group's bot takes. Starting, linking and
-changing take what configuring the bot takes -- the bar the in-chat setup of a
-channel sets. A source's settings are the bot's configuration, not the
-channel's lines, so reading one asks the bot's rule, not the channel's.
+Reading takes what reading the group's bot takes, and seeing the channel (or
+managing the pod's channels): a private group's title and invite link are its
+people's. Starting, linking and changing take what configuring the bot takes
+-- the bar the in-chat setup of a channel sets.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep, get_uow_factory
+from app.core.authorization.context import ResourceRef
 from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.transaction_locks import connection_released
@@ -77,6 +78,7 @@ from app.modules.agent_surfaces.services.whatsapp_groups import (
     GroupsNotAvailable,
     WhatsAppGroupOpener,
 )
+from app.modules.channels.contracts.lines import viewer_of, visible_channel
 from app.modules.channels.contracts.source_settings import (
     SourceSettingsQuery,
     SourceSettingsResponse,
@@ -99,6 +101,19 @@ async def _source(
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND)
     return state
+
+
+async def _seen_by(
+    uow: UoWDep, ctx, *, pod_id: UUID, user_id: UUID, channel_id: UUID
+) -> None:
+    """404 unless the caller may see the source's channel, or manages the pod's
+    channels -- a private group's title and invite link are its people's. A
+    pod admin finds a group nobody let them into here, to join it."""
+    if await ctx.can(Permissions.CHANNEL_MANAGE, ResourceRef.pod(pod_id)):
+        return
+    viewer = await viewer_of(uow, pod_id=pod_id, user_id=user_id)
+    if await visible_channel(uow, viewer=viewer, channel_id=channel_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND)
 
 
 async def _on_bot(ctx, *, pod_id: UUID, state: SourceState, action: str) -> None:
@@ -321,6 +336,7 @@ async def get_source(
     state = await _source(
         uow, pod_id=pod_id, source_id=source_id, channel_id=channel_id
     )
+    await _seen_by(uow, ctx, pod_id=pod_id, user_id=user.id, channel_id=channel_id)
     await _on_bot(ctx, pod_id=pod_id, state=state, action=Permissions.AGENT_READ)
     access = GroupAccess(ctx=ctx, uow=uow, pod_id=pod_id, viewer_id=user.id)
     return detail_response(
@@ -362,6 +378,7 @@ async def update_source(
     current = await _source(
         uow, pod_id=pod_id, source_id=source_id, channel_id=channel_id
     )
+    await _seen_by(uow, ctx, pod_id=pod_id, user_id=user.id, channel_id=channel_id)
     await _on_bot(ctx, pod_id=pod_id, state=current, action=Permissions.AGENT_UPDATE)
     access = GroupAccess(ctx=ctx, uow=uow, pod_id=pod_id, viewer_id=user.id)
     if not await access.manages(current):

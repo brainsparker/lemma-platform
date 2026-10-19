@@ -25,6 +25,7 @@ from opentelemetry import metrics
 from redis.exceptions import RedisError
 
 from app.core.domain.realtime import RealtimeChannel, RealtimeSlowConsumerError
+from app.core.live.access_clock import AccessClock
 from app.core.live.config import LiveSettings
 from app.core.live.connection import LiveConnection
 from app.core.live.protocol import LiveAccessDenied, ResyncReason
@@ -107,8 +108,7 @@ class PodHub:
         self._joining = 0
         self._cursor: str | None = None
         self._position: ChangePosition | None = None
-        self._epoch: str | None = None
-        self._next_epoch_check = 0.0
+        self._authz = AccessClock(settings)
         self._recheck_at: float | None = None
         self._last_read = 0.0
         self._recheck_step = _RECHECK_FIRST
@@ -298,7 +298,7 @@ class PodHub:
         try:
             self._cursor = await self._feed.horizon(self.pod_id)
             self._position = self._feed.position(self._cursor)
-            self._epoch = await self._epoch_of(self.pod_id)
+            epoch = await self._epoch_of(self.pod_id)
         except BaseException as exc:
             start.failed(exc)
             if isinstance(exc, asyncio.CancelledError):
@@ -312,9 +312,7 @@ class PodHub:
             if not isinstance(exc, Exception):
                 raise
             return
-        self._next_epoch_check = (
-            time.monotonic() + self._settings.live_authz_check_seconds
-        )
+        self._authz.start(epoch)
         start.succeeded()
         pump = create_background_task(
             self._pump_wakes(), name=f"live-wake-{self.pod_id}"
@@ -323,8 +321,10 @@ class PodHub:
             while True:
                 woken, read_due = await self._wait_for_work()
                 try:
-                    if time.monotonic() >= self._next_epoch_check:
-                        await self._check_epoch()
+                    if time.monotonic() >= self._authz.next_check:
+                        await self._authz.check(
+                            lambda: self._epoch_of(self.pod_id), self.recheck_access
+                        )
                     if read_due and self._by_table:
                         async with self._lock:
                             found = await self._drain()
@@ -357,7 +357,7 @@ class PodHub:
         read_due_at = (
             self._recheck_at if self._recheck_at is not None else self._next_poll
         )
-        timeout = max(0.0, min(read_due_at, self._next_epoch_check) - now)
+        timeout = max(0.0, min(read_due_at, self._authz.next_check) - now)
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(self._wake.wait(), timeout=timeout)
         # Reads are at least one coalescing window apart, whatever asked for
@@ -509,17 +509,7 @@ class PodHub:
                 subscription.advance(self._position, self._cursor)
                 self._resync(subscription, self._cursor, ResyncReason.CURSOR_EXPIRED)
 
-    # -- authorization epoch --------------------------------------------------
-
-    async def _check_epoch(self) -> None:
-        self._next_epoch_check = (
-            time.monotonic() + self._settings.live_authz_check_seconds
-        )
-        epoch = await self._epoch_of(self.pod_id)
-        if epoch is None or epoch == self._epoch:
-            return
-        self._epoch = epoch
-        await self.recheck_access()
+    # -- authorization (on ``self._authz``: ``app/core/live/access_clock.py``) --
 
     async def recheck_access(self) -> None:
         """Re-check every subscription; end the ones that lost their table."""

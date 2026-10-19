@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 
 from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import require_action
@@ -22,6 +22,8 @@ from app.modules.channels.api.access import (
     Caller,
     CallerDep,
     conflict,
+    decode_cursor,
+    encode_cursor,
     missing,
     require_manage,
     unprocessable,
@@ -30,13 +32,14 @@ from app.modules.channels.api.access import (
 from app.modules.channels.api.controller import seat_agents, seat_people
 from app.modules.channels.api.schemas import (
     ChannelDetailResponse,
+    ChannelMemberListResponse,
     MembersAddRequest,
     MemberUpdateRequest,
     MyMembershipUpdate,
     ReadRequest,
     ReadResponse,
 )
-from app.modules.channels.api.views import channel_detail
+from app.modules.channels.api.views import channel_detail, members_response
 from app.modules.channels.domain.access import may_see
 from app.modules.channels.domain.entities import (
     Channel,
@@ -45,7 +48,7 @@ from app.modules.channels.domain.entities import (
     Principal,
     SenderKind,
 )
-from app.modules.channels.infrastructure.members import MemberRepository
+from app.modules.channels.infrastructure.members import MAX_MEMBERS, MemberRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 
 logger = get_logger(__name__)
@@ -79,6 +82,39 @@ async def add_members(
     )
     await uow.commit()
     return await channel_detail(uow, caller, channel)
+
+
+@router.get(
+    "/{channel_id}/members",
+    operation_id="channel.member.list",
+    response_model=ChannelMemberListResponse,
+    dependencies=[require_action(Permissions.CHANNEL_READ)],
+)
+async def list_members(
+    pod_id: UUID,
+    channel_id: UUID,
+    uow: UoWDep,
+    caller: CallerDep,
+    cursor: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=100, ge=1, le=MAX_MEMBERS),
+) -> ChannelMemberListResponse:
+    """Who is in a channel -- members, contacts and agents -- in the order
+    they joined, a page at a time."""
+    channel = await visible(uow, caller, channel_id)
+    members = await MemberRepository(uow.session).page(
+        channel.id, limit=limit, after=decode_cursor(cursor)
+    )
+    last = members[-1] if len(members) == limit else None
+    return ChannelMemberListResponse(
+        items=await members_response(uow, caller, members),
+        next_cursor=(
+            encode_cursor(last.joined_at, last.seat_id)
+            if last is not None
+            and last.joined_at is not None
+            and last.seat_id is not None
+            else None
+        ),
+    )
 
 
 async def _group(

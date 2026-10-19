@@ -108,11 +108,12 @@ async def answer_line(
 
 
 def _answerable(line: ChannelMessage) -> bool:
-    """A member's own line written in Lemma, still there."""
+    """A member's own line written in Lemma -- wherever it was carried -- still
+    there. One heard on a platform is answered there."""
     return (
         line.sender.kind is SenderKind.MEMBER
         and line.sender.user_id is not None
-        and line.source_id is None
+        and not line.heard_outside
         and not line.members_only
         and not line.is_deleted
     )
@@ -338,11 +339,8 @@ async def post_run_answer(
             select(AgentModel.name).where(AgentModel.id == agent_id)
         )
     )
-    # A member's own channel reads as a chat: the answer follows the line it
-    # answers. Elsewhere it is a reply in the line's thread.
     channel = await channel_by_id(uow, line.channel_id)
-    direct = channel is not None and channel.kind is ChannelKind.DIRECT
-    in_thread = line.thread_root_id or (None if direct else line.id)
+    in_thread, place = _where_the_answer_goes(channel, line)
     return await post(
         uow,
         channel_id=line.channel_id,
@@ -353,13 +351,31 @@ async def post_run_answer(
                 display_name=agent_name,
             ),
             text=text,
+            target_source_id=place,
             client_message_id=answer_client_id(run_id),
             conversation_id=conversation_id,
             agent_run_id=run_id,
             thread_root_id=in_thread,
             reply_to_id=line.id,
         ),
+        deliver_to=[place] if place else [],
     )
+
+
+def _where_the_answer_goes(
+    channel: Channel | None, line: ChannelMessage
+) -> tuple[UUID | None, UUID | None]:
+    """The thread an answer is a reply in, and the place it is carried to.
+
+    A member's own channel reads as a chat: the answer follows the line it
+    answers. Elsewhere it is a reply in the line's thread. A group's line
+    carried to its platform was asked there too: the answer follows it, into
+    its thread there. A contact's channel never: the answer is the member's,
+    made with their access, not the contact's to read.
+    """
+    kind = channel.kind if channel is not None else None
+    in_thread = line.thread_root_id or (None if kind is ChannelKind.DIRECT else line.id)
+    return in_thread, line.place_id if kind is ChannelKind.GROUP else None
 
 
 __all__ = [

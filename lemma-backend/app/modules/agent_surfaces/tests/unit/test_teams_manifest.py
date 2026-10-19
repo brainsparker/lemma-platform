@@ -23,6 +23,9 @@ CONTENT_BY_VERSION = {
     # RSC: ChannelMessage.Read.Group and ChatMessage.Read.Chat, so channel and
     # group-chat talk reaches the bot without an @mention.
     "1.1.0": "805bfbb5f41601fb2d212bda3738ddb87511fbb228fd1126b89eca175f4f016e",
+    # RSC: ChannelSettings.Read.Group, so the bot can ask Graph whether a team
+    # channel is standard (open to the team) or private before mirroring it.
+    "1.2.0": "963df5118f1cb393be2742468aea32c5cdac47ada0ebd5c867c615e74067ef20",
 }
 
 
@@ -53,6 +56,7 @@ def test_the_manifest_reads_the_messages_channels_log():
     assert {permission["name"] for permission in permissions} >= {
         "ChannelMessage.Read.Group",
         "ChatMessage.Read.Chat",
+        "ChannelSettings.Read.Group",
     }
 
 

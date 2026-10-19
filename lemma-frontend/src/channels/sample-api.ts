@@ -6,7 +6,7 @@ import {
     SAMPLE_SOURCE_SETTINGS,
 } from "@/data/fixtures";
 import type { ChannelApi } from "./api";
-import { readChannelDetail, readChannelPage, readLine, readLinePage, type Line } from "./model";
+import { readChannelDetail, readChannelPage, readLine, readLinePage, readThreadPage, type Line } from "./model";
 import { readSearchPage } from "./search-model";
 import { readInbox } from "./waiting";
 import { readSourceSettings } from "./sources";
@@ -118,7 +118,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
         },
         async thread(_channelId, rootId) {
             await wait(120);
-            return readLinePage({ items: threads.get(rootId) ?? [], has_more: false });
+            return readThreadPage({ items: threads.get(rootId) ?? [], has_more: false });
         },
         async post(channelId, body) {
             await wait(250);

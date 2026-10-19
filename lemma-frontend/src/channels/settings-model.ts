@@ -36,3 +36,10 @@ export function mutedSaid(until: string | null, now = new Date()): string | null
         ? at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
         : at.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }));
 }
+
+/** What making a private group public means, asked before it is done: the
+ *  whole pod can read it from then on, what was said before included. */
+export function publicWarning(title: string | null, space: string): string {
+    return "Everyone in " + space + " will be able to find " + (title ?? "this channel")
+        + " and read everything said in it, including what was said before it was public. Make it public?";
+}

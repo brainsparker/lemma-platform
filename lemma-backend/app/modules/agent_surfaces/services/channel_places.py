@@ -35,6 +35,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.external_accounts import account_key_for
+from app.modules.agent_surfaces.domain.place_privacy import is_private_place
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -253,20 +254,14 @@ def is_shared(route: ResolvedSurfaceRoute, parsed: ParsedInboundSurfaceEvent) ->
     return route.conversation_kind == _EMAIL and bool(_copied(parsed))
 
 
-#: Platform conversation types a pod member who is not in them cannot read.
-_PRIVATE_TYPES = frozenset({"group", "mpim", "groupchat", "private"})
-
-
 def is_private(surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent) -> bool:
-    """Whether the platform keeps this place to its members. A Slack public
-    channel and a Teams standard channel are open to their workspace; a Slack
-    private channel or group DM, a Teams group chat or private channel, a
-    WhatsApp or Telegram group, and a copied email thread are not."""
+    """Whether the platform keeps this place to its members. Only a Slack
+    public channel and a Teams standard channel are open to their workspace,
+    and only on the platform's word (``domain/place_privacy``): a place whose
+    kind nothing said is private."""
     if surface.surface_type not in (SurfacePlatform.SLACK, SurfacePlatform.TEAMS):
         return True
-    kind = str(parsed.metadata.get("channel_type") or "").lower()
-    membership = str(parsed.metadata.get("membership_type") or "").lower()
-    return kind in _PRIVATE_TYPES or membership == "private"
+    return is_private_place(surface.surface_type, parsed.metadata)
 
 
 def place_of(

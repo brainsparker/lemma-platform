@@ -1121,11 +1121,69 @@ code.gsheet__code-text {
 }
 
 /* What was said, a day at a time. */
+/* The timeline and what floats over it: "Jump to unread" at its top, the
+   new-lines pill at its foot. */
+.ctimeline__wrap {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
 .ctimeline {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     padding: 12px 32px 16px;
+}
+.ctimeline__jump,
+.ctimeline__fresh {
+    position: absolute;
+    left: 50%;
+    z-index: 2;
+    transform: translateX(-50%);
+    box-shadow: var(--depth-raise);
+}
+.ctimeline__jump {
+    top: 8px;
+    background: var(--paper);
+}
+.ctimeline__fresh {
+    bottom: 10px;
+}
+/* Where the lines unread when the channel was opened begin. */
+.ctimeline__unread {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+    list-style: none;
+    font-size: 12px;
+    color: var(--accent);
+}
+.ctimeline__unread::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--accent-line);
+}
+.chthread__more {
+    display: block;
+    margin: 4px auto 12px;
+}
+.chcompose__progress {
+    margin: 0;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.chcompose[data-dragging] {
+    outline: 2px dashed var(--accent-line);
+    outline-offset: 2px;
+}
+.chchip--file[data-state="uploading"] {
+    color: var(--ink-2);
+}
+.chchip--file[data-state="uploaded"] {
+    color: var(--ok);
 }
 .ctimeline__older {
     display: block;

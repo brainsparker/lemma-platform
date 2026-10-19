@@ -10,6 +10,7 @@ from pydantic import (
     ConfigDict,
     Field,
     computed_field,
+    field_validator,
     model_validator,
 )
 
@@ -358,6 +359,22 @@ class SendMessageRequest(BaseModel):
             "first send's run, with deduplicated=true."
         ),
     )
+
+    @field_validator("client_message_id")
+    @classmethod
+    def _not_a_system_name(cls, value: str | None) -> str | None:
+        """The pod names some sends itself -- the turn a channel line starts,
+        the news that answers arrived -- and a client never takes one of
+        those names first."""
+        if value is not None and value.startswith(SYSTEM_CLIENT_ID_PREFIXES):
+            raise ValueError("That client_message_id is reserved")
+        return value
+
+
+#: The ``client_message_id`` names the pod gives its own sends in a
+#: conversation: ``channel_answers.turn_client_id``,
+#: ``message_reply_service.replies_client_id``.
+SYSTEM_CLIENT_ID_PREFIXES = ("channel-line:", "replies:")
 
 
 class CreateAgentRequest(BaseModel):

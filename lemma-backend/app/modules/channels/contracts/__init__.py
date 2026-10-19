@@ -10,6 +10,7 @@ deliveries (``contracts/deliveries``) are submodules.
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence
+from datetime import datetime
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -122,6 +123,7 @@ __all__ = [
     "channel_by_id",
     "contact_channel",
     "direct_channel",
+    "hand_back",
     "join",
     "keyed_client_id",
     "may_read",
@@ -307,6 +309,21 @@ async def assign(
     """Somebody answers this contact by hand now -- or, with ``None``, nobody:
     its agent answers them again."""
     await ChannelRepository(uow.session).assign(channel_id, user_id)
+
+
+async def hand_back(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    channel_id: UUID,
+    user_id: UUID,
+    quiet_since: datetime,
+) -> bool:
+    """Let go of ``user_id`` as the contact's assignee if they have not
+    written since ``quiet_since``: one conditional write, so it happens once
+    and never to a member who just wrote. Whether this call let them go."""
+    return await ChannelRepository(uow.session).hand_back(
+        channel_id, user_id=user_id, quiet_since=quiet_since
+    )
 
 
 async def acknowledge(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> bool:

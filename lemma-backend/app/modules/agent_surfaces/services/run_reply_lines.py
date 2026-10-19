@@ -36,7 +36,11 @@ from app.modules.agent.contracts.run_replies import (
 )
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
-from app.modules.agent_surfaces.services.channel_lines import answered_for
+from app.modules.agent_surfaces.services.channel_lines import (
+    WEB,
+    answered_for,
+    shown_on_web,
+)
 from app.modules.agent_surfaces.services.place_threads import THREADED
 from app.modules.agent_surfaces.services.progress_events import failure_notice
 from app.modules.channels.contracts import (
@@ -47,7 +51,6 @@ from app.modules.channels.contracts import (
     SourceKind,
     post,
 )
-from app.modules.channels.contracts.deliveries import deliveries_of, delivery_sent
 from app.modules.channels.contracts.lines import thread_root_at
 from app.modules.channels.contracts.places import ReplyAddress
 
@@ -81,7 +84,10 @@ async def post_run_reply(
 ) -> ChannelMessage | None:
     """Post the run's answer at ``address`` and plan its delivery there."""
     source = address.source
-    web = source.surface_id is None
+    # The place's platform, not a missing surface: a place whose bot was
+    # removed has no surface either, and its answer is not shown anywhere --
+    # its delivery says so (``channel_deliveries``).
+    web = source.platform == WEB
     if web and material.status == "FAILED":
         # The web chat says a run failed on its own page.
         return None
@@ -101,7 +107,7 @@ async def post_run_reply(
                 display_name=await _agent_name(uow, agent_id),
             ),
             text=text,
-            source_id=source.id,
+            target_source_id=source.id,
             client_message_id=answer_line_client_id(run_id),
             conversation_id=conversation_id,
             agent_run_id=run_id,
@@ -113,7 +119,7 @@ async def post_run_reply(
         deliver_to=[source.id],
     )
     if line is not None and web:
-        await _shown_on_web(uow, line, source)
+        await shown_on_web(uow, line, source)
     return line
 
 
@@ -147,17 +153,6 @@ async def _agent_name(uow: SqlAlchemyUnitOfWork, agent_id: UUID) -> str:
     if agent is None or agent.is_pod_default:
         return DEFAULT_RESPONDER_NAME
     return agent.name
-
-
-async def _shown_on_web(
-    uow: SqlAlchemyUnitOfWork, line: ChannelMessage, source: Source
-) -> None:
-    """The web chat shows the answer from the conversation: nothing is sent."""
-    for delivery in await deliveries_of(uow, [line.id]):
-        if delivery.source_id == source.id:
-            await delivery_sent(
-                uow, delivery.id, platform=source.platform, external_message_id=None
-            )
 
 
 __all__ = ["ALL_REASONING_REPLY", "answer_text", "post_run_reply"]

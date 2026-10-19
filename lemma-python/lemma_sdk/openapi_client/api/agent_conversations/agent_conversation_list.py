@@ -148,13 +148,12 @@ def sync_detailed(
 ) -> Response[ConversationListResponse | ErrorResponse]:
     """List Pod Agent Conversations
 
-     List root conversations for the current user in a pod. Omit agent_name to list conversations across
-    the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
-    name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
-    default; pass parent_id to list the children of a specific conversation instead. Archived
-    conversations are omitted; pass archived=true for the archive. Pass search to keep only
-    conversations whose title contains it (case-insensitive). Ordered by last_activity_at, most recent
-    first.
+     List root conversations for the current user in a pod. Omit agent_name for conversations across the
+    pod, pass POD_DEFAULT (or pod_default) for the pod assistant's, or a name for one pod agent's. Child
+    (sub-agent) conversations are omitted by default; pass parent_id to list one conversation's children
+    instead. Archived conversations are omitted; pass archived=true for the archive. search keeps titles
+    containing it (case-insensitive); in_channel=false keeps conversations of no channel (the chats
+    list), true those in one. Ordered by last_activity_at, most recent first.
 
     Args:
         pod_id (UUID):
@@ -164,8 +163,7 @@ def sync_detailed(
         parent_id (None | Unset | UUID):
         archived (bool | Unset):  Default: False.
         search (None | str | Unset):
-        in_channel (bool | None | Unset): false: only conversations of no channel (the chats
-            list); true: only those in a channel. Omitted: both.
+        in_channel (bool | None | Unset):
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 
@@ -213,13 +211,12 @@ def sync(
 ) -> ConversationListResponse | ErrorResponse | None:
     """List Pod Agent Conversations
 
-     List root conversations for the current user in a pod. Omit agent_name to list conversations across
-    the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
-    name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
-    default; pass parent_id to list the children of a specific conversation instead. Archived
-    conversations are omitted; pass archived=true for the archive. Pass search to keep only
-    conversations whose title contains it (case-insensitive). Ordered by last_activity_at, most recent
-    first.
+     List root conversations for the current user in a pod. Omit agent_name for conversations across the
+    pod, pass POD_DEFAULT (or pod_default) for the pod assistant's, or a name for one pod agent's. Child
+    (sub-agent) conversations are omitted by default; pass parent_id to list one conversation's children
+    instead. Archived conversations are omitted; pass archived=true for the archive. search keeps titles
+    containing it (case-insensitive); in_channel=false keeps conversations of no channel (the chats
+    list), true those in one. Ordered by last_activity_at, most recent first.
 
     Args:
         pod_id (UUID):
@@ -229,8 +226,7 @@ def sync(
         parent_id (None | Unset | UUID):
         archived (bool | Unset):  Default: False.
         search (None | str | Unset):
-        in_channel (bool | None | Unset): false: only conversations of no channel (the chats
-            list); true: only those in a channel. Omitted: both.
+        in_channel (bool | None | Unset):
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 
@@ -273,13 +269,12 @@ async def asyncio_detailed(
 ) -> Response[ConversationListResponse | ErrorResponse]:
     """List Pod Agent Conversations
 
-     List root conversations for the current user in a pod. Omit agent_name to list conversations across
-    the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
-    name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
-    default; pass parent_id to list the children of a specific conversation instead. Archived
-    conversations are omitted; pass archived=true for the archive. Pass search to keep only
-    conversations whose title contains it (case-insensitive). Ordered by last_activity_at, most recent
-    first.
+     List root conversations for the current user in a pod. Omit agent_name for conversations across the
+    pod, pass POD_DEFAULT (or pod_default) for the pod assistant's, or a name for one pod agent's. Child
+    (sub-agent) conversations are omitted by default; pass parent_id to list one conversation's children
+    instead. Archived conversations are omitted; pass archived=true for the archive. search keeps titles
+    containing it (case-insensitive); in_channel=false keeps conversations of no channel (the chats
+    list), true those in one. Ordered by last_activity_at, most recent first.
 
     Args:
         pod_id (UUID):
@@ -289,8 +284,7 @@ async def asyncio_detailed(
         parent_id (None | Unset | UUID):
         archived (bool | Unset):  Default: False.
         search (None | str | Unset):
-        in_channel (bool | None | Unset): false: only conversations of no channel (the chats
-            list); true: only those in a channel. Omitted: both.
+        in_channel (bool | None | Unset):
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 
@@ -336,13 +330,12 @@ async def asyncio(
 ) -> ConversationListResponse | ErrorResponse | None:
     """List Pod Agent Conversations
 
-     List root conversations for the current user in a pod. Omit agent_name to list conversations across
-    the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
-    name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
-    default; pass parent_id to list the children of a specific conversation instead. Archived
-    conversations are omitted; pass archived=true for the archive. Pass search to keep only
-    conversations whose title contains it (case-insensitive). Ordered by last_activity_at, most recent
-    first.
+     List root conversations for the current user in a pod. Omit agent_name for conversations across the
+    pod, pass POD_DEFAULT (or pod_default) for the pod assistant's, or a name for one pod agent's. Child
+    (sub-agent) conversations are omitted by default; pass parent_id to list one conversation's children
+    instead. Archived conversations are omitted; pass archived=true for the archive. search keeps titles
+    containing it (case-insensitive); in_channel=false keeps conversations of no channel (the chats
+    list), true those in one. Ordered by last_activity_at, most recent first.
 
     Args:
         pod_id (UUID):
@@ -352,8 +345,7 @@ async def asyncio(
         parent_id (None | Unset | UUID):
         archived (bool | Unset):  Default: False.
         search (None | str | Unset):
-        in_channel (bool | None | Unset): false: only conversations of no channel (the chats
-            list); true: only those in a channel. Omitted: both.
+        in_channel (bool | None | Unset):
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 

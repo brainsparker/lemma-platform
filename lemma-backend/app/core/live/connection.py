@@ -24,7 +24,10 @@ from uuid import UUID, uuid4
 from pydantic import JsonValue
 
 from app.core.live.protocol import (
+    CLOSE_FORBIDDEN,
+    CLOSE_NOT_FOUND,
     LiveErrorCode,
+    UnsubscribedReason,
     ResyncReason,
     error_frame,
     events_frame,
@@ -134,6 +137,14 @@ class LiveConnection:
     subscriptions: dict[str, LiveSubscription] = field(default_factory=dict)
     closed: bool = False
     overflows: int = 0
+    #: The socket carries one subscription and nothing else (the previous
+    #: ``/datastore/changes`` socket): the server ending it closes the socket,
+    #: since its client has no frame that says so.
+    ends_with_subscription: bool = False
+    #: Why the server closed the socket, for its close frame; ``None`` for a
+    #: plain close.
+    close_code: int | None = None
+    close_reason: str = ""
     _queue: deque[_Queued] = field(default_factory=deque)
     _queued_bytes: int = 0
     _wake: asyncio.Event = field(default_factory=asyncio.Event)
@@ -243,6 +254,17 @@ class LiveConnection:
             subscription.release()
         self._drop_where(lambda item: item.droppable_for == subscription_id)
         self.offer(self.frames.unsubscribed(subscription_id, reason))
+        if (
+            self.ends_with_subscription
+            and subscription is not None
+            and reason != UnsubscribedReason.CLIENT.value
+        ):
+            self.close_with(
+                CLOSE_FORBIDDEN
+                if reason == UnsubscribedReason.ACCESS_REVOKED.value
+                else CLOSE_NOT_FOUND,
+                reason,
+            )
 
     # -- calls ---------------------------------------------------------------
 
@@ -269,6 +291,14 @@ class LiveConnection:
             item = self._queue.popleft()
             self._queued_bytes -= len(item.text)
             await self.send_text(item.text)
+
+    def close_with(self, code: int, reason: str) -> None:
+        """Close the socket from the server's side with ``code``: the sender
+        stops, and the socket's runner closes it with that code."""
+        if self.closed:
+            return
+        self.close_code, self.close_reason = code, reason
+        self.close()
 
     def close(self) -> None:
         """Stop sending and let every subscription go."""

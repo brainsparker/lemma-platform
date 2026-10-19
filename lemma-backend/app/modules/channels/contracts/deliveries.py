@@ -10,14 +10,16 @@ whose sender died mid-send is settled by ``delivery_interrupted``, not resent.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import facts
+from app.modules.channels.contracts.facts import ChannelDeliveryDue
 from app.modules.channels.domain.entities import Delivery
 from app.modules.channels.infrastructure.deliveries import DeliveryRepository
 
 __all__ = [
+    "announce_next_for_target",
     "claim_delivery",
     "deliveries_of",
     "delivery_by_external",
@@ -26,10 +28,17 @@ __all__ = [
     "delivery_failed",
     "delivery_interrupted",
     "delivery_noted",
+    "delivery_reasoned",
     "delivery_sent",
     "delivery_skipped",
     "delivery_undelivered",
+    "delivery_unnoted",
     "due_deliveries",
+    "due_fact",
+    "held_pushes",
+    "lapsed_delivery",
+    "push_is_urgent",
+    "reclaim_delivery",
     "retry_delivery",
 ]
 
@@ -41,32 +50,56 @@ async def delivery_by_id(
 
 
 async def claim_delivery(
-    uow: SqlAlchemyUnitOfWork, delivery_id: UUID, *, at: datetime
+    uow: SqlAlchemyUnitOfWork, delivery_id: UUID
 ) -> Delivery | None:
     """Take a due delivery to send it; ``None`` when it is not due -- sent,
-    skipped, given up, being sent by somebody else, or a claim that lapsed
-    unfinished (``delivery_interrupted``)."""
-    return await DeliveryRepository(uow.session).claim(delivery_id, at=at)
+    skipped, given up, being sent by somebody else, waiting behind an earlier
+    line to the same target, or a claim that lapsed unfinished
+    (``lapsed_delivery``)."""
+    return await DeliveryRepository(uow.session).claim(delivery_id)
+
+
+async def lapsed_delivery(
+    uow: SqlAlchemyUnitOfWork, delivery_id: UUID
+) -> Delivery | None:
+    """The delivery, when it is a claim whose sender died before recording
+    what happened."""
+    return await DeliveryRepository(uow.session).lapsed(delivery_id)
+
+
+async def reclaim_delivery(
+    uow: SqlAlchemyUnitOfWork, delivery_id: UUID
+) -> Delivery | None:
+    """Take a lapsed claim to send it again -- only where the platform dedupes
+    a resend by the delivery's key, so what did arrive is not repeated."""
+    return await DeliveryRepository(uow.session).reclaim(delivery_id)
 
 
 async def delivery_interrupted(
-    uow: SqlAlchemyUnitOfWork, delivery_id: UUID, *, at: datetime
+    uow: SqlAlchemyUnitOfWork, delivery_id: UUID
 ) -> Delivery | None:
     """Settle a claim whose sender died before recording what happened, without
     sending it again: ``SENT`` when its platform id was noted before the call
     (``delivery_noted``), else ``DEAD`` saying it may not have arrived.
     ``None`` when it is no such claim."""
-    return await DeliveryRepository(uow.session).interrupted(delivery_id, at=at)
+    return await DeliveryRepository(uow.session).interrupted(delivery_id)
 
 
 async def delivery_noted(
     uow: SqlAlchemyUnitOfWork, delivery_id: UUID, *, external_message_id: str
 ) -> None:
-    """The platform's id for a claimed send, known before the call that
-    finishes it -- a live stream the answer closes in place."""
+    """The platform's id for a claimed send, as soon as it is known: before
+    the call that finishes a live stream in place, or the moment the platform
+    answers, so its status report finds the row before ``SENT`` is recorded."""
     await DeliveryRepository(uow.session).noted(
         delivery_id, external_message_id=external_message_id
     )
+
+
+async def delivery_unnoted(uow: SqlAlchemyUnitOfWork, delivery_id: UUID) -> None:
+    """Forget a noted id that no longer stands for a message there: a live
+    stream taken down, so a lapse is not read as the answer having arrived."""
+    await DeliveryRepository(uow.session).unnoted(delivery_id)
 
 
 async def delivery_sent(
@@ -100,10 +133,12 @@ async def delivery_failed(
     *,
     reason: str,
     platform: str | None = None,
+    retry_after: float | None = None,
 ) -> Delivery:
-    """It did not go: due again after backoff, or given up after the last try."""
+    """It did not go: due again after backoff -- no sooner than the platform's
+    ``retry_after`` (seconds) -- or given up after the last try."""
     return await DeliveryRepository(uow.session).failed(
-        delivery, reason=reason, platform=platform
+        delivery, reason=reason, platform=platform, retry_after=retry_after
     )
 
 
@@ -128,23 +163,68 @@ async def retry_delivery(
 
 
 async def delivery_undelivered(
-    uow: SqlAlchemyUnitOfWork, *, platform: str, external_message_id: str, reason: str
-) -> int:
-    """A send the platform took and later reported, by its id, never arrived:
-    ``DEAD`` with ``reason``. How many deliveries that was -- none for an id
-    that is not one of ours."""
-    return await DeliveryRepository(uow.session).undelivered(
-        platform=platform, external_message_id=external_message_id, reason=reason
-    )
+    uow: SqlAlchemyUnitOfWork, delivery_id: UUID, *, reason: str
+) -> bool:
+    """A send the platform took and later reported never arrived: ``DEAD``
+    with ``reason`` -- that delivery only, found by ``delivery_by_external``,
+    and even while its sender is still recording it. Whether it changed."""
+    return await DeliveryRepository(uow.session).undelivered(delivery_id, reason=reason)
 
 
 async def delivery_by_external(
-    uow: SqlAlchemyUnitOfWork, *, platform: str, external_message_id: str
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    platform: str,
+    external_message_id: str,
+    pod_id: UUID | None = None,
 ) -> Delivery | None:
-    """The delivery a platform's status report names."""
+    """The delivery a platform's status report names, in ``pod_id`` when the
+    report says whose it is."""
     return await DeliveryRepository(uow.session).by_external(
-        platform=platform, external_message_id=external_message_id
+        platform=platform, external_message_id=external_message_id, pod_id=pod_id
     )
+
+
+async def push_is_urgent(uow: SqlAlchemyUnitOfWork, delivery: Delivery) -> bool:
+    """Whether a push is one the member must not miss: its line names them,
+    or asks a question waiting on them. Not held to the hourly push budget,
+    and may go by email from any channel."""
+    return await DeliveryRepository(uow.session).urgent(delivery)
+
+
+async def held_pushes(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    recipient_user_id: UUID,
+    channel_id: UUID,
+    reason: str,
+) -> list[Delivery]:
+    """A member's pushes of one channel's lines skipped with ``reason`` --
+    held for a digest -- oldest first, and locked for the digest taking them."""
+    return await DeliveryRepository(uow.session).held(
+        recipient_user_id=recipient_user_id, channel_id=channel_id, reason=reason
+    )
+
+
+async def delivery_reasoned(
+    uow: SqlAlchemyUnitOfWork, delivery_ids: Sequence[UUID], *, reason: str
+) -> None:
+    """A new reason on deliveries that keep their status."""
+    await DeliveryRepository(uow.session).reasoned(delivery_ids, reason=reason)
+
+
+async def announce_next_for_target(
+    uow: SqlAlchemyUnitOfWork, delivery: Delivery
+) -> None:
+    """Once ``delivery`` is settled, announce the next delivery to its target
+    that was waiting behind it, so a place's lines keep going in order
+    without waiting for the sweeper."""
+    following = await DeliveryRepository(uow.session).next_for_target(delivery)
+    if following is None:
+        return
+    queued = await DeliveryRepository(uow.session).get(following)
+    if queued is not None:
+        await facts.emit(uow, due_fact(queued))
 
 
 async def deliveries_of(
@@ -153,7 +233,13 @@ async def deliveries_of(
     return await DeliveryRepository(uow.session).of_messages(message_ids)
 
 
-async def due_deliveries(
-    uow: SqlAlchemyUnitOfWork, *, at: datetime, limit: int = 100
-) -> list[UUID]:
-    return await DeliveryRepository(uow.session).due(at=at, limit=limit)
+async def due_deliveries(uow: SqlAlchemyUnitOfWork, *, limit: int = 100) -> list[UUID]:
+    return await DeliveryRepository(uow.session).due(limit=limit)
+
+
+def due_fact(delivery: Delivery) -> ChannelDeliveryDue:
+    """The announcement that ``delivery`` is due, keyed by its target so one
+    place's sends run one at a time."""
+    return ChannelDeliveryDue(
+        pod_id=delivery.pod_id, delivery_id=delivery.id, target=delivery.target_key
+    )

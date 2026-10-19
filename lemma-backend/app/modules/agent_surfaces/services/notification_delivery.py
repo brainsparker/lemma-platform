@@ -67,6 +67,9 @@ class Outbound:
     pod_id: UUID
     recipient_user_id: UUID
     title: str
+    #: The key every try of it is sent under, where the platform dedupes on
+    #: one (a push's delivery's).
+    key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +84,8 @@ class Delivered:
     #: Nothing took it because a platform failed, not because nothing could:
     #: worth trying again.
     retryable: bool = False
+    #: Held back by the hourly budget, for a digest (``push_digests``).
+    held: bool = False
 
     @property
     def sent(self) -> bool:
@@ -179,6 +184,10 @@ class UndeliverableReason:
         "reply window."
     )
     NO_EMAIL_ADDRESS = "No email address is on file for this person."
+    NOT_WORTH_AN_EMAIL = (
+        "No chat app reaches them, and a group's lines that do not name them "
+        "are not emailed; it waits in Lemma."
+    )
     NO_SURFACE_FOR_AGENT = (
         "This agent has no surface it can reach people on. Connect a chat "
         "surface for it, or configure email so it gets a mailbox."

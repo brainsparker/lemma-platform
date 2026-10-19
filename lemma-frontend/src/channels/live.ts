@@ -1,4 +1,4 @@
-import { readChannel, readLine, readPerson, type Channel, type ChannelDetail, type Line, type LinePage, type Unread } from "./model";
+import { readChannel, readLine, readPerson, type Channel, type ChannelDetail, type Line, type LinePage, type Page, type ThreadPage, type Unread } from "./model";
 import type { Inbox, PersonRef } from "./waiting";
 
 /** What the pod's live socket says about channels, read off the wire and
@@ -22,7 +22,8 @@ export type ChannelEvent =
     | { type: "question.closed"; messageId: string; state: string }
     | { type: "channel.updated"; channel: Channel }
     | { type: "read.updated"; readSeq: number }
-    | { type: "typing"; user: PersonRef }
+    /** `threadRootId`: typing a reply in that thread, shown only there. */
+    | { type: "typing"; user: PersonRef; threadRootId: string | null }
     | { type: "answering.started"; messageId: string; agentId: string | null }
     | { type: "answering.finished"; messageId: string; agentId: string | null }
     | { type: "line.streaming"; messageId: string; agentId: string | null; kind: string; delta: string };
@@ -50,7 +51,7 @@ export function readChannelEvent(raw: unknown): ChannelEvent | null {
             return { type: "read.updated", readSeq: count(event.read_seq) };
         case "typing": {
             const user = readPerson(event.user);
-            return user ? { type: "typing", user } : null;
+            return user ? { type: "typing", user, threadRootId: text(event.thread_root_id) } : null;
         }
         case "answering.started":
         case "answering.finished": {
@@ -90,12 +91,18 @@ export function upsertTimeline(pages: readonly LinePage[], line: Line): { pages:
     return { pages: [{ ...newest, items }, ...rest], added: true };
 }
 
-/** A thread's replies with one more, or one changed, oldest first. */
-export function upsertThread(page: LinePage, line: Line): LinePage {
-    if (page.items.some((one) => one.id === line.id)) {
-        return { ...page, items: page.items.map((one) => (one.id === line.id ? line : one)) };
+/** A thread's pages with one reply more, or one changed: replaced where it
+ *  is held, else added to the last page -- but only once the last page is
+ *  the newest. While later pages are still to be read, a new reply is left
+ *  for them to bring, so it is never shown out of order or twice. */
+export function upsertThread(pages: readonly ThreadPage[], line: Line): ThreadPage[] {
+    if (pages.some((page) => page.items.some((one) => one.id === line.id))) {
+        return pages.map((page) => ({ ...page, items: page.items.map((one) => (one.id === line.id ? line : one)) }));
     }
-    return { ...page, items: [...page.items, line].sort((a, b) => a.seq - b.seq) };
+    const last = pages.at(-1);
+    if (!last) return [{ items: [line], nextAfter: null }];
+    if (last.nextAfter !== null) return [...pages];
+    return [...pages.slice(0, -1), { ...last, items: [...last.items, line].sort((a, b) => a.seq - b.seq) }];
 }
 
 /* ── the channel ───────────────────────────────────────────────────── */
@@ -112,6 +119,19 @@ export function mergeChannel(detail: ChannelDetail, channel: Channel): ChannelDe
 export function withReadSeq(detail: ChannelDetail, readSeq: number): ChannelDetail {
     if (readSeq <= detail.me.readSeq) return detail;
     return { ...detail, me: { ...detail.me, readSeq }, unread: { ...detail.unread, readSeq, lines: 0, mentions: 0 } };
+}
+
+/** Who is typing in one place: the channel itself (`threadRootId` null) or
+ *  one thread -- a reply being typed is not news in the channel. */
+export function typingIn<T extends { threadRootId: string | null }>(typing: readonly T[], threadRootId: string | null): T[] {
+    return typing.filter((one) => one.threadRootId === threadRootId);
+}
+
+/** "Priya is typing…", for however many are. */
+export function sayTyping(names: readonly string[]): string {
+    if (names.length === 1) return names[0] + " is typing…";
+    if (names.length === 2) return names[0] + " and " + names[1] + " are typing…";
+    return names.length > 2 ? "Several people are typing…" : "";
 }
 
 /* ── an answer being written ───────────────────────────────────────── */
@@ -153,6 +173,13 @@ export function answeringStep(held: readonly Answering[], event: ChannelEvent): 
     }
 }
 
+/** The answers that started between two moments: what is said aloud when
+ *  an agent begins writing. One that was already going is not news. */
+export function answeringNews(before: readonly Answering[], after: readonly Answering[]): Answering[] {
+    const was = new Set(before.map((one) => one.messageId + ":" + (one.agentId ?? "")));
+    return after.filter((one) => !was.has(one.messageId + ":" + (one.agentId ?? "")));
+}
+
 /* ── the inbox ─────────────────────────────────────────────────────── */
 
 export type InboxEvent =
@@ -191,11 +218,28 @@ export function withChannelUnread<T extends { id: string; unread: Unread }>(chan
     return channels.map((channel) => (channel.id === channelId ? { ...channel, unread } : channel));
 }
 
-/** A new top-level line, as a list row's preview and order key. */
+/** A new top-level line, as a list row's preview and order key: the row
+ *  says it, and moves to the top, as the list orders by its newest line. */
 export function withLastLine<T extends Channel>(channels: readonly T[], channelId: string, line: Line): T[] {
-    return channels.map((channel) => (channel.id === channelId && line.seq >= channel.lastSeq
-        ? { ...channel, lastSeq: line.seq, lastMessageAt: line.createdAt, lastLine: { sender: line.sender, text: line.text ?? "", createdAt: line.createdAt } }
-        : channel));
+    const at = channels.findIndex((channel) => channel.id === channelId);
+    if (at === -1 || line.seq < channels[at].lastSeq) return [...channels];
+    const moved = { ...channels[at], lastSeq: line.seq, lastMessageAt: line.createdAt, lastLine: { sender: line.sender, text: line.text ?? "", createdAt: line.createdAt } };
+    return [moved, ...channels.slice(0, at), ...channels.slice(at + 1)];
+}
+
+/** The same across a list's pages: the row leaves whichever page held it
+ *  for the top of the first. A channel no page holds is left for the next
+ *  read of the list to bring. */
+export function withLastLinePages<T extends Channel>(pages: readonly Page<T>[], channelId: string, line: Line): Page<T>[] {
+    const holder = pages.findIndex((page) => page.items.some((channel) => channel.id === channelId));
+    if (holder === -1) return [...pages];
+    const row = pages[holder].items.find((channel) => channel.id === channelId)!;
+    if (line.seq < row.lastSeq) return [...pages];
+    const [moved] = withLastLine([row], channelId, line);
+    return pages.map((page, index) => {
+        const rest = index === holder ? page.items.filter((channel) => channel.id !== channelId) : page.items;
+        return { ...page, items: index === 0 ? [moved, ...rest] : rest };
+    });
 }
 
 /** A channel row replaced by what the socket says it is now. */

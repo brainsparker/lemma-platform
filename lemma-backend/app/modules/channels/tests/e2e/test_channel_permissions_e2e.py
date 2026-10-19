@@ -333,8 +333,10 @@ async def test_two_members_keys_never_name_one_line(pod: Pod):
     taken = await pod.client(pod.user).post(
         path, json={"text": "b", "client_message_id": "shared"}
     )
-    assert named.status_code == 201, named.text
-    assert taken.status_code == 409, taken.text
+
+    # A client's name is its own: the same one from two members is two lines.
+    assert named.status_code == taken.status_code == 201, taken.text
+    assert named.json()["id"] != taken.json()["id"]
 
 
 # -- where the bot's group routes are --------------------------------------------------

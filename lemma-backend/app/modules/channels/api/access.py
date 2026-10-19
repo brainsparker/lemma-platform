@@ -31,8 +31,10 @@ agents roster                          (``may_manage``)
 CONTACT channel: assignee, status,     ``channel.write`` + ``contact.message``
 agent switch, hand-back window
 Seeing a CONTACT channel at all        ``contact.read``
-A group source's settings              the bot's ``agent.read``; changing them
-(``/channels/{c}/sources/{s}``)        ``agent.update`` and its owner, or a pod
+A group source's settings              seeing the channel (else 404) or
+(``/channels/{c}/sources/{s}``)        ``channel.manage``, and the bot's
+                                       ``agent.read``; changing them
+                                       ``agent.update`` and its owner, or a pod
                                        admin (``agent_surfaces``)
 =====================================  ========================================
 """
@@ -62,11 +64,17 @@ class Caller:
     and the pod-wide permissions channel routes ask about."""
 
     def __init__(
-        self, viewer: Viewer, *, messages_contacts: bool, manages_channels: bool
+        self,
+        viewer: Viewer,
+        *,
+        messages_contacts: bool,
+        manages_channels: bool,
+        writes_channels: bool,
     ) -> None:
         self.viewer = viewer
         self.messages_contacts = messages_contacts
         self.manages_channels = manages_channels
+        self.writes_channels = writes_channels
 
     @property
     def user_id(self) -> UUID:
@@ -89,6 +97,7 @@ async def caller_from(ctx: Context, *, pod_id: UUID, user_id: UUID) -> Caller:
         ),
         messages_contacts=await ctx.can(Permissions.CONTACT_MESSAGE, pod),
         manages_channels=await ctx.can(Permissions.CHANNEL_MANAGE, pod),
+        writes_channels=await ctx.can(Permissions.CHANNEL_WRITE, pod),
     )
 
 
@@ -137,9 +146,13 @@ async def may_manage(
     uow: SqlAlchemyUnitOfWork, caller: Caller, channel: Channel
 ) -> bool:
     """Whether the caller may change this channel's settings and roster: its
-    owner, or whoever manages the pod's channels (``channel.manage``)."""
+    owner while they may write in the pod (``channel.write``) -- an owner made
+    a viewer keeps the seat, not the say -- or whoever manages the pod's
+    channels (``channel.manage``)."""
     if caller.manages_channels:
         return True
+    if not caller.writes_channels:
+        return False
     seat = await MemberRepository(uow.session).of_user(channel.id, caller.user_id)
     return seat is not None and seat.role is MemberRole.OWNER
 

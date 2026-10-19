@@ -16,6 +16,12 @@
  *    once; 4403 and 4404 are final; 4429 (too many sockets) waits longer.
  *  - With no subscription and no call left, the socket closes after a short
  *    idle, so a remount reuses it rather than opening a second.
+ *  - A socket can die without closing -- a laptop asleep, a network that
+ *    changed under it -- and then no `onclose` ever comes. Each ping expects
+ *    a frame back before the next is due; silence that long is a dead socket,
+ *    dropped and dialled again. Coming back online, or to the tab, does not
+ *    wait for that: a socket waiting to reconnect dials now, and an open one
+ *    is pinged at once.
  *
  *  Pure of React and of the SDK: the WebSocket, the clock and the session are
  *  handed in, which is what lets the tests drive a reconnect frame by frame. */
@@ -54,7 +60,14 @@ export interface LiveSocketOptions {
     /** How long a socket with nothing on it stays open. */
     idleCloseMs?: number;
     pingMs?: number;
+    /** How long after a ping silence means the socket is dead; `pingMs` by
+     *  default, so a dead socket is noticed within two pings of the last
+     *  frame heard. */
+    pongTimeoutMs?: number;
     callTimeoutMs?: number;
+    /** Hear "worth checking now" -- back online, the tab in front again;
+     *  returns how to stop listening. */
+    wakeups?: (wake: () => void) => () => void;
 }
 
 export interface LiveHandlers {
@@ -178,6 +191,8 @@ export class LiveSocket {
     private reconnectTimer: unknown = null;
     private idleTimer: unknown = null;
     private pingTimer: unknown = null;
+    private pongTimer: unknown = null;
+    private readonly unwake: (() => void) | null;
     private current: LiveStatus = "idle";
     private readonly subscriptions = new Map<string, Subscription>();
     private readonly calls = new Map<string, PendingCall>();
@@ -190,6 +205,21 @@ export class LiveSocket {
         this.options = options;
         this.clock = options.clock ?? realClock;
         this.random = options.random ?? Math.random;
+        this.unwake = options.wakeups?.(() => this.wake()) ?? null;
+    }
+
+    /** Something says the network may be back, or may have gone: a socket
+     *  waiting out its backoff dials now; an open one is asked to answer. */
+    wake(): void {
+        if (this.final) return;
+        if (this.reconnectTimer !== null) {
+            this.clock.clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+            if (this.wanted()) void this.connect();
+            else this.setStatus("idle");
+            return;
+        }
+        if (this.ready) this.ping();
     }
 
     get status(): LiveStatus {
@@ -238,6 +268,7 @@ export class LiveSocket {
     /** Stop for good: the page is going. */
     close(): void {
         this.final = true;
+        this.unwake?.();
         for (const subscription of this.subscriptions.values()) subscription.live = false;
         this.subscriptions.clear();
         this.teardown();
@@ -299,6 +330,7 @@ export class LiveSocket {
     }
 
     private receive(data: unknown): void {
+        this.heard();
         let frame: Frame;
         try {
             const parsed: unknown = JSON.parse(typeof data === "string" ? data : "");
@@ -436,12 +468,46 @@ export class LiveSocket {
 
     private startPing(): void {
         this.stopPing();
-        this.pingTimer = this.clock.setInterval(() => this.send('{"op":"ping"}'), this.options.pingMs ?? 25_000);
+        this.pingTimer = this.clock.setInterval(() => this.ping(), this.options.pingMs ?? 25_000);
+    }
+
+    /** A ping that expects an answer: anything heard before the deadline will
+     *  do, and the first deadline armed stands. */
+    private ping(): void {
+        this.send('{"op":"ping"}');
+        if (this.pongTimer !== null) return;
+        this.pongTimer = this.clock.setTimeout(() => {
+            this.pongTimer = null;
+            this.dead();
+        }, this.options.pongTimeoutMs ?? this.options.pingMs ?? 25_000);
+    }
+
+    private heard(): void {
+        if (this.pongTimer === null) return;
+        this.clock.clearTimeout(this.pongTimer);
+        this.pongTimer = null;
+    }
+
+    /** A socket gone silent: no close is coming, so it is closed here and
+     *  dialled again as after any drop. */
+    private dead(): void {
+        const socket = this.socket;
+        if (!socket) return;
+        socket.onmessage = null;
+        socket.onclose = null;
+        socket.onerror = null;
+        try {
+            socket.close(4000, "no answer");
+        } catch {
+            /* already gone */
+        }
+        this.closed(1006);
     }
 
     private stopPing(): void {
         if (this.pingTimer !== null) this.clock.clearInterval(this.pingTimer);
         this.pingTimer = null;
+        this.heard();
     }
 
     private teardown(): void {

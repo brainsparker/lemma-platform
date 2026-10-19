@@ -3,7 +3,8 @@
 * ``channel`` -- one channel's timeline, for a reader who may see it:
   ``{"topic":"channel","channel_id":"…","since":"<cursor>"}``.
 * ``inbox`` -- the reader's counts across the pod: ``{"topic":"inbox"}``.
-* ``typing`` -- the caller is writing in a channel; its other readers hear.
+* ``typing`` -- the caller is writing in a channel (or one of its threads);
+  its other readers hear.
 * ``read`` -- the caller has seen a channel up to a line: ``POST …/read``,
   over the socket.
 
@@ -68,6 +69,12 @@ class _ReadParams(_ChannelParams):
     seq: int = Field(ge=0)
 
 
+class _TypingParams(_ChannelParams):
+    #: Typing in a thread: its root line. Relayed as given -- the typist may
+    #: see the channel, and it only says where their composer is.
+    thread_root_id: UUID | None = None
+
+
 class ChannelTopic:
     name = "channel"
 
@@ -79,12 +86,12 @@ class ChannelTopic:
             caller = await require_caller(
                 uow, pod_id=connection.pod_id, user_id=connection.user_id
             )
-            channel = await visible_channel(uow, caller, params.channel_id)
+        # Whether they may see it is decided in the hub, under its lock.
         await _hub(connection.pod_id).join_channel(
             connection,
             request.id,
             caller=caller,
-            channel=channel,
+            channel_id=params.channel_id,
             since=request.since,
         )
 
@@ -117,7 +124,7 @@ class TypingCall:
     async def __call__(
         self, connection: LiveConnection, params: JsonObject, *, call_id: str
     ) -> JsonValue:
-        parsed = parse_params(_ChannelParams, params, request_id=call_id)
+        parsed = parse_params(_TypingParams, params, request_id=call_id)
         per_user = live_settings.live_typing_calls_per_user_per_minute
         if not await admit_user_call(
             connection.pod_id, connection.user_id, "typing", per_user
@@ -148,6 +155,7 @@ class TypingCall:
                 "c": str(channel.id),
                 "u": str(connection.user_id),
                 "who": ref(typist, names).model_dump(mode="json"),
+                "t": str(parsed.thread_root_id) if parsed.thread_root_id else None,
             },
         )
         return {}

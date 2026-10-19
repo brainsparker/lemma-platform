@@ -7,7 +7,7 @@ import {
     contactName,
     contactSubline,
     everyPage,
-    followUpRefusal,
+    outreachProblem,
     handleText,
     readContact,
     readOrigins,
@@ -79,9 +79,18 @@ test("origins are tidied, and only secure ones are accepted", () => {
 });
 
 test("every refusal says why in words", () => {
-    assert.match(followUpRefusal("outside_window"), /WhatsApp/);
-    assert.match(followUpRefusal("unsubscribed"), /asked not to/);
-    assert.equal(followUpRefusal(undefined), "Couldn’t send it. Try again.");
+    /* The API's refusal of the message is a sentence, said as given. */
+    const refused = (statusCode: number, message: string, name = "ApiError") => Object.assign(new Error(message), { statusCode, name });
+    assert.equal(outreachProblem(refused(409, "They asked not to be written to there.")), "They asked not to be written to there.");
+    assert.equal(outreachProblem(refused(422, "WhatsApp only allows a reply within 24 hours of their last message.")), "WhatsApp only allows a reply within 24 hours of their last message.");
+    /* Anything that is not a sentence for a person is never shown raw. */
+    assert.equal(outreachProblem(refused(422, '{"detail":[{"loc":["body","text"]}]}')), "That can’t be sent to them there.");
+    assert.equal(outreachProblem(refused(409, "Conflict")), "They can’t be written to there now.");
+    assert.equal(outreachProblem(refused(500, "Traceback (most recent call last): KeyError")), "Lemma couldn’t send it just now. Try again.");
+    assert.equal(outreachProblem(refused(503, "Service Unavailable")), "Sending isn’t available right now. Try again in a few minutes.");
+    assert.equal(outreachProblem(refused(404, "Contact not found")), "They are not one of this pod’s contacts any more.");
+    assert.match(outreachProblem(Object.assign(new Error("fetch failed"), { name: "NetworkError" })), /Couldn’t reach Lemma/);
+    assert.equal(outreachProblem(undefined), "Couldn’t send it. Try again.");
 });
 
 test("the cap says what was spent, with or without one", () => {

@@ -264,7 +264,7 @@ async def test_a_send_whose_sender_died_unrecorded_is_never_sent_again(
     # The dead sender's claim -- taken, perhaps sent, never recorded.
     async with async_session_maker() as session:
         uow = SqlAlchemyUnitOfWork(session)
-        claimed = await claim_delivery(uow, planned.id, at=datetime.now(UTC))
+        claimed = await claim_delivery(uow, planned.id)
         assert claimed is not None
         if noted:
             await delivery_noted(uow, planned.id, external_message_id="stream-1")

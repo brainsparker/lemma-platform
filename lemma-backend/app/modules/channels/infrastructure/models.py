@@ -98,6 +98,8 @@ class ChannelModel(UUIDAuditBase):
             postgresql_where=text("kind = 'CONTACT'"),
         ),
         Index("ix_channels_pod_activity", "pod_id", "last_line_at", "id"),
+        # A live hub's idle poll: the pod's channels changed since its last.
+        Index("ix_channels_pod_updated", "pod_id", "updated_at"),
         Index(
             "ix_channels_assignee",
             "assignee_user_id",

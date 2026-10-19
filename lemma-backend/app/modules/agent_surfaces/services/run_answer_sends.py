@@ -50,7 +50,10 @@ from app.modules.agent_surfaces.services.pending_envelope import (
     discard_display_paths,
 )
 from app.modules.channels.contracts import ChannelMessage, Delivery, SenderKind
-from app.modules.channels.contracts.deliveries import delivery_noted
+from app.modules.channels.contracts.deliveries import (
+    delivery_noted,
+    delivery_unnoted,
+)
 
 logger = get_logger(__name__)
 
@@ -107,6 +110,7 @@ class RunAnswerSends:
             send_metadata["retry_action"] = True
         run = None if failed else RunFiles(run_id)
         receipt: DeliveryReceipt | None = None
+        raised: BaseException | None = None
         with track_sends() as sends:
             try:
                 async with self.uow_factory() as uow:
@@ -116,19 +120,36 @@ class RunAnswerSends:
                         metadata=send_metadata,
                         attach_files_of=run,
                     )
+                    if receipt is not None and receipt.external_message_id:
+                        # As it answers: its status report finds the row.
+                        await delivery_noted(
+                            uow,
+                            delivery.id,
+                            external_message_id=receipt.external_message_id,
+                        )
                     await uow.commit()
-            except send_errors():
+            except send_errors() as exc:
                 logger.warning(
                     "agent_surfaces.run_answer_sends.send_failed.degraded",
                     delivery_id=str(delivery.id),
                     platform=platform,
                     exc_info=True,
                 )
+                raised = exc
         if receipt is not None and run is not None:
             # Released with the answer that carried them. One that did not
             # arrive keeps them for its retry, or until they expire.
             await discard_display_paths(conversation_id, run)
-        return of_send(receipt, sends, platform=platform)
+        return of_send(
+            receipt,
+            sends,
+            platform=platform,
+            raised=raised,
+            nothing_sent=(
+                "The conversation has nowhere to answer it any more, or the "
+                "answer was nothing once its reasoning was stripped."
+            ),
+        )
 
     async def _run_failed(self, run_id: UUID) -> bool:
         async with self.uow_factory() as uow:
@@ -172,6 +193,11 @@ class RunAnswerSends:
             return Outcome.delivered(platform, external_message_id=display.message_id)
         await self._take_down(conversation_id, display)
         await forget_live_display(run_id)
+        # The stream is gone: its id no longer says the answer arrived, should
+        # this sender die before the answer is posted in its place.
+        async with self.uow_factory() as uow:
+            await delivery_unnoted(uow, delivery.id)
+            await uow.commit()
         return None
 
     async def _close(

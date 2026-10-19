@@ -36,9 +36,14 @@ from app.modules.agent.contracts import channel_conversations
 from app.modules.agent.domain.asked_questions import line_client_id
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
-from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
+from app.modules.agent.domain.value_objects import (
+    AgentRunApprovalDecision,
+    MessageKind,
+    MessageRole,
+)
 from app.modules.agent.infrastructure.models import AgentModel
 from app.modules.agent.infrastructure.models.approval import AgentApprovalDecisionModel
+from app.modules.agent.infrastructure.models.conversation import MessageModel
 from app.modules.agent.infrastructure.repositories.conversation_repository import (
     ConversationRepository,
 )
@@ -46,6 +51,7 @@ from app.modules.agent.services.channel_answers import line_answered_by
 from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.channels.contracts import (
     ChannelKind,
+    ChannelMessage,
     channel_by_id,
     NewLine,
     NewQuestion,
@@ -98,6 +104,8 @@ class Pause:
     kind: str
     tool_args: dict[str, object]
     agent_run_id: UUID | None
+    #: Where the call sits in its conversation, to find what led up to it.
+    sequence: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +174,7 @@ async def undecided_pauses(
             kind=call.tool_name or "",
             tool_args=dict(call.tool_args) if isinstance(call.tool_args, dict) else {},
             agent_run_id=call.agent_run_id,
+            sequence=call.sequence,
         )
         for call in calls
         if call.tool_call_id and call.tool_name in (ASK_USER, REQUEST_APPROVAL)
@@ -235,6 +244,10 @@ async def _ask(uow: SqlAlchemyUnitOfWork, conversation, pause: Pause, ref: str) 
     channel_id, thread_root = await _where_to_ask(uow, conversation)
     agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
     text, question = shown(pause)
+    if narration := await _narration(uow, conversation.id, pause):
+        # What the agent said leading up to the question: a platform's card
+        # carries it, and the timeline should read the same.
+        text = f"{narration}\n\n{text}"
     approval = pause.kind == REQUEST_APPROVAL
     await post(
         uow,
@@ -262,6 +275,35 @@ async def _ask(uow: SqlAlchemyUnitOfWork, conversation, pause: Pause, ref: str) 
             + (APPROVAL_EXPIRES_AFTER if approval else ASK_EXPIRES_AFTER),
         ),
     )
+
+
+async def _narration(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, pause: Pause
+) -> str | None:
+    """The agent's words just before it paused -- its last message in the run
+    before the call, when that is what it said rather than another tool call."""
+    if pause.agent_run_id is None or pause.sequence is None:
+        return None
+    message = MessageModel
+    before = (
+        await uow.session.execute(
+            select(message.role, message.kind, message.text)
+            .where(
+                message.conversation_id == conversation_id,
+                message.agent_run_id == pause.agent_run_id,
+                message.sequence < pause.sequence,
+                message.kind != MessageKind.THINKING.value,
+            )
+            .order_by(message.sequence.desc())
+            .limit(1)
+        )
+    ).first()
+    if before is None:
+        return None
+    role, kind, said = before
+    if role != MessageRole.ASSISTANT.value or kind != MessageKind.TEXT.value:
+        return None
+    return (said or "").strip() or None
 
 
 async def _where_to_ask(
@@ -319,6 +361,43 @@ async def _close_stale(
                 else None
             ),
         )
+
+
+async def tell_where_asked(
+    uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, text: str, key: str
+) -> ChannelMessage | None:
+    """Say something about a pause where its question was asked: the agent's
+    line for the member, in the conversation's channel (or the member's own).
+    ``key`` names the notice, so saying it twice is one line.
+
+    A note for members: it is the timeline's record, never pushed or carried
+    to a platform -- a conversation on one is told there by ``agent_surfaces``
+    already, and a push would tell the member twice."""
+    conversation = await ConversationRepository(uow).get_conversation(
+        conversation_id, include_runs=False
+    )
+    if conversation is None or Audience.of(conversation).contact_id is not None:
+        return None
+    channel_id, thread_root = await _where_to_ask(uow, conversation)
+    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
+    return await post(
+        uow,
+        channel_id=channel_id,
+        line=NewLine(
+            sender=Sender.agent(
+                agent_id,
+                on_behalf_of=Principal.member(conversation.user_id),
+                display_name=await uow.session.scalar(
+                    select(AgentModel.name).where(AgentModel.id == agent_id)
+                ),
+            ),
+            text=text,
+            client_message_id=line_client_id(key),
+            conversation_id=conversation.id,
+            thread_root_id=thread_root,
+            members_only=True,
+        ),
+    )
 
 
 # -- answering on the line -------------------------------------------------------
@@ -437,6 +516,7 @@ __all__ = [
     "pause_decisions",
     "shown",
     "sync_pause_questions",
+    "tell_where_asked",
     "tool_prefix",
     "tool_ref",
     "undecided_pauses",

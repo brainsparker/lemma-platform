@@ -8,6 +8,7 @@ import {
     contactName,
     contactSubline,
     handleText,
+    outreachProblem,
     outreachSaid,
     readOrigins,
     vouchedBy,
@@ -186,7 +187,7 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
                                         setSentTo(sent.channelId);
                                         setSaid(outreachSaid(sent));
                                     },
-                                    onError: (error) => setSaid(error instanceof Error && error.message ? error.message : "Couldn’t send it. Try again."),
+                                    onError: (error) => setSaid(outreachProblem(error)),
                                 },
                             );
                         }}

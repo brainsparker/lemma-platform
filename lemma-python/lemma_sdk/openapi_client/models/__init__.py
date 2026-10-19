@@ -121,6 +121,7 @@ _NAME_TO_MODULE = {
     'ChannelEditRequest': 'channel_edit_request',
     'ChannelKind': 'channel_kind',
     'ChannelListResponse': 'channel_list_response',
+    'ChannelMemberListResponse': 'channel_member_list_response',
     'ChannelMemberResponse': 'channel_member_response',
     'ChannelMessageResponse': 'channel_message_response',
     'ChannelMessagesResponse': 'channel_messages_response',
@@ -516,6 +517,7 @@ _NAME_TO_MODULE = {
     'ScheduledWorkflowStartOutput': 'scheduled_workflow_start_output',
     'Scope': 'scope',
     'SearchFreshness': 'search_freshness',
+    'SearchItem': 'search_item',
     'SearchMethod': 'search_method',
     'SearchResponse': 'search_response',
     'SearchResult': 'search_result',
@@ -806,6 +808,7 @@ if TYPE_CHECKING:
     from .channel_edit_request import ChannelEditRequest
     from .channel_kind import ChannelKind
     from .channel_list_response import ChannelListResponse
+    from .channel_member_list_response import ChannelMemberListResponse
     from .channel_member_response import ChannelMemberResponse
     from .channel_message_response import ChannelMessageResponse
     from .channel_messages_response import ChannelMessagesResponse
@@ -1201,6 +1204,7 @@ if TYPE_CHECKING:
     from .scheduled_workflow_start_output import ScheduledWorkflowStartOutput
     from .scope import Scope
     from .search_freshness import SearchFreshness
+    from .search_item import SearchItem
     from .search_method import SearchMethod
     from .search_response import SearchResponse
     from .search_result import SearchResult
@@ -1504,6 +1508,7 @@ __all__ = [
     'ChannelEditRequest',
     'ChannelKind',
     'ChannelListResponse',
+    'ChannelMemberListResponse',
     'ChannelMemberResponse',
     'ChannelMessageResponse',
     'ChannelMessagesResponse',
@@ -1899,6 +1904,7 @@ __all__ = [
     'ScheduledWorkflowStartOutput',
     'Scope',
     'SearchFreshness',
+    'SearchItem',
     'SearchMethod',
     'SearchResponse',
     'SearchResult',

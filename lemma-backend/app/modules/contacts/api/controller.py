@@ -226,9 +226,11 @@ async def export_contact(
         after = ExportCursor.decode(cursor) if cursor else None
     except BadExportCursor as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+    # The person a merged contact's id leads to is the one exported: what was
+    # said under the old id has moved to them.
     contact = await _found(uow, pod_id=pod_id, contact_id=contact_id)
     page = await export_page(
-        uow_factory, pod_id=pod_id, contact_id=contact_id, cursor=after
+        uow_factory, pod_id=pod_id, contact_id=contact.id, cursor=after
     )
     return ContactExportResponse(
         contact=_response(contact),

@@ -429,6 +429,7 @@ async def test_an_export_carries_their_rows_and_pages_through_everything(
 # ------------------------------------------------------------ the contacts cap
 
 
+@pytest.mark.drives_work
 async def test_past_the_cap_no_run_starts_and_a_person_takes_over(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -493,17 +494,27 @@ async def test_past_the_cap_no_run_starts_and_a_person_takes_over(
         ).all()
     ]
     assert ("user", "Hello again?") in texts and ("user", "Anyone there?") in texts
-    # Told once that a person will reply -- in the thread and by email.
+    # Told once that a person will reply -- in the thread and by email, as the
+    # pod's line at her place carried by its delivery: her rules apply, and
+    # the email says how to stop, in its body and its headers.
     replies = [text for role, text in texts if text and "will reply here" in text]
     assert len(replies) == 1 and replies[0].startswith("A person from ")
+    assert message_store.get_all("RESEND")[sent_before:] == []
+    await send_deliveries()
     sent = message_store.get_all("RESEND")[sent_before:]
-    assert len(sent) == 1 and "will reply here" in str(sent[0])
+    [courtesy] = [mail for mail in sent if "will reply here" in str(mail)]
+    assert courtesy["to"] == [CUSTOMER]
+    assert "List-Unsubscribe" in courtesy["headers"]
     # The member was told once, in their own channel, where to look -- not
     # what she wrote: her words stay in her channel, which forgetting her takes.
+    # Pushed: nobody else is answering her.
     [note] = await direct_lines(db_session, pod_id=pod_id, user_id=owner)
     assert note.members_only
     assert "Somebody outside the space is waiting for you" in note.body
     assert "Hello again?" not in note.body and "Anyone there?" not in note.body
+    assert [push.recipient_user_id for push in await deliveries_of_line(note.id)] == [
+        owner
+    ]
     # Both are on Dana's channel, which waits on a person to answer by hand.
     conversation = await db_session.get(ConversationModel, first.conversation_id)
     assert conversation is not None and conversation.channel_id is not None

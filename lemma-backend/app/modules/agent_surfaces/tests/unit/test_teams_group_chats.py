@@ -124,6 +124,7 @@ class _Seats:
             kind=place.kind,
             external_channel_id=place.external_channel_id,
             title=home.title,
+            is_private=place.is_private,
             shared_externally=False,
         )
         self.made.append(source)
@@ -146,6 +147,8 @@ async def test_a_group_chat_becomes_a_group_channel_once():
     assert source.platform == "TEAMS"
     assert source.kind is SourceKind.SHARED
     assert source.title == "Group chat"
+    # A group chat is its members' alone.
+    assert source.is_private is True
 
 
 async def test_a_teams_channel_nobody_routed_is_not_a_channel_here():

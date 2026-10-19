@@ -5,16 +5,19 @@ import {
     mergeChannel,
     readChannelEvent,
     readInboxEvent,
+    sayTyping,
+    typingIn,
     upsertThread,
     upsertTimeline,
     withChannelUnread,
     withInboxTotals,
     withLastLine,
+    withLastLinePages,
     withReadSeq,
     type Answering,
     type ChannelEvent,
 } from "../src/channels/live.ts";
-import { joinPages, readChannel, readChannelDetail, readLine, type Line, type LinePage } from "../src/channels/model.ts";
+import { joinPages, joinThread, readChannel, readChannelDetail, readLine, readThreadPage, type Line, type LinePage } from "../src/channels/model.ts";
 import { readInbox } from "../src/channels/waiting.ts";
 
 /** What the live socket says about a channel, applied to what the views
@@ -29,13 +32,25 @@ test("reads each event the channel topic sends, and ignores one it does not know
     assert.equal(created?.type, "line.created");
     assert.equal(created && "line" in created ? created.line.text : null, "Ship it");
     assert.deepEqual(readChannelEvent({ type: "read.updated", channel_id: "c", read_seq: 12 }), { type: "read.updated", readSeq: 12 });
-    assert.deepEqual(readChannelEvent({ type: "typing", channel_id: "c", user: priya }), { type: "typing", user: { kind: "MEMBER", id: "user-priya", name: "Priya" } });
+    assert.deepEqual(readChannelEvent({ type: "typing", channel_id: "c", user: priya }), { type: "typing", user: { kind: "MEMBER", id: "user-priya", name: "Priya" }, threadRootId: null });
     assert.deepEqual(readChannelEvent({ type: "line.streaming", channel_id: "c", message_id: "l9", agent_id: "a", agent_run_id: "r", kind: "text", delta: "Hi" }),
         { type: "line.streaming", messageId: "l9", agentId: "a", kind: "text", delta: "Hi" });
     assert.deepEqual(readChannelEvent({ type: "question.closed", channel_id: "c", message_id: "l3", state: "EXPIRED" }), { type: "question.closed", messageId: "l3", state: "EXPIRED" });
     assert.equal(readChannelEvent({ type: "channel.updated", channel: { id: "c", kind: "GROUP", joined: true, created_at: "" } })?.type, "channel.updated");
     assert.equal(readChannelEvent({ type: "something.new" }), null);
     assert.equal(readChannelEvent({ type: "line.created", message: { text: "no id" } }), null);
+});
+
+test("typing in a thread is shown in that thread only, never in the channel", () => {
+    const event = readChannelEvent({ type: "typing", channel_id: "c", user: priya, thread_root_id: "root-1" });
+    assert.deepEqual(event, { type: "typing", user: { kind: "MEMBER", id: "user-priya", name: "Priya" }, threadRootId: "root-1" });
+    const typing = [{ name: "Priya", threadRootId: "root-1" }, { name: "Sam", threadRootId: null }, { name: "Ann", threadRootId: "root-2" }];
+    assert.deepEqual(typingIn(typing, null).map((one) => one.name), ["Sam"]);
+    assert.deepEqual(typingIn(typing, "root-1").map((one) => one.name), ["Priya"]);
+    assert.equal(sayTyping(["Priya"]), "Priya is typing…");
+    assert.equal(sayTyping(["Priya", "Sam"]), "Priya and Sam are typing…");
+    assert.equal(sayTyping(["a", "b", "c"]), "Several people are typing…");
+    assert.equal(sayTyping([]), "");
 });
 
 test("a new line joins the newest page in seq order; the same line twice is one line", () => {
@@ -65,12 +80,24 @@ test("a deleted line keeps its place, empty", () => {
 });
 
 test("a reply joins its thread in seq order, once", () => {
-    const thread = upsertThread({ items: [line(2, { thread_root_id: "l1" })], nextBefore: null }, line(4, { thread_root_id: "l1" }));
-    assert.deepEqual(thread.items.map((one) => one.seq), [2, 4]);
-    assert.deepEqual(upsertThread(thread, line(4, { thread_root_id: "l1", text: "changed" })).items.map((one) => one.text), ["line 2", "changed"]);
+    const thread = upsertThread([{ items: [line(2, { thread_root_id: "l1" })], nextAfter: null }], line(4, { thread_root_id: "l1" }));
+    assert.deepEqual(joinThread(thread).map((one) => one.seq), [2, 4]);
+    assert.deepEqual(joinThread(upsertThread(thread, line(4, { thread_root_id: "l1", text: "changed" }))).map((one) => one.text), ["line 2", "changed"]);
     /* The thread's first line comes again as `line.edited` with its count. */
     const root = upsertTimeline([{ items: [line(1, { reply_count: 1 })], nextBefore: null }], line(1, { reply_count: 2 }));
     assert.equal(root.pages[0].items[0].replyCount, 2);
+});
+
+test("a thread past its first page is read on after its last reply, and a new reply waits for the page that holds it", () => {
+    const first = readThreadPage({ items: [{ id: "r1", seq: 5, created_at: "" }, { id: "r2", seq: 7, created_at: "" }], has_more: true, next_after_seq: 7 });
+    assert.equal(first.nextAfter, 7);
+    assert.equal(readThreadPage({ items: [], has_more: false, next_after_seq: 9 }).nextAfter, null, "no more pages, whatever the cursor says");
+    /* A reply heard while later pages are unread is theirs to bring. */
+    assert.deepEqual(joinThread(upsertThread([first], line(40, { thread_root_id: "l1" }))).map((one) => one.seq), [5, 7]);
+    const read = [first, readThreadPage({ items: [{ id: "r3", seq: 9, created_at: "" }], has_more: false })];
+    assert.deepEqual(joinThread(upsertThread(read, line(40, { thread_root_id: "l1" }))).map((one) => one.seq), [5, 7, 9, 40]);
+    /* An edit lands wherever its reply is held. */
+    assert.equal(joinThread(upsertThread(read, { ...first.items[0], text: "changed" }))[0].text, "changed");
 });
 
 test("the channel as the list shows it is laid over the detail, which keeps its members and places", () => {
@@ -130,9 +157,17 @@ test("the inbox's counts are absolute: each event is the truth for its channel a
 });
 
 test("a new line is a list row's preview and moves it to the top", () => {
-    const rows = [readChannel({ id: "c1", kind: "GROUP", created_at: "", last_seq: 3 })!];
-    const [row] = withLastLine(rows, "c1", line(4));
-    assert.equal(row.lastSeq, 4);
-    assert.equal(row.lastLine?.text, "line 4");
-    assert.equal(withLastLine(rows, "c1", line(2))[0].lastSeq, 3, "an older line is not the newest");
+    const rows = ["c0", "c1", "c2"].map((id) => readChannel({ id, kind: "GROUP", created_at: "", last_seq: 3 })!);
+    const moved = withLastLine(rows, "c1", line(4));
+    assert.deepEqual(moved.map((one) => one.id), ["c1", "c0", "c2"], "the row with the new line goes first");
+    assert.equal(moved[0].lastSeq, 4);
+    assert.equal(moved[0].lastLine?.text, "line 4");
+    const older = withLastLine(rows, "c1", line(2));
+    assert.deepEqual(older.map((one) => one.id), ["c0", "c1", "c2"], "an older line moves nothing");
+    assert.equal(older[1].lastSeq, 3, "an older line is not the newest");
+    /* Across pages: from the second page to the top of the first. */
+    const pages = [{ items: rows.slice(0, 2), nextBefore: "x" }, { items: [readChannel({ id: "c9", kind: "GROUP", created_at: "", last_seq: 1 })!], nextBefore: null }];
+    const bumped = withLastLinePages(pages, "c9", line(5));
+    assert.deepEqual(bumped.map((page) => page.items.map((one) => one.id)), [["c9", "c0", "c1"], []]);
+    assert.deepEqual(withLastLinePages(pages, "nowhere", line(5)).map((page) => page.items.length), [2, 1]);
 });

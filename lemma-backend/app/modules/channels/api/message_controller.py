@@ -14,6 +14,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
+from app.core.authorization.context import ActorType
 from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -295,10 +296,13 @@ async def answer_question(
     message_id: UUID,
     body: ChannelAnswerRequest,
     caller: CallerDep,
+    ctx: PodContextDep,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> ChannelMessageResponse:
     """Answer what this line asks the reader: a question, an approval (which
-    needs a `decision`), a form. Only the person it waits on may.
+    needs a `decision`), a form. Only the person it waits on may -- and an
+    approval, or an agent's paused question, only by their own hand: an agent
+    calling with a token delegated by them is refused, as its tool is.
 
     No session is held across the answer: what asked takes it in its own -- a
     run resumed, a form submitted -- and may call out to do so.
@@ -312,6 +316,7 @@ async def answer_question(
             message_id=message_id,
             by=Principal.member(caller.user_id),
             given=body.answer,
+            through_agent=ctx.actor_type is ActorType.DELEGATED_USER_WORKLOAD,
         )
     except AnswerRefused as refused:
         raise _refused(refused) from refused
@@ -390,7 +395,10 @@ async def retry_delivery(
     if retried is None:
         raise conflict("Only a send that failed can be tried again")
     await facts.emit(
-        uow, ChannelDeliveryDue(pod_id=channel.pod_id, delivery_id=retried.id)
+        uow,
+        ChannelDeliveryDue(
+            pod_id=channel.pod_id, delivery_id=retried.id, target=retried.target_key
+        ),
     )
     await uow.commit()
     return delivery_response(retried, names={})

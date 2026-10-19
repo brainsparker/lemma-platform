@@ -28,7 +28,7 @@ import {
     type SourcePlace,
 } from "./model";
 import { channelKey, keepChannel, refreshLists } from "./queries";
-import { muteChoices, mutedSaid, NOTIFY_VIA } from "./settings-model";
+import { muteChoices, mutedSaid, NOTIFY_VIA, publicWarning } from "./settings-model";
 import { useOnline } from "./use-presence";
 import { SourceSettingsView } from "./source-settings";
 import { isGroupPlatform, platformName } from "./sources";
@@ -43,7 +43,8 @@ const LEVELS: { level: NotifyLevel; label: string; note: string }[] = [
  *  of it, who is in it -- people with their roles, agents with when they
  *  answer -- and the outside places it is fed by. What the reader may not
  *  change is shown, not offered; the API decides again, and a refusal is
- *  said where it happened. Holds the keyboard while open. */
+ *  said where it happened. Beside the timeline, not over it: Tab moves on
+ *  out of it, Escape closes it and gives focus back. */
 export function ChannelPanel({ pod, channel, may, onClose, onLeft }: {
     pod: Pod;
     channel: ChannelDetail;
@@ -53,7 +54,7 @@ export function ChannelPanel({ pod, channel, may, onClose, onLeft }: {
     onLeft: () => void;
 }) {
     const panel = useRef<HTMLElement>(null);
-    const keys = usePanelFocus(panel, onClose);
+    const keys = usePanelFocus(panel, onClose, { trap: false });
     return (
         <aside className="cside" aria-label="About this channel" ref={panel} tabIndex={-1} onKeyDown={keys}>
             <header className="cside__head">
@@ -77,11 +78,14 @@ function About({ pod, channel, may, onGone }: { pod: Pod; channel: ChannelDetail
     const cache = useQueryClient();
     const [editing, setEditing] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    /* Making a private group public shows everything said in it to the
+       whole pod, its history included: asked first. Private needs no ask. */
+    const [publishing, setPublishing] = useState(false);
     const [title, setTitle] = useState(channel.title ?? "");
     const [topic, setTopic] = useState(channel.topic ?? "");
     const update = useMutation({
         mutationFn: (body: ChannelChange) => channelApi(pod.id).update(channel.id, body),
-        onSuccess: (saved) => { keepChannel(cache, pod.id, saved); setEditing(false); },
+        onSuccess: (saved) => { keepChannel(cache, pod.id, saved); setEditing(false); setPublishing(false); },
     });
     const destroy = useMutation({
         mutationFn: () => channelApi(pod.id).destroy(channel.id),
@@ -151,13 +155,22 @@ function About({ pod, channel, may, onGone }: { pod: Pod; channel: ChannelDetail
                     {may.manage && (
                         <div className="cside__acts">
                             <button type="button" className="gsheet__inline" onClick={() => { setTitle(channel.title ?? ""); setTopic(channel.topic ?? ""); setEditing(true); }}>Rename or describe</button>
-                            <button type="button" className="gsheet__inline" disabled={update.isPending} onClick={() => update.mutate({ visibility: channel.visibility === "PRIVATE" ? "PUBLIC" : "PRIVATE" })}>
+                            <button type="button" className="gsheet__inline" disabled={update.isPending} aria-expanded={channel.visibility === "PRIVATE" ? publishing : undefined} onClick={() => channel.visibility === "PRIVATE" ? setPublishing(true) : update.mutate({ visibility: "PRIVATE" })}>
                                 {channel.visibility === "PRIVATE" ? "Make it public" : "Make it private"}
                             </button>
                             <button type="button" className="gsheet__inline" disabled={update.isPending} onClick={() => update.mutate({ archived: !channel.archived })}>
                                 {channel.archived ? "Bring back from the archive" : "Archive"}
                             </button>
                             {deletable && !deleting && <button type="button" className="gsheet__inline gsheet__inline--bad" onClick={() => setDeleting(true)}>Delete</button>}
+                        </div>
+                    )}
+                    {publishing && channel.visibility === "PRIVATE" && (
+                        <div className="cside__confirm" role="group" aria-label="Make this channel public">
+                            <p className="gside__text">{publicWarning(channel.title, pod.name)}</p>
+                            <div className="cline__edit-acts">
+                                <button type="button" className="linkish" onClick={() => setPublishing(false)}>Keep it private</button>
+                                <button type="button" className="pill-button" disabled={update.isPending} onClick={() => update.mutate({ visibility: "PUBLIC" })}>{update.isPending ? "Saving…" : "Make it public"}</button>
+                            </div>
                         </div>
                     )}
                     {deleting && (

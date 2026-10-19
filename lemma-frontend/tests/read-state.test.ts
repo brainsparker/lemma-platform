@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readTarget, type ReadInputs } from "../src/channels/read-state.ts";
+import { readTarget, unseenThreadMention, type ReadInputs } from "../src/channels/read-state.ts";
 
 /** A channel is read as far as the newest line the reader has seen -- not
  *  by the page being open, and not past what is below the fold. */
@@ -32,4 +32,20 @@ test("a line is marked once: what this view asked for already is not asked again
 
 test("the read position never goes back, even when another tab read further", () => {
     assert.equal(readTarget({ ...base, seenMax: 12, readSeq: 20, lastSeq: 12 }), null);
+});
+
+test("reading to the end stops short of a reply naming the reader in a thread they have not opened", () => {
+    /* Lines 13 and 15 are replies; 13 names the reader, in a closed thread. */
+    assert.equal(readTarget({ ...base, seenMax: 12, lastSeq: 15, heldBack: 13 }), 12);
+    assert.equal(readTarget({ ...base, seenMax: 12, lastSeq: 15, heldBack: 14 }), 13);
+    assert.equal(readTarget({ ...base, seenMax: 12, lastSeq: 15, heldBack: null }), 15);
+    const mentions = [
+        { channelId: "c1", seq: 14, threadRootId: "root-a" },
+        { channelId: "c1", seq: 13, threadRootId: "root-b" },
+        { channelId: "c1", seq: 11, threadRootId: null },
+        { channelId: "c2", seq: 2, threadRootId: "root-c" },
+    ];
+    assert.equal(unseenThreadMention(mentions, "c1", null), 13);
+    assert.equal(unseenThreadMention(mentions, "c1", "root-b"), 14, "the open thread's mention is on screen");
+    assert.equal(unseenThreadMention(mentions, "c3", null), null);
 });

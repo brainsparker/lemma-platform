@@ -26,22 +26,25 @@ rows by the `ContactMerged` fact.
 | Table | Meaning |
 | --- | --- |
 | `contacts` | One person per pod, and the name to address them by. `merged_into_id` points a contact that turned out to be another at the one it became (always one hop); `answered_at` is when an agent first answered them, which the organization's contact limit counts. Cascades from the pod |
-| `contact_identities` | The handles a contact is known by (`PHONE`, `EMAIL`, `TELEGRAM`, `HOST`, `SLACK`, `TEAMS`, `WEB`) and who vouched for each (`strength`: `CHANNEL`, `HOST`, `CODE`, `MEMBER`, `SESSION`). Only `CHANNEL`, `HOST` and `CODE` prove a handle another contact holds. Unique per pod and handle, so one number is one contact whichever bot it writes to. `last_inbound_at` is when they last wrote from it; `unsubscribed_at` when they asked not to be written to there |
+| `contact_identities` | The handles a contact is known by (`PHONE`, `EMAIL`, `TELEGRAM`, `HOST`, `SLACK`, `TEAMS`, `WEB`) and who vouched for each (`strength`: `CHANNEL`, `HOST`, `CODE`, `MEMBER`, `SESSION`). Only `CHANNEL`, `HOST` and `CODE` prove a handle another contact holds. Unique per pod and handle, so one number is one contact whichever bot it writes to. A number a platform vouches for is read as international (WhatsApp's comes without its `+`, which is put back), never in the pod's region; only one a member typed without `+` is tried there first (`domain/handles.py`). A WhatsApp group participant named only by a user id, with no number, has no phone handle. `last_inbound_at` is when they last wrote from it; `unsubscribed_at` when they asked not to be written to there |
 | `visitor_sessions` | One web visitor's chat with one widget, found by a secret only their page holds (stored hashed). Names the visitor's contact from their first write; `strength` says whether anything vouched for them (`ANONYMOUS`, `CODE`, `HOST`). Ends at `expires_at` -- 90 days for an anonymous session, 30 days after last use for a confirmed one, a host session only as long as the host keeps signing -- or when `revoked_at` is set by a reissued widget secret or a forgotten contact. An ended session is swept hourly; its contact and conversation stay |
 | `agent_surface_web_codes` | A one-time code sent to an email a visitor typed, hashed with its session; ten minutes, five guesses counted atomically. Swept once used or expired |
-| `contact_suppressions` | A handle nobody in the pod may write to -- it said STOP, used an unsubscribe link, or bounced -- keyed by the pod, the handle's kind and a hash of the normalised handle, with the `reason`. Kept apart from the contact so it survives the contact being forgotten |
+| `contact_suppressions` | A handle nobody in the pod may write to -- it said STOP, used an unsubscribe link, or bounced -- keyed by the pod, the handle's kind and a hash of the normalised handle, with the `reason`. An emailed STOP counts only from an address the mail service vouched for (SPF/DKIM/DMARC passed): anybody can send one under somebody else's address, and an unvouched one is parked for a member instead. Kept apart from the contact so it survives the contact being forgotten |
 
 - `GET /pods/{pod_id}/contacts` and `GET /pods/{pod_id}/contacts/{id}`: takes
   `conversation.read`. Pages with an opaque `cursor` / `next_cursor`
   (`created_at` and id).
 - `PATCH /pods/{pod_id}/contacts/{id}`: rename; takes `pod.update`.
 - `DELETE /pods/{pod_id}/contacts/{id}`: forget a contact; takes
-  `pod.member.manage`. `services/forget.py`: their rows in contact-owned tables
+  `pod.member.manage`. A merged contact's id forgets the person it became, as
+  every verb here follows a merge. `services/forget.py`: their rows in contact-owned tables
   first (`datastore/contracts/contact_rows.delete_contact_rows`), then one
   main-database transaction for their conversations, handles, web chat
   sessions and codes, and stored platform profiles
   (`agent_surfaces/contracts/contacts`), blanking the questions of theirs that
-  reached members' inboxes.
+  reached members' inboxes. Their own channel goes; in groups their lines are
+  emptied in place, so others' replies and threads stay
+  (`channels/contracts/contacts`).
 - `GET /pods/{pod_id}/contacts/{id}/export`: a page of their handles, their
   words and the bot's answers (never tool calls or private notes), then their
   rows; follow `next_cursor`. Takes `pod.member.manage`.

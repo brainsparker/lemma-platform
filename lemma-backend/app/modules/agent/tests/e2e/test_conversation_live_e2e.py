@@ -159,3 +159,39 @@ async def test_an_agent_answering_a_line_is_seen_live_from_start_to_answer(
         assert over["status"] == "COMPLETED"
         ending = await live.event("after", "completed")
         assert ending["agent_run_id"] == str(run.id)
+
+
+async def test_a_member_taken_out_of_the_pod_stops_hearing_their_conversation(
+    scenario, backend_server
+) -> None:
+    """Access is decided again when the pod's grants move: a subscriber who
+    may no longer read the conversation is told so and hears nothing more."""
+    await scenario.create_org_with_pod(name_prefix="Live conversation access")
+    member = await scenario.create_user("live-conversation-leaver")
+    added = await scenario.add_user_to_pod(user=member, role="POD_USER")
+    headers = {"Authorization": f"Bearer {member['token']}"}
+    created = await scenario.async_client.post(
+        f"/pods/{scenario.pod_id}/conversations",
+        json={"title": "mine"},
+        headers=headers,
+    )
+    assert created.status_code in {200, 201}, created.text
+    conversation_id = UUID(created.json()["id"])
+
+    async with live_socket(backend_server, scenario.pod_id, member["token"]) as live:
+        subscribed = await live.subscribe(
+            "v", "conversation", conversation_id=str(conversation_id)
+        )
+        assert subscribed["type"] == "subscribed", subscribed
+        member_id = added.get("pod_member_id") or added["id"]
+        removed = await scenario.owner_client.delete(
+            f"/pods/{scenario.pod_id}/members/{member_id}"
+        )
+        assert removed.status_code == 204, removed.text
+        ended = await live.until("unsubscribed", "v", timeout=20)
+        assert ended["reason"] == "access_revoked"
+        await publish_conversation_event(
+            conversation_id, token_payload(uuid4(), "after", kind="text")
+        )
+        await live.quiet(1.0)
+        assert live.events("v", "token") == []

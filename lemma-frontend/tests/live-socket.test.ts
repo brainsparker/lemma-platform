@@ -271,3 +271,53 @@ test("the status is told to whoever listens: polling falls back only while it is
     last().drop(1011);
     assert.deepEqual(said, ["idle", "connecting", "open", "reconnecting"]);
 });
+
+test("a socket that goes silent is dropped and dialled again: one ping unanswered is enough", async () => {
+    const { live, sockets, last, clock } = harness();
+    const { heard, handlers } = recorder();
+    live.subscribe("inbox", {}, handlers);
+    await settle();
+    last().hear({ type: "ready" });
+    clock.advance(25_000);
+    assert.deepEqual(last().sent.at(-1), { op: "ping" });
+    last().hear({ type: "pong" });
+    clock.advance(25_000);
+    assert.equal(live.status, "open", "an answered ping keeps it");
+    /* Half-open: the ping goes nowhere and no close ever comes. */
+    clock.advance(25_000);
+    assert.equal(sockets[0].closed, 4000, "the silent socket is closed here");
+    assert.equal(live.status, "reconnecting");
+    clock.advance(1_000);
+    await settle();
+    assert.equal(sockets.length, 2, "and dialled again");
+    sockets[1].hear({ type: "ready" });
+    assert.equal(sockets[1].subscribes().length, 1, "with its subscription sent again");
+    assert.ok(heard.every((one) => one.kind !== "ended"));
+});
+
+test("back online or back to the tab: a socket waiting to reconnect dials now, an open one is asked to answer", async () => {
+    let wake: (() => void) | null = null;
+    const sockets: FakeSocket[] = [];
+    const clock = new FakeClock();
+    const live = new LiveSocket({
+        url: (token) => liveUrl("https://api.example.test", "pod-1", token),
+        auth: { token: async () => "tok", refresh: async () => {} },
+        open: (url) => { const socket = new FakeSocket(url); sockets.push(socket); return socket; },
+        clock,
+        random: () => 1,
+        wakeups: (given) => { wake = given; return () => { wake = null; }; },
+    });
+    live.subscribe("inbox", {}, recorder().handlers);
+    await settle();
+    sockets[0].hear({ type: "ready" });
+    wake!();
+    assert.deepEqual(sockets[0].sent.at(-1), { op: "ping" }, "an open socket is pinged at once");
+    clock.advance(25_000);
+    assert.equal(sockets[0].closed, 4000, "and dropped when it does not answer");
+    assert.equal(sockets.length, 1, "still waiting out its backoff");
+    wake!();
+    await settle();
+    assert.equal(sockets.length, 2, "coming back dials now, not after the backoff");
+    live.close();
+    assert.equal(wake, null, "a closed socket stops listening");
+});

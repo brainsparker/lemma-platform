@@ -5,7 +5,7 @@ import { useInfiniteQuery, useQuery, type InfiniteData, type QueryClient } from 
 import { pollWhenDown, useLiveStatus } from "@/live/pod-live";
 import { isForbidden, isMissing } from "@/session/auth-state";
 import { channelApi } from "./api";
-import { joinPages, type Channel, type ChannelDetail, type LinePage, type Page } from "./model";
+import { joinPages, joinThread, type Channel, type ChannelDetail, type LinePage, type Page, type ThreadPage } from "./model";
 import type { ListFilter } from "./views";
 
 /** The keys every view of a pod's channels reads under. All of them start
@@ -75,14 +75,20 @@ export function useLines(podId: string, channelId: string, visible: boolean) {
     return { ...query, lines };
 }
 
+/** A thread's replies, a page at a time from the first: a long thread is
+ *  read on as the reader asks for more. */
 export function useThread(podId: string, channelId: string, rootId: string, visible: boolean) {
     const status = useLiveStatus(podId);
-    return useQuery({
+    const query = useInfiniteQuery({
         queryKey: threadKey(podId, channelId, rootId),
-        queryFn: () => channelApi(podId).thread(channelId, rootId),
+        queryFn: ({ pageParam }) => channelApi(podId).thread(channelId, rootId, pageParam),
+        initialPageParam: undefined as number | undefined,
+        getNextPageParam: (last: ThreadPage) => last.nextAfter ?? undefined,
         refetchInterval: visible ? pollWhenDown(status, READ_EVERY_MS) : false,
         staleTime: 5_000,
     });
+    const replies = useMemo(() => joinThread(query.data?.pages ?? []), [query.data]);
+    return { ...query, replies };
 }
 
 export function useSourceSettings(podId: string, channelId: string, sourceId: string, enabled = true) {
@@ -93,6 +99,21 @@ export function useSourceSettings(podId: string, channelId: string, sourceId: st
         staleTime: 30_000,
         retry: settled,
     });
+}
+
+/** Where one line is held: the channel's timeline, or -- a reply -- its
+ *  thread. An edit or a delete reads only those again. */
+export function lineKeys(podId: string, channelId: string, line: { threadRootId: string | null }): (readonly unknown[])[] {
+    return line.threadRootId ? [threadKey(podId, channelId, line.threadRootId), linesKey(podId, channelId)] : [linesKey(podId, channelId)];
+}
+
+/** What an answer to a question moves: the line it is on, wherever that is
+ *  held -- the channel's timeline, or its thread -- and the channel's own
+ *  counts. Nothing in other channels. */
+export function answeredKeys(podId: string, question: { channelId: string; threadRootId: string | null }): (readonly unknown[])[] {
+    const keys: (readonly unknown[])[] = [linesKey(podId, question.channelId), channelKey(podId, question.channelId)];
+    if (question.threadRootId) keys.push(threadKey(podId, question.channelId, question.threadRootId));
+    return keys;
 }
 
 /** After anything about a channel changed: its lists and the inbox say what

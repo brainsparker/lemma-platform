@@ -129,7 +129,7 @@ async def send_outreach(
             id=line.id,
             channel_id=line.channel_id,
             seq=line.seq,
-            source_id=line.source_id,
+            source_id=line.place_id,
             text=line.text,
             created_at=line.created_at,
         ),

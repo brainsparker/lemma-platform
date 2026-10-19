@@ -20,7 +20,7 @@ Resend address.
 | --- | --- |
 | API routers | Pod surface CRUD/setup/catalog/send, current-user defaults, public webhooks/verification |
 | Request-time intake | Every webhook route and receiver classifies a delivery, answers provider-deadline interactions in the request, and writes each message as a `surface_inbound_messages` row plus a `surface.ingest` item in one transaction |
-| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination, for held and resent messages), `surface.reply_for_run` (subscribes `AgentRunFinished`; posts the answer as the agent's line with a delivery to its place) and `surface.channel_delivery` (sends one channel delivery and records the platform's message id on it), `surface.receiver` (`receivers`, one leased item per polling credential), `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
+| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination, for held and resent messages), `surface.reply_for_run` (subscribes `AgentRunFinished`; posts the answer as the agent's line with a delivery to its place), `surface.channel_delivery` (sends one channel delivery and records the platform's message id on it; one at a time per place or member) and `surface.push_digest` (one note for the pushes the hourly budget held), `surface.receiver` (`receivers`, one leased item per polling credential), `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
 | Periodic work | `surfaces.receivers.reconcile` (15 s), `surfaces.onboarding_cleanup` (1 min), `surfaces.web_visitors` (hourly), `surfaces.retention` (daily) |
 
 ## Main data model
@@ -101,6 +101,61 @@ sequenceDiagram
     Out-->>Out: delivery SENT + platform message id
     P-->>API: status webhook (WhatsApp 131047) -> delivery DEAD by that id
 ```
+
+### Sending a channel delivery
+
+`services/channel_deliveries.py` claims one `channel_message_deliveries` row,
+sends it, and records the outcome on it (`services/delivery_outcome.py`). A
+try is retried only when the retry cannot be the duplicate the person sees:
+
+- **`FAILED`**, due again after the backoff -- and no sooner than a
+  `Retry-After` the platform asked for -- when the platform's failure was
+  transient and nothing of the message arrived, or when no platform was
+  called at all (our own database failing first, or anything raising before
+  the send: recorded before it propagates, not left as a lapsed claim).
+- **`DEAD`** at once for a refusal, for part of a long message having
+  arrived, and for a send whose answer never came back (a read timeout or a
+  dropped connection after the request left: it may be on their screen) --
+  except on a platform that dedupes a resend by the delivery's key
+  (`channel-delivery-{id}`, Resend), where an ambiguous send is retried.
+- **`SKIPPED`** when there was nothing to send to (no thread, a removed bot,
+  a message that was nothing once reasoning was stripped) or a contact's rules
+  refused it -- among them WhatsApp's 24-hour window, which only the contact's
+  own message at the place opens (`channel_sources.last_inbound_at`): a line
+  written in Lemma never does, so past it a member's or agent's line is
+  `SKIPPED`, not sent to fail. A member's line counts against the contact's
+  day only once it can actually go.
+
+A sender that died mid-send leaves a lapsed claim: `SENT` when the platform's
+id was noted before the call (a live stream closed in place), sent again when
+its place is on a key-deduping platform (so a deploy mid-send costs nothing),
+and otherwise `DEAD` saying it may not have arrived, for a member to retry.
+The platform's id is noted on the row as soon as the platform answers, so a
+status report (WhatsApp 131047, a Resend bounce) finds that one delivery even
+before `SENT` is recorded, and a later `SENT` does not undo it. A bounce
+suppresses the delivery's own place address, not everybody the email copied;
+a bounce Resend could not classify is not permanent.
+
+One channel's lines reach a place -- and a member's pushes reach them -- in
+the order they were written: `surface.channel_delivery` runs one item per
+target at a time (the fact's `target`), and the claim refuses a row while an
+earlier line's row to the same target is pending, being sent, or failed and
+waiting out its backoff; settling one announces the next.
+
+A **push** to a member is sent under its delivery's key, charged to the
+member's hourly push budget once per delivery (not per try), and never sent
+on a second app after a send that may already be on the first. One that names
+the member or asks them something is never held by the budget; one that is
+held waits in Lemma and is counted into a digest -- one note naming them, per
+channel, `push_digests.DIGEST_AFTER` later (`surface.push_digest`). A plain
+line in a group is not emailed unless the member chose email for it: email is
+for their own channel, a contact's, and what names them or asks them
+something.
+
+A place's account (`domain/external_accounts.account_key_for`) is the Slack
+workspace or Teams tenant *and* the bot, so two agents' apps in one workspace
+keep separate places, tokens and history; the same app installed again keeps
+its bot id and so its account.
 
 Adapters share a contract for parse, enrich, sender profile, `send_message`,
 `deliver`, interaction parsing, processing indicator, and platform tool
@@ -282,6 +337,29 @@ is answered *for the pod*, in a group the pod has opened to them.
   in all of them is logged as the channel's lines, a platform thread as a
   thread; a run still reads a Slack or Teams channel's history from the
   platform.
+- **A mirror is private unless the platform says otherwise.** A Slack or Teams
+  place's channel is public only on the platform's word
+  (`domain/place_privacy.py`): a Slack `message` names its channel type, an
+  `app_mention` does not, so before the first mirror of a place is made Slack
+  is asked (`conversations.info`) and Teams' Graph (`membershipType`, under the
+  manifest's `ChannelSettings.Read.Group`); the answer rides on the event and is
+  kept five minutes in Redis (`services/place_privacy.py`). No answer, no
+  public mirror. A Teams group chat and every WhatsApp or Telegram group are
+  private. A Slack channel converted to private turns its mirror private on
+  the next message naming the new type; nothing turns one back.
+- **Who is in a mirror follows the platform.** A person who leaves the place --
+  Slack `member_left_channel`, Teams `membersRemoved`, Telegram
+  `left_chat_member` -- leaves its channel, unless somebody in Lemma put them
+  there (a member added them, or an admin joined on request): a seat the
+  platform made has no `added_by_user_id`. The bot taken out (Slack
+  `channel_left` / `group_left`, Teams removing the bot, Telegram
+  `my_chat_member` to left or kicked) archives the channel; put back, it
+  returns. Slack `channel_shared` / `channel_unshared` set `shared_externally`.
+  These arrive as `surface.platform_update` items, read by each adapter's
+  `parse_group_updates` and applied by `services/group_updates.py` to the
+  places on that chat in the receiving surfaces, or -- on a shared app's
+  webhook -- in the workspace or tenant the event names. WhatsApp's
+  participant updates are not read.
 - **A WhatsApp group is one the bot opened.** A business number cannot be added
   to a group, only create one, so a member asks in their own WhatsApp chat and
   the agent calls `whatsapp_open_group` (offered only in a member's private
@@ -469,7 +547,12 @@ represented as contacts. The inbound row's unique key and the message claim
 
 The contact path (`services/contacts.py`) never answers mail a machine sent
 (`platforms/email_automated.py`, plus the pod's own addresses), and treats a
-message that is only "STOP" as an unsubscribe. What it says or notes without a
+message that is only "STOP" as an unsubscribe -- from email only when the
+sender's address is vouched for (the parser's SPF/DKIM/DMARC verdict is a
+pass). Anybody can write "STOP" under somebody else's address, and honouring
+it would cut the real person off; an unvouched one is parked for the member
+who looks after contacts like any unverified mail, and the signed one-click
+unsubscribe every email carries still works for whoever it reached. What it says or notes without a
 model -- a refusal, a parked-mail note, "a person will reply" -- is windowed in
 Redis by `services/contact_windows.py`, failing closed. Before a run for
 somebody outside the pod starts, `services/outside_cap.py` asks whether the
@@ -478,8 +561,12 @@ organization's contacts cap is reached, or a member answers the contact by hand
 stepped in by writing there and has written within the channel's hand-back
 window -- past it, the member is let go and told). If so the message is kept
 -- in the conversation and on the channel's timeline -- and no run starts. At
-the cap the member is told and the person hears once a day that a person will
-reply; with the agent off the channel waits on a reply and the member who
+the cap the member is told, pushed -- or, when the member who looks after them
+cannot open a contact's channel, told how to get access while the pod's
+administrators are told it is theirs -- and the person hears once a day that a
+person will reply, as the pod's line carried to their place like any other
+(their rules apply; an email carries the unsubscribe footer and headers), and
+only when somebody who can open their channel was told; with the agent off the channel waits on a reply and the member who
 looks after them is told, and -- if the pod set `config.contacts.auto_acknowledge`
 -- the contact hears that line once, until a member writes to them or the
 channel is closed (`services/contact_acknowledgement.py`); a member who stepped

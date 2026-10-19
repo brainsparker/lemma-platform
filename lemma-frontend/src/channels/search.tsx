@@ -52,7 +52,7 @@ export function SearchResults({ pod, query }: { pod: Pod; query: string }) {
                                     >
                                         <span className="crow__name">{senderLabel(hit.line, me)} <small className="chsearch__where">in {where}{hit.line.threadRootId ? ", in a thread" : ""}</small></span>
                                         <span className="crow__sub">
-                                            {snippet(hit.line.text ?? "", settled).map((piece, index) => piece.match ? <mark key={index}>{piece.text}</mark> : <span key={index}>{piece.text}</span>)}
+                                            {snippet(hit.snippet ?? hit.line.text ?? "", settled).map((piece, index) => piece.match ? <mark key={index}>{piece.text}</mark> : <span key={index}>{piece.text}</span>)}
                                         </span>
                                     </button>
                                     <span className="crow__when">{sinceShort(hit.line.createdAt)}</span>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 from uuid import UUID
@@ -19,6 +20,7 @@ from ..openapi_client.api.channels import (
     channel_member_add,
     channel_member_join,
     channel_member_leave,
+    channel_member_list,
     channel_member_me_update,
     channel_member_remove,
     channel_member_update,
@@ -39,6 +41,9 @@ from ..openapi_client.models.channel_detail_response import ChannelDetailRespons
 from ..openapi_client.models.channel_edit_request import ChannelEditRequest
 from ..openapi_client.models.channel_kind import ChannelKind
 from ..openapi_client.models.channel_list_response import ChannelListResponse
+from ..openapi_client.models.channel_member_list_response import (
+    ChannelMemberListResponse,
+)
 from ..openapi_client.models.channel_message_response import ChannelMessageResponse
 from ..openapi_client.models.channel_messages_response import ChannelMessagesResponse
 from ..openapi_client.models.channel_post_request import ChannelPostRequest
@@ -57,6 +62,7 @@ from ..openapi_client.models.read_response import ReadResponse
 from ..openapi_client.models.search_response import SearchResponse
 from ..openapi_client.models.sender_kind import SenderKind
 from ..openapi_client.models.thread_response import ThreadResponse
+from ..openapi_client.models.visibility import Visibility
 from ..openapi_client.types import UNSET
 from .base import BoundResource, as_uuid, compact
 
@@ -140,6 +146,8 @@ class PodChannels(BoundResource):
         self,
         *,
         kind: Literal["DIRECT", "CONTACT", "GROUP"] | None = None,
+        visibility: Literal["PUBLIC", "PRIVATE"] | None = None,
+        q: str | None = None,
         archived: bool = False,
         contact_id: str | UUID | None = None,
         assignee: str | UUID | None = None,
@@ -154,6 +162,9 @@ class PodChannels(BoundResource):
         """The channels the caller may see, most recently active first, each
         with what is new in it for them and its last line.
 
+        ``visibility`` keeps only public or only private channels (a member's
+        and a contact's own are private); ``q`` keeps channels whose title
+        holds these words, in any case.
         ``assignee`` is ``"me"`` or a member's user id (contacts' channels
         assigned to them); ``needs_person`` keeps contacts' channels waiting
         on a person (open, unassigned, the agent off or asking for one);
@@ -166,6 +177,8 @@ class PodChannels(BoundResource):
             channel_list,
             self._pod_uuid(),
             kind=ChannelKind(kind) if kind is not None else UNSET,
+            visibility=Visibility(visibility) if visibility is not None else UNSET,
+            q=_unset(q),
             archived=archived,
             contact_id=as_uuid(contact_id) if contact_id else UNSET,
             assignee=str(assignee) if assignee else UNSET,
@@ -289,6 +302,23 @@ class PodChannels(BoundResource):
         self._call(channel_delete, self._pod_uuid(), as_uuid(channel_id))
 
     # -- members -------------------------------------------------------------------
+
+    def members(
+        self,
+        channel_id: str | UUID,
+        *,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> ChannelMemberListResponse:
+        """Who is in a channel -- members, contacts and agents -- in the order
+        they joined. Page with ``next_cursor``."""
+        return self._call(
+            channel_member_list,
+            self._pod_uuid(),
+            as_uuid(channel_id),
+            cursor=_unset(cursor),
+            limit=limit,
+        )
 
     def add_members(
         self,
@@ -575,16 +605,30 @@ class PodChannels(BoundResource):
         q: str,
         *,
         channel_id: str | UUID | None = None,
+        kind: Literal["DIRECT", "CONTACT", "GROUP"] | None = None,
+        sender: tuple[Kind, str | UUID] | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        archived: bool = False,
         cursor: str | None = None,
         limit: int = 30,
     ) -> SearchResponse:
         """Lines matching every word, newest first, in the channels the caller
-        sees -- or in one of them. Page with ``next_cursor``."""
+        sees -- or in one of them -- each with its ``rank`` and a plain-text
+        ``snippet``. ``sender`` is ``(kind, id)``: only lines a member, contact
+        or agent said; ``since``/``until`` bound when; ``archived`` searches
+        archived channels too. Page with ``next_cursor``."""
         return self._call(
             channel_search,
             self._pod_uuid(),
             q=q,
             channel_id=as_uuid(channel_id) if channel_id else UNSET,
+            kind=ChannelKind(kind) if kind is not None else UNSET,
+            sender_kind=SenderKind(sender[0]) if sender is not None else UNSET,
+            sender_id=as_uuid(sender[1]) if sender is not None else UNSET,
+            since=_unset(since),
+            until=_unset(until),
+            archived=archived,
             cursor=_unset(cursor),
             limit=limit,
         )

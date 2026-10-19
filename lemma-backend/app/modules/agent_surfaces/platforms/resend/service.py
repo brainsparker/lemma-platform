@@ -332,6 +332,8 @@ class ResendPlatformService:
             attachments=[],
             is_reply=False,
             from_name=self._sender_name(metadata),
+            # The delivery's key: its later tries are this same email.
+            idempotency_key=_idempotency_key(metadata),
             extra_headers=_unsubscribe_headers(metadata, mailto=self._from_address),
         )
         return ColdEmailSendResult(

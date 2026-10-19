@@ -209,6 +209,31 @@ async def test_only_the_owner_or_an_admin_changes_a_group_and_the_owner_is_told(
     assert "now answers for the people outside the space" in notice.body
 
 
+async def test_a_private_groups_settings_are_hidden_from_who_cannot_see_it(
+    scenario, db_session: AsyncSession, fake_whatsapp, message_store, monkeypatch
+):
+    """A WhatsApp group is private to its people. A viewer reads the bot, but
+    not this group: its settings -- the title, the invite link -- are not
+    theirs, and they are told it does not exist rather than that it is
+    forbidden."""
+    _wire_whatsapp(monkeypatch, fake_whatsapp)
+    _surface, group, _editor = await _pod_with_a_group(scenario, message_store)
+    viewer = await scenario.create_user("group-viewer")
+    await scenario.add_user_to_pod(user=viewer, role="POD_VIEWER")
+    path = (
+        f"/pods/{scenario.pod_id}/channels/{group['channel_id']}/sources/{group['id']}"
+    )
+
+    hidden = await scenario.async_client.get(path, headers=auth_headers(viewer))
+    assert hidden.status_code == 404, hidden.text
+    assert "Acme order 1182" not in hidden.text
+
+    # Its own people read it as before.
+    shown = await scenario.owner_client.get(path)
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["title"] == "Acme order 1182"
+
+
 async def test_a_group_whose_owner_left_the_pod_is_anybodys_to_take_on(
     scenario, db_session: AsyncSession, fake_whatsapp, message_store, monkeypatch
 ):

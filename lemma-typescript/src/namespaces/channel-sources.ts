@@ -26,7 +26,9 @@ export class ChannelSourcesNamespace {
     return this.client.request(() =>
       ChannelsService.channelList(
         podId,
-        undefined,
+        undefined, // kind
+        undefined, // visibility
+        undefined, // q
         false,
         undefined,
         undefined,

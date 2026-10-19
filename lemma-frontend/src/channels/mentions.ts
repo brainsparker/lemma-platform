@@ -69,12 +69,14 @@ export function mentionsIn(text: string, picked: readonly Mentionable[]): Mentio
 
 /** Everyone who can be named in a channel, in the order the `@` menu offers
  *  them: the channel's own agents, then the people in it other than the
- *  reader, then the pod's other agents -- naming one answers once. Each
- *  once; nobody without an id or a name. */
+ *  reader, then the pod's other members who can read it (`readers`), then
+ *  the pod's other agents -- naming one answers once. Each once; nobody
+ *  without an id or a name. */
 export function mentionables(
     agents: readonly { id: string; label: string }[],
     people: readonly { kind: "MEMBER" | "CONTACT" | "AGENT"; id: string | null; name: string | null }[],
     me: string | null,
+    readers: readonly { userId: string; name: string }[] = [],
 ): Mentionable[] {
     const out: Mentionable[] = [];
     const seen = new Set<string>();
@@ -93,8 +95,24 @@ export function mentionables(
         if (person.kind === "MEMBER" && person.id === me) continue;
         add({ kind: person.kind, id: person.id, name: person.name, inChannel: true });
     }
+    for (const reader of readers) {
+        if (!reader.userId || !reader.name || reader.userId === me) continue;
+        add({ kind: "MEMBER", id: reader.userId, name: reader.name, inChannel: false });
+    }
     for (const agent of agents) if (agent.id && agent.label) add({ kind: "AGENT", id: agent.id, name: agent.label, inChannel: false });
     return out;
+}
+
+/** The pod's members who can read a channel without being in it: everyone,
+ *  for a public group; nobody else's own channel, a private group or a
+ *  contact's is theirs to read, so naming them would name somebody who
+ *  cannot see the line. Teammates (agents) are named as agents instead. */
+export function channelReaders<M extends { userId?: string; name: string; kind?: string }>(
+    channel: { kind: "DIRECT" | "CONTACT" | "GROUP"; visibility: "PUBLIC" | "PRIVATE" },
+    members: readonly M[],
+): { userId: string; name: string }[] {
+    if (channel.kind !== "GROUP" || channel.visibility !== "PUBLIC") return [];
+    return members.flatMap((member) => member.userId && member.kind !== "teammate" ? [{ userId: member.userId, name: member.name }] : []);
 }
 
 /** The text with one picked name taken out -- its chip removed -- and the

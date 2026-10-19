@@ -11,8 +11,12 @@ work grows with watched channels and their changes, never with sockets.
 
 Nothing is lost to a missed signal. A channel's changes are numbered under its
 row lock (``infrastructure.revisions``) and the hub reads ``rev > its own``;
-an idle poll re-reads every watched head, and read positions changed since the
-last poll.
+an idle poll re-reads every watched head, the pod's channels changed since the
+last poll, and read positions moved since then. The hub's cursors move only
+once every subscription was offered what lies before them (``timeline``).
+
+Access is decided once per subscription and again on the hub's
+``AccessClock`` (``app/core/live/access_clock.py``).
 
 A subscription joins at the hub's cursor for its channel. One that resumes
 (``since``) is first sent its own gap, read directly under the hub's lock so
@@ -36,11 +40,13 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.live.access_clock import AccessClock
 from app.core.live.config import LiveSettings
 from app.core.live.connection import LiveConnection
 from app.core.live.protocol import (
     LiveAccessDenied,
     LiveErrorCode,
+    LiveUnavailable,
     ResyncReason,
     UnsubscribedReason,
 )
@@ -49,23 +55,15 @@ from app.core.live.topics import LiveRegistry
 from app.core.log.log import get_logger
 from app.core.request_context import create_background_task
 from app.modules.channels.api.access import Caller
-from app.modules.channels.domain.access import may_see
 from app.modules.channels.domain.entities import Channel
-from app.modules.channels.infrastructure.lines import LineRepository
-from app.modules.channels.infrastructure.members import MemberRepository
-from app.modules.channels.infrastructure.models import ChannelReadStateModel
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.services.live.events import (
     Head,
-    channel_updated,
     heads_of,
-    lines_view,
-    parse_cursor,
-    read_updated,
     typing_event,
 )
 from app.modules.channels.services.live.inbox_feed import InboxFeed
-from app.modules.channels.services.live.readers import caller_for
+from app.modules.channels.services.live.readers import visible_channel
 from app.modules.channels.services.live.answers import (
     Answers,
     answering_for,
@@ -80,15 +78,22 @@ from app.modules.channels.services.live.instruments import (
     hub_resyncs,
 )
 from app.modules.channels.services.live.subscriptions import ChannelSub, InboxSub
+from app.modules.channels.services.live.timeline import (
+    gap_since,
+    plan_changes,
+    read_updates,
+    reads_moved,
+    readers_now,
+)
 
 logger = get_logger(__name__)
 EpochReader = Callable[[UUID], Awaitable[str | None]]
 
 #: The signals the hub hears.
 SIGNAL_KINDS = ["channel", "read", "typing", "answering"]
-#: How far back a poll looks for read positions, past the last one: a read
-#: committed just after a poll began is still found by the next.
-_READ_OVERLAP = timedelta(seconds=5)
+#: How far back a poll looks for channels that moved: ``updated_at`` is its
+#: transaction's start; the signal covers a transaction longer than this.
+_CHANNEL_OVERLAP = timedelta(seconds=30)
 
 
 class ChannelsHub:
@@ -122,14 +127,17 @@ class ChannelsHub:
         self._everything = False
         self._joining = 0
         self._task: asyncio.Task[None] | None = None
+        #: The first subscriber's start, which every concurrent one awaits.
+        self._starting: asyncio.Task[None] | None = None
         #: Unforeseen ends of the loop since it last read cleanly.
         self._loop_failures = 0
         self._started = False
-        self._epoch: str | None = None
-        self._next_epoch_check = 0.0
+        self._stopped = False
+        self.access = AccessClock(settings)
         self._next_poll = 0.0
         self._last_read = 0.0
-        self._reads_since: datetime | None = None
+        #: The database's clock at the last poll: what the next one reads from.
+        self._polled_at: datetime | None = None
         self.idle_since: float | None = None
         self._answers = Answers(
             deliver=self._deliver_to,
@@ -140,21 +148,43 @@ class ChannelsHub:
     # -- lifecycle ------------------------------------------------------------
 
     async def _ensure_started(self) -> None:
-        # Claimed before the first await, so two joins racing to start the
-        # hub cannot both register for its signals.
+        """Start the hub once: one start task, made before anything is awaited,
+        that every concurrent first subscriber awaits -- two cannot each start
+        a loop and orphan one. A failed start is made again by the next."""
+        if self._stopped:
+            raise LiveUnavailable("the pod's channels feed is stopping")
         if self._started:
             if self._task is None or self._task.done():
                 # Its restart was lost (it is scheduled from the loop's end):
                 # the next subscriber starts it again.
                 self._start_loop()
             return
-        self._started = True
+        if self._starting is None or self._starting.done():
+            self._starting = create_background_task(
+                self._start(), name=f"live-channels-start-{self.pod_id}"
+            )
+        starting = self._starting
+        try:
+            # Shielded: one subscriber giving up does not cancel the others'.
+            await asyncio.shield(starting)
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if starting.cancelled() and not (current and current.cancelling()):
+                # The start was cancelled by ``stop``, not this subscriber.
+                raise LiveUnavailable("the pod's channels feed stopped") from None
+            raise
+        if not self._started:
+            raise LiveUnavailable("the pod's channels feed is stopping")
+
+    async def _start(self) -> None:
         listener = await self._listeners.of(self.pod_id)
+        epoch = await self._epoch_of(self.pod_id)
+        if self._stopped or self._started:
+            return
         listener.listen(SIGNAL_KINDS, self.on_signal, self.catch_up)
-        self._epoch = await self._epoch_of(self.pod_id)
-        now = time.monotonic()
-        self._next_epoch_check = now + self._settings.live_authz_check_seconds
-        self._next_poll = now + self._settings.live_idle_poll_seconds
+        self.access.start(epoch)
+        self._next_poll = time.monotonic() + self._settings.live_idle_poll_seconds
+        self._started = True
         self._start_loop()
 
     def _start_loop(self, *, after: float = 0.0) -> None:
@@ -185,7 +215,13 @@ class ChannelsHub:
         self._start_loop(after=self._backoff(self._loop_failures))
 
     async def stop(self) -> None:
+        self._stopped = True
         self._started = False
+        starting, self._starting = self._starting, None
+        if starting is not None and not starting.done():
+            starting.cancel()
+            # Waited on, not awaited: how the start ended is its subscribers'.
+            await asyncio.wait({starting})
         task, self._task = self._task, None
         listener = await self._listeners.of(self.pod_id)
         listener.forget(self.on_signal, self.catch_up)
@@ -219,10 +255,14 @@ class ChannelsHub:
         subscription_id: str,
         *,
         caller: Caller,
-        channel: Channel,
+        channel_id: UUID,
         since: str | None,
     ) -> None:
-        """Index a ``channel`` subscription, sending its gap since ``since``."""
+        """Index a ``channel`` subscription, sending its gap since ``since``.
+
+        Visibility is decided under the lock, after the head is read: a
+        removal committing later takes a change past that head, which the next
+        read ends the subscription on, rather than landing behind it unseen."""
         self._joining += 1
         self.idle_since = None
         try:
@@ -230,14 +270,15 @@ class ChannelsHub:
             async with self._lock, self._uow_factory() as uow:
                 if connection.closed:
                     return
-                head = self._heads.get(channel.id)
+                head = self._heads.get(channel_id)
                 if head is None:
-                    head = (await heads_of(uow, [channel.id])).get(channel.id)
+                    head = (await heads_of(uow, [channel_id])).get(channel_id)
                     if head is None:
                         raise LiveAccessDenied(
                             LiveErrorCode.NOT_FOUND, "Channel not found"
                         )
-                    self._heads[channel.id] = head
+                channel = await visible_channel(uow, caller, channel_id)
+                self._heads.setdefault(channel.id, head)
                 sub = ChannelSub(
                     id=subscription_id,
                     connection=connection,
@@ -270,26 +311,18 @@ class ChannelsHub:
     ) -> None:
         if since is None:
             return
-        position = parse_cursor(since)
-        if position is None:
-            self._resync(sub, ResyncReason.CURSOR_EXPIRED)
-            return
-        since_rev, since_seq = position
-        if since_rev >= head.rev:
-            return
-        limit = self._settings.live_max_changes_per_batch
-        lines = await LineRepository(uow.session).changed_since(
-            channel.id, after_rev=since_rev, limit=limit + 1
+        gap = await gap_since(
+            uow,
+            sub,
+            channel,
+            head,
+            since,
+            limit=self._settings.live_max_changes_per_batch,
         )
-        if len(lines) > limit:
-            self._resync(sub, ResyncReason.TOO_MANY)
-            return
-        events: list[str] = []
-        if head.changed_rev > since_rev:
-            events.append(await channel_updated(uow, sub.caller, channel))
-        view = await lines_view(uow, channel, lines, since_seq=since_seq)
-        events.extend(view.events_for(sub.user_id))
-        sub.connection.offer_events(sub.id, head.cursor, events, previous_cursor=since)
+        if isinstance(gap, ResyncReason):
+            self._resync(sub, gap)
+        else:
+            sub.connection.offer_events(sub.id, head.cursor, gap, previous_cursor=since)
 
     async def join_inbox(
         self, connection: LiveConnection, subscription_id: str, *, caller: Caller
@@ -357,7 +390,7 @@ class ChannelsHub:
 
     def _on_typing(self, channel_id: UUID, signal: Signal) -> None:
         typist = as_uuid(signal.get("u"))
-        event = typing_event(channel_id, signal.get("who"))
+        event = typing_event(channel_id, signal.get("who"), signal.get("t"))
         for sub in list(self._channels.get(channel_id, ())):
             if sub.user_id != typist:
                 sub.connection.offer_events(sub.id, sub.cursor, [event])
@@ -400,8 +433,8 @@ class ChannelsHub:
             polled = await self._wait()
             started = time.monotonic()
             try:
-                if time.monotonic() >= self._next_epoch_check:
-                    await self._check_epoch()
+                if time.monotonic() >= self.access.next_check:
+                    await self._check_access()
                 async with self._lock, self._uow_factory() as uow:
                     await self._drain(uow, polled=polled)
             except (SQLAlchemyError, RedisError, OSError, TimeoutError) as exc:
@@ -424,7 +457,7 @@ class ChannelsHub:
     async def _wait(self) -> bool:
         """Sleep until there is something to read; whether a poll is due."""
         timeout = max(
-            0.0, min(self._next_poll, self._next_epoch_check) - time.monotonic()
+            0.0, min(self._next_poll, self.access.next_check) - time.monotonic()
         )
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(self._wake.wait(), timeout=timeout)
@@ -441,26 +474,69 @@ class ChannelsHub:
         return False
 
     async def _drain(self, uow: SqlAlchemyUnitOfWork, *, polled: bool) -> None:
-        everything = polled or self._everything
+        everything = self._everything
         self._everything = False
         dirty, self._dirty = self._dirty, set()
         reads, self._reads = self._reads, set()
+        polled_at = self._polled_at
+        read = False
+        try:
+            await self._read(
+                uow, dirty=dirty, reads=reads, polled=polled, everything=everything
+            )
+            read = True
+        finally:
+            if not read:
+                # Nothing taken for this read is dropped: the next one reads
+                # it all again, from the same poll.
+                self._dirty |= dirty
+                self._reads |= reads
+                self._polled_at = polled_at
+                self._everything = self._everything or everything
+
+    async def _read(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        *,
+        dirty: set[UUID],
+        reads: set[tuple[UUID, UUID]],
+        polled: bool,
+        everything: bool,
+    ) -> None:
         hub_reads.add(1)
-        if everything:
-            dirty |= set(self._channels)
-            reads |= await self._reads_moved(uow)
+        changed_since: datetime | None = None
+        if polled or everything:
+            dirty = dirty | set(self._channels)
+            # The database's clock, which stamped the rows, not this process's.
+            now = await uow.session.scalar(select(func.now()))
+            since, self._polled_at = self._polled_at, now
+            if since is None:
+                # The first poll: the inbox compares every channel once.
+                everything = True
+            else:
+                users = {s.user_id for subs in self._channels.values() for s in subs}
+                reads = reads | await reads_moved(uow, users | self.inbox.users, since)
+                changed_since = since - _CHANNEL_OVERLAP
         watched = dirty & set(self._channels)
         heads = await heads_of(uow, watched)
         for channel_id in sorted(watched):
             await self._advance(uow, channel_id, heads.get(channel_id))
-        await self.inbox.drain(uow, dirty=dirty, reads=reads, everything=everything)
-        await self._send_reads(uow, reads)
+        await self.inbox.drain(
+            uow,
+            dirty=dirty,
+            reads=reads,
+            everything=everything,
+            changed_since=changed_since,
+        )
+        for sub, event in await read_updates(uow, reads, self._channels):
+            sub.connection.offer_events(sub.id, sub.cursor, [event])
 
     async def _advance(
         self, uow: SqlAlchemyUnitOfWork, channel_id: UUID, head: Head | None
     ) -> None:
         """Send one channel's changes since the hub's cursor for it, up to
-        ``head`` (``None``: the channel is gone)."""
+        ``head`` (``None``: the channel is gone). The cursor moves only once
+        every subscriber was offered its events (``timeline``)."""
         subs = [sub for sub in self._channels.get(channel_id, ()) if sub.active]
         known = self._heads.get(channel_id)
         if known is not None and head is not None and head.rev <= known.rev:
@@ -470,115 +546,46 @@ class ChannelsHub:
             for sub in subs:
                 self._end(sub, UnsubscribedReason.GONE.value)
             return
-        since = known or Head(0, 0)
-        self._heads[channel_id] = head
-        limit = self._settings.live_max_changes_per_batch
-        lines = await LineRepository(uow.session).changed_since(
-            channel_id, after_rev=since.rev, limit=limit + 1
+        plan = await plan_changes(
+            uow,
+            channel,
+            subs,
+            since=known or Head(0, 0),
+            head=head,
+            limit=self._settings.live_max_changes_per_batch,
         )
-        view = (
-            await lines_view(uow, channel, lines, since_seq=since.seq)
-            if len(lines) <= limit
-            else None
-        )
-        members = await MemberRepository(uow.session).users_in(
-            channel_id, {sub.user_id for sub in subs}
-        )
-        for sub in subs:
-            if not may_see(
-                channel, sub.caller.viewer, is_member=sub.user_id in members
-            ):
-                self._end(sub, UnsubscribedReason.ACCESS_REVOKED.value)
-                continue
+        # Nothing awaited from here: every subscriber is offered its events,
+        # and only then does the hub's cursor move.
+        for sub in plan.revoked:
+            self._end(sub, UnsubscribedReason.ACCESS_REVOKED.value)
+        for sub, events in plan.sends:
             previous, sub.cursor = sub.cursor, head.cursor
-            if view is None:
+            if events is None:
                 self._resync(sub, ResyncReason.TOO_MANY)
-                continue
-            events: list[str] = []
-            if head.changed_rev > since.rev:
-                events.append(await channel_updated(uow, sub.caller, channel))
-            events.extend(view.events_for(sub.user_id))
-            sub.connection.offer_events(
-                sub.id, head.cursor, events, previous_cursor=previous
-            )
-
-    async def _send_reads(
-        self, uow: SqlAlchemyUnitOfWork, reads: set[tuple[UUID, UUID]]
-    ) -> None:
-        members = MemberRepository(uow.session)
-        for channel_id, user_id in sorted(reads):
-            subs = [
-                sub
-                for sub in self._channels.get(channel_id, ())
-                if sub.active and sub.user_id == user_id
-            ]
-            if not subs:
-                continue
-            event = read_updated(
-                channel_id,
-                await members.read_seq(channel_id=channel_id, user_id=user_id),
-            )
-            for sub in subs:
-                sub.connection.offer_events(sub.id, sub.cursor, [event])
-
-    async def _reads_moved(self, uow: SqlAlchemyUnitOfWork) -> set[tuple[UUID, UUID]]:
-        """Read positions of the hub's readers moved since its last poll."""
-        users = {sub.user_id for subs in self._channels.values() for sub in subs}
-        users |= self.inbox.users
-        # The database's clock, which stamped the rows, not this process's.
-        now = await uow.session.scalar(select(func.now()))
-        since, self._reads_since = self._reads_since, now
-        if not users or since is None:
-            return set()
-        state = ChannelReadStateModel
-        rows = await uow.session.execute(
-            select(state.channel_id, state.user_id).where(
-                state.user_id.in_(sorted(users)),
-                state.updated_at > since - _READ_OVERLAP,
-            )
-        )
-        return {(row[0], row[1]) for row in rows}
+            else:
+                sub.connection.offer_events(
+                    sub.id, head.cursor, events, previous_cursor=previous
+                )
+        if channel_id in self._channels:
+            self._heads[channel_id] = head
 
     # -- authorization ------------------------------------------------------------
 
-    async def _check_epoch(self) -> None:
-        self._next_epoch_check = (
-            time.monotonic() + self._settings.live_authz_check_seconds
-        )
-        epoch = await self._epoch_of(self.pod_id)
-        if epoch is None or epoch == self._epoch:
-            return
-        self._epoch = epoch
+    async def _check_access(self) -> None:
+        await self.access.check(lambda: self._epoch_of(self.pod_id), self._recheck_all)
+
+    async def _recheck_all(self) -> None:
         async with self._lock, self._uow_factory() as uow:
             await self._recheck(uow)
             await self.inbox.recheck(uow, self._end)
 
     async def _recheck(self, uow: SqlAlchemyUnitOfWork) -> None:
-        """The pod's grants moved: rebuild every reader, and end what they may
-        no longer see."""
-        callers: dict[UUID, Caller | None] = {}
-        channels = await ChannelRepository(uow.session).by_ids(set(self._channels))
-        for channel_id, subs in list(self._channels.items()):
-            channel = channels.get(channel_id)
-            members = await MemberRepository(uow.session).users_in(
-                channel_id, {sub.user_id for sub in subs}
-            )
-            for sub in list(subs):
-                if sub.user_id not in callers:
-                    callers[sub.user_id] = await caller_for(
-                        uow, pod_id=self.pod_id, user_id=sub.user_id
-                    )
-                caller = callers[sub.user_id]
-                if (
-                    caller is None
-                    or channel is None
-                    or not may_see(
-                        channel, caller.viewer, is_member=sub.user_id in members
-                    )
-                ):
-                    self._end(sub, UnsubscribedReason.ACCESS_REVOKED.value)
-                    continue
-                sub.caller = caller
+        """Rebuild every reader, and end what they may no longer see."""
+        revoked, kept = await readers_now(uow, self.pod_id, self._channels)
+        for sub in revoked:
+            self._end(sub, UnsubscribedReason.ACCESS_REVOKED.value)
+        for sub, caller in kept:
+            sub.caller = caller
 
     def _end(self, sub: ChannelSub | InboxSub, reason: str) -> None:
         sub.connection.offer_unsubscribed(sub.id, reason)

@@ -346,8 +346,8 @@ async def _build_lemma_harness_tooling(
 
     # Somebody may be waiting on the person this agent is talking to. What they
     # asked is in the run's context part; this hands the run the tools that
-    # answer it. Never on a stranger's run: an open notification is the
-    # owner's question to answer.
+    # answer it. Never on a stranger's run: a question waiting on a member is
+    # theirs to answer, not somebody's outside the pod.
     if not answers_outsider and getattr(ctx, "open_questions", None):
         capabilities.append(OpenQuestionsCapability())
 

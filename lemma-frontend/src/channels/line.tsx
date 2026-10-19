@@ -23,6 +23,7 @@ import {
 import type { Answering } from "./live";
 import { DeliveryStatus, LineParts, LineText } from "./parts";
 import { problemOf } from "./problem";
+import { lineKeys } from "./queries";
 import { WaitingRow } from "./waiting-panel";
 
 export { problemOf };
@@ -50,7 +51,8 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
     const [editing, setEditing] = useState(false);
     const [draft, setDraft] = useState("");
     const [confirming, setConfirming] = useState(false);
-    const reread = () => void cache.invalidateQueries({ queryKey: ["channel", podId] });
+    /* Only where this line is held; the socket brings the change too. */
+    const reread = () => { for (const key of lineKeys(podId, channel.id, line)) void cache.invalidateQueries({ queryKey: key }); };
     const edit = useMutation({
         mutationFn: (text: string) => channelApi(podId).edit(channel.id, line.id, text),
         onSuccess: () => { setEditing(false); reread(); },
@@ -149,7 +151,10 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
                 </div>
                 {remove.isError && <p className="cline__problem" role="alert">{problemOf(remove.error, "Couldn’t delete it.")}</p>}
                 {answering.map((one) => (
-                    <div key={one.messageId + (one.agentId ?? "")} className="cline__answering" role="status">
+                    /* Not a live region: every piece written would be read out
+                       again. Its start and its finished line are said by the
+                       timeline's own announcer. */
+                    <div key={one.messageId + (one.agentId ?? "")} className="cline__answering">
                         <span className="cline__answering-who">{(agentName?.(one.agentId) ?? "An agent") + " is answering…"}</span>
                         {one.text && <div className="cline__text cline__text--md cline__text--draft"><Prose text={one.text} /></div>}
                     </div>
@@ -167,7 +172,12 @@ function Question({ podId, channel, line, me }: { podId: string; channel: Channe
     const state = questionState(interaction, me);
     if (state.kind === "yours") {
         const question = asWaitingQuestion(line, channel, me);
-        return question ? <div className="cline__ask"><WaitingRow podId={podId} question={question} bare /></div> : null;
+        return question ? (
+            <div className="cline__ask">
+                {state.answering && <p className="cline__asked">Being answered… If that answer doesn’t arrive, answer it again here.</p>}
+                <WaitingRow podId={podId} question={question} bare />
+            </div>
+        ) : null;
     }
     const said = sayQuestion(state);
     const answer = state.kind === "answered" ? answerSummary(interaction.answer) : null;

@@ -20,7 +20,7 @@ from app.modules.channels.domain.entities import (
     Source,
 )
 from app.modules.channels.domain.projection import withheld_from
-from app.modules.channels.infrastructure.lines import LineRepository
+from app.modules.channels.infrastructure.lines import LineRepository, SearchFilter
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.source_repository import SourceRepository
@@ -168,7 +168,13 @@ async def search_lines(
     channel_id: UUID | None = None,
     before: tuple[datetime, UUID] | None = None,
 ) -> list[ChannelMessage]:
-    """Lines matching every word in channels ``viewer`` sees, newest first."""
-    return await LineRepository(uow.session).search(
-        viewer, query=words, limit=limit, channel_id=channel_id, before=before
+    """Lines matching every word in channels ``viewer`` sees and reads in
+    full, newest first."""
+    hits = await LineRepository(uow.session).search(
+        viewer,
+        query=words,
+        limit=limit,
+        within=SearchFilter(channel_id=channel_id),
+        before=before,
     )
+    return [hit.message for hit in hits]

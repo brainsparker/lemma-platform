@@ -4,15 +4,18 @@ The inbox is not a log to replay; it is counts, worked out again from the
 tables whenever something they count may have moved -- a channel's change
 counter (a line, a question, a seat) or a reader's read position. The feed
 remembers every channel's head as it last saw it, so on a signal it reads only
-the channels named, and on a poll (or after signals may have been missed)
-every channel of the pod, in one query, to find the ones that moved.
+the channels named, on a poll only the channels changed since the last
+(``events.changed_heads``), and only after signals may have been missed every
+channel of the pod, in one query, to find the ones that moved. Its heads move
+once every reader has been told, so a read that fails part way is made again.
 
 Each event is absolute -- the channel's counts and the totals now -- so a
 client applies whichever came last; a subscriber that resumes is told to
 refetch ``/inbox`` instead (``resync``).
 
 A reader's counts are worked out together for every channel that moved for
-them: a fixed number of reads per reader however many channels moved. The
+them: a fixed number of reads per reader however many channels moved, and
+which of those channels each reader is in is one read for every reader. The
 feed also remembers which channels each reader may see, so one that stops
 being theirs -- taken out of a private group, the grant gone, the channel
 deleted -- is sent once more with nothing in it, and its badge clears; a
@@ -21,7 +24,8 @@ channel they never saw is never named to them.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
+from datetime import datetime
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -34,12 +38,15 @@ from app.modules.channels.domain.entities import Channel
 from app.modules.channels.infrastructure.access import visible_to
 from app.modules.channels.infrastructure.inbox import InboxReads
 from app.modules.channels.infrastructure.lines import LineRepository
-from app.modules.channels.infrastructure.members import MemberRepository
-from app.modules.channels.infrastructure.models import ChannelModel
+from app.modules.channels.infrastructure.models import (
+    ChannelMemberModel,
+    ChannelModel,
+)
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.services.live.events import (
     Head,
     LinesView,
+    changed_heads,
     heads_of,
     inbox_updated,
     lines_view,
@@ -103,59 +110,93 @@ class InboxFeed:
         dirty: Collection[UUID],
         reads: Collection[tuple[UUID, UUID]],
         everything: bool,
+        changed_since: datetime | None = None,
     ) -> None:
         """Tell each reader about the channels whose counts may have moved for
-        them. ``everything``: compare every channel of the pod, not only
-        ``dirty``."""
+        them: ``dirty``, those changed since ``changed_since`` (a poll), or
+        with ``everything`` every channel of the pod.
+
+        The feed's heads and what each reader was shown move only once every
+        reader has been told: a read that fails part way leaves both as they
+        were, and the next read tells everyone again."""
         if not self.subs or self._heads is None:
             return
-        moved = await self._moved(uow, dirty, everything=everything)
-        for_user: dict[UUID, set[UUID]] = {}
-        for channel_id in moved:
-            for user_id in self.subs:
-                for_user.setdefault(user_id, set()).add(channel_id)
+        moved, now, gone = await self._moved(
+            uow, dirty, everything=everything, changed_since=changed_since
+        )
+        for_user = self._readers_of(moved, reads)
+        shown: dict[UUID, tuple[set[UUID], set[UUID]]] = {}
+        if for_user:
+            wanted = {channel_id for ids in for_user.values() for channel_id in ids}
+            channels = await ChannelRepository(uow.session).by_ids(wanted)
+            views = await _new_lines(uow, moved, channels)
+            joined = await _memberships(uow, set(for_user), set(channels))
+            for user_id, channel_ids in for_user.items():
+                shown[user_id] = await self._tell(
+                    uow,
+                    user_id,
+                    channel_ids,
+                    channels,
+                    views,
+                    joined.get(user_id, set()),
+                )
+        # Everyone told: only now do the heads and what each reader saw move.
+        self._heads.update(now)
+        for channel_id in gone:
+            self._heads.pop(channel_id, None)
+        for user_id, (added, lost) in shown.items():
+            seen = self._seen.get(user_id)
+            if seen is not None:
+                seen |= added
+                seen -= lost
+
+    def _readers_of(
+        self,
+        moved: Collection[UUID],
+        reads: Collection[tuple[UUID, UUID]],
+    ) -> dict[UUID, set[UUID]]:
+        """Per reader, the channels whose counts may have moved for them."""
+        for_user: dict[UUID, set[UUID]] = {
+            user_id: set(moved) for user_id in self.subs if moved
+        }
         for channel_id, user_id in reads:
             if user_id in self.subs:
                 for_user.setdefault(user_id, set()).add(channel_id)
-        if not for_user:
-            return
-        wanted = {channel_id for ids in for_user.values() for channel_id in ids}
-        channels = await ChannelRepository(uow.session).by_ids(wanted)
-        views: dict[UUID, LinesView] = {}
-        for channel_id, (before, _after) in moved.items():
-            channel = channels.get(channel_id)
-            if channel is not None and _after.seq > before.seq:
-                lines = await LineRepository(uow.session).changed_since(
-                    channel_id, after_rev=before.rev, limit=_QUESTION_SCAN
-                )
-                views[channel_id] = await lines_view(
-                    uow, channel, lines, since_seq=before.seq
-                )
-        for user_id, channel_ids in for_user.items():
-            await self._tell(uow, user_id, channel_ids, channels, views)
+        return for_user
 
     async def _moved(
-        self, uow: SqlAlchemyUnitOfWork, dirty: Collection[UUID], *, everything: bool
-    ) -> dict[UUID, tuple[Head, Head]]:
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        dirty: Collection[UUID],
+        *,
+        everything: bool,
+        changed_since: datetime | None,
+    ) -> tuple[dict[UUID, tuple[Head, Head]], dict[UUID, Head], set[UUID]]:
+        """What moved since the feed's heads, the heads read, and the
+        channels found gone; nothing of the feed's own is changed."""
         assert self._heads is not None
-        now = (
-            await pod_heads(uow, self.pod_id)
-            if everything
-            else await heads_of(uow, dirty)
-        )
+        if everything:
+            now = await pod_heads(uow, self.pod_id)
+        else:
+            now = await heads_of(uow, dirty)
+            if changed_since is not None:
+                now.update(await changed_heads(uow, self.pod_id, changed_since))
         moved: dict[UUID, tuple[Head, Head]] = {}
         for channel_id, head in now.items():
             before = self._heads.get(channel_id, Head(0, 0))
             if head.rev > before.rev:
                 moved[channel_id] = (before, head)
-            self._heads[channel_id] = head
         # A channel deleted: its readers' badges clear.
         looked_at = set(self._heads) if everything else set(dirty)
-        for gone in looked_at - set(now):
-            before = self._heads.pop(gone, None)
-            if before is not None:
-                moved[gone] = (before, before)
-        return moved
+        gone = {
+            channel_id
+            for channel_id in looked_at - set(now)
+            if channel_id in self._heads
+        }
+        for channel_id in gone:
+            before = self._heads[channel_id]
+            moved[channel_id] = (before, before)
+        return moved, now, gone
 
     async def _tell(
         self,
@@ -164,16 +205,15 @@ class InboxFeed:
         channel_ids: set[UUID],
         channels: dict[UUID, Channel],
         views: dict[UUID, LinesView],
-    ) -> None:
+        joined: set[UUID],
+    ) -> tuple[set[UUID], set[UUID]]:
+        """Offer the reader their counts; the channels newly shown to them
+        and those they lost sight of, for the caller to remember."""
         subs = [sub for sub in self.subs.get(user_id, ()) if sub.active]
         if not subs:
-            return
+            return set(), set()
         caller = subs[0].caller
-        seen = self._seen.setdefault(user_id, set())
-        joined = await MemberRepository(uow.session).channels_of(
-            user_id,
-            [channel_id for channel_id in channel_ids if channel_id in channels],
-        )
+        seen = self._seen.get(user_id, set())
         shown: list[Channel] = []
         lost: list[UUID] = []
         for channel_id in sorted(channel_ids):
@@ -182,12 +222,10 @@ class InboxFeed:
                 channel, caller.viewer, is_member=channel_id in joined
             ):
                 shown.append(channel)
-                seen.add(channel_id)
             elif channel_id in seen:
                 lost.append(channel_id)
-                seen.discard(channel_id)
         if not shown and not lost:
-            return
+            return set(), set()
         inbox = InboxReads(uow.session)
         unread = await inbox.unread(caller.viewer, shown)
         totals = await inbox.totals(caller.viewer)
@@ -201,24 +239,77 @@ class InboxFeed:
         events.extend(inbox_updated(channel_id, None, totals) for channel_id in lost)
         for sub in subs:
             sub.connection.offer_events(sub.id, None, events)
+        return {channel.id for channel in shown}, set(lost)
 
     async def recheck(
         self, uow: SqlAlchemyUnitOfWork, end: Callable[[InboxSub, str], None]
     ) -> None:
-        """The pod's grants moved: rebuild each reader, end those who may no
-        longer read channels, and have the rest refetch their counts."""
+        """Rebuild each reader: end those who may no longer read channels, and
+        have those whose access changed refetch their counts. A reader whose
+        access is as it was is left alone -- a re-check on the clock, or a
+        grant elsewhere in the pod, costs them nothing."""
         for user_id, subs in list(self.subs.items()):
             caller = await caller_for(uow, pod_id=self.pod_id, user_id=user_id)
-            if caller is not None:
-                self._seen[user_id] = await _seen_by(uow, caller)
-            for sub in list(subs):
-                if caller is None:
+            if caller is None:
+                for sub in list(subs):
                     end(sub, UnsubscribedReason.ACCESS_REVOKED.value)
-                    continue
+                continue
+            changed = [sub for sub in subs if not _same(sub.caller, caller)]
+            if not changed:
+                continue
+            self._seen[user_id] = await _seen_by(uow, caller)
+            for sub in subs:
                 sub.caller = caller
+            for sub in changed:
                 sub.connection.offer_resync(
                     sub.id, None, ResyncReason.PERMISSION_CHANGED
                 )
+
+
+def _same(before: Caller, after: Caller) -> bool:
+    return (
+        before.viewer == after.viewer
+        and before.messages_contacts == after.messages_contacts
+        and before.manages_channels == after.manages_channels
+    )
+
+
+async def _new_lines(
+    uow: SqlAlchemyUnitOfWork,
+    moved: Mapping[UUID, tuple[Head, Head]],
+    channels: Mapping[UUID, Channel],
+) -> dict[UUID, LinesView]:
+    """The lines new in each moved channel, named once for every reader: where
+    a question newly waiting on one of them is found."""
+    views: dict[UUID, LinesView] = {}
+    for channel_id, (before, after) in moved.items():
+        channel = channels.get(channel_id)
+        if channel is not None and after.seq > before.seq:
+            lines = await LineRepository(uow.session).changed_since(
+                channel_id, after_rev=before.rev, limit=_QUESTION_SCAN
+            )
+            views[channel_id] = await lines_view(
+                uow, channel, lines, since_seq=before.seq
+            )
+    return views
+
+
+async def _memberships(
+    uow: SqlAlchemyUnitOfWork, users: set[UUID], channel_ids: set[UUID]
+) -> dict[UUID, set[UUID]]:
+    """Which of ``channel_ids`` each reader is in: one read for them all."""
+    if not users or not channel_ids:
+        return {}
+    rows = await uow.session.execute(
+        select(ChannelMemberModel.user_id, ChannelMemberModel.channel_id).where(
+            ChannelMemberModel.user_id.in_(sorted(users)),
+            ChannelMemberModel.channel_id.in_(sorted(channel_ids)),
+        )
+    )
+    joined: dict[UUID, set[UUID]] = {}
+    for user_id, channel_id in rows:
+        joined.setdefault(user_id, set()).add(channel_id)
+    return joined
 
 
 async def _seen_by(uow: SqlAlchemyUnitOfWork, caller: Caller) -> set[UUID]:

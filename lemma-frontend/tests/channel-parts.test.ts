@@ -4,10 +4,10 @@ import { readLine } from "../src/channels/model.ts";
 import { mentionables, pickedIn, removeMention } from "../src/channels/mentions.ts";
 import { extraLinks, isInlineImage, pieces, sizeShown } from "../src/channels/parts-model.ts";
 import { readSearchPage, snippet } from "../src/channels/search-model.ts";
-import { draftKey, keepDraft, readDraft } from "../src/channels/drafts.ts";
-import { muteChoices, mutedSaid } from "../src/channels/settings-model.ts";
+import { draftKey, keepDraft, parseDraft, readDraft } from "../src/channels/drafts.ts";
+import { muteChoices, mutedSaid, publicWarning } from "../src/channels/settings-model.ts";
 import { bellCount, readInbox } from "../src/channels/waiting.ts";
-import { nextFocus } from "../src/ui/focus-trap.ts";
+import { nextFocus, panelTabTarget } from "../src/ui/focus-trap.ts";
 
 /** What a line carries beside its text, and the small rules around the
  *  composer, the bell and the panels. */
@@ -63,13 +63,24 @@ test("a chip shows while its name is in the text, and removing it takes the name
 test("a draft is kept per thread, and forgotten once empty", () => {
     const main = draftKey("pod", "c1");
     const thread = draftKey("pod", "c1", "root-1");
-    keepDraft(main, "for everyone");
-    keepDraft(thread, "for the thread");
-    assert.equal(readDraft(main), "for everyone");
-    assert.equal(readDraft(thread), "for the thread");
-    assert.equal(readDraft(draftKey("pod", "c1", "root-2")), "");
-    keepDraft(thread, "");
-    assert.equal(readDraft(thread), "");
+    keepDraft(main, { text: "for everyone", picked: [] });
+    keepDraft(thread, { text: "for the thread", picked: [] });
+    assert.equal(readDraft(main).text, "for everyone");
+    assert.equal(readDraft(thread).text, "for the thread");
+    assert.deepEqual(readDraft(draftKey("pod", "c1", "root-2")), { text: "", picked: [] });
+    keepDraft(thread, { text: "", picked: [] });
+    assert.equal(readDraft(thread).text, "");
+});
+
+test("a draft keeps who was picked from the menu, so its @names still name them", () => {
+    const key = draftKey("pod", "c1", "root-9");
+    const sam = { kind: "MEMBER" as const, id: "user-sam-2", name: "Sam" };
+    keepDraft(key, { text: "@Sam can you look", picked: [sam] });
+    assert.deepEqual(readDraft(key).picked, [sam]);
+    /* What an earlier build stored -- the words alone -- still reads. */
+    assert.deepEqual(parseDraft("half a line"), { text: "half a line", picked: [] });
+    assert.deepEqual(parseDraft(JSON.stringify({ text: "@Sam hi", picked: [sam, { kind: "ROBOT", id: 1 }] })), { text: "@Sam hi", picked: [sam] });
+    assert.deepEqual(parseDraft(null), { text: "", picked: [] });
 });
 
 test("a search result reads its line and channel, and its snippet marks the words searched for", () => {
@@ -79,6 +90,11 @@ test("a search result reads its line and channel, and its snippet marks the word
     });
     assert.equal(found.items.length, 1);
     assert.equal(found.nextBefore, "n2");
+    assert.equal(found.items[0].snippet, null, "no snippet: the line's own text is cut here");
+    /* The server's snippet is plain text; the words are marked here. */
+    const ranked = readSearchPage({ items: [{ channel: { id: "c1", kind: "GROUP" }, message: { id: "l5", seq: 5, text: "long text", created_at: "" }, rank: 0.4, snippet: "…the beta ships Thursday…" }] });
+    assert.equal(ranked.items[0].snippet, "…the beta ships Thursday…");
+    assert.equal(snippet(ranked.items[0].snippet!, "beta").find((piece) => piece.match)?.text, "beta");
     assert.deepEqual(snippet("Ship the beta Thursday", "beta thursday"), [
         { text: "Ship the ", match: false }, { text: "beta", match: true }, { text: " ", match: false }, { text: "Thursday", match: true },
     ]);
@@ -105,6 +121,24 @@ test("the bell counts what the inbox lists: questions, mentions and your own cha
     assert.deepEqual(bellCount(null, 0), { badge: null, said: "Nothing new for you" });
 });
 
+test("the bell opens a reply in its thread: a mention or a question asked in a thread carries its first line", () => {
+    const inbox = readInbox({
+        totals: { channels: 1, mentions: 1, waiting: 1 },
+        mentions: [{ channel: { id: "c2", kind: "GROUP" }, message: { id: "m2", seq: 12, thread_root_id: "root-1", sender: { name: "Priya" }, text: "@Dana here", created_at: "x" } }],
+        waiting: [{ channel: { id: "c2", kind: "GROUP" }, message: { id: "q2", thread_root_id: "root-1", sender: { kind: "AGENT", name: "Lem" }, text: "Which?", created_at: "x", question: { kind: "ASK", question: {} } } },
+            { channel: { id: "c2", kind: "GROUP" }, message: { id: "q3", sender: { kind: "AGENT", name: "Lem" }, text: "Top?", created_at: "x", question: { kind: "ASK", question: {} } } }],
+    });
+    assert.equal(inbox.mentioned[0].threadRootId, "root-1");
+    assert.deepEqual(inbox.items.map((item) => item.threadRootId), ["root-1", null]);
+});
+
+test("a side panel beside the timeline does not hold Tab; a popover over the page does", () => {
+    const items = ["close", "name", "save"];
+    assert.equal(panelTabTarget(items, "save", false, false), null, "past the last, on out of the panel");
+    assert.equal(panelTabTarget(items, "close", true, false), null);
+    assert.equal(panelTabTarget(items, "save", false, true), "close", "a trapping panel goes round");
+});
+
 test("Tab goes round inside a panel: past the last to the first, and back", () => {
     const items = ["close", "name", "save"];
     assert.equal(nextFocus(items, "save", false), "close");
@@ -112,4 +146,9 @@ test("Tab goes round inside a panel: past the last to the first, and back", () =
     assert.equal(nextFocus(items, "name", false), null, "inside, the browser moves it");
     assert.equal(nextFocus(items, "outside", false), "close");
     assert.equal(nextFocus([], null, false), null);
+});
+
+test("making a private group public is asked first, saying its history goes with it", () => {
+    assert.match(publicWarning("launch", "Acme"), /^Everyone in Acme will be able to find launch and read everything said in it, including what was said before/);
+    assert.match(publicWarning(null, "Acme"), /find this channel/);
 });

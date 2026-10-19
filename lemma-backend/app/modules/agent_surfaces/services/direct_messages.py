@@ -94,9 +94,16 @@ def _line_name(key: str | None) -> str | None:
 
 
 async def tell_member(
-    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, user_id: UUID, text: str
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    pod_id: UUID,
+    user_id: UUID,
+    text: str,
+    urgent: bool = False,
 ) -> ChannelMessage | None:
-    """A notice to one member: a note in their own channel, never pushed."""
+    """A notice to one member: a note in their own channel. Not pushed, unless
+    ``urgent`` -- somebody is waiting on them -- when it names them, so it
+    reaches them outside the app whatever their push budget."""
     channel = await direct_channel(uow, pod_id=pod_id, user_id=user_id)
     agent_id = effective_agent_id(None, pod_id=pod_id)
     return await post(
@@ -107,4 +114,5 @@ async def tell_member(
             text=text,
             members_only=True,
         ),
+        mentions=[Principal.member(user_id)] if urgent else (),
     )

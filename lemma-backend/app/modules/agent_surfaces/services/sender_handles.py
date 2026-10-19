@@ -79,8 +79,7 @@ def _chat_or_mail_handle(
 ) -> tuple[IdentityKind, str, bool] | None:
     platform = parsed.platform
     if platform is SurfacePlatform.WHATSAPP:
-        value = parsed.sender_phone or parsed.sender_external_user_id
-        return (IdentityKind.PHONE, value, True) if value else None
+        return _whatsapp_number(parsed)
     if platform is SurfacePlatform.TELEGRAM:
         value = parsed.sender_external_user_id
         return (IdentityKind.TELEGRAM, value, True) if value else None
@@ -91,6 +90,23 @@ def _chat_or_mail_handle(
         vouched = parsed.sender_authentication == EmailAuthenticationVerdict.PASS
         return IdentityKind.EMAIL, value, vouched
     return None
+
+
+def _whatsapp_number(
+    parsed: ParsedInboundSurfaceEvent,
+) -> tuple[IdentityKind, str, bool] | None:
+    """The sender's number, as Meta names it: international, with no ``+``.
+
+    The ``+`` goes back on before it is read, so a number Meta vouched for is
+    never taken for one in the pod's own region -- ``447700900123`` read as a
+    US number is somebody else. A group participant WhatsApp names only by a
+    business-scoped user id has no number, and so no phone handle: that id is
+    not a number, and read as one it named a stranger.
+    """
+    number = (parsed.sender_phone or "").strip().lstrip("+")
+    if not number:
+        return None
+    return IdentityKind.PHONE, f"+{number}", True
 
 
 def _slack_outsider_handle(

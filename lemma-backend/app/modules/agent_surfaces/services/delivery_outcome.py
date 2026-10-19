@@ -3,10 +3,19 @@
 Four ends, one per status a delivery row can settle in after a try:
 
 * ``SENT`` -- with the platform's id for the message, when it named one;
-* ``SKIPPED`` -- not sent, on purpose (a contact's rules, nowhere to send);
-* ``FAILED`` -- did not go, and is worth trying again after a backoff;
+* ``SKIPPED`` -- not sent, on purpose (a contact's rules, nowhere to send,
+  nothing left to send once reasoning was stripped);
+* ``FAILED`` -- did not go, and is worth trying again after a backoff: the
+  platform's failure was transient and nothing of the message arrived, or
+  nothing reached the platform at all;
 * ``DEAD`` -- did not go, and trying again would repeat what already arrived
-  (part of a long message) or meet the same refusal.
+  (part of a long message, or a send that may have landed) or meet the same
+  refusal.
+
+A send is retried only when a retry cannot be the duplicate the person sees.
+Saying something twice is worse than saying, visibly, that it may not have
+arrived -- except on a platform that dedupes a resend by its key
+(``RESENDS_SAFELY``), where an ambiguous send is simply sent again.
 """
 
 from __future__ import annotations
@@ -14,8 +23,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
 from app.modules.agent_surfaces.platforms.delivery import SendOutcome
+
+#: Platforms that honour the delivery's idempotency key: a resend under it is
+#: the first send's result, never a second message (Resend keeps a key for a
+#: day, longer than a delivery is retried).
+RESENDS_SAFELY = frozenset({SurfacePlatform.RESEND.value})
 
 
 class Result(StrEnum):
@@ -31,6 +46,9 @@ class Outcome:
     platform: str | None = None
     reason: str | None = None
     external_message_id: str | None = None
+    #: How long the platform asked to be left alone, in seconds: a retry waits
+    #: at least this long.
+    retry_after: float | None = None
 
     @property
     def sent(self) -> bool:
@@ -49,18 +67,46 @@ class Outcome:
         return cls(Result.SKIPPED, platform=platform, reason=reason)
 
     @classmethod
-    def failed(cls, reason: str, *, platform: str | None = None) -> Outcome:
-        return cls(Result.FAILED, platform=platform, reason=reason)
+    def failed(
+        cls,
+        reason: str,
+        *,
+        platform: str | None = None,
+        retry_after: float | None = None,
+    ) -> Outcome:
+        return cls(
+            Result.FAILED, platform=platform, reason=reason, retry_after=retry_after
+        )
 
     @classmethod
     def dead(cls, reason: str, *, platform: str | None = None) -> Outcome:
         return cls(Result.DEAD, platform=platform, reason=reason)
 
 
+def may_have_arrived(platform: str) -> str:
+    """What a member reads on a send whose platform never answered."""
+    return (
+        f"{platform} did not answer after it was sent, so it may or may not "
+        "have arrived. It was not sent again in case it did."
+    )
+
+
 def of_send(
-    receipt: DeliveryReceipt | None, sends: SendOutcome, *, platform: str
+    receipt: DeliveryReceipt | None,
+    sends: SendOutcome,
+    *,
+    platform: str,
+    raised: BaseException | None = None,
+    nothing_sent: str = "There was nothing to send there.",
 ) -> Outcome:
-    """A platform send's outcome: its receipt, and what its tries ran into."""
+    """A platform send's outcome: its receipt, and what its tries ran into.
+
+    With no platform called at all, ``raised`` is what stopped it first -- our
+    own database, say -- and a retry may well get further; without one,
+    nothing was there to send to (no thread, or a message that was nothing
+    once reasoning was stripped), which ``nothing_sent`` says, and a retry
+    would find the same.
+    """
     if receipt is not None:
         return Outcome.delivered(
             platform, external_message_id=receipt.external_message_id
@@ -71,9 +117,68 @@ def of_send(
             "not to repeat that part.",
             platform=platform,
         )
-    return Outcome.failed(
-        f"{platform} did not take it. It will be tried again.", platform=platform
+    if sends.gave_up_transient:
+        return Outcome.failed(
+            f"{platform} could not take it just now. It will be tried again.",
+            platform=platform,
+            retry_after=sends.retry_after,
+        )
+    if not sends.tried:
+        if raised is not None:
+            return Outcome.failed(
+                f"It could not be got ready to send ({type(raised).__name__}). "
+                "It will be tried again.",
+                platform=platform,
+            )
+        return Outcome.skipped(nothing_sent, platform=platform)
+    if sends.ambiguous:
+        if platform in RESENDS_SAFELY:
+            return Outcome.failed(
+                f"{platform} did not answer. It will be sent again under the "
+                "same key, which it does not deliver twice.",
+                platform=platform,
+            )
+        return Outcome.dead(may_have_arrived(platform), platform=platform)
+    return Outcome.dead(
+        f"{platform} refused it; sending it again would meet the same refusal.",
+        platform=platform,
     )
 
 
-__all__ = ["Outcome", "Result", "of_send"]
+def timed_out(sends: SendOutcome, *, timeout: float) -> Outcome:
+    """A send cut off by ``SEND_TIMEOUT``: tried again only when the platform
+    was not called yet, or dedupes a resend; otherwise it may be there."""
+    platform = sends.platform
+    if not sends.tried or (platform is not None and platform in RESENDS_SAFELY):
+        return Outcome.failed(
+            f"No answer from the platform within {timeout:g} s. "
+            "It will be tried again.",
+            platform=platform,
+        )
+    return Outcome.dead(may_have_arrived(platform or "The platform"), platform=platform)
+
+
+def raised_before_recording(sends: SendOutcome, exc: BaseException) -> Outcome:
+    """A send that raised something no send path expects (a bug, or our own
+    database going away mid-send): retried when no platform was called yet,
+    else given up as possibly there."""
+    if not sends.tried:
+        return Outcome.failed(
+            f"It could not be got ready to send ({type(exc).__name__}). "
+            "It will be tried again.",
+            platform=sends.platform,
+        )
+    return Outcome.dead(
+        may_have_arrived(sends.platform or "The platform"), platform=sends.platform
+    )
+
+
+__all__ = [
+    "RESENDS_SAFELY",
+    "Outcome",
+    "Result",
+    "may_have_arrived",
+    "of_send",
+    "raised_before_recording",
+    "timed_out",
+]

@@ -11,9 +11,10 @@ fail open if they are wrong:
 * unauthenticated email is never answered but parked, a few notes an hour;
 * mail a machine sent is neither answered nor parked;
 * "STOP" opts the handle out before anything else is asked -- with nobody
-  looking after contacts, from a stranger, from a machine -- and only "START"
-  or a message the person typed opts it back in, never an auto-reply or mail
-  nothing vouched for;
+  looking after contacts, from a stranger, from a machine, but never from mail
+  nothing vouched for, which is parked -- and only "START" or a message the
+  person typed opts it back in, never an auto-reply or mail nothing vouched
+  for;
 * where the turn runs -- the contact's own conversation, looked after by the
   member who looks after contacts, naming the contact so the run authorizes
   as them.
@@ -468,6 +469,23 @@ async def test_an_email_whose_subject_is_unsubscribe_opts_out(pod):
 
     assert context is None
     assert await pod.opted_out(IdentityKind.EMAIL, EMAIL)
+
+
+@pytest.mark.parametrize(
+    "verdict", [EmailAuthenticationVerdict.FAIL, EmailAuthenticationVerdict.UNKNOWN]
+)
+async def test_a_stop_nothing_vouched_for_is_parked_not_honoured(pod, verdict):
+    """Anybody can send "STOP" under somebody else's address: honoured, it cut
+    the real person off from the pod's mail. It is parked for the member who
+    looks after contacts instead, who decides."""
+    context = await pod.prepare(
+        pod.surface(platform=SurfacePlatform.RESEND),
+        _email(text="STOP", authentication=verdict),
+    )
+
+    assert context is None
+    assert not await pod.opted_out(IdentityKind.EMAIL, EMAIL)
+    assert await pod.notes() == [f"Unverified email from {EMAIL}"]
 
 
 async def test_stop_from_a_machine_still_opts_out(pod):

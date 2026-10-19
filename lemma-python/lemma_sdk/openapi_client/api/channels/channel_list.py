@@ -11,6 +11,7 @@ from ...models.channel_kind import ChannelKind
 from ...models.channel_list_response import ChannelListResponse
 from ...models.contact_status import ContactStatus
 from ...models.error_response import ErrorResponse
+from ...models.visibility import Visibility
 from ...types import UNSET, Response, Unset
 
 
@@ -18,6 +19,8 @@ def _get_kwargs(
     pod_id: UUID,
     *,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
     assignee: None | str | Unset = UNSET,
@@ -40,6 +43,22 @@ def _get_kwargs(
     else:
         json_kind = kind
     params["kind"] = json_kind
+
+    json_visibility: None | str | Unset
+    if isinstance(visibility, Unset):
+        json_visibility = UNSET
+    elif isinstance(visibility, Visibility):
+        json_visibility = visibility.value
+    else:
+        json_visibility = visibility
+    params["visibility"] = json_visibility
+
+    json_q: None | str | Unset
+    if isinstance(q, Unset):
+        json_q = UNSET
+    else:
+        json_q = q
+    params["q"] = json_q
 
     params["archived"] = archived
 
@@ -138,6 +157,8 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
     assignee: None | str | Unset = UNSET,
@@ -157,6 +178,9 @@ def sync_detailed(
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
@@ -182,6 +206,8 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         kind=kind,
+        visibility=visibility,
+        q=q,
         archived=archived,
         contact_id=contact_id,
         assignee=assignee,
@@ -206,6 +232,8 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
     assignee: None | str | Unset = UNSET,
@@ -225,6 +253,9 @@ def sync(
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
@@ -251,6 +282,8 @@ def sync(
         pod_id=pod_id,
         client=client,
         kind=kind,
+        visibility=visibility,
+        q=q,
         archived=archived,
         contact_id=contact_id,
         assignee=assignee,
@@ -269,6 +302,8 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
     assignee: None | str | Unset = UNSET,
@@ -288,6 +323,9 @@ async def asyncio_detailed(
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
@@ -313,6 +351,8 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         kind=kind,
+        visibility=visibility,
+        q=q,
         archived=archived,
         contact_id=contact_id,
         assignee=assignee,
@@ -335,6 +375,8 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
     assignee: None | str | Unset = UNSET,
@@ -354,6 +396,9 @@ async def asyncio(
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
@@ -381,6 +426,8 @@ async def asyncio(
             pod_id=pod_id,
             client=client,
             kind=kind,
+            visibility=visibility,
+            q=q,
             archived=archived,
             contact_id=contact_id,
             assignee=assignee,

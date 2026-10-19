@@ -6,6 +6,9 @@ import type { PersonRef } from "./waiting";
 export interface SearchHit {
     line: Line;
     channel: { id: string; kind: ChannelKind; title: string | null; person: PersonRef | null };
+    /** The server's plain-text cut of the line around the match, when it
+     *  made one: the words searched for are marked here, not by the server. */
+    snippet: string | null;
 }
 
 type Wire = Record<string, unknown>;
@@ -28,6 +31,7 @@ export function readSearchPage(raw: unknown): Page<SearchHit> {
                     title: typeof channel.title === "string" && channel.title ? channel.title : null,
                     person: readPerson(channel.person),
                 },
+                snippet: typeof row.snippet === "string" && row.snippet.trim() ? row.snippet : null,
             }];
         }),
         nextBefore: typeof body.next_cursor === "string" && body.next_cursor ? body.next_cursor : null,

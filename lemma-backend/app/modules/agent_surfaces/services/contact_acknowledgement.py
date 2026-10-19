@@ -28,7 +28,7 @@ from app.modules.agent.contracts import (
 from app.modules.agent.contracts.channel_conversations import (
     channel_of_conversation,
 )
-from app.modules.agent_surfaces.services.channel_lines import WEB
+from app.modules.agent_surfaces.services.channel_lines import WEB, shown_on_web
 from app.modules.agent_surfaces.services.contact_reach import reach_for
 from app.modules.channels.contracts import (
     Channel,
@@ -78,7 +78,7 @@ async def acknowledge_contact(
         return None
     if not await acknowledge(uow, channel.id):
         return None
-    await post(
+    line = await post(
         uow,
         channel_id=channel.id,
         line=NewLine(
@@ -87,12 +87,14 @@ async def acknowledge_contact(
                 on_behalf_of=Principal.contact(channel.contact_id),
             ),
             text=text,
-            source_id=source.id,
+            target_source_id=source.id,
             conversation_id=conversation_id,
         ),
-        # A web chat shows it from their conversation; nothing carries it.
-        deliver_to=[] if source.platform == WEB else [source.id],
+        deliver_to=[source.id],
     )
+    if line is not None and source.platform == WEB:
+        # A web chat shows it from their conversation; nothing carries it.
+        await shown_on_web(uow, line, source)
     logger.info(
         "agent_surfaces.contact_acknowledgement.sent.observed",
         channel_id=str(channel.id),

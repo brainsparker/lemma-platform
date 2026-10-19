@@ -200,3 +200,99 @@ async def test_one_more_reader_costs_the_same_however_many_channels_moved(
         "per channel for every reader, where it should read every moved "
         "channel's counts for a reader at once"
     )
+
+
+# -- the idle poll ---------------------------------------------------------------
+
+
+@contextmanager
+def _rows_on(connection: AsyncConnection) -> Iterator[list[int]]:
+    """Rows each statement on this connection returned while the block runs."""
+    rows: list[int] = []
+
+    def after(conn, cursor, statement, parameters, context, executemany):
+        rows.append(max(cursor.rowcount, 0))
+
+    target = connection.sync_connection
+    assert target is not None
+    event.listen(target, "after_cursor_execute", after)
+    try:
+        yield rows
+    finally:
+        event.remove(target, "after_cursor_execute", after)
+
+
+async def _contacts(db_session, pod: Pod, count: int) -> list[UUID]:
+    """``count`` contacts, each with their CONTACT channel."""
+    pod_id = UUID(pod.id)
+    contacts = [uuid4() for _ in range(count)]
+    await db_session.execute(
+        text("""
+        INSERT INTO contacts (id, pod_id, display_name, created_at, updated_at)
+        SELECT id, :pod, 'contact', now(), now() FROM unnest(CAST(:ids AS uuid[])) id
+        """),
+        {"pod": pod_id, "ids": contacts},
+    )
+    channels = [uuid4() for _ in range(count)]
+    await db_session.execute(
+        text("""
+        INSERT INTO channels
+          (id, pod_id, kind, visibility, contact_id, last_seq, last_rev,
+           created_at, updated_at)
+        SELECT c, :pod, 'CONTACT', 'PRIVATE', k, 0, 0,
+               now() - interval '1 hour', now() - interval '1 hour'
+        FROM unnest(CAST(:channels AS uuid[]), CAST(:contacts AS uuid[])) AS t(c, k)
+        """),
+        {"pod": pod_id, "channels": channels, "contacts": contacts},
+    )
+    await db_session.commit()
+    return channels
+
+
+async def _poll_cost(db_manager, pod: Pod, reader: UUID) -> tuple[int, int]:
+    """Statements and rows one idle poll of the inbox reads, nothing moved."""
+    pod_id = UUID(pod.id)
+    feed = InboxFeed(pod_id)
+    async with db_manager.session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        caller = await caller_for(uow, pod_id=pod_id, user_id=reader)
+        assert caller is not None
+        await feed.join(
+            uow,
+            InboxSub(
+                id=uuid4().hex,
+                connection=cast(LiveConnection, _Socket(reader)),
+                caller=caller,
+            ),
+        )
+        since = await session.scalar(text("SELECT now() - interval '30 seconds'"))
+    async with db_manager.session_factory() as session:
+        connection = await session.connection()
+        with _counted_on(connection) as statements, _rows_on(connection) as rows:
+            await feed.drain(
+                SqlAlchemyUnitOfWork(session),
+                dirty=(),
+                reads=(),
+                everything=False,
+                changed_since=since,
+            )
+    return len(statements), sum(rows)
+
+
+async def test_an_idle_poll_costs_the_same_however_many_contacts_the_pod_has(
+    pod: Pod, db_session, db_manager
+):
+    """A pod's CONTACT channels are one per contact, so they are most of its
+    channels. The poll that backs up lost signals reads only the channels
+    changed since the last poll -- none, here -- never the pod's every head."""
+    reader = UUID(pod.editor["id"])
+    await _contacts(db_session, pod, 10)
+    few = await _poll_cost(db_manager, pod, reader)
+    await _contacts(db_session, pod, 40)
+    many = await _poll_cost(db_manager, pod, reader)
+    print(f"\n  (statements, rows) per idle poll: 10 contacts {few}, 50 {many}")
+    assert few == many, (
+        f"an idle poll read {few} with 10 contacts and {many} with 50: it reads "
+        "every channel of the pod instead of the ones that moved"
+    )
+    assert many[1] == 0, "an idle poll with nothing moved read channel rows"

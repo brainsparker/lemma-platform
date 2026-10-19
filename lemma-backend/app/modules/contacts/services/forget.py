@@ -9,6 +9,14 @@ platform profiles stored for their handles -- so the contact is never half
 forgotten there. The questions of theirs a bot passed on to a member are blanked
 in that same transaction, before the conversations they point at are deleted.
 
+In the channels, their own channel goes with them; in every other -- a group
+they wrote in -- their lines are emptied in place rather than deleted, so the
+members' replies, the agents' answers and the threads they started stay, and
+the timeline keeps its numbers (``channels/contracts/contacts``).
+
+A merged contact's id leads to the person it became, here as in every other
+verb: forgetting it forgets that person.
+
 A contact others were merged into is forgotten with them. Their rows and
 conversations move to it in queued work after the merge, so a forget that comes
 first finds them still under the merged ids -- and deleting the contact cascades
@@ -27,6 +35,7 @@ from app.modules.agent.contracts.contact_conversations import (
     forget_contact_conversations,
 )
 from app.modules.agent_surfaces.contracts.contacts import forget_contact_senders
+from app.modules.channels.contracts.contacts import forget_contacts_in_channels
 from app.modules.contacts.contracts.visitor_sessions import (
     forget_contact_visitor_sessions,
     forget_session_liveness,
@@ -76,16 +85,23 @@ async def forget_contact(
 ) -> Forgotten | None:
     """Forget this contact, or ``None`` when the pod has no such contact."""
     async with uow_factory() as uow:
-        contact = await ContactRepository(uow.session).get(
-            pod_id=pod_id, contact_id=contact_id
-        )
+        contacts = ContactRepository(uow.session)
+        contact = await contacts.get(pod_id=pod_id, contact_id=contact_id)
+        if contact is not None and contact.merged_into_id is not None:
+            contact = await contacts.get(
+                pod_id=pod_id, contact_id=contact.merged_into_id
+            )
     if contact is None:
         return None
+    contact_id = contact.id
     everyone = [contact_id, *await _absorbed_by(uow_factory, pod_id, contact_id)]
     rows = 0
     for one in everyone:
         rows += await delete_contact_rows(uow_factory, pod_id=pod_id, contact_id=one)
     async with uow_factory() as uow:
+        # Channels first: their locks are taken before the lines under them,
+        # as every writer to a channel takes them.
+        await forget_contacts_in_channels(uow, pod_id=pod_id, contact_ids=everyone)
         conversations = 0
         ended: list[UUID] = []
         for one in everyone:

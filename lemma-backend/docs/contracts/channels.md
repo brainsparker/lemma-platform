@@ -22,6 +22,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `channel.member.add` | POST | `/pods/{pod_id}/channels/{channel_id}/members` | Add Members |
 | `channel.member.join` | POST | `/pods/{pod_id}/channels/{channel_id}/members/me` | Join Channel |
 | `channel.member.leave` | DELETE | `/pods/{pod_id}/channels/{channel_id}/members/me` | Leave Channel |
+| `channel.member.list` | GET | `/pods/{pod_id}/channels/{channel_id}/members` | List Members |
 | `channel.member.me_update` | PATCH | `/pods/{pod_id}/channels/{channel_id}/members/me` | Update My Membership |
 | `channel.member.remove` | DELETE | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | Remove Member |
 | `channel.member.update` | PATCH | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | Update Member |

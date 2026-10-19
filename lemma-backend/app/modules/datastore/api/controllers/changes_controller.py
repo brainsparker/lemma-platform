@@ -14,6 +14,9 @@ Differences a previous client can notice, all of them safe for it:
 * A burst too large to send row by row, or a socket that falls behind, gets a
   fresh ``ready`` at the new position instead of every row.
 * A delete carries an empty ``payload``.
+* Losing access to what it watches closes the socket with ``4403``, and the
+  session ending closes it with ``4401``, rather than leaving it open and
+  silent.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ from app.core.live.protocol import (
     LiveAccessDenied,
     LiveUnavailable,
 )
+from app.core.live.sessions import SessionWatch, end_for_session
 from app.core.live.socket import accept_and_authenticate, close_code_for, serve
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.live import LiveCursorExpired, SubscribeRequest
@@ -93,9 +97,10 @@ async def datastore_changes_ws(
         ),
     ),
 ) -> None:
-    user_id = await accept_and_authenticate(websocket)
-    if user_id is None:
+    session = await accept_and_authenticate(websocket)
+    if session is None:
         return
+    user_id = session.user_id
     try:
         await _authorize(pod_id, user_id, table)
     # The base class: a missing pod permission is raised by core authorization
@@ -111,6 +116,9 @@ async def datastore_changes_ws(
         send_text=websocket.send_text,
         queue_bytes=live_settings.live_socket_queue_bytes,
         frames=LegacyFrames(),
+        # Its client has no frame for "unsubscribed": losing access to what it
+        # watches closes the socket (4403), which that client stops on.
+        ends_with_subscription=True,
     )
     hub = await live_hubs().hub(pod_id)
     try:
@@ -134,4 +142,10 @@ async def datastore_changes_ws(
             reason="Internal error while starting the datastore changes websocket.",
         )
         return
-    await serve(websocket, connection, handle=None)
+    watch = SessionWatch(session)
+
+    async def keep() -> None:
+        if not await watch.still_valid():
+            end_for_session(connection)
+
+    await serve(websocket, connection, handle=None, session=session, keep=keep)

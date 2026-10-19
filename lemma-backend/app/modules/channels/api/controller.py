@@ -67,6 +67,7 @@ from app.modules.channels.infrastructure.names import Names
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.rows import now
 from app.modules.channels.infrastructure.source_repository import SourceRepository
+from app.modules.contacts.contracts import contact_by_id
 from app.modules.pod.contracts.members import pod_member_holds, pod_member_id
 
 router = APIRouter(prefix="/pods/{pod_id}/channels", tags=["Channels"])
@@ -78,6 +79,17 @@ _IDEMPOTENT_CHANNELS = UUID("5f0e9a52-3c4b-4d7e-9b1a-8c2d6e4f1a37")
 IdempotencyKey = Header(
     default=None, alias="Idempotency-Key", min_length=1, max_length=255
 )
+
+
+async def _contact_now(
+    uow: UoWDep, pod_id: UUID, contact_id: UUID | None
+) -> UUID | None:
+    """A merged contact's id filters by the person it became, whose channel
+    took theirs."""
+    if contact_id is None:
+        return None
+    contact = await contact_by_id(uow, pod_id=pod_id, contact_id=contact_id)
+    return contact.id if contact is not None else contact_id
 
 
 @router.get(
@@ -92,6 +104,19 @@ async def list_channels(
     caller: CallerDep,
     ctx: PodContextDep,
     kind: ChannelKind | None = Query(default=None),
+    visibility: Visibility | None = Query(
+        default=None,
+        description=(
+            "Only `PUBLIC` or only `PRIVATE` channels; a member's and a "
+            "contact's own channel are private."
+        ),
+    ),
+    q: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Only channels whose title holds these words, in any case.",
+    ),
     archived: bool = Query(default=False),
     contact_id: UUID | None = Query(
         default=None, description="Only this contact's channel."
@@ -133,8 +158,10 @@ async def list_channels(
     channels = await ChannelRepository(uow.session).list_for(
         caller.viewer,
         kind=kind,
+        visibility=visibility,
+        titled=q,
         archived=archived,
-        contact_id=contact_id,
+        contact_id=await _contact_now(uow, pod_id, contact_id),
         assignee_user_id=_assignee(assignee, caller),
         unassigned=unassigned,
         status=status_,
@@ -253,6 +280,10 @@ async def create_channel(
         )
         if channel.pod_id != caller.pod_id:
             raise conflict("That Idempotency-Key was used elsewhere")
+        if not made:
+            # A replay shows the group only to whoever may still see it: made
+            # private since, or they were taken out of it, it is not theirs.
+            channel = await visible(uow, caller, channel.id)
     if made:
         await seat_people(uow, channel, body.members, added_by=caller.user_id)
         await seat_agents(

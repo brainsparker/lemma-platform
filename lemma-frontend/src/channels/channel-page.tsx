@@ -13,16 +13,17 @@ import { ChannelPanel } from "./channel-panel";
 import { Composer } from "./composer";
 import { ContactControls } from "./contact-controls";
 import { onFocusAsked, takeFocus, type LineFocus } from "./focus";
-import { upsertTimeline } from "./live";
-import { mentionables } from "./mentions";
+import { answeringNews, sayTyping, typingIn, upsertTimeline } from "./live";
+import { channelReaders, mentionables } from "./mentions";
 import { channelTitle, newestSeq, personName, platformsOf, whoAnswers, type ChannelDetail, type Line, type LinePage } from "./model";
 import { linesKey, refreshLists, useChannel, useLines } from "./queries";
-import { readTarget } from "./read-state";
+import { readTarget, unseenThreadMention, usePageShown } from "./read-state";
 import { platformName } from "./sources";
 import { ThreadPanel } from "./thread-panel";
 import { Timeline } from "./timeline";
 import { useAbilities } from "./use-abilities";
 import { useChannelLive } from "./use-channel-live";
+import { useInbox } from "./waiting-panel";
 
 /** One channel, in one place: everything said there, oldest at the top, the
  *  box to say something, and -- beside it -- either a thread or what is true
@@ -77,6 +78,11 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
     const [threadRoot, setThreadRoot] = useState<string | null>(null);
     const [pin, setPin] = useState(0);
     const [highlight, setHighlight] = useState<LineFocus | null>(null);
+    /* Where the unread lines began when it was opened: the "New" mark
+       stays there while the reader reads, rather than chasing them. */
+    const [unreadFrom] = useState(channel.me.readSeq);
+    const shown = usePageShown();
+    const inbox = useInbox(pod.id, visible);
 
     /* Opened at one line, now or while already open. */
     useEffect(() => {
@@ -102,7 +108,10 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
         }
     }, [highlight, timeline]);
 
-    /* Read as far as the newest line seen; not while reading back. */
+    /* Read as far as the newest line seen; not while reading back, not
+       behind another tab, and not past a reply naming the reader in a
+       thread they have not opened. */
+    const heldBack = unseenThreadMention(inbox.data?.mentioned ?? [], channel.id, side === "thread" ? threadRoot : null);
     const marked = useRef(0);
     const [progress, setProgress] = useState({ seenMax: 0, atEnd: true });
     const onProgress = useCallback((next: { seenMax: number; atEnd: boolean }) => {
@@ -110,7 +119,9 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
     }, []);
     const { markRead } = live;
     useEffect(() => {
-        if (!visible || timeline.isPending) return;
+        /* The inbox says which thread mentions are unread; until it has,
+           what reading to the end may mark is not known. */
+        if (!visible || !shown || timeline.isPending || inbox.isPending) return;
         const target = readTarget({
             seenMax: progress.seenMax,
             atEnd: progress.atEnd,
@@ -118,16 +129,17 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
             lastSeq: channel.lastSeq,
             readSeq: channel.me.readSeq,
             marked: marked.current,
+            heldBack,
         });
         if (target === null) return;
         const was = marked.current;
         marked.current = target;
         markRead(target).catch(() => { marked.current = was; });
-    }, [visible, progress, timeline.isPending, timeline.lines, channel.lastSeq, channel.me.readSeq, markRead]);
+    }, [visible, shown, progress, timeline.isPending, timeline.lines, channel.lastSeq, channel.me.readSeq, markRead, heldBack, inbox.isPending]);
 
     const people = useMemo(
-        () => mentionables(agents.data ?? [], channel.members.map((one) => one.person), me),
-        [agents.data, channel.members, me],
+        () => mentionables(agents.data ?? [], channel.members.map((one) => one.person), me, channelReaders(channel, pod.members)),
+        [agents.data, channel, pod.members, me],
     );
     const agentName = useCallback((agentId: string | null) => {
         const member = channel.members.find((one) => one.person.kind === "AGENT" && one.person.id === agentId);
@@ -144,7 +156,19 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
     const placeholder = channel.kind === "DIRECT" ? "Write to " + pod.name
         : channel.kind === "CONTACT" ? "Write to " + (channel.person?.name ?? "them")
         : "Write in " + title;
-    const typingNames = live.typing.map((who) => personName(who, me));
+    const typingNames = typingIn(live.typing, null).map((one) => personName(one.who, me));
+    const threadTyping = root ? typingIn(live.typing, root.id).map((one) => personName(one.who, me)) : [];
+
+    /* What a screen reader hears: a new line from somebody else, and an
+       answer starting -- never the answer a piece at a time. */
+    const [said, setSaid] = useState("");
+    useEffect(() => { if (live.announced) setSaid(live.announced); }, [live.announced]);
+    const heardAnswering = useRef(live.answering);
+    useEffect(() => {
+        const started = answeringNews(heardAnswering.current, live.answering);
+        heardAnswering.current = live.answering;
+        if (started.length) setSaid(started.map((one) => agentName(one.agentId)).join(", ") + (started.length === 1 ? " is answering" : " are answering"));
+    }, [live.answering, agentName]);
 
     return (
         <div className="cpage" data-side={side ?? undefined}>
@@ -205,14 +229,12 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
                     answering={live.answering}
                     agentName={agentName}
                     highlight={highlight ? highlight.threadRootId ?? highlight.lineId : null}
-                    announced={live.announced}
+                    announced={said}
                     onProgress={onProgress}
+                    unreadFrom={unreadFrom}
+                    me={me}
                 />
-                <p className="cpage__typing" aria-hidden={typingNames.length === 0}>
-                    {typingNames.length === 1 ? typingNames[0] + " is typing…"
-                        : typingNames.length === 2 ? typingNames[0] + " and " + typingNames[1] + " are typing…"
-                        : typingNames.length > 2 ? "Several people are typing…" : ""}
-                </p>
+                <p className="cpage__typing" aria-hidden={typingNames.length === 0}>{sayTyping(typingNames)}</p>
                 <Composer
                     podId={pod.id}
                     channel={channel}
@@ -220,7 +242,7 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
                     placeholder={placeholder}
                     disabledReason={channel.archived ? "This channel is archived. Bring it back to write in it." : may.writeRefused}
                     onPosted={posted}
-                    onTyping={live.typed}
+                    onTyping={() => live.typed(null)}
                 />
             </div>
             {side === "thread" && root && (
@@ -236,6 +258,7 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
                     answering={live.answering}
                     agentName={agentName}
                     highlight={highlight?.threadRootId ? highlight.lineId : null}
+                    typing={threadTyping}
                     onTyping={live.typed}
                     onClose={() => { setSide(null); setThreadRoot(null); }}
                 />

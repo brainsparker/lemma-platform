@@ -42,6 +42,8 @@ WORKFLOW_RESUME = "workflow.resume"
 WORKFLOW_WAIT_EXPIRE = "workflow.wait_expire"
 WORKFLOW_DECIDE = "workflow.decide"
 WORKFLOW_NOTIFY_FORM = "workflow.notify_form"
+#: A form's question expired in its assignee's inbox: the wait ends with it.
+WORKFLOW_FORM_EXPIRED = "workflow.form_expired"
 #: Admit a workflow's parked runs into whatever room it has. Admission normally
 #: happens in the transaction that frees the room; this is for room that
 #: appears any other way -- a raised limit, the cutover.

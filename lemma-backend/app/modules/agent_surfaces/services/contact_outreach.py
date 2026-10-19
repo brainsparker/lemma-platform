@@ -143,11 +143,21 @@ class ContactOutreach:
             raise OutreachRefused(
                 str(refused), status_code=refused.status_code
             ) from refused
-        [delivery] = [
-            delivery
-            for delivery in await deliveries_of(self.uow, [line.id])
-            if delivery.source_id == source.id
-        ]
+        delivery = next(
+            (
+                delivery
+                for delivery in await deliveries_of(self.uow, [line.id])
+                if delivery.source_id == source.id
+            ),
+            None,
+        )
+        if delivery is None:
+            # The key named a line already written for another of their
+            # handles: a retry must be the same request.
+            raise OutreachRefused(
+                "That key was already used for a line to another of their handles.",
+                status_code=409,
+            )
         return Reached(line=line, delivery=delivery)
 
     async def _place(

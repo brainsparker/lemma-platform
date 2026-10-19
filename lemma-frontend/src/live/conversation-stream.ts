@@ -78,6 +78,15 @@ export function sseFrame(event: Record<string, unknown>): string {
     return "data: " + JSON.stringify(payload) + "\n\n";
 }
 
+/** Whether the socket is worth waiting on for a run. A socket going --
+ *  `idle` until something subscribes, `connecting`, `open` -- is; one that
+ *  dropped and is waiting out its backoff, or was refused for good, is not:
+ *  a send waiting the whole subscribe timeout on it only to fall back to SSE
+ *  is a send held for nothing. */
+export function socketCarries(status: LiveStatus): boolean {
+    return status !== "reconnecting" && status !== "closed";
+}
+
 /** A run's events as a byte stream of SSE frames. `send` makes it the
  *  stream of the run a new message starts; without it, of the run going
  *  now (or `agentRunId`). Rejects with `SocketUnavailable` when the socket
@@ -88,6 +97,7 @@ export async function socketRunStream(deps: RunStreamDeps, request: {
     send?: unknown;
     signal?: AbortSignal;
 }): Promise<ReadableStream<Uint8Array>> {
+    if (!socketCarries(deps.live.status)) throw new SocketUnavailable("The live socket is down.");
     const later = deps.setTimeout ?? ((run: () => void, ms: number) => setTimeout(run, ms));
     const cancelTimer = deps.clearTimeout ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>));
     const encoder = new TextEncoder();

@@ -116,6 +116,11 @@ def _a_completed_run(monkeypatch):
         run_answer_sends, "run_reply_material", _material("COMPLETED", "answer")
     )
     monkeypatch.setattr(run_answer_sends, "delivery_noted", note)
+
+    async def unnote(_uow, _delivery_id):
+        noted.append(None)
+
+    monkeypatch.setattr(run_answer_sends, "delivery_unnoted", unnote)
     monkeypatch.setattr(run_answer_sends, "discard_display_paths", _nothing)
     return noted
 
@@ -214,7 +219,9 @@ async def test_the_answer_closes_the_sealed_stream_with_what_is_left(
     assert await take_live_display(run_id, wait_seconds=0) is None
 
 
-async def test_a_refused_close_takes_the_stream_down_and_posts_the_answer() -> None:
+async def test_a_refused_close_takes_the_stream_down_and_posts_the_answer(
+    _a_completed_run,
+) -> None:
     run_id = uuid4()
     await record_live_display(
         run_id, conversation_id=uuid4(), handle=STREAM, streamed="Here", sealed=True
@@ -228,6 +235,10 @@ async def test_a_refused_close_takes_the_stream_down_and_posts_the_answer() -> N
     # The id is the new message's, not the stream's that was taken down.
     assert result.external_message_id == "1700000009.1"
     assert await take_live_display(run_id, wait_seconds=0) is None
+    # The stream's id, noted before the close, is forgotten once the stream
+    # is gone -- a sender dying now leaves no sign the answer arrived -- and
+    # the new message's is noted as the platform answers.
+    assert _a_completed_run[-2:] == [None, "1700000009.1"]
 
 
 async def test_an_unsealed_stream_that_disagrees_is_not_trusted(monkeypatch) -> None:

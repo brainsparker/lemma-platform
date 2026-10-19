@@ -17,8 +17,9 @@ from sqlalchemy import BigInteger, Uuid, and_, column, func, select, true, value
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.access import Viewer
-from app.modules.channels.domain.entities import Channel, NotifyLevel, QuestionState
+from app.modules.channels.domain.entities import Channel, NotifyLevel
 from app.modules.channels.infrastructure.access import visible_to
+from app.modules.channels.infrastructure.questions import still_waiting
 from app.modules.channels.infrastructure.models import (
     ChannelMemberModel,
     ChannelMentionModel,
@@ -146,7 +147,7 @@ class InboxReads:
             .where(
                 q.awaits_user_id == viewer.user_id,
                 q.channel_id.in_(ids),
-                q.state == QuestionState.OPEN.value,
+                still_waiting(),
             )
             .group_by(q.channel_id)
         )
@@ -204,7 +205,7 @@ class InboxReads:
             .join(channel, channel.id == q.channel_id)
             .where(
                 q.awaits_user_id == viewer.user_id,
-                q.state == QuestionState.OPEN.value,
+                still_waiting(),
                 visible_to(viewer),
             )
         )

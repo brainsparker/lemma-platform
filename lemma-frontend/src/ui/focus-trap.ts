@@ -8,7 +8,12 @@ import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type RefOb
  *
  *  For the side panels and popovers that are not `Modal`s (which do the same
  *  for themselves): the keys are heard on the panel, not the document, so a
- *  dialog opened over it still answers its own Escape first. */
+ *  dialog opened over it still answers its own Escape first.
+ *
+ *  A side panel beside the page it belongs to is not modal: the page stays
+ *  usable, so Tab goes on out of it as the browser would (`trap: false`),
+ *  and only Escape and giving focus back are kept. A popover laid over the
+ *  page keeps Tab inside it. */
 
 const FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -23,12 +28,19 @@ export function nextFocus<T>(items: readonly T[], active: T | null, backwards: b
     return null;
 }
 
+/** Where Tab goes from a panel: round inside it when it traps the keyboard,
+ *  else nowhere of its own -- the browser moves on out of it. */
+export function panelTabTarget<T>(items: readonly T[], active: T | null, backwards: boolean, trap: boolean): T | null {
+    return trap ? nextFocus(items, active, backwards) : null;
+}
+
 export function focusables(root: HTMLElement): HTMLElement[] {
     return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((element) => !element.closest("[hidden], [inert]"));
 }
 
 /** Wire a panel: returns the `onKeyDown` to put on it. */
-export function usePanelFocus(panel: RefObject<HTMLElement | null>, onClose: () => void, options: { focusFirst?: boolean } = {}) {
+export function usePanelFocus(panel: RefObject<HTMLElement | null>, onClose: () => void, options: { focusFirst?: boolean; trap?: boolean } = {}) {
+    const trap = options.trap !== false;
     const close = useRef(onClose);
     close.current = onClose;
     useEffect(() => {
@@ -52,8 +64,7 @@ export function usePanelFocus(panel: RefObject<HTMLElement | null>, onClose: () 
             return;
         }
         if (event.key !== "Tab" || !panel.current) return;
-        const items = focusables(panel.current);
-        const target = nextFocus(items, document.activeElement as HTMLElement | null, event.shiftKey);
+        const target = panelTabTarget(trap ? focusables(panel.current) : [], document.activeElement as HTMLElement | null, event.shiftKey, trap);
         if (target) {
             event.preventDefault();
             target.focus();

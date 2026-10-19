@@ -47,6 +47,9 @@ class ChannelDeliveryDue(Fact):
 
     pod_id: UUID
     delivery_id: UUID
+    #: ``Delivery.target_key``: the place or member it goes to, so the sends
+    #: to one target run one at a time. Empty from an older announcement.
+    target: str = ""
 
     def work_namespace(self) -> str:
         return pod_namespace(self.pod_id)

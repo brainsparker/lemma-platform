@@ -5,6 +5,11 @@ row's lock, so numbers are gapless and a reader resumes exactly where it left
 off. A line written twice is one line: a client names its line
 (``client_message_id``) and a platform names its message (``source_id`` +
 ``external_message_id``); either finds the line already there.
+
+A line is heard at a place (``source_id``: a person said it on a platform) or
+written in Lemma -- and then perhaps carried to one (``target_source_id``).
+Only a person heard at a place says the place is alive (``last_inbound_at``):
+a member's line sent there from Lemma opens no platform's window.
 """
 
 from __future__ import annotations
@@ -14,17 +19,18 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Row, Select, and_, func, or_, select, update
+from sqlalchemy import ColumnElement, Row, Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.access import Viewer
 from app.modules.channels.domain.entities import (
+    ChannelKind,
     ChannelMessage,
     Sender,
     SenderKind,
 )
 from app.modules.channels.domain.parts import Part, dump_parts
-from app.modules.channels.infrastructure.access import visible_to
+from app.modules.channels.infrastructure.access import shown_in_full_to, visible_to
 from app.modules.channels.infrastructure.models import (
     ChannelMessageDeliveryModel,
     ChannelMessageModel,
@@ -40,7 +46,10 @@ from app.modules.channels.infrastructure.rows import MAX_LINES, message_entity, 
 class NewLine:
     sender: Sender
     text: str
+    #: Where it was heard: a person said it there, on a platform.
     source_id: UUID | None = None
+    #: Where a line written in Lemma is carried (and its delivery planned).
+    target_source_id: UUID | None = None
     members_only: bool = False
     parts: Sequence[Part] = field(default_factory=tuple)
     client_message_id: str | None = None
@@ -115,6 +124,7 @@ class LineRepository:
             body=line.text,
             parts=dump_parts(list(line.parts)),
             source_id=line.source_id,
+            target_source_id=line.target_source_id,
             members_only=line.members_only,
             client_message_id=line.client_message_id,
             conversation_id=line.conversation_id,
@@ -152,6 +162,20 @@ class LineRepository:
             )
         await self.session.flush()
         return message_entity(row), True
+
+    async def named(
+        self, channel_id: UUID, client_message_id: str
+    ) -> ChannelMessage | None:
+        """The channel's line a client named so, if one was written."""
+        found = (
+            await self.session.execute(
+                _with_question().where(
+                    ChannelMessageModel.channel_id == channel_id,
+                    ChannelMessageModel.client_message_id == client_message_id,
+                )
+            )
+        ).first()
+        return message_entity(found[0], question=found[1]) if found else None
 
     async def _written_before(
         self, channel_id: UUID, line: NewLine
@@ -308,13 +332,19 @@ class LineRepository:
         top_level: bool = True,
     ) -> list[ChannelMessage]:
         """Lines oldest first: the newest page, or those before or after a
-        number. ``source_id``: only what was said there (a contact reading)."""
+        number. ``source_id``: only what is at that place -- heard there or
+        carried there (a contact reading)."""
         message = ChannelMessageModel
         statement = _with_question().where(message.channel_id == channel_id)
         if top_level:
             statement = statement.where(message.thread_root_id.is_(None))
         if source_id is not None:
-            statement = statement.where(message.source_id == source_id)
+            statement = statement.where(
+                or_(
+                    message.source_id == source_id,
+                    message.target_source_id == source_id,
+                )
+            )
         if before_seq is not None:
             statement = statement.where(message.seq < before_seq)
         size = max(1, min(limit, MAX_LINES))
@@ -430,24 +460,46 @@ class LineRepository:
         *,
         query: str,
         limit: int,
-        channel_id: UUID | None = None,
+        within: SearchFilter | None = None,
         before: tuple[datetime, UUID] | None = None,
-    ) -> list[ChannelMessage]:
+    ) -> list[SearchHit]:
         """Lines matching every word, newest first, in channels ``viewer`` may
-        see; notes to members are members' to find. Paged by ``before``."""
+        see and lines they read in full -- an answer withheld from them is not
+        found by what it said, and is filtered before the page is cut. Notes to
+        members are members' to find. Paged by ``before``."""
+        within = within or SearchFilter()
         message = ChannelMessageModel
+        words = func.plainto_tsquery("simple", query)
         statement = (
             _with_question()
+            .add_columns(
+                func.ts_rank(message.search, words).label("rank"),
+                # Costly, so Postgres makes it after the page is cut: only for
+                # the lines shown, from the row already read.
+                func.ts_headline("simple", message.body, words, SNIPPET_OPTIONS),
+            )
             .join(ChannelModel, ChannelModel.id == message.channel_id)
             .where(
+                # The pod beside the words: one GIN (``btree_gin``) finds both.
+                message.pod_id == viewer.pod_id,
+                message.search.op("@@")(words),
                 visible_to(viewer),
-                ChannelModel.archived_at.is_(None),
+                shown_in_full_to(viewer),
                 message.deleted_at.is_(None),
-                message.search.op("@@")(func.plainto_tsquery("simple", query)),
             )
         )
-        if channel_id is not None:
-            statement = statement.where(message.channel_id == channel_id)
+        if not within.archived:
+            statement = statement.where(ChannelModel.archived_at.is_(None))
+        if within.channel_id is not None:
+            statement = statement.where(message.channel_id == within.channel_id)
+        if within.kind is not None:
+            statement = statement.where(ChannelModel.kind == within.kind.value)
+        if within.sender is not None:
+            statement = statement.where(*_said_by(within.sender))
+        if within.after is not None:
+            statement = statement.where(message.created_at >= within.after)
+        if within.until is not None:
+            statement = statement.where(message.created_at < within.until)
         if before is not None:
             at, message_id = before
             statement = statement.where(
@@ -456,9 +508,62 @@ class LineRepository:
                     and_(message.created_at == at, message.id < message_id),
                 )
             )
-        rows = await self.session.execute(
-            statement.order_by(message.created_at.desc(), message.id.desc()).limit(
-                max(1, min(limit, MAX_LINES))
+        rows = list(
+            await self.session.execute(
+                statement.order_by(message.created_at.desc(), message.id.desc()).limit(
+                    max(1, min(limit, MAX_LINES))
+                )
             )
         )
-        return [message_entity(row[0], question=row[1]) for row in rows]
+        return [
+            SearchHit(
+                message=message_entity(row[0], question=row[1]),
+                rank=float(row[2] or 0.0),
+                snippet=str(row[3]) if row[3] is not None else None,
+            )
+            for row in rows
+        ]
+
+
+#: A snippet is the text around the match, unmarked: a reader highlights the
+#: words itself, so nobody's line is ever rendered as markup.
+SNIPPET_OPTIONS = "StartSel='',StopSel='',MaxWords=24,MinWords=8,MaxFragments=1"
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFilter:
+    """What a search is narrowed to; every field absent is no narrowing."""
+
+    channel_id: UUID | None = None
+    kind: ChannelKind | None = None
+    #: Who said it: a member, a contact, or an agent.
+    sender: SpeakerRef | None = None
+    #: Said at or after this; before ``until``.
+    after: datetime | None = None
+    until: datetime | None = None
+    #: Archived channels are searched too.
+    archived: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SpeakerRef:
+    kind: SenderKind
+    id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SearchHit:
+    message: ChannelMessage
+    #: ``ts_rank`` of the line against the words: higher is closer.
+    rank: float
+    snippet: str | None
+
+
+def _said_by(sender: SpeakerRef) -> tuple[ColumnElement[bool], ...]:
+    message = ChannelMessageModel
+    column = {
+        SenderKind.MEMBER: message.sender_user_id,
+        SenderKind.CONTACT: message.sender_contact_id,
+        SenderKind.AGENT: message.sender_agent_id,
+    }[sender.kind]
+    return (message.sender_kind == sender.kind.value, column == sender.id)

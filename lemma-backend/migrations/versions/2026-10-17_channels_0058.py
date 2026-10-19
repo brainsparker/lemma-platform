@@ -96,6 +96,7 @@ CREATE TABLE channels (
 CREATE INDEX ix_channels_assignee ON channels (assignee_user_id) WHERE assignee_user_id IS NOT NULL;
 CREATE INDEX ix_channels_created_by ON channels (created_by_user_id) WHERE created_by_user_id IS NOT NULL;
 CREATE INDEX ix_channels_pod_activity ON channels (pod_id, last_line_at, id);
+CREATE INDEX ix_channels_pod_updated ON channels (pod_id, updated_at);
 CREATE UNIQUE INDEX uq_channels_contact ON channels (contact_id) WHERE kind = 'CONTACT';
 CREATE UNIQUE INDEX uq_channels_direct_member ON channels (pod_id, member_user_id) WHERE kind = 'DIRECT';
 CREATE TABLE channel_members (
@@ -179,6 +180,7 @@ CREATE TABLE channel_messages (
 	seq BIGINT NOT NULL,
 	client_message_id VARCHAR(64),
 	source_id UUID,
+	target_source_id UUID,
 	sender_kind VARCHAR(10) NOT NULL,
 	sender_user_id UUID,
 	sender_contact_id UUID,
@@ -207,19 +209,21 @@ CREATE TABLE channel_messages (
 	CONSTRAINT ck_channel_messages_sender_kind CHECK (sender_kind IN ('MEMBER', 'CONTACT', 'AGENT')),
 	CONSTRAINT ck_channel_messages_one_sender CHECK (num_nonnulls(sender_user_id, sender_contact_id, sender_agent_id) <= 1 AND (sender_user_id IS NULL OR sender_kind = 'MEMBER') AND (sender_contact_id IS NULL OR sender_kind = 'CONTACT') AND (sender_agent_id IS NULL OR sender_kind = 'AGENT')),
 	CONSTRAINT ck_channel_messages_only_an_agent_acts_for_someone CHECK (num_nonnulls(on_behalf_user_id, on_behalf_contact_id) <= 1 AND (sender_kind = 'AGENT' OR num_nonnulls(on_behalf_user_id, on_behalf_contact_id) = 0)),
+	CONSTRAINT ck_channel_messages_heard_or_carried CHECK (num_nonnulls(source_id, target_source_id) <= 1),
 	FOREIGN KEY(channel_id, pod_id) REFERENCES channels (id, pod_id) ON DELETE CASCADE,
 	CONSTRAINT uq_channel_messages_seq UNIQUE (channel_id, seq),
 	FOREIGN KEY(pod_id) REFERENCES pods (id) ON DELETE CASCADE,
 	FOREIGN KEY(source_id) REFERENCES channel_sources (id) ON DELETE SET NULL,
+	FOREIGN KEY(target_source_id) REFERENCES channel_sources (id) ON DELETE SET NULL,
 	FOREIGN KEY(sender_user_id) REFERENCES users (id) ON DELETE SET NULL,
-	FOREIGN KEY(sender_contact_id) REFERENCES contacts (id) ON DELETE CASCADE,
+	FOREIGN KEY(sender_contact_id) REFERENCES contacts (id) ON DELETE SET NULL,
 	FOREIGN KEY(sender_agent_id) REFERENCES agents (id) ON DELETE SET NULL,
 	FOREIGN KEY(on_behalf_user_id) REFERENCES users (id) ON DELETE SET NULL,
-	FOREIGN KEY(on_behalf_contact_id) REFERENCES contacts (id) ON DELETE CASCADE,
+	FOREIGN KEY(on_behalf_contact_id) REFERENCES contacts (id) ON DELETE SET NULL,
 	FOREIGN KEY(conversation_id) REFERENCES agent_conversations (id) ON DELETE SET NULL,
 	FOREIGN KEY(agent_run_id) REFERENCES agent_runs (id) ON DELETE SET NULL,
 	FOREIGN KEY(reply_to_id) REFERENCES channel_messages (id) ON DELETE SET NULL,
-	FOREIGN KEY(thread_root_id) REFERENCES channel_messages (id) ON DELETE CASCADE
+	FOREIGN KEY(thread_root_id) REFERENCES channel_messages (id) ON DELETE SET NULL
 );
 CREATE INDEX ix_channel_messages_conversation ON channel_messages (conversation_id, seq);
 CREATE INDEX ix_channel_messages_on_behalf_contact ON channel_messages (on_behalf_contact_id) WHERE on_behalf_contact_id IS NOT NULL;
@@ -227,11 +231,12 @@ CREATE INDEX ix_channel_messages_on_behalf_user ON channel_messages (on_behalf_u
 CREATE INDEX ix_channel_messages_reply_to ON channel_messages (reply_to_id) WHERE reply_to_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_rev ON channel_messages (channel_id, rev);
 CREATE INDEX ix_channel_messages_run ON channel_messages (agent_run_id) WHERE agent_run_id IS NOT NULL;
-CREATE INDEX ix_channel_messages_search ON channel_messages USING gin (search);
+CREATE INDEX ix_channel_messages_search ON channel_messages USING gin (pod_id, search);
 CREATE INDEX ix_channel_messages_sender_agent ON channel_messages (sender_agent_id) WHERE sender_agent_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_sender_contact ON channel_messages (sender_contact_id) WHERE sender_contact_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_sender_user ON channel_messages (sender_user_id) WHERE sender_user_id IS NOT NULL;
-CREATE INDEX ix_channel_messages_source ON channel_messages (source_id) WHERE source_id IS NOT NULL;
+CREATE INDEX ix_channel_messages_source ON channel_messages (source_id, seq) WHERE source_id IS NOT NULL;
+CREATE INDEX ix_channel_messages_target ON channel_messages (target_source_id, seq) WHERE target_source_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_thread ON channel_messages (thread_root_id, seq) WHERE thread_root_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_channel_messages_client ON channel_messages (channel_id, client_message_id) WHERE client_message_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_channel_messages_external ON channel_messages (source_id, md5(external_message_id)) WHERE external_message_id IS NOT NULL;
@@ -292,10 +297,11 @@ CREATE TABLE channel_questions (
 );
 CREATE INDEX ix_channel_questions_batch ON channel_questions (pod_id, batch_id) WHERE batch_id IS NOT NULL;
 CREATE INDEX ix_channel_questions_channel ON channel_questions (channel_id);
-CREATE INDEX ix_channel_questions_expiry ON channel_questions (expires_at) WHERE state = 'OPEN' AND expires_at IS NOT NULL;
+CREATE INDEX ix_channel_questions_claimed ON channel_questions (claimed_at) WHERE state = 'ANSWERING';
+CREATE INDEX ix_channel_questions_expiry ON channel_questions (expires_at) WHERE state IN ('OPEN', 'ANSWERING') AND expires_at IS NOT NULL;
 CREATE INDEX ix_channel_questions_ref_prefix ON channel_questions (pod_id, ref text_pattern_ops);
-CREATE INDEX ix_channel_questions_waiting_contact ON channel_questions (awaits_contact_id) WHERE state = 'OPEN' AND awaits_contact_id IS NOT NULL;
-CREATE INDEX ix_channel_questions_waiting_member ON channel_questions (awaits_user_id, pod_id) WHERE state = 'OPEN' AND awaits_user_id IS NOT NULL;
+CREATE INDEX ix_channel_questions_waiting_contact ON channel_questions (awaits_contact_id) WHERE state IN ('OPEN', 'ANSWERING') AND awaits_contact_id IS NOT NULL;
+CREATE INDEX ix_channel_questions_waiting_member ON channel_questions (awaits_user_id, pod_id) WHERE state IN ('OPEN', 'ANSWERING') AND awaits_user_id IS NOT NULL;
 CREATE TABLE channel_message_deliveries (
 	message_id UUID NOT NULL,
 	pod_id UUID NOT NULL,
@@ -510,12 +516,27 @@ ON CONFLICT DO NOTHING
 """
 
 
+def _ensure_btree_gin() -> None:
+    """The search index keeps a line's pod beside its words (``btree_gin``, a
+    contrib module every supported Postgres ships). Looked for before it is
+    asked for: some managed Postgres refuse even a no-op CREATE EXTENSION to a
+    role that is not an extension admin."""
+    present = (
+        op.get_bind()
+        .execute(sa.text("SELECT 1 FROM pg_extension WHERE extname = 'btree_gin'"))
+        .first()
+    )
+    if present is None:
+        op.execute("CREATE EXTENSION btree_gin")
+
+
 def upgrade() -> None:
     op.drop_table("agent_surface_group_messages")
     op.drop_table("agent_surface_groups")
     op.drop_table("agent_surface_conversation_links")
     op.execute("DELETE FROM work_items WHERE kind = 'notification.expire'")
     op.drop_table("notifications")
+    _ensure_btree_gin()
     _run(_NEW_TABLES)
     _run(_DIRECT_CHANNELS)
     op.add_column(

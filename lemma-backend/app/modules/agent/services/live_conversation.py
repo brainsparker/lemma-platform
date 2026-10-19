@@ -19,6 +19,12 @@ already finished is followed by its ending (``completed``, ``error`` or
 heard for a while, it is read again, so an ending published while the
 listener was away still arrives.
 
+Access is decided again when the pod's grants move
+(``authz_epoch.pod_grants_epoch``), and every ``LIVE_AUTHZ_RECHECK_SECONDS``
+regardless: a subscriber who may no longer read the conversation -- taken out
+of the pod, the conversation no longer theirs -- is sent ``unsubscribed``
+(``access_revoked``) and hears nothing more of it.
+
 The same events are a named stream, ``agent.conversation`` (key: the
 conversation id), that core's live registry opens for other topics -- channels
 relays an answer being written into the line it answers.
@@ -29,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -38,6 +45,7 @@ from pydantic import BaseModel, ConfigDict
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.authorization.authz_epoch import pod_grants_epoch
 from app.core.authorization.dependencies import assert_pod_membership
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.scope import context_scope
@@ -45,6 +53,8 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.live.access_clock import AccessClock
+from app.core.live.config import live_settings
 from app.core.live.connection import LiveConnection
 from app.core.live.protocol import (
     JsonObject,
@@ -52,6 +62,7 @@ from app.core.live.protocol import (
     LiveErrorCode,
     ResyncReason,
     SubscribeRequest,
+    UnsubscribedReason,
     dumps,
     parse_params,
 )
@@ -107,6 +118,8 @@ IDLE_CHECK_SECONDS = 15.0
 
 #: A run's own events that end it.
 _ENDINGS = frozenset({"completed", "error", "stopped"})
+#: How often a subscription looks at the pod's grants epoch.
+ACCESS_CHECK_SECONDS = 5.0
 
 
 class _Params(BaseModel):
@@ -126,6 +139,8 @@ class _ConversationSub:
     task: asyncio.Task[None] | None = field(default=None, repr=False)
     #: The run being watched, until it ends.
     run_id: UUID | None = None
+    #: The pod's grants epoch when access was decided at subscribe.
+    epoch: str | None = None
 
     def release(self) -> None:
         if not self.active:
@@ -205,8 +220,39 @@ async def _ending_if_over(sub: _ConversationSub) -> None:
         sub.connection.offer_events(sub.id, None, [dumps(ending)])
 
 
+async def _still_allowed(sub: _ConversationSub) -> None:
+    """Decide the subscription's access again; end it if it was lost. A
+    database error is raised, so the clock decides again at its next check."""
+    try:
+        await _authorize(
+            sub.connection.pod_id, sub.connection.user_id, sub.conversation_id, None
+        )
+    except LiveAccessDenied:
+        sub.connection.offer_unsubscribed(
+            sub.id, UnsubscribedReason.ACCESS_REVOKED.value
+        )
+
+
+async def _check_access(sub: _ConversationSub, access: AccessClock) -> None:
+    try:
+        await access.check(
+            lambda: pod_grants_epoch(sub.connection.pod_id),
+            lambda: _still_allowed(sub),
+        )
+    except (SQLAlchemyError, OSError) as exc:
+        logger.warning(
+            "agent.live.conversation_access_check_failed.degraded",
+            conversation_id=str(sub.conversation_id),
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+
+
 async def _forward(sub: _ConversationSub, listening: asyncio.Event) -> None:
-    """Hand each of the conversation's events to the subscriber, until it goes."""
+    """Hand each of the conversation's events to the subscriber, until it goes
+    or loses the right to them."""
+    access = AccessClock(live_settings, check_seconds=ACCESS_CHECK_SECONDS)
+    access.start(sub.epoch)
     try:
         async with conversation_events(str(sub.conversation_id)) as events:
             listening.set()
@@ -214,14 +260,23 @@ async def _forward(sub: _ConversationSub, listening: asyncio.Event) -> None:
             # The pull is held across a quiet interval, never cancelled:
             # cancelling an async generator's ``__anext__`` closes it.
             pending: asyncio.Future[JsonObject] | None = None
+            quiet_until = time.monotonic() + IDLE_CHECK_SECONDS
             try:
                 while sub.active:
                     if pending is None:
                         pending = asyncio.ensure_future(anext(stream))
-                    done, _ = await asyncio.wait({pending}, timeout=IDLE_CHECK_SECONDS)
+                    wait = min(quiet_until, access.next_check) - time.monotonic()
+                    done, _ = await asyncio.wait({pending}, timeout=max(wait, 0.0))
+                    if time.monotonic() >= access.next_check:
+                        await _check_access(sub, access)
+                        if not sub.active:
+                            return
                     if not done:
-                        await _ending_if_over(sub)
+                        if time.monotonic() >= quiet_until:
+                            quiet_until = time.monotonic() + IDLE_CHECK_SECONDS
+                            await _ending_if_over(sub)
                         continue
+                    quiet_until = time.monotonic() + IDLE_CHECK_SECONDS
                     pulled, pending = pending, None
                     try:
                         event = pulled.result()
@@ -258,6 +313,8 @@ class ConversationTopic:
         self, connection: LiveConnection, request: SubscribeRequest
     ) -> None:
         params = parse_params(_Params, request.params, request_id=request.id)
+        # Read before access is decided: a grant moving after it is a move.
+        epoch = await pod_grants_epoch(connection.pod_id)
         run = await _authorize(
             connection.pod_id,
             connection.user_id,
@@ -270,6 +327,7 @@ class ConversationTopic:
             connection=connection,
             conversation_id=params.conversation_id,
             run_id=run.id if run is not None and ending is None else None,
+            epoch=epoch,
         )
         connection.subscriptions[request.id] = sub
         listening = asyncio.Event()

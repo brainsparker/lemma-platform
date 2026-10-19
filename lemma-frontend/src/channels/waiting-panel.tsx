@@ -14,7 +14,8 @@ import { openAtLine } from "./focus";
 import { FormAnswer } from "./form-answer";
 import { readInboxEvent, withChannelUnread, withInboxTotals } from "./live";
 import { sinceShort, type Channel, type Page } from "./model";
-import { allChannels, inboxKey, useChannelList } from "./queries";
+import { problemOf } from "./problem";
+import { allChannels, answeredKeys, inboxKey, useChannelList } from "./queries";
 import {
     bellCount,
     choicesOf,
@@ -155,7 +156,7 @@ export function WaitingBell({ podId }: { podId: string }) {
     );
 }
 
-function InboxPanel({ podId, inbox, mine, at, panel, onClose }: {
+export function InboxPanel({ podId, inbox, mine, at, panel, onClose }: {
     podId: string;
     inbox: ReturnType<typeof useInbox>;
     mine: Channel | null;
@@ -167,9 +168,9 @@ function InboxPanel({ podId, inbox, mine, at, panel, onClose }: {
     const items = inbox.data?.items ?? [];
     const mentioned = inbox.data?.mentioned ?? [];
     const directNew = mine?.unread.lines ?? 0;
-    const open = (channelId: string, lineId?: string) => {
+    const open = (channelId: string, lineId?: string, threadRootId: string | null = null) => {
         onClose();
-        openAtLine(podId, channelId, { lineId: lineId ?? "", threadRootId: null });
+        openAtLine(podId, channelId, { lineId: lineId ?? "", threadRootId });
     };
     const nothing = !inbox.isPending && !inbox.isError && items.length === 0 && mentioned.length === 0 && directNew === 0;
     return (
@@ -209,7 +210,7 @@ function InboxPanel({ podId, inbox, mine, at, panel, onClose }: {
                     <h3 id="inbox-waiting" className="notify__label">Waiting on you</h3>
                     <div className="notify__list">
                         {items.map(question => (
-                            <WaitingRow key={question.id} podId={podId} question={question} onOpen={() => open(question.channelId, question.id)} />
+                            <WaitingRow key={question.id} podId={podId} question={question} onOpen={() => open(question.channelId, question.id, question.threadRootId)} />
                         ))}
                     </div>
                 </section>
@@ -220,7 +221,7 @@ function InboxPanel({ podId, inbox, mine, at, panel, onClose }: {
                     <ul className="notify__mentions">
                         {mentioned.map((item) => (
                             <li key={item.id}>
-                                <button type="button" className="notify__open" onClick={() => open(item.channelId, item.id)}>
+                                <button type="button" className="notify__open" onClick={() => open(item.channelId, item.id, item.threadRootId)}>
                                     <span>{item.from} <small>{item.channelKind === "DIRECT" ? "in your channel" : "in " + (item.channelTitle ?? "a channel")} · {sinceShort(item.at)}</small></span>
                                     {item.text && <small className="notify__said">{item.text.replace(/\s+/g, " ").slice(0, 140)}</small>}
                                 </button>
@@ -251,9 +252,12 @@ export function WaitingRow({ podId, question, bare = false, onOpen }: { podId: s
         onSuccess: () => {
             setProblem(null);
             void cache.invalidateQueries({ queryKey: inboxKey(podId) });
-            void cache.invalidateQueries({ queryKey: ["channel", podId] });
+            /* Only the channel it was asked in: the line moves, nothing else does. */
+            for (const key of answeredKeys(podId, question)) void cache.invalidateQueries({ queryKey: key });
         },
-        onError: (failure) => setProblem(failure instanceof Error ? failure.message : "Couldn’t send your answer."),
+        /* The server's sentence -- "Somebody is answering this already" -- is
+           the useful one; it is said as given. */
+        onError: (failure) => setProblem(problemOf(failure, "Couldn’t send your answer.")),
     });
 
     return (

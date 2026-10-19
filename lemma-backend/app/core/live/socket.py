@@ -29,6 +29,7 @@ from supertokens_python.recipe.session.interfaces import SessionContainer
 
 from app.core.live.connection import LiveConnection
 from app.core.live.limits import SLOT_REFRESH_SECONDS
+from app.core.live.sessions import LiveSession, open_sockets
 from app.core.live.protocol import (
     CLOSE_FORBIDDEN,
     CLOSE_NOT_FOUND,
@@ -87,8 +88,18 @@ async def _resolve_session(websocket: WebSocket) -> SessionContainer:
     return session
 
 
-async def accept_and_authenticate(websocket: WebSocket) -> UUID | None:
-    """Accept the handshake, then resolve the caller; None means it was closed."""
+def _session_of(session: SessionContainer) -> LiveSession:
+    expires = session.get_access_token_payload().get("exp")
+    return LiveSession(
+        user_id=UUID(session.get_user_id()),
+        handle=session.get_handle(),
+        access_expires_at=float(expires) if isinstance(expires, int | float) else None,
+    )
+
+
+async def accept_and_authenticate(websocket: WebSocket) -> LiveSession | None:
+    """Accept the handshake, then resolve the caller's session; None means
+    the socket was closed."""
     try:
         await websocket.accept()
     except RuntimeError:
@@ -110,7 +121,7 @@ async def accept_and_authenticate(websocket: WebSocket) -> UUID | None:
             code=CLOSE_UNAUTHENTICATED, reason="Unauthorized live socket."
         )
         return None
-    return UUID(session.get_user_id())
+    return _session_of(session)
 
 
 def close_code_for(status_code: int) -> int:
@@ -283,10 +294,16 @@ async def serve(
     connection: LiveConnection,
     *,
     handle: FrameHandler | None,
+    session: LiveSession,
     keep: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """Run one socket until either side ends it. ``keep`` runs every
-    ``SLOT_REFRESH_SECONDS`` while it is open: what it holds stays claimed."""
+    ``SLOT_REFRESH_SECONDS`` while it is open: what it holds stays claimed.
+    The socket closes when its ``session`` is announced ended
+    (``sessions.OpenSockets``), or when the server ends it with a code
+    (``LiveConnection.close_with``), with that code."""
+    sockets = open_sockets()
+    sockets.hold(connection, session)
     tasks = {
         create_inherited_task(connection.run_sender(), name="live-socket-sender"),
         create_inherited_task(
@@ -309,13 +326,19 @@ async def serve(
                     exc_info=error,
                 )
     finally:
+        sockets.release(connection, session)
         connection.close()
         for task in tasks:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         with contextlib.suppress(Exception):
-            await websocket.close()
+            if connection.close_code is None:
+                await websocket.close()
+            else:
+                await websocket.close(
+                    code=connection.close_code, reason=connection.close_reason
+                )
 
 
 __all__ = [

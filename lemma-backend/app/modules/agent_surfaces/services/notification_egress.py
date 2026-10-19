@@ -24,6 +24,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
+from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
 from app.modules.agent_surfaces.domain.ports import (
     ColdEmailThread,
     SurfaceNotificationEgressPort,
@@ -91,6 +92,9 @@ class NotificationEgress:
         # bot would lose the name and icon it replies under.
         if agent_name:
             metadata["agent_display_name"] = agent_name
+        if outbound.key:
+            # Every try of one push is one message where the platform dedupes.
+            metadata[IDEMPOTENCY_KEY] = outbound.key
         if channel.source is not None:
             receipt = await self.egress.deliver_message(
                 conversation_id=conversation_id,

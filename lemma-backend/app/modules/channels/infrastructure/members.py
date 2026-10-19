@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Collection
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, literal, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,6 +60,7 @@ class MemberRepository:
                     role
                     or (MemberRole.GUEST if principal.is_contact else MemberRole.MEMBER)
                 ).value,
+                notify=NotifyLevel.default_in(channel.kind).value,
                 added_by_user_id=added_by_user_id,
             )
             .on_conflict_do_nothing()
@@ -162,6 +164,30 @@ class MemberRepository:
             .where(ChannelMemberModel.channel_id == channel_id)
             .order_by(ChannelMemberModel.created_at, ChannelMemberModel.id)
             .limit(max(1, min(limit, MAX_MEMBERS)))
+        )
+        return [member_entity(row) for row in rows]
+
+    async def page(
+        self,
+        channel_id: UUID,
+        *,
+        limit: int,
+        after: tuple[datetime, UUID] | None = None,
+    ) -> list[Member]:
+        """Who is in the channel, in the order they joined, from ``after``
+        (a seat's join time and id)."""
+        member = ChannelMemberModel
+        statement = select(member).where(member.channel_id == channel_id)
+        if after is not None:
+            joined, seat_id = after
+            statement = statement.where(
+                tuple_(member.created_at, member.id)
+                > tuple_(literal(joined), literal(seat_id))
+            )
+        rows = await self.session.scalars(
+            statement.order_by(member.created_at, member.id).limit(
+                max(1, min(limit, MAX_MEMBERS))
+            )
         )
         return [member_entity(row) for row in rows]
 
@@ -300,3 +326,30 @@ class MemberRepository:
             )
         )
         return {row[0]: int(row[1]) for row in rows}
+
+    async def remove_platform_seat(
+        self, channel_id: UUID, principal: Principal
+    ) -> bool:
+        """Take out a person the platform says left the place this channel
+        mirrors -- when the platform is what put them here (nobody in Lemma
+        added them, ``added_by_user_id`` empty). Somebody a member added, or an
+        admin who joined on request, is the pod's choice and stays."""
+        member = ChannelMemberModel
+        who = (
+            member.user_id == principal.user_id
+            if principal.user_id is not None
+            else member.contact_id == principal.contact_id
+        )
+        seated = await self.session.scalar(
+            select(member.id).where(
+                member.channel_id == channel_id,
+                who,
+                member.added_by_user_id.is_(None),
+            )
+        )
+        if seated is None:
+            return False
+        # The channel before the seat, the order a new line takes them in.
+        await touch_channel(self.session, channel_id)
+        await self.session.execute(delete(member).where(member.id == seated))
+        return True

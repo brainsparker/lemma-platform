@@ -396,6 +396,27 @@ export function readLinePage(raw: unknown): LinePage {
     };
 }
 
+/** A page of a thread's replies, oldest first, and the `seq` to read the
+ *  next page after -- null once the newest reply is held. */
+export interface ThreadPage {
+    items: Line[];
+    nextAfter: number | null;
+}
+
+export function readThreadPage(raw: unknown): ThreadPage {
+    const body = record(raw);
+    return {
+        items: rows(body.items).map(readLine).filter((line): line is Line => line !== null),
+        nextAfter: body.has_more === true ? seq(body.next_after_seq) : null,
+    };
+}
+
+/** A thread's pages as one run of replies, oldest first, each once. */
+export function joinThread(pages: readonly ThreadPage[]): Line[] {
+    const seen = new Set<string>();
+    return pages.flatMap((page) => page.items).filter((line) => !seen.has(line.id) && Boolean(seen.add(line.id)));
+}
+
 /** The newest line in a timeline, by `seq`: what reading it marks read. */
 export function newestSeq(lines: readonly Pick<Line, "seq">[]): number | null {
     let newest: number | null = null;
@@ -571,7 +592,10 @@ export function isMine(line: Pick<Line, "sender" | "deleted" | "withheld">, me: 
 
 /** Where a question on a line stands, to the reader. */
 export type QuestionState =
-    | { kind: "yours" }
+    /** `answering`: somebody's answer is being taken. It is still offered:
+     *  a claim that lapses (its tab closed, its worker gone) puts it back, and
+     *  answering one still being taken is refused in words that say so. */
+    | { kind: "yours"; answering?: boolean }
     | { kind: "waiting"; on: string }
     | { kind: "answering" }
     | { kind: "answered"; by: string | null }
@@ -580,10 +604,10 @@ export type QuestionState =
 export function questionState(interaction: Interaction, me: string | null): QuestionState {
     if (interaction.state === "ANSWERED") return { kind: "answered", by: interaction.answeredBy ? personName(interaction.answeredBy, me) : null };
     if (interaction.state === "CANCELLED" || interaction.state === "EXPIRED") return { kind: "closed", why: interaction.state };
-    /* An answer being taken is not open to another one. */
-    if (interaction.state === "ANSWERING") return { kind: "answering" };
     const awaits = interaction.awaits;
-    if (awaits && me && awaits.kind === "MEMBER" && awaits.id === me) return { kind: "yours" };
+    const mine = Boolean(awaits && me && awaits.kind === "MEMBER" && awaits.id === me);
+    if (interaction.state === "ANSWERING") return mine ? { kind: "yours", answering: true } : { kind: "answering" };
+    if (mine) return { kind: "yours" };
     return { kind: "waiting", on: awaits ? personName(awaits, me) : "someone" };
 }
 
@@ -621,6 +645,7 @@ export function asWaitingQuestion(line: Line, channel: Pick<Channel, "id" | "kin
         from: senderLabel(line, me),
         askedAt: line.createdAt,
         question: line.interaction.question,
+        threadRootId: line.threadRootId,
     };
 }
 

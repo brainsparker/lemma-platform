@@ -19,35 +19,51 @@ T = TypeVar("T", bound="ChannelMessagesResponse")
 class ChannelMessagesResponse:
     """
     Attributes:
-        items (list[ChannelMessageResponse]): Oldest first, the newest page unless `before` was given.
-        next_before (None | str | Unset): Pass as `before` for the page before this one.
+        has_more (bool): Whether there are more lines in the direction read: older ones, or with `after_seq`, newer
+            ones.
+        items (list[ChannelMessageResponse]): Oldest first.
+        next_after_seq (int | None | Unset): Pass as `after_seq` for the newer page.
+        next_before_seq (int | None | Unset): Pass as `before_seq` for the older page.
     """
 
+    has_more: bool
     items: list[ChannelMessageResponse]
-    next_before: None | str | Unset = UNSET
+    next_after_seq: int | None | Unset = UNSET
+    next_before_seq: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        has_more = self.has_more
+
         items = []
         for items_item_data in self.items:
             items_item = items_item_data.to_dict()
             items.append(items_item)
 
-        next_before: None | str | Unset
-        if isinstance(self.next_before, Unset):
-            next_before = UNSET
+        next_after_seq: int | None | Unset
+        if isinstance(self.next_after_seq, Unset):
+            next_after_seq = UNSET
         else:
-            next_before = self.next_before
+            next_after_seq = self.next_after_seq
+
+        next_before_seq: int | None | Unset
+        if isinstance(self.next_before_seq, Unset):
+            next_before_seq = UNSET
+        else:
+            next_before_seq = self.next_before_seq
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
+                "has_more": has_more,
                 "items": items,
             }
         )
-        if next_before is not UNSET:
-            field_dict["next_before"] = next_before
+        if next_after_seq is not UNSET:
+            field_dict["next_after_seq"] = next_after_seq
+        if next_before_seq is not UNSET:
+            field_dict["next_before_seq"] = next_before_seq
 
         return field_dict
 
@@ -56,6 +72,8 @@ class ChannelMessagesResponse:
         from ..models.channel_message_response import ChannelMessageResponse
 
         d = dict(src_dict)
+        has_more = d.pop("has_more")
+
         items = []
         _items = d.pop("items")
         for items_item_data in _items:
@@ -63,18 +81,29 @@ class ChannelMessagesResponse:
 
             items.append(items_item)
 
-        def _parse_next_before(data: object) -> None | str | Unset:
+        def _parse_next_after_seq(data: object) -> int | None | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
-            return cast(None | str | Unset, data)
+            return cast(int | None | Unset, data)
 
-        next_before = _parse_next_before(d.pop("next_before", UNSET))
+        next_after_seq = _parse_next_after_seq(d.pop("next_after_seq", UNSET))
+
+        def _parse_next_before_seq(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        next_before_seq = _parse_next_before_seq(d.pop("next_before_seq", UNSET))
 
         channel_messages_response = cls(
+            has_more=has_more,
             items=items,
-            next_before=next_before,
+            next_after_seq=next_after_seq,
+            next_before_seq=next_before_seq,
         )
 
         channel_messages_response.additional_properties = d

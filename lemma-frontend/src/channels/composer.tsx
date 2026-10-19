@@ -33,6 +33,9 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, on
     const [highlight, setHighlight] = useState(0);
     const [dismissed, setDismissed] = useState<number | null>(null);
     const choices = composerChoices(channel);
+    /* One name per line being written: sending it again after a failure is
+       the same line, not a second one. */
+    const draftId = useRef<string | null>(null);
 
     const at = mentionAt(text, caret);
     const offered = at && dismissed !== at.start ? matchMentionable(people, at.query) : [];
@@ -40,6 +43,7 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, on
 
     const send = useMutation({
         mutationFn: (body: { text: string; mentions: ReturnType<typeof mentionsIn> }) => channelApi(podId).post(channel.id, {
+            clientMessageId: (draftId.current ??= crypto.randomUUID()),
             text: body.text,
             mentions: body.mentions,
             membersOnly: choices.notes && membersOnly,
@@ -47,6 +51,7 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, on
             threadRootId: threadRootId ?? null,
         }),
         onSuccess: (line) => {
+            draftId.current = null;
             setText("");
             setPicked([]);
             onPosted(line);
@@ -119,7 +124,7 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, on
                 aria-controls={menuOpen ? listId : undefined}
                 aria-activedescendant={active}
                 aria-autocomplete="list"
-                onChange={(event) => { setText(event.target.value); setCaret(event.target.selectionStart ?? event.target.value.length); setDismissed(null); }}
+                onChange={(event) => { draftId.current = null; setText(event.target.value); setCaret(event.target.selectionStart ?? event.target.value.length); setDismissed(null); }}
                 onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
                 onKeyDown={keys}
             />

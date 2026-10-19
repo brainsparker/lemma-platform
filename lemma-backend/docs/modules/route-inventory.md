@@ -120,22 +120,30 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
-| DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.delete` | Delete Channel Message |
-| DELETE | `/pods/{pod_id}/channels/{channel_id}/participants/{member_id}` | `channel.participant.remove` | Remove Participant |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}` | `channel.delete` | Delete Channel |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.leave` | Leave Channel |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | `channel.member.remove` | Remove Member |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.delete` | Delete Message |
 | GET | `/pods/{pod_id}/channels` | `channel.list` | List Channels |
-| GET | `/pods/{pod_id}/channels/search` | `channel.message.search` | Search Channels |
+| GET | `/pods/{pod_id}/channels/me` | `channel.me.get` | Get My Channel |
 | GET | `/pods/{pod_id}/channels/{channel_id}` | `channel.get` | Get Channel |
-| GET | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.list` | List Channel Messages |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.list` | List Messages |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries` | `channel.delivery.list` | List Deliveries |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread` | `channel.message.thread` | List Thread |
 | GET | `/pods/{pod_id}/inbox` | `channel.inbox.get` | Get Inbox |
+| GET | `/pods/{pod_id}/search` | `channel.search` | Search |
 | PATCH | `/pods/{pod_id}/channels/{channel_id}` | `channel.update` | Update Channel |
-| PATCH | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.update` | Edit Channel Message |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.me_update` | Update My Membership |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | `channel.member.update` | Update Member |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.update` | Edit Message |
 | POST | `/pods/{pod_id}/channels` | `channel.create` | Create Channel |
-| POST | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.post` | Post Channel Message |
-| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer` | `channel.message.answer` | Answer Channel Question |
-| POST | `/pods/{pod_id}/channels/{channel_id}/participants` | `channel.participant.add` | Add Participants |
-| POST | `/pods/{pod_id}/channels/{channel_id}/read` | `channel.mark_read` | Mark Channel Read |
-| PUT | `/pods/{pod_id}/channels/{channel_id}/me` | `channel.notify.update` | Set My Notify |
+| POST | `/pods/{pod_id}/channels/me` | `channel.me.create` | Create My Channel |
+| POST | `/pods/{pod_id}/channels/{channel_id}/members` | `channel.member.add` | Add Members |
+| POST | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.join` | Join Channel |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.post` | Post Message |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer` | `channel.message.answer` | Answer Question |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry` | `channel.delivery.retry` | Retry Delivery |
+| POST | `/pods/{pod_id}/channels/{channel_id}/read` | `channel.read` | Mark Read |
 
 ## connectors
 

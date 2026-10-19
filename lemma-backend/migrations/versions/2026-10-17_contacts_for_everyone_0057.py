@@ -8,6 +8,9 @@ Only the server writes it.
 the one it became, and cascades: forgetting a contact forgets the contacts that
 became it. **`contacts.answered_at`** is when an agent first answered them,
 which the organization's contact limit counts.
+**`contact_suppressions`** are handles nobody in the pod may write to -- they
+said stop, unsubscribed, or bounced -- keyed by a hash of the handle so the
+opt-out outlives the contact being forgotten.
 **`usage_contacts_caps.max_contacts`** is how many contacts an organization's
 bots may answer at all; null for no limit. `max_contacts_set` and
 `monthly_limit_set` say which half of the cap an owner chose: a half they did
@@ -51,6 +54,25 @@ def _repair_invalid(name: str) -> None:
 
 
 def upgrade() -> None:
+    op.create_table(
+        "contact_suppressions",
+        sa.Column(
+            "pod_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("pods.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+        sa.Column("kind", sa.String(20), primary_key=True),
+        sa.Column("value_hash", sa.LargeBinary(32), primary_key=True),
+        sa.Column("reason", sa.String(20), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        if_not_exists=True,
+    )
     op.add_column(
         "contacts",
         sa.Column(
@@ -146,3 +168,4 @@ def downgrade() -> None:
     op.drop_index("ix_contacts_merged_into", table_name="contacts", if_exists=True)
     op.drop_column("contacts", "answered_at")
     op.drop_column("contacts", "merged_into_id")
+    op.drop_table("contact_suppressions", if_exists=True)

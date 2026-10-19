@@ -1,4 +1,4 @@
-import { SenderKind } from "lemma-sdk";
+import { MentionPart, NotifyLevel as WireNotifyLevel } from "lemma-sdk";
 import { source } from "@/data";
 import { lemma } from "@/session/client";
 import {
@@ -10,9 +10,11 @@ import {
     type ChannelDetail,
     type ChannelKind,
     type Line,
+    type LinePage,
     type NotifyLevel,
     type Page,
 } from "./model";
+import type { PersonRef } from "./waiting";
 import { readSourceSettings, type SourceSettings } from "./sources";
 import type { Mention } from "./mentions";
 
@@ -24,17 +26,22 @@ import type { Mention } from "./mentions";
 export interface ChannelApi {
     list(options: { kind?: ChannelKind; archived?: boolean; contactId?: string; before?: string; limit?: number }): Promise<Page<Channel>>;
     get(channelId: string): Promise<ChannelDetail>;
-    /** The newest page of top-level lines, or the one before `before`. */
-    lines(channelId: string, before?: string): Promise<Page<Line>>;
-    thread(channelId: string, rootId: string): Promise<Page<Line>>;
+    /** The newest page of top-level lines, or the one before line `beforeSeq`. */
+    lines(channelId: string, beforeSeq?: number): Promise<LinePage>;
+    /** A thread's replies, oldest first. */
+    thread(channelId: string, rootId: string): Promise<LinePage>;
     post(channelId: string, body: PostBody): Promise<Line>;
     edit(channelId: string, lineId: string, text: string): Promise<Line>;
     remove(channelId: string, lineId: string): Promise<void>;
-    markRead(channelId: string): Promise<void>;
+    /** The reader has seen the channel up to line `seq`. */
+    markRead(channelId: string, seq: number): Promise<void>;
     create(body: { title: string; topic: string | null; members: string[] }): Promise<ChannelDetail>;
     update(channelId: string, body: { title?: string | null; topic?: string | null; archived?: boolean }): Promise<ChannelDetail>;
-    addMembers(channelId: string, members: string[]): Promise<ChannelDetail>;
-    removeMember(channelId: string, memberId: string): Promise<void>;
+    addMembers(channelId: string, people: string[]): Promise<ChannelDetail>;
+    /** Take somebody out of a group. */
+    removeMember(channelId: string, member: Pick<PersonRef, "kind"> & { id: string }): Promise<void>;
+    /** The reader leaves a channel they are in. */
+    leave(channelId: string): Promise<void>;
     setNotify(channelId: string, notify: NotifyLevel): Promise<ChannelDetail>;
     /** A contact's channel: switch its agent on (handing them back now) or off. */
     setAgentAnswers(channelId: string, on: boolean): Promise<ChannelDetail>;
@@ -52,6 +59,8 @@ export interface PostBody {
     sourceId?: string | null;
     threadRootId?: string | null;
     mentions?: Mention[];
+    /** The composer's name for this line: a retried send is the same line. */
+    clientMessageId?: string | null;
 }
 
 function must<T>(value: T | null, what: string): T {
@@ -64,14 +73,14 @@ function liveApi(podId: string): ChannelApi {
     const detail = (raw: unknown) => must(readChannelDetail(raw), "channel");
     const settings = (raw: unknown) => must(readSourceSettings(raw), "group");
     return {
-        async list(options) {
-            return readChannelPage(await client().channels.list(podId, options));
+        async list({ before, ...options }) {
+            return readChannelPage(await client().channels.list(podId, { ...options, cursor: before }));
         },
         async get(channelId) {
             return detail(await client().channels.get(podId, channelId));
         },
-        async lines(channelId, before) {
-            return readLinePage(await client().channels.messages(podId, channelId, { limit: 50, before }));
+        async lines(channelId, beforeSeq) {
+            return readLinePage(await client().channels.messages(podId, channelId, { limit: 50, beforeSeq }));
         },
         async thread(channelId, rootId) {
             return readLinePage(await client().channels.thread(podId, channelId, rootId, { limit: 100 }));
@@ -82,17 +91,18 @@ function liveApi(podId: string): ChannelApi {
                 members_only: body.membersOnly ?? false,
                 source_id: body.sourceId ?? null,
                 thread_root_id: body.threadRootId ?? null,
-                mentions: (body.mentions ?? []).map((mention) => ({ id: mention.id, kind: SenderKind[mention.kind] })),
+                parts: (body.mentions ?? []).map((mention) => ({ type: "mention", id: mention.id, kind: MentionPart.kind[mention.kind] })),
+                client_message_id: body.clientMessageId ?? null,
             })), "line");
         },
         async edit(channelId, lineId, text) {
             return must(readLine(await client().channels.edit(podId, channelId, lineId, text)), "line");
         },
         async remove(channelId, lineId) {
-            await client().channels.delete(podId, channelId, lineId);
+            await client().channels.deleteMessage(podId, channelId, lineId);
         },
-        async markRead(channelId) {
-            await client().channels.markRead(podId, channelId);
+        async markRead(channelId, seq) {
+            await client().channels.markRead(podId, channelId, seq);
         },
         async create(body) {
             return detail(await client().channels.create(podId, body));
@@ -100,14 +110,17 @@ function liveApi(podId: string): ChannelApi {
         async update(channelId, body) {
             return detail(await client().channels.update(podId, channelId, body));
         },
-        async addMembers(channelId, members) {
-            return detail(await client().channels.addMembers(podId, channelId, members));
+        async addMembers(channelId, people) {
+            return detail(await client().channels.addMembers(podId, channelId, { people }));
         },
-        async removeMember(channelId, memberId) {
-            await client().channels.removeMember(podId, channelId, memberId);
+        async removeMember(channelId, member) {
+            await client().channels.removeMember(podId, channelId, member.kind, member.id);
+        },
+        async leave(channelId) {
+            await client().channels.leave(podId, channelId);
         },
         async setNotify(channelId, notify) {
-            return detail(await client().channels.setNotify(podId, channelId, notify));
+            return detail(await client().channels.updateMyMembership(podId, channelId, { notify: WireNotifyLevel[notify] }));
         },
         async setAgentAnswers(channelId, on) {
             return detail(await client().channels.setAgentAnswers(podId, channelId, on));

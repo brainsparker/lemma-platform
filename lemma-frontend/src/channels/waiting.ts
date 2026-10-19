@@ -51,7 +51,7 @@ export function readInbox(raw: unknown): Inbox {
     for (const entry of Array.isArray(body.waiting) ? body.waiting : []) {
         const channel = record(record(entry).channel);
         const line = record(record(entry).message);
-        const interaction = record(line.interaction);
+        const interaction = record(line.question);
         if (typeof line.id !== "string" || typeof interaction.kind !== "string") continue;
         items.push({
             id: line.id,

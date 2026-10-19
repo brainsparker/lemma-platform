@@ -1,9 +1,10 @@
 """Which channel an outside place belongs to, decided the first time it is heard.
 
-A source joins a channel once and stays: a private chat with a member is a
-source of that member's DIRECT channel, a contact's is a source of theirs, a
-group is a source of a GROUP channel of its own. After that the source's row
-answers, whoever writes there next.
+A place is in an external account; the account is made the first time any of
+its places is heard, and keeps them across a reinstalled bot. A private chat
+with a member is a source of that member's DIRECT channel, a contact's of
+theirs, a group of a GROUP channel of its own -- private when the platform
+keeps it to its members, public otherwise.
 """
 
 from __future__ import annotations
@@ -14,7 +15,15 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.channels.domain.entities import Channel, Source, SourceKind
+from app.modules.channels.domain.entities import (
+    Channel,
+    Principal,
+    Source,
+    SourceKind,
+    Visibility,
+)
+from app.modules.channels.infrastructure.accounts import AccountRepository
+from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.source_repository import SourceRepository
 
@@ -39,9 +48,11 @@ class ContactsHome:
 
 @dataclass(frozen=True, slots=True)
 class GroupHome:
-    """A chat several people read: a GROUP channel of its own."""
+    """A chat several people read: a GROUP channel of its own. ``owner``: the
+    member who brought the bot in, who is in it from the start."""
 
     title: str | None
+    owner_user_id: UUID | None = None
 
 
 type Home = MembersHome | ContactsHome | GroupHome
@@ -51,88 +62,97 @@ type Home = MembersHome | ContactsHome | GroupHome
 class Place:
     """An outside place, as the surface that hears it names it.
 
-    ``surface_id`` is ``None`` for a web chat, which no surface carries: it is
-    keyed by its widget and the visitor's session instead.
+    ``account_key`` is the account's own name on its platform -- a Slack team,
+    a Teams tenant, a WhatsApp number, a bot, an inbox, a web widget -- and
+    ``surface_id`` the installation that reaches it now (``None`` for a web
+    widget, which no surface carries).
     """
 
     surface_id: UUID | None
     platform: str
+    account_key: str
     kind: SourceKind
     external_channel_id: str | None
     external_user_id: str | None
     title: str | None = None
+    #: The platform keeps it to its members.
+    is_private: bool = True
 
 
 class ChannelPlaces:
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
-        self.channels = ChannelRepository(uow.session)
         self.session = uow.session
+        self.channels = ChannelRepository(uow.session)
+        self.sources = SourceRepository(uow.session)
+        self.accounts = AccountRepository(uow.session)
+        self.members = MemberRepository(uow.session)
 
     async def source_for(self, *, pod_id: UUID, place: Place, home: Home) -> Source:
         """The source for ``place``, made -- with its channel -- the first time."""
-        found = await self._find(pod_id, place)
+        account = await self.accounts.account_for(
+            pod_id=pod_id,
+            platform=place.platform,
+            account_key=place.account_key,
+            surface_id=place.surface_id,
+        )
+        found = await self._find(account.id, place)
         if found is not None:
             return found
         if isinstance(home, GroupHome):
-            return await self._group_source(pod_id, place, home)
+            return await self._group_source(pod_id, account.id, place, home)
         channel = await self._home(pod_id, home)
-        added = await self.channels.add_source(
-            channel=channel,
-            surface_id=place.surface_id,
-            platform=place.platform,
-            kind=place.kind,
-            external_channel_id=place.external_channel_id,
-            external_user_id=place.external_user_id,
-            title=place.title,
-        )
-        return added or await self._winner(pod_id, place)
+        added = await self._add(channel, account.id, place)
+        return added or await self._winner(account.id, place)
 
     async def _group_source(
-        self, pod_id: UUID, place: Place, home: GroupHome
+        self, pod_id: UUID, account_id: UUID, place: Place, home: GroupHome
     ) -> Source:
-        """A group's channel and its source, made together or not at all.
-
-        Two first messages in one group race to create both; the loser's
-        channel is rolled back with its source, rather than left behind empty.
-        """
+        """A group's channel and its source, made together or not at all."""
         try:
             async with self.session.begin_nested():
                 channel = await self.channels.open_group(
-                    pod_id=pod_id, title=home.title or place.title
+                    pod_id=pod_id,
+                    title=home.title or place.title,
+                    visibility=(
+                        Visibility.PRIVATE if place.is_private else Visibility.PUBLIC
+                    ),
+                    created_by_user_id=home.owner_user_id,
                 )
-                added = await self.channels.add_source(
-                    channel=channel,
-                    surface_id=place.surface_id,
-                    platform=place.platform,
-                    kind=place.kind,
-                    external_channel_id=place.external_channel_id,
-                    external_user_id=place.external_user_id,
-                    title=place.title,
-                )
+                added = await self._add(channel, account_id, place)
                 if added is None:
                     raise _LostTheRace
                 return added
         except IntegrityError, _LostTheRace:
-            return await self._winner(pod_id, place)
+            return await self._winner(account_id, place)
 
     async def open_pending_group(
         self,
         *,
         pod_id: UUID,
-        surface_id: UUID,
-        platform: str,
+        place: Place,
         title: str,
         owner_user_id: UUID,
         request_id: str,
         answers_outsiders: bool,
     ) -> Source:
-        """A group the bot asked a platform to create: its channel, and a place
-        with no id until the platform confirms it."""
-        channel = await self.channels.open_group(pod_id=pod_id, title=title)
-        return await SourceRepository(self.session).add_pending(
+        """A group the bot asked a platform to create: its private channel,
+        with its owner in it, and a place with no id until confirmed."""
+        account = await self.accounts.account_for(
+            pod_id=pod_id,
+            platform=place.platform,
+            account_key=place.account_key,
+            surface_id=place.surface_id,
+        )
+        channel = await self.channels.open_group(
+            pod_id=pod_id,
+            title=title,
+            visibility=Visibility.PRIVATE,
+            created_by_user_id=owner_user_id,
+        )
+        return await self.sources.add_pending(
             channel=channel,
-            surface_id=surface_id,
-            platform=platform,
+            account_id=account.id,
+            platform=place.platform,
             title=title,
             owner_user_id=owner_user_id,
             request_id=request_id,
@@ -146,17 +166,33 @@ class ChannelPlaces:
             pod_id=pod_id, contact_id=home.contact_id
         )
 
-    async def _find(self, pod_id: UUID, place: Place) -> Source | None:
-        return await self.channels.find_source(
-            pod_id=pod_id,
-            surface_id=place.surface_id,
+    async def _add(
+        self, channel: Channel, account_id: UUID, place: Place
+    ) -> Source | None:
+        return await self.sources.add(
+            channel=channel,
+            account_id=account_id,
             platform=place.platform,
+            kind=place.kind,
+            is_private=place.is_private,
+            external_channel_id=place.external_channel_id,
+            external_user_id=place.external_user_id,
+            title=place.title,
+        )
+
+    async def _find(self, account_id: UUID, place: Place) -> Source | None:
+        return await self.sources.find(
+            account_id=account_id,
             external_channel_id=place.external_channel_id,
             external_user_id=place.external_user_id,
         )
 
-    async def _winner(self, pod_id: UUID, place: Place) -> Source:
-        winner = await self._find(pod_id, place)
+    async def _winner(self, account_id: UUID, place: Place) -> Source:
+        winner = await self._find(account_id, place)
         if winner is None:  # pragma: no cover - the conflict named it
             raise LookupError("A source another writer added vanished")
         return winner
+
+    async def join(self, channel: Channel, principal: Principal) -> None:
+        """Somebody the platform shows is in a place is in its channel."""
+        await self.members.add_person(channel, principal)

@@ -6,7 +6,7 @@ import type { ChannelResponse } from './ChannelResponse.js';
 export type ChannelListResponse = {
     items: Array<ChannelResponse>;
     /**
-     * Pass as `before` for the next page.
+     * Pass as `cursor` for the next page.
      */
-    next_before?: (string | null);
+    next_cursor?: (string | null);
 };

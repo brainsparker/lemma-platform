@@ -264,38 +264,39 @@ async def member_writes(
     return posted.json()
 
 
-_MEMBER_POST_REGISTRY: WorkRegistry | None = None
+_DELIVERY_REGISTRY: WorkRegistry | None = None
 
 
-async def deliver_member_posts() -> int:
-    """Carry members' lines to their outside places, as the worker would.
+async def send_deliveries() -> int:
+    """Carry lines out of Lemma, as the worker would.
 
-    A member's line is posted at once; ``surface.member_post`` takes it to the
-    platform afterwards, and records on the line what became of it.
+    Posting a line plans its deliveries -- to an outside place it was written
+    for, and a push to each member who hears of it -- and announces each
+    (``ChannelDeliveryDue``); ``surface.channel_delivery`` sends one and
+    records on its row what became of it.
     """
-    from app.modules.agent_surfaces.events.member_post_work import (
-        register_member_post_work,
+    from app.modules.agent_surfaces.events.channel_delivery_work import (
+        register_channel_delivery_work,
     )
 
-    global _MEMBER_POST_REGISTRY
-    if _MEMBER_POST_REGISTRY is None:
-        _MEMBER_POST_REGISTRY = WorkRegistry()
-        register_member_post_work(_MEMBER_POST_REGISTRY)
+    global _DELIVERY_REGISTRY
+    if _DELIVERY_REGISTRY is None:
+        _DELIVERY_REGISTRY = WorkRegistry()
+        register_channel_delivery_work(_DELIVERY_REGISTRY)
     await make_due(async_session_maker)
     return await run_until_idle(
         async_session_maker,
-        registry=_MEMBER_POST_REGISTRY,
+        registry=_DELIVERY_REGISTRY,
         classes=[WorkClass.DELIVERY],
     )
 
 
 async def deliveries_of_line(message_id: str | UUID) -> list[Any]:
-    """What became of one line: each attempt to carry it somewhere."""
+    """What became of one line: its delivery to each place and member."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.channels.contracts.deliveries import deliveries_of
 
     async with async_session_maker() as session:
-        found = await deliveries_of(
+        return await deliveries_of(
             SqlAlchemyUnitOfWork(session), [UUID(str(message_id))]
         )
-    return found.get(UUID(str(message_id)), [])

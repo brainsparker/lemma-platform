@@ -355,7 +355,6 @@ function Composer({ podId, path, members, bots, anchor, parentId, autoFocus, pla
                 for (const person of named.filter((one) => one.kind === "person")) {
                     void lemma(podId).channels.notify(podId, {
                         to: person.key,
-                        title: "You were mentioned on " + docTitle(path),
                         text: "You were mentioned on " + docTitle(path) + ":\n\n" + body.trim(),
                     }).catch(() => undefined);
                 }

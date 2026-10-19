@@ -12,9 +12,6 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (  # noq
 from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (  # noqa: F401
     WhatsAppNumber,
 )
-from app.modules.agent_surfaces.infrastructure.notification_models import (  # noqa: F401
-    NotificationModel,
-)
 from app.modules.agent_surfaces.infrastructure.inbound_delivery_models import (  # noqa: F401
     SurfaceDeliveryModel,
     SurfaceInboundMessageModel,

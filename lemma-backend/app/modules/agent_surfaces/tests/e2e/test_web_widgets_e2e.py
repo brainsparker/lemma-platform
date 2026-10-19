@@ -47,7 +47,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
 )
 from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     contact_channel_id,
-    deliver_member_posts,
+    send_deliveries,
     deliveries_of_line,
     member_writes,
 )
@@ -872,7 +872,7 @@ async def test_a_members_line_waits_in_a_web_contacts_chat(
     written = await member_writes(
         authenticated_client, pod_id, channel, "It's back in stock."
     )
-    await deliver_member_posts()
+    await send_deliveries()
     [delivery] = await deliveries_of_line(written["id"])
     assert (delivery.platform, delivery.status.value) == ("WEB", "SENT")
     history = await authenticated_client.get(

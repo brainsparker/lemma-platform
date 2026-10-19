@@ -34,6 +34,7 @@ def _answered_at(surface_id, *, last_event=None) -> InMemoryChannelSeats:
             id=uuid4(),
             channel_id=uuid4(),
             pod_id=uuid4(),
+            account_id=uuid4(),
             surface_id=surface_id,
             platform="WHATSAPP",
             kind=SourceKind.PRIVATE,

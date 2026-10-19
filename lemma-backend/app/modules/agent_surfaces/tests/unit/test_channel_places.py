@@ -3,7 +3,8 @@
 The rules that decide a person has one conversation however a chat moves: a
 private chat is keyed by the person, never by the address it arrived on; a
 group, a shared channel and an email thread with others on it are keyed by
-the chat, and are a channel of their own.
+the chat, and are a channel of their own; an email between the pod and one
+person is that person's, on the inbox.
 """
 
 from __future__ import annotations
@@ -115,7 +116,7 @@ def test_a_group_is_keyed_by_the_chat_and_named_for_it():
     assert place.title == "Launch crew"
 
 
-def test_an_email_thread_is_private_until_somebody_else_is_copied():
+def test_an_email_is_the_correspondents_until_somebody_else_is_copied():
     mail = _surface(SurfacePlatform.RESEND)
     alone = _said(SurfacePlatform.RESEND, chat="inbox", thread="<root@mail>")
     copied = _said(
@@ -125,8 +126,9 @@ def test_an_email_thread_is_private_until_somebody_else_is_copied():
     assert not is_shared(_route("EMAIL"), alone)
     assert is_shared(_route("EMAIL"), copied)
     private, shared = _place(mail, alone, "EMAIL"), _place(mail, copied, "EMAIL")
+    # One place per correspondent on the inbox, whatever thread they write in.
     assert private.kind is SourceKind.PRIVATE
-    assert private.external_channel_id == "<root@mail>"
+    assert (private.external_channel_id, private.external_user_id) == (None, PERSON)
     assert shared.kind is SourceKind.SHARED
     assert (shared.external_channel_id, shared.external_user_id) == (
         "<root@mail>",

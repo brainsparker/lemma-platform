@@ -62,7 +62,7 @@ async def _a_question_for(alice, bob, *, pod):
     inbox = await eventually(
         lambda: bob.inbox_in(pod),
         lambda inbox: any(
-            (item["message"].get("interaction") or {}).get("question", {}).get("run_id")
+            (item["message"].get("question") or {}).get("question", {}).get("run_id")
             == str(run["id"])
             for item in inbox["waiting"]
         ),
@@ -72,7 +72,7 @@ async def _a_question_for(alice, bob, *, pod):
     [waiting] = [
         item
         for item in inbox["waiting"]
-        if item["message"]["interaction"]["question"].get("run_id") == str(run["id"])
+        if item["message"]["question"]["question"].get("run_id") == str(run["id"])
     ]
     return run, waiting
 
@@ -119,7 +119,7 @@ async def test_a_line_for_one_person_is_in_their_own_channel(team):
 
 @scenario("Reading a channel clears it from what is new")
 @proves("PS-SURF-031")
-@covers("channel.mark_read", "channel.inbox.get", "channel.list")
+@covers("channel.read", "channel.inbox.get", "channel.list")
 async def test_reading_clears_what_is_new(team, run):
     alice, bob, pod = team
     channel = await _names(alice, bob, pod=pod, run=run, text="@sofia please look")
@@ -128,7 +128,8 @@ async def test_reading_clears_what_is_new(team, run):
     await bob.reads_channel(channel, in_pod=pod)
 
     seen = await bob.channel_seen_by_me(channel, in_pod=pod)
-    assert seen["unread"] == {"lines": 0, "mentions": 0, "waiting": 0}, seen
+    unread = seen["unread"]
+    assert (unread["lines"], unread["mentions"], unread["waiting"]) == (0, 0, 0), seen
     after = (await bob.inbox_in(pod))["totals"]
     assert after["mentions"] == before["mentions"] - 1, after
     assert after["channels"] == before["channels"] - 1, after
@@ -136,7 +137,7 @@ async def test_reading_clears_what_is_new(team, run):
 
 @scenario("Read state is per person, not shared")
 @proves("PS-SURF-031")
-@covers("channel.mark_read", "channel.list")
+@covers("channel.read", "channel.list")
 async def test_read_state_is_personal(world, team, run):
     alice, bob, pod = team
     carol = await world.person("wei")
@@ -163,7 +164,7 @@ async def test_a_question_is_answered_from_the_inbox(team):
 
     answered = await bob.answers_question(waiting, saying={"approved": True}, in_pod=pod)
 
-    assert answered["interaction"]["state"] == "ANSWERED", answered
+    assert answered["question"]["state"] == "ANSWERED", answered
     still = (await bob.inbox_in(pod))["waiting"]
     assert all(item["message"]["id"] != waiting["message"]["id"] for item in still)
     # The answer went where it was waiting: the run carries on.
@@ -205,7 +206,7 @@ async def test_an_outsider_sees_no_inbox(world, team, run):
 
 @scenario("A removed member cannot act on what was waiting on them")
 @proves("PS-SURF-030")
-@covers("channel.message.answer", "channel.mark_read", "channel.inbox.get")
+@covers("channel.message.answer", "channel.read", "channel.inbox.get")
 async def test_removal_closes_the_inbox_it_left_behind(team, run):
     """Reading was gated; answering must be too, and answering is the louder
     half: a question waiting on a person steers whatever asked it. Same rule
@@ -228,5 +229,5 @@ async def test_removal_closes_the_inbox_it_left_behind(team, run):
     )
     assert refusals == (403, 403, 403), (
         f"a removed member could still act on what was waiting on them: "
-        f"answer={refusals[0]} mark_read={refusals[1]} inbox={refusals[2]}"
+        f"answer={refusals[0]} read={refusals[1]} inbox={refusals[2]}"
     )

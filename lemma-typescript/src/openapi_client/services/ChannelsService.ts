@@ -12,24 +12,36 @@ import type { ChannelMessageResponse } from '../models/ChannelMessageResponse.js
 import type { ChannelMessagesResponse } from '../models/ChannelMessagesResponse.js';
 import type { ChannelPostRequest } from '../models/ChannelPostRequest.js';
 import type { ChannelUpdateRequest } from '../models/ChannelUpdateRequest.js';
+import type { ContactStatus } from '../models/ContactStatus.js';
+import type { DeliveriesResponse } from '../models/DeliveriesResponse.js';
+import type { DeliveryResponse } from '../models/DeliveryResponse.js';
 import type { InboxResponse } from '../models/InboxResponse.js';
-import type { NotifyRequest } from '../models/NotifyRequest.js';
-import type { ParticipantsAddRequest } from '../models/ParticipantsAddRequest.js';
+import type { MembersAddRequest } from '../models/MembersAddRequest.js';
+import type { MemberUpdateRequest } from '../models/MemberUpdateRequest.js';
+import type { MyMembershipUpdate } from '../models/MyMembershipUpdate.js';
+import type { ReadRequest } from '../models/ReadRequest.js';
+import type { ReadResponse } from '../models/ReadResponse.js';
 import type { SearchResponse } from '../models/SearchResponse.js';
+import type { SenderKind } from '../models/SenderKind.js';
+import type { ThreadResponse } from '../models/ThreadResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class ChannelsService {
     /**
      * List Channels
-     * The pod's channels this member sees, most recently active first, each
-     * with what is new in it for them and its last line.
+     * The channels the reader may see, most recently active first, each with
+     * what is new in it for them and its last line.
      * @param podId
      * @param kind
      * @param archived
      * @param contactId Only this contact's channel.
+     * @param assignee `me`, or a member's user id: contacts' channels assigned to them.
+     * @param unassigned
+     * @param status
+     * @param joined Only channels the reader is in.
+     * @param cursor
      * @param limit
-     * @param before
      * @returns ChannelListResponse Successful Response
      * @throws ApiError
      */
@@ -38,8 +50,12 @@ export class ChannelsService {
         kind?: (ChannelKind | null),
         archived: boolean = false,
         contactId?: (string | null),
+        assignee?: (string | null),
+        unassigned: boolean = false,
+        status?: (ContactStatus | null),
+        joined: boolean = false,
+        cursor?: (string | null),
         limit: number = 50,
-        before?: (string | null),
     ): CancelablePromise<ChannelListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -51,8 +67,12 @@ export class ChannelsService {
                 'kind': kind,
                 'archived': archived,
                 'contact_id': contactId,
+                'assignee': assignee,
+                'unassigned': unassigned,
+                'status': status,
+                'joined': joined,
+                'cursor': cursor,
                 'limit': limit,
-                'before': before,
             },
             errors: {
                 422: `Validation Error`,
@@ -61,21 +81,28 @@ export class ChannelsService {
     }
     /**
      * Create Channel
-     * A channel made in Lemma, with its maker and the members they named in it.
+     * A group made in Lemma: public unless asked otherwise, with its maker as
+     * its owner and the members and agents named in it. The same
+     * `Idempotency-Key` from the same member returns the group it made.
      * @param podId
      * @param requestBody
+     * @param idempotencyKey
      * @returns ChannelDetailResponse Successful Response
      * @throws ApiError
      */
     public static channelCreate(
         podId: string,
         requestBody: ChannelCreateRequest,
+        idempotencyKey?: (string | null),
     ): CancelablePromise<ChannelDetailResponse> {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/pods/{pod_id}/channels',
             path: {
                 'pod_id': podId,
+            },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
             },
             body: requestBody,
             mediaType: 'application/json',
@@ -85,28 +112,66 @@ export class ChannelsService {
         });
     }
     /**
-     * Search Channels
-     * Lines matching every word, newest first, in the channels the reader sees.
+     * Get My Channel
+     * The reader's own channel with the pod; 404 until it is made.
      * @param podId
-     * @param q
-     * @param limit
-     * @returns SearchResponse Successful Response
+     * @returns ChannelDetailResponse Successful Response
      * @throws ApiError
      */
-    public static channelMessageSearch(
+    public static channelMeGet(
         podId: string,
-        q: string,
-        limit: number = 30,
-    ): CancelablePromise<SearchResponse> {
+    ): CancelablePromise<ChannelDetailResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/pods/{pod_id}/channels/search',
+            url: '/pods/{pod_id}/channels/me',
             path: {
                 'pod_id': podId,
             },
-            query: {
-                'q': q,
-                'limit': limit,
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Create My Channel
+     * Make the reader's own channel with the pod; 200 with it if it exists.
+     * @param podId
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelMeCreate(
+        podId: string,
+    ): CancelablePromise<ChannelDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/channels/me',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Delete Channel
+     * Delete a group made in Lemma, and its timeline: its owners' or an
+     * admin's. A channel an outside place feeds is archived instead.
+     * @param podId
+     * @param channelId
+     * @returns void
+     * @throws ApiError
+     */
+    public static channelDelete(
+        podId: string,
+        channelId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/channels/{channel_id}',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
             },
             errors: {
                 422: `Validation Error`,
@@ -115,8 +180,8 @@ export class ChannelsService {
     }
     /**
      * Get Channel
-     * One channel, with the places it is fed from, the people in it, and how
-     * the reader hears of it.
+     * One channel, with the places it is fed from, its members and agents,
+     * and how the reader hears of it.
      * @param podId
      * @param channelId
      * @returns ChannelDetailResponse Successful Response
@@ -140,11 +205,12 @@ export class ChannelsService {
     }
     /**
      * Update Channel
-     * Rename, re-describe or archive a group; switch a contact's agent.
+     * Change exactly the fields named; `null` clears.
      *
-     * A contact's channel changes only its `settings`, and takes
-     * `contact.message`: switching its agent off leaves the contact to members;
-     * switching it on hands them back to the agent at once, whoever stepped in.
+     * A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
+     * admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+     * `status`, `assignee` -- for who may write to contacts. Switching the agent
+     * on hands the contact back to it now: nobody is assigned.
      * @param podId
      * @param channelId
      * @param requestBody
@@ -171,22 +237,23 @@ export class ChannelsService {
         });
     }
     /**
-     * Set My Notify
-     * How the reader hears of this channel's lines outside the app.
+     * Add Members
+     * Add members of the pod, and the pod's agents, to a group. An agent
+     * already in it answers as now asked.
      * @param podId
      * @param channelId
      * @param requestBody
      * @returns ChannelDetailResponse Successful Response
      * @throws ApiError
      */
-    public static channelNotifyUpdate(
+    public static channelMemberAdd(
         podId: string,
         channelId: string,
-        requestBody: NotifyRequest,
+        requestBody: MembersAddRequest,
     ): CancelablePromise<ChannelDetailResponse> {
         return __request(OpenAPI, {
-            method: 'PUT',
-            url: '/pods/{pod_id}/channels/{channel_id}/me',
+            method: 'POST',
+            url: '/pods/{pod_id}/channels/{channel_id}/members',
             path: {
                 'pod_id': podId,
                 'channel_id': channelId,
@@ -199,21 +266,169 @@ export class ChannelsService {
         });
     }
     /**
-     * List Channel Messages
-     * The channel's timeline, oldest first: who said what, when and where.
-     * A thread's replies are not in it; its first line counts them.
+     * Leave Channel
+     * Leave a channel. Leaving one not joined is nothing; a member's own
+     * channel cannot be left.
      * @param podId
      * @param channelId
+     * @returns void
+     * @throws ApiError
+     */
+    public static channelMemberLeave(
+        podId: string,
+        channelId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/channels/{channel_id}/members/me',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Update My Membership
+     * How the reader hears of this channel's lines outside the app. Absent is
+     * unchanged; `null` clears `notify_via` (the pod's rule) and `muted_until`.
+     * @param podId
+     * @param channelId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelMemberMeUpdate(
+        podId: string,
+        channelId: string,
+        requestBody: MyMembershipUpdate,
+    ): CancelablePromise<ChannelDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/pods/{pod_id}/channels/{channel_id}/members/me',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Join Channel
+     * Join a channel the reader may see: a public group, or -- holding
+     * `contact.read` -- a contact's channel. Joining one already joined is
+     * nothing.
+     * @param podId
+     * @param channelId
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelMemberJoin(
+        podId: string,
+        channelId: string,
+    ): CancelablePromise<ChannelDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/channels/{channel_id}/members/me',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Remove Member
+     * Take somebody out of a group -- its owners' or an admin's -- or leave a
+     * channel oneself.
+     * @param podId
+     * @param channelId
+     * @param kind
+     * @param memberId
+     * @returns void
+     * @throws ApiError
+     */
+    public static channelMemberRemove(
+        podId: string,
+        channelId: string,
+        kind: SenderKind,
+        memberId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'kind': kind,
+                'member_id': memberId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Update Member
+     * A person's role (`owner` or `member`), or when an agent answers.
+     * @param podId
+     * @param channelId
+     * @param kind
+     * @param memberId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelMemberUpdate(
+        podId: string,
+        channelId: string,
+        kind: SenderKind,
+        memberId: string,
+        requestBody: MemberUpdateRequest,
+    ): CancelablePromise<ChannelDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'kind': kind,
+                'member_id': memberId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Messages
+     * The timeline, oldest first: the newest page, the page before
+     * `before_seq`, or the page after `after_seq`. A thread's replies are not in
+     * it; its first line counts them.
+     * @param podId
+     * @param channelId
+     * @param beforeSeq
+     * @param afterSeq
      * @param limit
-     * @param before
      * @returns ChannelMessagesResponse Successful Response
      * @throws ApiError
      */
     public static channelMessageList(
         podId: string,
         channelId: string,
+        beforeSeq?: (number | null),
+        afterSeq?: (number | null),
         limit: number = 50,
-        before?: (string | null),
     ): CancelablePromise<ChannelMessagesResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -223,8 +438,9 @@ export class ChannelsService {
                 'channel_id': channelId,
             },
             query: {
+                'before_seq': beforeSeq,
+                'after_seq': afterSeq,
                 'limit': limit,
-                'before': before,
             },
             errors: {
                 422: `Validation Error`,
@@ -232,12 +448,14 @@ export class ChannelsService {
         });
     }
     /**
-     * Post Channel Message
-     * Write in the channel. It goes to one outside place -- the one named, or
-     * the one the channel last heard from -- unless it is a note to members.
+     * Post Message
+     * Write in the channel. A reply goes where its thread is; otherwise to
+     * the place named, or the one the channel last heard from -- unless it is a
+     * note to members. Naming somebody who cannot see the channel is refused.
      * @param podId
      * @param channelId
      * @param requestBody
+     * @param idempotencyKey
      * @returns ChannelMessageResponse Successful Response
      * @throws ApiError
      */
@@ -245,6 +463,7 @@ export class ChannelsService {
         podId: string,
         channelId: string,
         requestBody: ChannelPostRequest,
+        idempotencyKey?: (string | null),
     ): CancelablePromise<ChannelMessageResponse> {
         return __request(OpenAPI, {
             method: 'POST',
@@ -252,6 +471,9 @@ export class ChannelsService {
             path: {
                 'pod_id': podId,
                 'channel_id': channelId,
+            },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
             },
             body: requestBody,
             mediaType: 'application/json',
@@ -261,8 +483,8 @@ export class ChannelsService {
         });
     }
     /**
-     * Delete Channel Message
-     * Delete one's own line: it stays in its place, saying nothing.
+     * Delete Message
+     * Delete one's own line: it keeps its place, saying nothing.
      * @param podId
      * @param channelId
      * @param messageId
@@ -288,7 +510,7 @@ export class ChannelsService {
         });
     }
     /**
-     * Edit Channel Message
+     * Edit Message
      * Change what one's own line says. A copy already sent outside stays as sent.
      * @param podId
      * @param channelId
@@ -319,11 +541,12 @@ export class ChannelsService {
         });
     }
     /**
-     * Answer Channel Question
-     * Answer what this line asks the reader: a question, an approval, a form.
+     * Answer Question
+     * Answer what this line asks the reader: a question, an approval (which
+     * needs a `decision`), a form. Only the person it waits on may.
      *
-     * No session is held across the answer: what asked the question takes it in
-     * its own -- a run resumed, a form submitted -- and may call out to do so.
+     * No session is held across the answer: what asked takes it in its own -- a
+     * run resumed, a form submitted -- and may call out to do so.
      * @param podId
      * @param channelId
      * @param messageId
@@ -353,23 +576,82 @@ export class ChannelsService {
         });
     }
     /**
-     * List Thread
-     * A thread's replies, oldest first, the newest page of them.
+     * List Deliveries
+     * Where a line went outside Lemma, and what became of each send. A push
+     * to a member is shown only to that member.
      * @param podId
      * @param channelId
      * @param messageId
+     * @returns DeliveriesResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelDeliveryList(
+        podId: string,
+        channelId: string,
+        messageId: string,
+    ): CancelablePromise<DeliveriesResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'message_id': messageId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Retry Delivery
+     * Try a failed or given-up send again, now: for who wrote the line, or
+     * may change the channel.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param deliveryId
+     * @returns DeliveryResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelDeliveryRetry(
+        podId: string,
+        channelId: string,
+        messageId: string,
+        deliveryId: string,
+    ): CancelablePromise<DeliveryResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'message_id': messageId,
+                'delivery_id': deliveryId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Thread
+     * A thread: its first line, and its replies oldest first after `after_seq`.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param afterSeq
      * @param limit
-     * @param before
-     * @returns ChannelMessagesResponse Successful Response
+     * @returns ThreadResponse Successful Response
      * @throws ApiError
      */
     public static channelMessageThread(
         podId: string,
         channelId: string,
         messageId: string,
+        afterSeq?: (number | null),
         limit: number = 50,
-        before?: (string | null),
-    ): CancelablePromise<ChannelMessagesResponse> {
+    ): CancelablePromise<ThreadResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread',
@@ -379,8 +661,8 @@ export class ChannelsService {
                 'message_id': messageId,
             },
             query: {
+                'after_seq': afterSeq,
                 'limit': limit,
-                'before': before,
             },
             errors: {
                 422: `Validation Error`,
@@ -388,22 +670,23 @@ export class ChannelsService {
         });
     }
     /**
-     * Add Participants
-     * Add members of the pod to a group.
+     * Mark Read
+     * The reader has seen the channel up to line `seq`: it never goes back,
+     * and never past the newest line. Mentions up to it are read too.
      * @param podId
      * @param channelId
      * @param requestBody
-     * @returns ChannelDetailResponse Successful Response
+     * @returns ReadResponse Successful Response
      * @throws ApiError
      */
-    public static channelParticipantAdd(
+    public static channelRead(
         podId: string,
         channelId: string,
-        requestBody: ParticipantsAddRequest,
-    ): CancelablePromise<ChannelDetailResponse> {
+        requestBody: ReadRequest,
+    ): CancelablePromise<ReadResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/pods/{pod_id}/channels/{channel_id}/participants',
+            url: '/pods/{pod_id}/channels/{channel_id}/read',
             path: {
                 'pod_id': podId,
                 'channel_id': channelId,
@@ -416,61 +699,9 @@ export class ChannelsService {
         });
     }
     /**
-     * Remove Participant
-     * Leave a channel, or -- for who may change it -- take somebody out.
-     * @param podId
-     * @param channelId
-     * @param memberId
-     * @returns void
-     * @throws ApiError
-     */
-    public static channelParticipantRemove(
-        podId: string,
-        channelId: string,
-        memberId: string,
-    ): CancelablePromise<void> {
-        return __request(OpenAPI, {
-            method: 'DELETE',
-            url: '/pods/{pod_id}/channels/{channel_id}/participants/{member_id}',
-            path: {
-                'pod_id': podId,
-                'channel_id': channelId,
-                'member_id': memberId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Mark Channel Read
-     * Everything in the channel up to now has been read by this member, and
-     * every line naming them.
-     * @param podId
-     * @param channelId
-     * @returns void
-     * @throws ApiError
-     */
-    public static channelMarkRead(
-        podId: string,
-        channelId: string,
-    ): CancelablePromise<void> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/pods/{pod_id}/channels/{channel_id}/read',
-            path: {
-                'pod_id': podId,
-                'channel_id': channelId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
      * Get Inbox
-     * What is new for the reader across the pod, and every question waiting
-     * on them, newest first.
+     * What is new for the reader across the pod: the badges, the questions
+     * waiting on them, and the unread lines naming them -- newest first.
      * @param podId
      * @returns InboxResponse Successful Response
      * @throws ApiError
@@ -483,6 +714,43 @@ export class ChannelsService {
             url: '/pods/{pod_id}/inbox',
             path: {
                 'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Search
+     * Lines matching every word, newest first, in the channels the reader
+     * sees -- or in one of them. An answer withheld from the reader is not found
+     * by what it said.
+     * @param podId
+     * @param q
+     * @param channelId
+     * @param cursor
+     * @param limit
+     * @returns SearchResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelSearch(
+        podId: string,
+        q: string,
+        channelId?: (string | null),
+        cursor?: (string | null),
+        limit: number = 30,
+    ): CancelablePromise<SearchResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/search',
+            path: {
+                'pod_id': podId,
+            },
+            query: {
+                'q': q,
+                'channel_id': channelId,
+                'cursor': cursor,
+                'limit': limit,
             },
             errors: {
                 422: `Validation Error`,

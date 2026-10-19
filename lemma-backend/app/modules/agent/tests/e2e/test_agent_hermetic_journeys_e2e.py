@@ -3166,8 +3166,8 @@ async def test_an_agent_answers_a_workflow_form_waiting_on_its_person(
 ):
     """`answer_question` closing a real FORM line, through an agent run.
 
-    The line and its HTTP answer are `agent_surfaces`' test
-    (`test_workflow_form_lines_e2e`); what only this one reaches is the agent's
+    The question and its answer on the line are `workflow`'s test
+    (`test_form_questions_e2e`); what only this one reaches is the agent's
     half. `answer_question` is in no grantable toolset: the open-questions
     capability brings it, only to a run in the person's own channel with a
     question waiting on them -- so the run here is in the assignee's DIRECT
@@ -3180,9 +3180,14 @@ async def test_an_agent_answers_a_workflow_form_waiting_on_its_person(
     """
     from sqlalchemy import select, update
 
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
     from app.modules.agent.infrastructure.models.conversation import (
         ConversationModel,
     )
+    from app.modules.channels.contracts import ChannelKind, QuestionKind, channel_by_id
+    from app.modules.channels.contracts import questions as channel_questions
+    from app.modules.channels.contracts.lines import viewer_of
     from app.modules.identity.infrastructure.models.organization_models import (
         OrganizationMember,
     )
@@ -3252,26 +3257,31 @@ async def test_an_agent_answers_a_workflow_form_waiting_on_its_person(
 
     # The FORM line is written by the run's work, which the worker runs after
     # the run's transaction commits.
-    async def forms_waiting() -> list[dict]:
-        inbox = await authenticated_client.get(f"/pods/{pod_id}/inbox")
-        assert inbox.status_code == status.HTTP_200_OK, inbox.text
+    async def forms_waiting() -> list:
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            viewer = await viewer_of(
+                uow, pod_id=UUID(pod_id), user_id=UUID(str(fixed_test_user["id"]))
+            )
+            waiting = await channel_questions.waiting_on(uow, viewer)
         return [
-            item
-            for item in inbox.json()["waiting"]
-            if (item["message"].get("interaction") or {}).get("kind") == "FORM"
-            and item["message"]["interaction"]["question"].get("run_id") == run_id
+            question
+            for question in waiting
+            if question.kind is QuestionKind.FORM
+            and question.question.get("run_id") == run_id
         ]
 
     waiting = (
         await eventually(
-            label="the form's line in the assignee's channel",
+            label="the form's question in the assignee's channel",
             probe=forms_waiting,
             done=lambda found: len(found) == 1,
             timeout_seconds=30,
         )
     )[0]
-    assert waiting["channel"]["kind"] == "DIRECT"
-    question_id = waiting["message"]["id"]
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        channel = await channel_by_id(uow, waiting.channel_id)
+    assert channel is not None and channel.kind is ChannelKind.DIRECT
+    question_id = str(waiting.message_id)
 
     agent_name = f"formfiller_{uuid4().hex[:8]}"
     agent = await authenticated_client.post(
@@ -3319,7 +3329,7 @@ async def test_an_agent_answers_a_workflow_form_waiting_on_its_person(
     await db_session.execute(
         update(ConversationModel)
         .where(ConversationModel.id == UUID(conversation_id))
-        .values(channel_id=UUID(waiting["channel"]["id"]))
+        .values(channel_id=waiting.channel_id)
     )
     await db_session.commit()
 

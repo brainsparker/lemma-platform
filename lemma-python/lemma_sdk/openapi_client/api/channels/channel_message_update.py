@@ -77,7 +77,7 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     body: ChannelEditRequest,
 ) -> Response[ChannelMessageResponse | ErrorResponse]:
-    """Edit Channel Message
+    """Edit Message
 
      Change what one's own line says. A copy already sent outside stays as sent.
 
@@ -117,7 +117,7 @@ def sync(
     client: AuthenticatedClient | Client,
     body: ChannelEditRequest,
 ) -> ChannelMessageResponse | ErrorResponse | None:
-    """Edit Channel Message
+    """Edit Message
 
      Change what one's own line says. A copy already sent outside stays as sent.
 
@@ -152,7 +152,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     body: ChannelEditRequest,
 ) -> Response[ChannelMessageResponse | ErrorResponse]:
-    """Edit Channel Message
+    """Edit Message
 
      Change what one's own line says. A copy already sent outside stays as sent.
 
@@ -190,7 +190,7 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     body: ChannelEditRequest,
 ) -> ChannelMessageResponse | ErrorResponse | None:
-    """Edit Channel Message
+    """Edit Message
 
      Change what one's own line says. A copy already sent outside stays as sent.
 

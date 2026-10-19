@@ -146,8 +146,8 @@ async def test_a_function_time_decision_form_flow_runs_on_work_items(
     assert await _items(flows, "workflow.notify_form") == 0
     assert (
         await flows.scalar(
-            "SELECT count(*) FROM channel_messages WHERE interaction_kind = 'FORM'"
-            " AND interaction->>'ref' LIKE :ref",
+            "SELECT count(*) FROM channel_questions WHERE kind = 'FORM'"
+            " AND ref LIKE :ref",
             ref=f"wf:{run['id']}:%",
         )
         == 1

@@ -143,10 +143,10 @@ function ChannelRow({ channel, space, me, onOpen }: { channel: Channel; space: s
                     {platformsOf(channel).map((platform) => (
                         <span key={platform} className="chrow__chip">{platformName(platform)}</span>
                     ))}
-                    {channel.kind === "CONTACT" && channel.attention && !channel.handler && (
+                    {channel.kind === "CONTACT" && channel.attention && !channel.assignee && (
                         <span className="chrow__chip chrow__chip--ask" title={channel.attention.reason ?? undefined}>Needs a person</span>
                     )}
-                    {channel.handler && <span className="chrow__chip">{channel.handler.id === me ? "You are answering" : (channel.handler.name ?? "A member") + " is answering"}</span>}
+                    {channel.assignee && <span className="chrow__chip">{channel.assignee.id === me ? "You are answering" : (channel.assignee.name ?? "A member") + " is answering"}</span>}
                 </span>
                 <span className="crow__sub chrow__preview">{previewOf(channel, me)}</span>
             </button>

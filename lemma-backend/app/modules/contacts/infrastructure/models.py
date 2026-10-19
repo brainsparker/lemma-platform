@@ -9,10 +9,18 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    LargeBinary,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.infrastructure.db.base import UUIDAuditBase
+from app.core.infrastructure.db.base import Base, UUIDAuditBase
 
 
 class ContactModel(UUIDAuditBase):
@@ -82,4 +90,27 @@ class ContactIdentityModel(UUIDAuditBase):
     #: cleared by the pod; only the contact writing again opts back in.
     unsubscribed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class ContactSuppressionModel(Base):
+    """A handle nobody in the pod may write to: it said stop, or bounced.
+
+    Keyed by a hash of the handle, not the contact, so it outlives the contact
+    being forgotten -- a person who said stop is not written to again because
+    the pod forgot who they were.
+    """
+
+    __tablename__ = "contact_suppressions"
+
+    pod_id: Mapped[UUID] = mapped_column(
+        ForeignKey("pods.id", ondelete="CASCADE"), primary_key=True
+    )
+    kind: Mapped[str] = mapped_column(String(20), primary_key=True)
+    #: sha256 of the normalised handle.
+    value_hash: Mapped[bytes] = mapped_column(LargeBinary(32), primary_key=True)
+    #: ``stop`` (they asked), ``unsubscribe`` (the email link), ``bounce``.
+    reason: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

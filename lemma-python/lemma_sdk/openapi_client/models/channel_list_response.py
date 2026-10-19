@@ -20,11 +20,11 @@ class ChannelListResponse:
     """
     Attributes:
         items (list[ChannelResponse]):
-        next_before (None | str | Unset): Pass as `before` for the next page.
+        next_cursor (None | str | Unset): Pass as `cursor` for the next page.
     """
 
     items: list[ChannelResponse]
-    next_before: None | str | Unset = UNSET
+    next_cursor: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -33,11 +33,11 @@ class ChannelListResponse:
             items_item = items_item_data.to_dict()
             items.append(items_item)
 
-        next_before: None | str | Unset
-        if isinstance(self.next_before, Unset):
-            next_before = UNSET
+        next_cursor: None | str | Unset
+        if isinstance(self.next_cursor, Unset):
+            next_cursor = UNSET
         else:
-            next_before = self.next_before
+            next_cursor = self.next_cursor
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -46,8 +46,8 @@ class ChannelListResponse:
                 "items": items,
             }
         )
-        if next_before is not UNSET:
-            field_dict["next_before"] = next_before
+        if next_cursor is not UNSET:
+            field_dict["next_cursor"] = next_cursor
 
         return field_dict
 
@@ -63,18 +63,18 @@ class ChannelListResponse:
 
             items.append(items_item)
 
-        def _parse_next_before(data: object) -> None | str | Unset:
+        def _parse_next_cursor(data: object) -> None | str | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
             return cast(None | str | Unset, data)
 
-        next_before = _parse_next_before(d.pop("next_before", UNSET))
+        next_cursor = _parse_next_cursor(d.pop("next_cursor", UNSET))
 
         channel_list_response = cls(
             items=items,
-            next_before=next_before,
+            next_cursor=next_cursor,
         )
 
         channel_list_response.additional_properties = d

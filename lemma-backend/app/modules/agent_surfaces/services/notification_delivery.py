@@ -76,6 +76,9 @@ class Delivered:
     platform: str | None = None
     conversation_id: UUID | None = None
     reason: str | None = None
+    #: Nothing took it because a platform failed, not because nothing could:
+    #: worth trying again.
+    retryable: bool = False
 
     @property
     def sent(self) -> bool:

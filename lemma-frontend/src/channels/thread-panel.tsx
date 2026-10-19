@@ -5,7 +5,7 @@ import { CloseIcon } from "@/ui/icons";
 import { Composer } from "./composer";
 import { LineView } from "./line";
 import type { Mentionable } from "./mentions";
-import type { ChannelDetail, Line, Page } from "./model";
+import type { ChannelDetail, Line, LinePage } from "./model";
 import { linesKey, threadKey, useThread } from "./queries";
 
 /** One thread: the line it hangs off, its replies, and a reply of your own. */
@@ -20,7 +20,7 @@ export function ThreadPanel({ podId, channel, root, people, visible, onClose }: 
     const cache = useQueryClient();
     const replies = useThread(podId, channel.id, root.id, visible);
     const posted = (line: Line) => {
-        cache.setQueryData<Page<Line>>(threadKey(podId, channel.id, root.id), (was) => was ? { ...was, items: [...was.items, line] } : was);
+        cache.setQueryData<LinePage>(threadKey(podId, channel.id, root.id), (was) => was ? { ...was, items: [...was.items, line] } : was);
         /* The first line counts its replies. */
         void cache.invalidateQueries({ queryKey: linesKey(podId, channel.id) });
     };

@@ -95,18 +95,18 @@ async def test_a_line_meta_reports_undelivered_is_no_longer_recorded_as_sent(
 ):
     """The status names Meta's message id; the line it carried is marked failed.
 
-    The line's delivery on WhatsApp was recorded SENT when Meta answered 200,
-    and stays so unless the status webhook is read back to the line.
+    The line's delivery row on WhatsApp was recorded SENT when Meta answered
+    200, and stays so unless the status webhook is read back to the line.
     """
     line_id = uuid4()
     marked: list[dict[str, Any]] = []
 
-    async def mark_delivery_failed(_uow, **kwargs) -> bool:
+    async def delivery_undelivered(_uow, **kwargs) -> int:
         marked.append(kwargs)
-        return True
+        return 1
 
     monkeypatch.setattr(
-        whatsapp_delivery_status, "mark_delivery_failed", mark_delivery_failed
+        whatsapp_delivery_status, "delivery_undelivered", delivery_undelivered
     )
     await sent_messages.remember_sent(line_id, _OUTSIDE_WINDOW["id"])
 
@@ -119,7 +119,7 @@ async def test_a_line_meta_reports_undelivered_is_no_longer_recorded_as_sent(
 
     [failed] = marked
     assert (failed["message_id"], failed["platform"]) == (line_id, "WHATSAPP")
-    assert "24 hours" in failed["error"]
+    assert "24 hours" in failed["reason"]
 
 
 async def test_a_status_for_a_message_nobody_remembered_marks_nothing(
@@ -127,7 +127,7 @@ async def test_a_status_for_a_message_nobody_remembered_marks_nothing(
 ):
     """A reply's own message, or one older than the cache: no line to correct."""
     marked = AsyncMock()
-    monkeypatch.setattr(whatsapp_delivery_status, "mark_delivery_failed", marked)
+    monkeypatch.setattr(whatsapp_delivery_status, "delivery_undelivered", marked)
 
     await whatsapp_delivery_status.apply_delivery_statuses(
         SimpleNamespace(session=SimpleNamespace(info={})),  # type: ignore[arg-type]

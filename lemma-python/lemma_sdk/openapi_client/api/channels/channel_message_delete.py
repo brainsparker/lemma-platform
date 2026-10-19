@@ -65,9 +65,9 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any | ErrorResponse]:
-    """Delete Channel Message
+    """Delete Message
 
-     Delete one's own line: it stays in its place, saying nothing.
+     Delete one's own line: it keeps its place, saying nothing.
 
     Args:
         pod_id (UUID):
@@ -102,9 +102,9 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
 ) -> Any | ErrorResponse | None:
-    """Delete Channel Message
+    """Delete Message
 
-     Delete one's own line: it stays in its place, saying nothing.
+     Delete one's own line: it keeps its place, saying nothing.
 
     Args:
         pod_id (UUID):
@@ -134,9 +134,9 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any | ErrorResponse]:
-    """Delete Channel Message
+    """Delete Message
 
-     Delete one's own line: it stays in its place, saying nothing.
+     Delete one's own line: it keeps its place, saying nothing.
 
     Args:
         pod_id (UUID):
@@ -169,9 +169,9 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
 ) -> Any | ErrorResponse | None:
-    """Delete Channel Message
+    """Delete Message
 
-     Delete one's own line: it stays in its place, saying nothing.
+     Delete one's own line: it keeps its place, saying nothing.
 
     Args:
         pod_id (UUID):

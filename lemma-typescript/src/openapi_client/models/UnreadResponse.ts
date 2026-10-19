@@ -4,13 +4,17 @@
 /* eslint-disable */
 export type UnreadResponse = {
     /**
-     * New lines since the reader last read it; stops at 100.
+     * New lines since the reader last read it, in channels they joined; stops at 100.
      */
     lines?: number;
     /**
-     * Lines naming the reader, unread.
+     * Unread lines naming the reader.
      */
     mentions?: number;
+    /**
+     * The last line the reader read.
+     */
+    read_seq?: number;
     /**
      * Questions here waiting on the reader's answer.
      */

@@ -104,23 +104,6 @@ def _theirs(pod_id: UUID, contact_id: UUID) -> tuple[ColumnElement[bool], ...]:
     )
 
 
-async def contact_conversation_ids(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    pod_id: UUID,
-    contact_id: UUID,
-    after: UUID | None = None,
-    limit: int = 500,
-) -> list[UUID]:
-    """A page of the conversations this pod had with this contact, by id."""
-    query = select(ConversationModel.id).where(*_theirs(pod_id, contact_id))
-    if after is not None:
-        query = query.where(ConversationModel.id > after)
-    return list(
-        await uow.session.scalars(query.order_by(ConversationModel.id).limit(limit))
-    )
-
-
 async def forget_contact_conversations(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_id: UUID
 ) -> int:

@@ -53,6 +53,8 @@ class InMemoryChannelSeats:
     def __init__(self) -> None:
         self.sources: dict[_PlaceKey, Source] = {}
         self.channels: dict[tuple[object, ...], UUID] = {}
+        #: Each account a place was heard in, by its pod, platform and key.
+        self.accounts: dict[tuple[UUID, str, str], UUID] = {}
         #: Each conversation's channel, as seating left it.
         self.placed: dict[UUID, UUID] = {}
         #: The persons ``lock_person`` was asked to serialise, in order.
@@ -141,9 +143,13 @@ class InMemoryChannelSeats:
             id=uuid4(),
             channel_id=self._channel(pod_id, home, key),
             pod_id=pod_id,
+            account_id=self.accounts.setdefault(
+                (pod_id, place.platform, place.account_key), uuid4()
+            ),
             surface_id=place.surface_id,
             platform=place.platform,
             kind=place.kind,
+            is_private=place.is_private,
             external_channel_id=place.external_channel_id,
             external_user_id=place.external_user_id,
             title=place.title,
@@ -235,16 +241,16 @@ class InMemoryChannelSeats:
     async def places_hearing(
         self,
         *,
-        platform: str | None,
+        platform: str,
         external_channel_id: str,
-        surface_ids: Collection[UUID] | None = None,
+        surface_ids: Collection[UUID] | None,
     ) -> list[Source]:
         return [
             source
             for source in self.sources.values()
             if source.external_user_id is None
             and source.external_channel_id == external_channel_id
-            and (platform is None or source.platform == platform)
+            and source.platform == platform
             and (surface_ids is None or source.surface_id in set(surface_ids))
         ]
 

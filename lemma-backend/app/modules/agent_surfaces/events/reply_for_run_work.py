@@ -45,10 +45,7 @@ from app.modules.agent_surfaces.events.work_kinds import (
     SURFACE_REPLY_FOR_RUN,
     run_reply_key,
 )
-from app.modules.agent_surfaces.services.channel_lines import (
-    note_answered_in_lemma,
-    note_answered_on,
-)
+from app.modules.agent_surfaces.services.channel_lines import note_answered_on
 from app.modules.channels.contracts.lines import last_heard_line
 from app.modules.agent_surfaces.services.surface_deliveries import (
     conversation_destination,
@@ -85,7 +82,7 @@ async def stage_run_reply(ctx: FastContext, payload: RunReplyPayload) -> None:
     failed = payload.status == "FAILED"
     if not failed and not material.answer:
         return
-    if await _answered_in_lemma(ctx, payload, material.answer):
+    if await _answered_in_lemma(ctx, payload):
         return
     address = await reply_address(ctx.uow, payload.conversation_id)
     answering = address.source if address is not None else None
@@ -125,23 +122,12 @@ async def stage_run_reply(ctx: FastContext, payload: RunReplyPayload) -> None:
     )
 
 
-async def _answered_in_lemma(
-    ctx: FastContext, payload: RunReplyPayload, answer: str | None
-) -> bool:
-    """Whether the run answers something asked in Lemma -- answered there, in
-    the same thread, and nowhere else."""
+async def _answered_in_lemma(ctx: FastContext, payload: RunReplyPayload) -> bool:
+    """Whether the run answers something asked in Lemma -- which the agent
+    module answers there, in the same thread (``agent.channel_reply``), and
+    which no platform is sent."""
     heard = await last_heard_line(ctx.uow, payload.conversation_id)
-    if heard is None or heard.source_id is not None:
-        return False
-    if answer:
-        await note_answered_in_lemma(
-            ctx.uow,
-            line=heard,
-            conversation_id=payload.conversation_id,
-            run_id=payload.run_id,
-            text=answer,
-        )
-    return True
+    return heard is not None and heard.source_id is None
 
 
 def register_reply_for_run_work(registry: WorkRegistry) -> None:

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { isForbidden, isMissing } from "@/session/auth-state";
 import { channelApi } from "./api";
-import { joinPages, type Channel, type ChannelDetail, type Line, type Page } from "./model";
+import { joinPages, type Channel, type ChannelDetail, type LinePage, type Page } from "./model";
 import { inboxKey } from "./waiting-panel";
 
 /** The keys every view of a pod's channels reads under. All of them start
@@ -56,8 +56,8 @@ export function useLines(podId: string, channelId: string, visible: boolean) {
     const query = useInfiniteQuery({
         queryKey: linesKey(podId, channelId),
         queryFn: ({ pageParam }) => channelApi(podId).lines(channelId, pageParam),
-        initialPageParam: undefined as string | undefined,
-        getNextPageParam: (last: Page<Line>) => last.nextBefore ?? undefined,
+        initialPageParam: undefined as number | undefined,
+        getNextPageParam: (last: LinePage) => last.nextBefore ?? undefined,
         refetchInterval: visible ? READ_EVERY_MS : false,
         staleTime: 5_000,
         retry: settled,
@@ -98,18 +98,20 @@ export function keepChannel(cache: QueryClient, podId: string, saved: ChannelDet
     refreshLists(cache, podId);
 }
 
-/** Marks the channel read as far as the newest line on screen, once per new
- *  line, while it is on screen -- and tells the lists and the inbox. */
-export function useMarkRead(podId: string, channelId: string, newest: string | null, visible: boolean): void {
+/** Marks the channel read up to line `upto`, once per new line, while it is
+ *  on screen -- and tells the lists and the inbox. Read state only moves
+ *  forward, so a line already read is not marked again. */
+export function useMarkRead(podId: string, channelId: string, upto: number | null, readSeq: number, visible: boolean): void {
     const cache = useQueryClient();
-    const marked = useRef<string | null>(null);
+    const marked = useRef<number>(0);
     useEffect(() => {
-        if (!visible || !newest || marked.current === newest) return;
-        marked.current = newest;
-        channelApi(podId).markRead(channelId)
+        if (!visible || !upto || upto <= Math.max(readSeq, marked.current)) return;
+        const was = marked.current;
+        marked.current = upto;
+        channelApi(podId).markRead(channelId, upto)
             .then(() => refreshLists(cache, podId))
-            .catch(() => { marked.current = null; });
-    }, [podId, channelId, newest, visible, cache]);
+            .catch(() => { marked.current = was; });
+    }, [podId, channelId, upto, readSeq, visible, cache]);
 }
 
 /** The group channels one bot is in, each with the place it is fed from

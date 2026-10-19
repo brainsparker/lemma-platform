@@ -77,7 +77,9 @@ async def fan_in_candidates(
         adopted = [
             place.surface_id
             for place in await router.seats.places_hearing(
-                platform=platform, external_channel_id=parsed.external_channel_id
+                platform=platform,
+                external_channel_id=parsed.external_channel_id,
+                surface_ids=None,
             )
             if place.surface_id is not None
         ]

@@ -55,8 +55,7 @@ async def adopt_joined_group(
     groups = SurfaceGroupRepository(uow.session)
     group, created = await groups.ensure_noting_creation(
         pod_id=surface.pod_id,
-        surface_id=surface.id,
-        platform=surface.surface_type.value,
+        surface=surface,
         external_channel_id=channel_id,
         title=parsed.channel_title,
     )
@@ -87,11 +86,10 @@ async def adopt_connected_channel(
     if not channel_id:
         return
     groups = SurfaceGroupRepository(uow.session)
+    # Private until heard: whether the platform opens it to the whole
+    # workspace is only known from what is said there.
     group = await groups.ensure(
-        pod_id=surface.pod_id,
-        surface_id=surface.id,
-        platform=surface.surface_type.value,
-        external_channel_id=channel_id,
+        pod_id=surface.pod_id, surface=surface, external_channel_id=channel_id
     )
     if group.owner_user_id is None and owner_user_id is not None:
         await groups.set_owner(group.id, owner_user_id)

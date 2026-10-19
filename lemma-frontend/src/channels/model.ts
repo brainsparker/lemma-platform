@@ -14,11 +14,17 @@ import type { PersonRef, WaitingQuestion } from "./waiting";
 
 export type ChannelKind = "DIRECT" | "CONTACT" | "GROUP";
 export type NotifyLevel = "ALL" | "MENTIONS" | "NONE";
+export type Visibility = "public" | "private";
+export type ContactStatus = "open" | "waiting_on_contact" | "closed";
+export type MemberRole = "owner" | "member" | "guest";
+export type AgentAnswers = "MENTIONED" | "EVERY_LINE";
 
 export interface Unread {
     lines: number;
     mentions: number;
     waiting: number;
+    /** The newest line the reader has seen, by its place in the channel. */
+    readSeq: number;
 }
 
 export interface SourceSummary {
@@ -34,18 +40,24 @@ export interface Channel {
     /** Whose it is: the member's for a DIRECT one, the contact's for a
      *  CONTACT one; null for a group. */
     person: PersonRef | null;
+    /** A group's: every member sees a public one, its members a private one. */
+    visibility: Visibility;
     sources: SourceSummary[];
-    /** A member who stepped in by writing to the contact; its agents wait
-     *  until they have been quiet `handBackAfterHours`. */
-    handler: PersonRef | null;
-    /** A contact's channel: whether its agents answer them at all. */
+    /** A contact's channel: the member answering them -- by writing to them,
+     *  or assigned. Its agent waits until they have been quiet
+     *  `handBackAfterHours`. */
+    assignee: PersonRef | null;
+    /** A contact's channel: whether its agent answers them at all. */
     agentsAnswer: boolean;
     handBackAfterHours: number;
+    status: ContactStatus | null;
     /** It asks for a person, and why. */
     attention: { since: string; reason: string | null } | null;
     archived: boolean;
     lastLine: { sender: PersonRef; text: string; createdAt: string } | null;
     lastMessageAt: string | null;
+    /** The newest line's place in the channel; lines are numbered from 1. */
+    lastSeq: number;
     createdAt: string;
     unread: Unread;
 }
@@ -61,21 +73,24 @@ export interface SourcePlace {
     lastInboundAt: string | null;
 }
 
-export interface Participant {
+/** Somebody in a channel: a person with a role, or an agent with when it
+ *  answers. */
+export interface Member {
     person: PersonRef;
-    notify: NotifyLevel;
-    lastReadAt: string | null;
+    role: MemberRole;
+    answers: AgentAnswers | null;
 }
 
 export interface ChannelDetail extends Channel {
     places: SourcePlace[];
-    participants: Participant[];
-    me: { joined: boolean; notify: NotifyLevel; lastReadAt: string | null };
+    members: Member[];
+    me: { joined: boolean; notify: NotifyLevel; readSeq: number; role: MemberRole | null; canManage: boolean };
 }
 
 export interface Interaction {
     kind: "ASK" | "APPROVAL" | "FORM";
-    state: "OPEN" | "ANSWERED" | "CANCELLED" | "EXPIRED";
+    /** `ANSWERING` while somebody's answer is being taken. */
+    state: "OPEN" | "ANSWERING" | "ANSWERED" | "CANCELLED" | "EXPIRED";
     question: Record<string, unknown>;
     /** The one person who may answer it. */
     awaits: PersonRef | null;
@@ -86,6 +101,8 @@ export interface Interaction {
 
 export interface Line {
     id: string;
+    /** Its place in the channel, from 1: what read state counts by. */
+    seq: number;
     sender: PersonRef;
     /** For an agent's line: whom it acted for, with whose access. */
     onBehalfOf: PersonRef | null;
@@ -103,10 +120,14 @@ export interface Line {
     interaction: Interaction | null;
 }
 
-export interface Page<T> {
+/** One page of a list, and what to ask for the page after it: an opaque
+ *  cursor for channels, a line's `seq` for a timeline. */
+export interface Page<T, Cursor = string> {
     items: T[];
-    nextBefore: string | null;
+    nextBefore: Cursor | null;
 }
+
+export type LinePage = Page<Line, number>;
 
 /* ── off the wire ──────────────────────────────────────────────────── */
 
@@ -128,6 +149,16 @@ function rows(value: unknown): unknown[] {
 
 const KINDS: readonly ChannelKind[] = ["DIRECT", "CONTACT", "GROUP"];
 const LEVELS: readonly NotifyLevel[] = ["ALL", "MENTIONS", "NONE"];
+const STATUSES: readonly ContactStatus[] = ["open", "waiting_on_contact", "closed"];
+const ROLES: readonly MemberRole[] = ["owner", "member", "guest"];
+
+function role(value: unknown): MemberRole | null {
+    return ROLES.includes(value as MemberRole) ? (value as MemberRole) : null;
+}
+
+function seq(value: unknown): number | null {
+    return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
 
 function level(value: unknown, fallback: NotifyLevel = "ALL"): NotifyLevel {
     return LEVELS.includes(value as NotifyLevel) ? (value as NotifyLevel) : fallback;
@@ -150,21 +181,22 @@ export function readChannel(raw: unknown): Channel | null {
     const attention = row.attention && typeof row.attention === "object" ? record(row.attention) : null;
     const last = row.last_line && typeof row.last_line === "object" ? record(row.last_line) : null;
     const unread = record(row.unread);
-    const settings = record(row.settings);
     return {
         id,
         kind: KINDS.includes(row.kind as ChannelKind) ? (row.kind as ChannelKind) : "GROUP",
         title: words(row.title),
         topic: words(row.topic),
         person: readPerson(row.person),
+        visibility: row.visibility === "private" ? "private" : "public",
         sources: rows(row.sources).flatMap((entry) => {
             const source = record(entry);
             const platform = words(source.platform);
             return platform ? [{ platform: platform.toUpperCase(), title: words(source.title) }] : [];
         }),
-        handler: readPerson(row.handler),
-        agentsAnswer: settings.agents_answer !== false,
-        handBackAfterHours: typeof settings.hand_back_after_hours === "number" && settings.hand_back_after_hours > 0 ? settings.hand_back_after_hours : 12,
+        assignee: readPerson(row.assignee),
+        agentsAnswer: row.agents_answer !== false,
+        handBackAfterHours: typeof row.hand_back_after_hours === "number" && row.hand_back_after_hours > 0 ? row.hand_back_after_hours : 12,
+        status: STATUSES.includes(row.status as ContactStatus) ? (row.status as ContactStatus) : null,
         attention: attention ? { since: String(attention.since ?? ""), reason: words(attention.reason) } : null,
         archived: row.archived === true,
         lastLine: last ? {
@@ -172,9 +204,10 @@ export function readChannel(raw: unknown): Channel | null {
             text: typeof last.text === "string" ? last.text : "",
             createdAt: String(last.created_at ?? ""),
         } : null,
-        lastMessageAt: words(row.last_message_at),
+        lastMessageAt: words(row.last_line_at),
+        lastSeq: count(row.last_seq),
         createdAt: String(row.created_at ?? ""),
-        unread: { lines: count(unread.lines), mentions: count(unread.mentions), waiting: count(unread.waiting) },
+        unread: { lines: count(unread.lines), mentions: count(unread.mentions), waiting: count(unread.waiting), readSeq: count(unread.read_seq) },
     };
 }
 
@@ -182,7 +215,7 @@ export function readChannelPage(raw: unknown): Page<Channel> {
     const body = record(raw);
     return {
         items: rows(body.items).map(readChannel).filter((channel): channel is Channel => channel !== null),
-        nextBefore: words(body.next_before),
+        nextBefore: words(body.next_cursor),
     };
 }
 
@@ -207,21 +240,30 @@ export function readChannelDetail(raw: unknown): ChannelDetail | null {
                 lastInboundAt: words(place.last_inbound_at),
             }];
         }),
-        participants: rows(row.participants).flatMap((entry) => {
-            const participant = record(entry);
-            const person = readPerson(participant.person);
-            return person ? [{ person, notify: level(participant.notify), lastReadAt: words(participant.last_read_at) }] : [];
+        members: rows(row.members).flatMap((entry) => {
+            const member = record(entry);
+            const person = readPerson(member.person);
+            if (!person) return [];
+            const answers = member.answers === "EVERY_LINE" || member.answers === "MENTIONED" ? member.answers : null;
+            return [{ person, role: role(member.role) ?? (person.kind === "CONTACT" ? "guest" : "member"), answers }];
         }),
-        me: { joined: me.joined !== false, notify: level(me.notify), lastReadAt: words(me.last_read_at) },
+        me: {
+            joined: me.joined === true,
+            notify: level(me.notify),
+            readSeq: count(me.read_seq),
+            role: role(me.role),
+            canManage: me.can_manage === true,
+        },
     };
 }
 
-function readInteraction(raw: unknown): Interaction | null {
+/** What a line asks, off the wire's `question`. */
+function readQuestion(raw: unknown): Interaction | null {
     if (!raw || typeof raw !== "object") return null;
     const row = raw as Wire;
     const kind = row.kind === "APPROVAL" || row.kind === "FORM" ? row.kind : row.kind === "ASK" ? "ASK" : null;
     if (!kind) return null;
-    const state = row.state === "ANSWERED" || row.state === "CANCELLED" || row.state === "EXPIRED" ? row.state : "OPEN";
+    const state = row.state === "ANSWERING" || row.state === "ANSWERED" || row.state === "CANCELLED" || row.state === "EXPIRED" ? row.state : "OPEN";
     return {
         kind,
         state,
@@ -241,6 +283,7 @@ export function readLine(raw: unknown): Line | null {
     const withheld = row.withheld === true;
     return {
         id,
+        seq: count(row.seq),
         sender: readPerson(row.sender) ?? SOMEBODY,
         onBehalfOf: readPerson(row.on_behalf_of),
         /* A withheld or deleted line keeps no text even if some arrived. */
@@ -253,21 +296,30 @@ export function readLine(raw: unknown): Line | null {
         sourceId: words(row.source_id),
         threadRootId: words(row.thread_root_id),
         replyCount: count(row.reply_count),
-        interaction: readInteraction(row.interaction),
+        interaction: readQuestion(row.question),
     };
 }
 
-export function readLinePage(raw: unknown): Page<Line> {
+/** A page of a timeline, or a thread's replies. The page before it is asked
+ *  for by the `seq` it starts at, and only while there are older lines. */
+export function readLinePage(raw: unknown): LinePage {
     const body = record(raw);
     return {
         items: rows(body.items).map(readLine).filter((line): line is Line => line !== null),
-        nextBefore: words(body.next_before),
+        nextBefore: seq(body.next_before_seq),
     };
+}
+
+/** The newest line in a timeline, by `seq`: what reading it marks read. */
+export function newestSeq(lines: readonly Pick<Line, "seq">[]): number | null {
+    let newest: number | null = null;
+    for (const line of lines) if (line.seq > 0 && (newest === null || line.seq > newest)) newest = line.seq;
+    return newest;
 }
 
 /** The pages of a timeline as react-query holds them -- newest first, each
  *  oldest first inside -- as one run, oldest first, each line once. */
-export function joinPages(pages: readonly Page<Line>[]): Line[] {
+export function joinPages(pages: readonly LinePage[]): Line[] {
     const seen = new Set<string>();
     const out: Line[] = [];
     for (const page of [...pages].reverse()) {
@@ -282,7 +334,7 @@ export function joinPages(pages: readonly Page<Line>[]): Line[] {
 
 /** A line written or changed here, put where it belongs in the pages already
  *  held: replaced where it is, or added to the newest page. */
-export function withLine(pages: readonly Page<Line>[], line: Line): Page<Line>[] {
+export function withLine(pages: readonly LinePage[], line: Line): LinePage[] {
     if (pages.some((page) => page.items.some((one) => one.id === line.id))) {
         return pages.map((page) => ({ ...page, items: page.items.map((one) => (one.id === line.id ? line : one)) }));
     }
@@ -435,12 +487,15 @@ export function isMine(line: Pick<Line, "sender" | "deleted" | "withheld">, me: 
 export type QuestionState =
     | { kind: "yours" }
     | { kind: "waiting"; on: string }
+    | { kind: "answering" }
     | { kind: "answered"; by: string | null }
     | { kind: "closed"; why: "CANCELLED" | "EXPIRED" };
 
 export function questionState(interaction: Interaction, me: string | null): QuestionState {
     if (interaction.state === "ANSWERED") return { kind: "answered", by: interaction.answeredBy ? personName(interaction.answeredBy, me) : null };
     if (interaction.state === "CANCELLED" || interaction.state === "EXPIRED") return { kind: "closed", why: interaction.state };
+    /* An answer being taken is not open to another one. */
+    if (interaction.state === "ANSWERING") return { kind: "answering" };
     const awaits = interaction.awaits;
     if (awaits && me && awaits.kind === "MEMBER" && awaits.id === me) return { kind: "yours" };
     return { kind: "waiting", on: awaits ? personName(awaits, me) : "someone" };
@@ -451,6 +506,7 @@ export function sayQuestion(state: QuestionState): string | null {
     switch (state.kind) {
         case "yours": return null;
         case "waiting": return "Waiting on " + state.on;
+        case "answering": return "Being answered";
         case "answered": return state.by ? "Answered by " + (state.by === "You" ? "you" : state.by) : "Answered";
         case "closed": return state.why === "EXPIRED" ? "No longer waiting: it expired" : "No longer waiting";
     }
@@ -521,10 +577,10 @@ export function composerChoices(detail: Pick<ChannelDetail, "places">): { notes:
 /** Who answers in a channel when nobody is named. In the reader's own the
  *  pod's agent answers every line; anywhere else an agent answers only when
  *  @mentioned, and not at all while a member has stepped in. */
-export function whoAnswers(channel: Pick<Channel, "kind" | "handler" | "agentsAnswer" | "handBackAfterHours">, space: string, me: string | null): string {
+export function whoAnswers(channel: Pick<Channel, "kind" | "assignee" | "agentsAnswer" | "handBackAfterHours">, space: string, me: string | null): string {
     if (channel.kind === "CONTACT" && !channel.agentsAnswer) return "Its agent is off: only members answer them.";
-    if (channel.handler) {
-        const name = personName(channel.handler, me);
+    if (channel.assignee) {
+        const name = personName(channel.assignee, me);
         const back = "its agent answers again " + channel.handBackAfterHours + " hours after " + (name === "You" ? "your" : "their") + " last line.";
         return (name === "You" ? "You are answering here; " : name + " is answering here; ") + back;
     }
@@ -534,7 +590,7 @@ export function whoAnswers(channel: Pick<Channel, "kind" | "handler" | "agentsAn
 }
 
 /** The members of the space not in the channel yet, by user id. */
-export function addable<M extends { userId?: string; kind?: string }>(members: readonly M[], participants: readonly Participant[]): M[] {
-    const inIt = new Set(participants.filter((one) => one.person.kind === "MEMBER").map((one) => one.person.id));
+export function addable<M extends { userId?: string; kind?: string }>(members: readonly M[], inChannel: readonly Member[]): M[] {
+    const inIt = new Set(inChannel.filter((one) => one.person.kind === "MEMBER").map((one) => one.person.id));
     return members.filter((member) => member.userId && member.kind !== "teammate" && !inIt.has(member.userId));
 }

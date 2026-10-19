@@ -10,8 +10,9 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.channel_post_request_parts_item import ChannelPostRequestPartsItem
-    from ..models.mention import Mention
+    from ..models.file_part import FilePart
+    from ..models.link_part import LinkPart
+    from ..models.mention_part import MentionPart
 
 
 T = TypeVar("T", bound="ChannelPostRequest")
@@ -21,18 +22,20 @@ T = TypeVar("T", bound="ChannelPostRequest")
 class ChannelPostRequest:
     """
     Attributes:
+        client_message_id (None | str | Unset): The client's name for this line: sending it again is the same line.
         members_only (bool | Unset): A note to the pod's members: never sent outside. Default: False.
-        mentions (list[Mention] | Unset):
-        parts (list[ChannelPostRequestPartsItem] | Unset):
+        parts (list[FilePart | LinkPart | MentionPart] | Unset): Mentions, files and links. Who a line names is read
+            from here.
         reply_to_id (None | Unset | UUID):
-        source_id (None | Unset | UUID): Which outside place it goes to; by default the one the channel last heard from.
+        source_id (None | Unset | UUID): Which outside place it goes to; by default the thread's, else the one the
+            channel last heard from.
         text (str | Unset):  Default: ''.
         thread_root_id (None | Unset | UUID): Reply in the thread of this line.
     """
 
+    client_message_id: None | str | Unset = UNSET
     members_only: bool | Unset = False
-    mentions: list[Mention] | Unset = UNSET
-    parts: list[ChannelPostRequestPartsItem] | Unset = UNSET
+    parts: list[FilePart | LinkPart | MentionPart] | Unset = UNSET
     reply_to_id: None | Unset | UUID = UNSET
     source_id: None | Unset | UUID = UNSET
     text: str | Unset = ""
@@ -40,20 +43,29 @@ class ChannelPostRequest:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        members_only = self.members_only
+        from ..models.file_part import FilePart
+        from ..models.mention_part import MentionPart
 
-        mentions: list[dict[str, Any]] | Unset = UNSET
-        if not isinstance(self.mentions, Unset):
-            mentions = []
-            for mentions_item_data in self.mentions:
-                mentions_item = mentions_item_data.to_dict()
-                mentions.append(mentions_item)
+        client_message_id: None | str | Unset
+        if isinstance(self.client_message_id, Unset):
+            client_message_id = UNSET
+        else:
+            client_message_id = self.client_message_id
+
+        members_only = self.members_only
 
         parts: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.parts, Unset):
             parts = []
             for parts_item_data in self.parts:
-                parts_item = parts_item_data.to_dict()
+                parts_item: dict[str, Any]
+                if isinstance(parts_item_data, MentionPart):
+                    parts_item = parts_item_data.to_dict()
+                elif isinstance(parts_item_data, FilePart):
+                    parts_item = parts_item_data.to_dict()
+                else:
+                    parts_item = parts_item_data.to_dict()
+
                 parts.append(parts_item)
 
         reply_to_id: None | str | Unset
@@ -85,10 +97,10 @@ class ChannelPostRequest:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if client_message_id is not UNSET:
+            field_dict["client_message_id"] = client_message_id
         if members_only is not UNSET:
             field_dict["members_only"] = members_only
-        if mentions is not UNSET:
-            field_dict["mentions"] = mentions
         if parts is not UNSET:
             field_dict["parts"] = parts
         if reply_to_id is not UNSET:
@@ -104,27 +116,55 @@ class ChannelPostRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.channel_post_request_parts_item import ChannelPostRequestPartsItem
-        from ..models.mention import Mention
+        from ..models.file_part import FilePart
+        from ..models.link_part import LinkPart
+        from ..models.mention_part import MentionPart
 
         d = dict(src_dict)
+
+        def _parse_client_message_id(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        client_message_id = _parse_client_message_id(d.pop("client_message_id", UNSET))
+
         members_only = d.pop("members_only", UNSET)
 
-        _mentions = d.pop("mentions", UNSET)
-        mentions: list[Mention] | Unset = UNSET
-        if _mentions is not UNSET:
-            mentions = []
-            for mentions_item_data in _mentions:
-                mentions_item = Mention.from_dict(mentions_item_data)
-
-                mentions.append(mentions_item)
-
         _parts = d.pop("parts", UNSET)
-        parts: list[ChannelPostRequestPartsItem] | Unset = UNSET
+        parts: list[FilePart | LinkPart | MentionPart] | Unset = UNSET
         if _parts is not UNSET:
             parts = []
             for parts_item_data in _parts:
-                parts_item = ChannelPostRequestPartsItem.from_dict(parts_item_data)
+
+                def _parse_parts_item(
+                    data: object,
+                ) -> FilePart | LinkPart | MentionPart:
+                    try:
+                        if not isinstance(data, dict):
+                            raise TypeError()
+                        parts_item_type_0 = MentionPart.from_dict(data)
+
+                        return parts_item_type_0
+                    except TypeError, ValueError, AttributeError, KeyError:
+                        pass
+                    try:
+                        if not isinstance(data, dict):
+                            raise TypeError()
+                        parts_item_type_1 = FilePart.from_dict(data)
+
+                        return parts_item_type_1
+                    except TypeError, ValueError, AttributeError, KeyError:
+                        pass
+                    if not isinstance(data, dict):
+                        raise TypeError()
+                    parts_item_type_2 = LinkPart.from_dict(data)
+
+                    return parts_item_type_2
+
+                parts_item = _parse_parts_item(parts_item_data)
 
                 parts.append(parts_item)
 
@@ -182,8 +222,8 @@ class ChannelPostRequest:
         thread_root_id = _parse_thread_root_id(d.pop("thread_root_id", UNSET))
 
         channel_post_request = cls(
+            client_message_id=client_message_id,
             members_only=members_only,
-            mentions=mentions,
             parts=parts,
             reply_to_id=reply_to_id,
             source_id=source_id,

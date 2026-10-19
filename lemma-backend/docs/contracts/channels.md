@@ -11,20 +11,28 @@ The table below is generated from the committed OpenAPI specification by `script
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
 | `channel.create` | POST | `/pods/{pod_id}/channels` | Create Channel |
+| `channel.delete` | DELETE | `/pods/{pod_id}/channels/{channel_id}` | Delete Channel |
+| `channel.delivery.list` | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries` | List Deliveries |
+| `channel.delivery.retry` | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry` | Retry Delivery |
 | `channel.get` | GET | `/pods/{pod_id}/channels/{channel_id}` | Get Channel |
 | `channel.inbox.get` | GET | `/pods/{pod_id}/inbox` | Get Inbox |
 | `channel.list` | GET | `/pods/{pod_id}/channels` | List Channels |
-| `channel.mark_read` | POST | `/pods/{pod_id}/channels/{channel_id}/read` | Mark Channel Read |
-| `channel.message.answer` | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer` | Answer Channel Question |
-| `channel.message.delete` | DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | Delete Channel Message |
-| `channel.message.list` | GET | `/pods/{pod_id}/channels/{channel_id}/messages` | List Channel Messages |
-| `channel.message.post` | POST | `/pods/{pod_id}/channels/{channel_id}/messages` | Post Channel Message |
-| `channel.message.search` | GET | `/pods/{pod_id}/channels/search` | Search Channels |
+| `channel.me.create` | POST | `/pods/{pod_id}/channels/me` | Create My Channel |
+| `channel.me.get` | GET | `/pods/{pod_id}/channels/me` | Get My Channel |
+| `channel.member.add` | POST | `/pods/{pod_id}/channels/{channel_id}/members` | Add Members |
+| `channel.member.join` | POST | `/pods/{pod_id}/channels/{channel_id}/members/me` | Join Channel |
+| `channel.member.leave` | DELETE | `/pods/{pod_id}/channels/{channel_id}/members/me` | Leave Channel |
+| `channel.member.me_update` | PATCH | `/pods/{pod_id}/channels/{channel_id}/members/me` | Update My Membership |
+| `channel.member.remove` | DELETE | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | Remove Member |
+| `channel.member.update` | PATCH | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | Update Member |
+| `channel.message.answer` | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer` | Answer Question |
+| `channel.message.delete` | DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | Delete Message |
+| `channel.message.list` | GET | `/pods/{pod_id}/channels/{channel_id}/messages` | List Messages |
+| `channel.message.post` | POST | `/pods/{pod_id}/channels/{channel_id}/messages` | Post Message |
 | `channel.message.thread` | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread` | List Thread |
-| `channel.message.update` | PATCH | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | Edit Channel Message |
-| `channel.notify.update` | PUT | `/pods/{pod_id}/channels/{channel_id}/me` | Set My Notify |
-| `channel.participant.add` | POST | `/pods/{pod_id}/channels/{channel_id}/participants` | Add Participants |
-| `channel.participant.remove` | DELETE | `/pods/{pod_id}/channels/{channel_id}/participants/{member_id}` | Remove Participant |
+| `channel.message.update` | PATCH | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | Edit Message |
+| `channel.read` | POST | `/pods/{pod_id}/channels/{channel_id}/read` | Mark Read |
+| `channel.search` | GET | `/pods/{pod_id}/search` | Search |
 | `channel.update` | PATCH | `/pods/{pod_id}/channels/{channel_id}` | Update Channel |
 
 <!-- /generated:operations -->

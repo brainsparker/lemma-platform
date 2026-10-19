@@ -2,12 +2,16 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { InboxItem } from './InboxItem.js';
 import type { InboxTotals } from './InboxTotals.js';
-import type { WaitingItem } from './WaitingItem.js';
 export type InboxResponse = {
+    /**
+     * Unread lines naming the reader, newest first.
+     */
+    mentions?: Array<InboxItem>;
     totals: InboxTotals;
     /**
-     * What is waiting on the reader, newest first.
+     * Questions waiting on the reader, newest first.
      */
-    waiting?: Array<WaitingItem>;
+    waiting?: Array<InboxItem>;
 };

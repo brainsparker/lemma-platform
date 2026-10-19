@@ -86,7 +86,7 @@ function About({ pod, channel }: { pod: Pod; channel: ChannelDetail }) {
                         {personName(channel.person, me)} writes to {pod.name} here, from outside it. Only its editors and admins read it.{" "}
                         <PlaceLink className="cside__link" href={writeAddress({ ...NOWHERE, podId: pod.id, tabId: "space:contacts" })}>See them in Contacts</PlaceLink>
                     </p>
-                    {channel.attention && !channel.handler && (
+                    {channel.attention && !channel.assignee && (
                         <p className="cside__ask" role="status">Asks for a person{channel.attention.reason ? ": " + channel.attention.reason : "."} <span className="cside__since">{sinceShort(channel.attention.since)}</span></p>
                     )}
                     <div className="gowner">
@@ -173,15 +173,19 @@ function People({ pod, channel, onLeft }: { pod: Pod; channel: ChannelDetail; on
     const cache = useQueryClient();
     const [adding, setAdding] = useState("");
     const group = channel.kind === "GROUP";
-    const candidates = group ? addable(pod.members, channel.participants) : [];
+    const candidates = group ? addable(pod.members, channel.members) : [];
+    const isYou = (member: { kind: string; id: string }) => member.kind === "MEMBER" && member.id === me;
     const add = useMutation({
         mutationFn: (userId: string) => channelApi(pod.id).addMembers(channel.id, [userId]),
         onSuccess: (saved) => { keepChannel(cache, pod.id, saved); setAdding(""); },
     });
     const remove = useMutation({
-        mutationFn: (memberId: string) => channelApi(pod.id).removeMember(channel.id, memberId),
-        onSuccess: (_done, memberId) => {
-            if (memberId === me) { refreshLists(cache, pod.id); onLeft(); return; }
+        mutationFn: (member: { kind: "MEMBER" | "AGENT"; id: string }) => {
+            const api = channelApi(pod.id);
+            return isYou(member) ? api.leave(channel.id) : api.removeMember(channel.id, member);
+        },
+        onSuccess: (_done, member) => {
+            if (isYou(member)) { refreshLists(cache, pod.id); onLeft(); return; }
             void cache.invalidateQueries({ queryKey: channelKey(pod.id, channel.id) });
         },
     });
@@ -189,7 +193,7 @@ function People({ pod, channel, onLeft }: { pod: Pod; channel: ChannelDetail; on
         <section className="gside">
             <h3 className="gside__head">Who is in it</h3>
             <ul className="gpeople">
-                {channel.participants.map((one) => {
+                {channel.members.map((one) => {
                     const name = personName(one.person, me);
                     const you = name === "You";
                     const removable = group && one.person.kind === "MEMBER" && one.person.id;
@@ -206,7 +210,7 @@ function People({ pod, channel, onLeft }: { pod: Pod; channel: ChannelDetail; on
                                     className="ghost-pill gpeople__invite"
                                     disabled={remove.isPending}
                                     aria-label={you ? "Leave this channel" : "Take " + name + " out of this channel"}
-                                    onClick={() => remove.mutate(String(one.person.id))}
+                                    onClick={() => remove.mutate({ kind: "MEMBER", id: String(one.person.id) })}
                                 >
                                     {you ? "Leave" : "Remove"}
                                 </button>

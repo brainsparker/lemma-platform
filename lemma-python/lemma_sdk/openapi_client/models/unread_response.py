@@ -15,13 +15,15 @@ T = TypeVar("T", bound="UnreadResponse")
 class UnreadResponse:
     """
     Attributes:
-        lines (int | Unset): New lines since the reader last read it; stops at 100. Default: 0.
-        mentions (int | Unset): Lines naming the reader, unread. Default: 0.
+        lines (int | Unset): New lines since the reader last read it, in channels they joined; stops at 100. Default: 0.
+        mentions (int | Unset): Unread lines naming the reader. Default: 0.
+        read_seq (int | Unset): The last line the reader read. Default: 0.
         waiting (int | Unset): Questions here waiting on the reader's answer. Default: 0.
     """
 
     lines: int | Unset = 0
     mentions: int | Unset = 0
+    read_seq: int | Unset = 0
     waiting: int | Unset = 0
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -29,6 +31,8 @@ class UnreadResponse:
         lines = self.lines
 
         mentions = self.mentions
+
+        read_seq = self.read_seq
 
         waiting = self.waiting
 
@@ -39,6 +43,8 @@ class UnreadResponse:
             field_dict["lines"] = lines
         if mentions is not UNSET:
             field_dict["mentions"] = mentions
+        if read_seq is not UNSET:
+            field_dict["read_seq"] = read_seq
         if waiting is not UNSET:
             field_dict["waiting"] = waiting
 
@@ -51,11 +57,14 @@ class UnreadResponse:
 
         mentions = d.pop("mentions", UNSET)
 
+        read_seq = d.pop("read_seq", UNSET)
+
         waiting = d.pop("waiting", UNSET)
 
         unread_response = cls(
             lines=lines,
             mentions=mentions,
+            read_seq=read_seq,
             waiting=waiting,
         )
 

@@ -63,8 +63,8 @@ def sync_detailed(
 ) -> Response[ErrorResponse | InboxResponse]:
     """Get Inbox
 
-     What is new for the reader across the pod, and every question waiting
-    on them, newest first.
+     What is new for the reader across the pod: the badges, the questions
+    waiting on them, and the unread lines naming them -- newest first.
 
     Args:
         pod_id (UUID):
@@ -95,8 +95,8 @@ def sync(
 ) -> ErrorResponse | InboxResponse | None:
     """Get Inbox
 
-     What is new for the reader across the pod, and every question waiting
-    on them, newest first.
+     What is new for the reader across the pod: the badges, the questions
+    waiting on them, and the unread lines naming them -- newest first.
 
     Args:
         pod_id (UUID):
@@ -122,8 +122,8 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | InboxResponse]:
     """Get Inbox
 
-     What is new for the reader across the pod, and every question waiting
-    on them, newest first.
+     What is new for the reader across the pod: the badges, the questions
+    waiting on them, and the unread lines naming them -- newest first.
 
     Args:
         pod_id (UUID):
@@ -152,8 +152,8 @@ async def asyncio(
 ) -> ErrorResponse | InboxResponse | None:
     """Get Inbox
 
-     What is new for the reader across the pod, and every question waiting
-    on them, newest first.
+     What is new for the reader across the pod: the badges, the questions
+    waiting on them, and the unread lines naming them -- newest first.
 
     Args:
         pod_id (UUID):

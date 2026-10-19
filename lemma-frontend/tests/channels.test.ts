@@ -10,6 +10,7 @@ import {
     isMine,
     joinPages,
     lineDays,
+    newestSeq,
     lineMeta,
     personName,
     previewOf,
@@ -38,16 +39,19 @@ const tomas = { kind: "CONTACT", id: "contact-tomas", name: "Tomás" };
 
 const listed = readChannelPage({
     items: [
-        { id: "c-direct", kind: "DIRECT", person: dana, sources: [{ platform: "whatsapp", title: null }], unread: { lines: 2, waiting: 1 }, created_at: "2026-10-18T09:00:00Z" },
+        { id: "c-direct", kind: "DIRECT", person: dana, sources: [{ platform: "whatsapp", title: null }], unread: { lines: 2, waiting: 1, read_seq: 7 }, last_seq: 9, created_at: "2026-10-18T09:00:00Z" },
         {
             id: "c-launch", kind: "GROUP", title: "launch", topic: "Beta", sources: [{ platform: "SLACK", title: "#launch" }, { platform: "TELEGRAM", title: "Crew" }, { platform: "SLACK", title: "#other" }],
             last_line: { sender: priya, text: "Thursday\nworks", created_at: "2026-10-18T10:00:00Z" },
-            unread: { lines: 150, mentions: 1 }, created_at: "2026-10-01T09:00:00Z",
+            unread: { lines: 150, mentions: 1 }, created_at: "2026-10-01T09:00:00Z", last_line_at: "2026-10-18T10:00:00Z", visibility: "private",
         },
-        { id: "c-contact", kind: "CONTACT", person: tomas, attention: { since: "2026-10-18T10:00:00Z", reason: "Refund" }, created_at: "2026-10-10T09:00:00Z" },
+        {
+            id: "c-contact", kind: "CONTACT", person: tomas, attention: { since: "2026-10-18T10:00:00Z", reason: "Refund" }, created_at: "2026-10-10T09:00:00Z",
+            agents_answer: false, hand_back_after_hours: 6, assignee: priya, status: "waiting_on_contact",
+        },
         { kind: "GROUP", title: "no id, never drawn" },
     ],
-    next_before: "cursor-2",
+    next_cursor: "cursor-2",
 });
 const [direct, launch, contact] = listed.items;
 
@@ -55,9 +59,24 @@ test("reads a page of channels, keeping its cursor and dropping a row without an
     assert.equal(listed.items.length, 3);
     assert.equal(listed.nextBefore, "cursor-2");
     assert.equal(direct.sources[0].platform, "WHATSAPP");
-    assert.deepEqual(direct.unread, { lines: 2, mentions: 0, waiting: 1 });
+    assert.deepEqual(direct.unread, { lines: 2, mentions: 0, waiting: 1, readSeq: 7 });
+    assert.equal(direct.lastSeq, 9);
     assert.deepEqual(contact.attention, { since: "2026-10-18T10:00:00Z", reason: "Refund" });
     assert.equal(launch.archived, false);
+    assert.equal(launch.visibility, "private");
+    assert.equal(direct.visibility, "public");
+    assert.equal(launch.lastMessageAt, "2026-10-18T10:00:00Z");
+});
+
+test("reads a contact's inbox fields off the channel itself", () => {
+    assert.equal(contact.agentsAnswer, false);
+    assert.equal(contact.handBackAfterHours, 6);
+    assert.equal(contact.assignee?.name, "Priya");
+    assert.equal(contact.status, "waiting_on_contact");
+    // A channel that says nothing about its agent has it answering.
+    assert.equal(direct.agentsAnswer, true);
+    assert.equal(direct.handBackAfterHours, 12);
+    assert.equal(direct.status, null);
 });
 
 test("names a channel the way its reader sees it", () => {
@@ -88,7 +107,7 @@ test("cuts the list into the reader's own, the groups and -- for an editor -- th
 test("says what is new, and the sidebar's badge puts questions first", () => {
     assert.equal(sayUnread(direct.unread), "2 new, a question waiting on you");
     assert.equal(sayUnread(launch.unread), "100 or more new, mentions you");
-    assert.equal(sayUnread({ lines: 0, mentions: 0, waiting: 0 }), null);
+    assert.equal(sayUnread({ lines: 0, mentions: 0, waiting: 0, readSeq: 0 }), null);
     assert.deepEqual(inboxBadge({ channels: 3, mentions: 2, waiting: 1 }), { count: 1, tone: "waiting", said: "1 question waiting on you" });
     assert.deepEqual(inboxBadge({ channels: 3, mentions: 2, waiting: 0 }), { count: 2, tone: "mention", said: "2 mentions of you" });
     assert.deepEqual(inboxBadge({ channels: 1, mentions: 0, waiting: 0 }), { count: 1, tone: "new", said: "1 channel with something new" });
@@ -103,16 +122,24 @@ const detail = readChannelDetail({
         { id: "s-wa", platform: "WHATSAPP", kind: "SHARED", title: "New", pending: true },
         { platform: "WEB" },
     ],
-    participants: [{ person: dana, notify: "ALL" }, { person: priya, notify: "LOUD" }, { person: tomas }],
-    me: { notify: "MENTIONS" },
+    members: [
+        { person: dana, role: "owner" },
+        { person: priya, role: "ruler" },
+        { person: tomas },
+        { person: lem, role: "member", answers: "EVERY_LINE" },
+    ],
+    me: { joined: true, notify: "MENTIONS", read_seq: 4, role: "owner", can_manage: true },
 })!;
 
-test("reads a channel's places, people and the reader's own settings", () => {
+test("reads a channel's places, members and the reader's own membership", () => {
     assert.deepEqual(detail.places.map((place) => [place.id, place.platform, place.pending]), [["s-slack", "SLACK", false], ["s-tg", "TELEGRAM", false], ["s-wa", "WHATSAPP", true]]);
     assert.equal(detail.places[0].surfaceId, "surface-1");
-    // A level this build does not know reads as the default.
-    assert.deepEqual(detail.participants.map((one) => one.notify), ["ALL", "ALL", "ALL"]);
-    assert.deepEqual(detail.me, { joined: true, notify: "MENTIONS", lastReadAt: null });
+    // A role this build does not know reads as what the person is: a contact
+    // is a guest, anybody else a member. Only an agent answers.
+    assert.deepEqual(detail.members.map((one) => [one.role, one.answers]), [["owner", null], ["member", null], ["guest", null], ["member", "EVERY_LINE"]]);
+    assert.deepEqual(detail.me, { joined: true, notify: "MENTIONS", readSeq: 4, role: "owner", canManage: true });
+    // Somebody not in it has not joined, and hears of everything by default.
+    assert.deepEqual(readChannelDetail({ id: "c", kind: "GROUP", created_at: "" })!.me, { joined: false, notify: "ALL", readSeq: 0, role: null, canManage: false });
 });
 
 test("says where a line was said: its place and platform, or nothing for Lemma", () => {
@@ -141,7 +168,8 @@ test("reads a line, and keeps no words of one withheld or deleted", () => {
     assert.equal(line({ text: "kept", deleted: true }).text, null);
     assert.equal(line({ reply_count: 3 }).replyCount, 3);
     assert.equal(line({ members_only: true }).membersOnly, true);
-    assert.equal(line({ interaction: { kind: "POLL" } }).interaction, null);
+    assert.equal(line({ question: { kind: "POLL" } }).interaction, null);
+    assert.equal(line({ seq: 12 }).seq, 12);
 });
 
 test("an agent's line says whom it acted for", () => {
@@ -167,8 +195,10 @@ test("only the reader's own lines, still there, are theirs to change", () => {
 });
 
 test("a question is the reader's to answer only when it awaits them", () => {
-    const asked = (interaction: Record<string, unknown>) => line({ sender: lem, text: "Which day?", interaction: { kind: "ASK", question: { prompt: "Which day?" }, ...interaction } }).interaction!;
+    const asked = (question: Record<string, unknown>) => line({ sender: lem, text: "Which day?", question: { kind: "ASK", question: { prompt: "Which day?" }, ...question } }).interaction!;
     assert.deepEqual(questionState(asked({ state: "OPEN", awaits: dana }), ME), { kind: "yours" });
+    // While somebody's answer is being taken, it is not open to another.
+    assert.equal(sayQuestion(questionState(asked({ state: "ANSWERING", awaits: dana }), ME)), "Being answered");
     assert.equal(sayQuestion(questionState(asked({ state: "OPEN", awaits: priya }), ME)), "Waiting on Priya");
     assert.equal(sayQuestion(questionState(asked({ state: "ANSWERED", answered_by: dana }), ME)), "Answered by you");
     assert.equal(sayQuestion(questionState(asked({ state: "ANSWERED" }), ME)), "Answered");
@@ -180,7 +210,7 @@ test("a question is the reader's to answer only when it awaits them", () => {
 });
 
 test("a question on a line is answered the way the bell answers one", () => {
-    const asked = line({ id: "q", sender: lem, on_behalf_of: priya, text: "May I?", interaction: { kind: "APPROVAL", state: "OPEN", awaits: dana, question: { prompt: "May I?" } } });
+    const asked = line({ id: "q", sender: lem, on_behalf_of: priya, text: "May I?", question: { kind: "APPROVAL", state: "OPEN", awaits: dana, question: { prompt: "May I?" } } });
     assert.deepEqual(asWaitingQuestion(asked, { id: "c-launch", kind: "GROUP", title: "launch" }, ME), {
         id: "q", channelId: "c-launch", channelTitle: "launch", channelKind: "GROUP", kind: "APPROVAL",
         text: "May I?", from: "Lem, for Priya", askedAt: "2026-10-18T10:00:00Z", question: { prompt: "May I?" },
@@ -189,8 +219,13 @@ test("a question on a line is answered the way the bell answers one", () => {
 });
 
 test("pages read back as one run, oldest first, each line once", () => {
-    const newest = readLinePage({ items: [{ id: "c", created_at: "3" }, { id: "d", created_at: "4" }], next_before: "b" });
-    const older = readLinePage({ items: [{ id: "a", created_at: "1" }, { id: "b", created_at: "2" }, { id: "c", created_at: "3" }] });
+    const newest = readLinePage({ items: [{ id: "c", seq: 3, created_at: "3" }, { id: "d", seq: 4, created_at: "4" }], has_more: true, next_before_seq: 3 });
+    const older = readLinePage({ items: [{ id: "a", seq: 1, created_at: "1" }, { id: "b", seq: 2, created_at: "2" }, { id: "c", seq: 3, created_at: "3" }], has_more: false, next_before_seq: null });
+    // The page before is asked for by the line it starts at; the oldest has none.
+    assert.equal(newest.nextBefore, 3);
+    assert.equal(older.nextBefore, null);
+    assert.equal(newestSeq(joinPages([newest, older])), 4);
+    assert.equal(newestSeq([]), null);
     assert.deepEqual(joinPages([newest, older]).map((one) => one.id), ["a", "b", "c", "d"]);
     // A line posted here joins the newest page; one edited replaces itself.
     const posted = withLine([newest, older], line({ id: "e" }));
@@ -209,23 +244,23 @@ test("cuts a timeline at each day, named the way a chat names them", () => {
 
 test("says who answers when nobody is named", () => {
     const on = { agentsAnswer: true, handBackAfterHours: 12 };
-    assert.equal(whoAnswers({ kind: "DIRECT", handler: null, ...on }, "Marketing", ME), "Marketing answers everything you write here.");
-    assert.equal(whoAnswers({ kind: "GROUP", handler: null, ...on }, "Marketing", ME), "@mention an agent to have it answer.");
-    assert.equal(whoAnswers({ kind: "CONTACT", handler: null, ...on }, "Marketing", ME), "Marketing’s agent answers them. Write here to answer them yourself.");
+    assert.equal(whoAnswers({ kind: "DIRECT", assignee: null, ...on }, "Marketing", ME), "Marketing answers everything you write here.");
+    assert.equal(whoAnswers({ kind: "GROUP", assignee: null, ...on }, "Marketing", ME), "@mention an agent to have it answer.");
+    assert.equal(whoAnswers({ kind: "CONTACT", assignee: null, ...on }, "Marketing", ME), "Marketing’s agent answers them. Write here to answer them yourself.");
     assert.equal(
-        whoAnswers({ kind: "CONTACT", handler: { kind: "MEMBER", id: ME, name: null }, ...on }, "M", ME),
+        whoAnswers({ kind: "CONTACT", assignee: { kind: "MEMBER", id: ME, name: null }, ...on }, "M", ME),
         "You are answering here; its agent answers again 12 hours after your last line.",
     );
     assert.equal(
-        whoAnswers({ kind: "CONTACT", handler: priya as never, ...on }, "M", ME),
+        whoAnswers({ kind: "CONTACT", assignee: priya as never, ...on }, "M", ME),
         "Priya is answering here; its agent answers again 12 hours after their last line.",
     );
 });
 
 test("a contact whose agent is off is answered by members alone, whoever stepped in", () => {
     const off = { agentsAnswer: false, handBackAfterHours: 12 };
-    assert.equal(whoAnswers({ kind: "CONTACT", handler: null, ...off }, "M", ME), "Its agent is off: only members answer them.");
-    assert.equal(whoAnswers({ kind: "CONTACT", handler: priya as never, ...off }, "M", ME), "Its agent is off: only members answer them.");
+    assert.equal(whoAnswers({ kind: "CONTACT", assignee: null, ...off }, "M", ME), "Its agent is off: only members answer them.");
+    assert.equal(whoAnswers({ kind: "CONTACT", assignee: priya as never, ...off }, "M", ME), "Its agent is off: only members answer them.");
 });
 
 test("offers to add the space's people not in the channel yet, never a teammate", () => {
@@ -236,5 +271,5 @@ test("offers to add the space's people not in the channel yet, never a teammate"
         { userId: "pod-bot", kind: "teammate", name: "Lem" },
         { kind: "person", name: "Invited, no account yet" },
     ];
-    assert.deepEqual(addable(members, detail.participants).map((member) => member.name), ["Jo"]);
+    assert.deepEqual(addable(members, detail.members).map((member) => member.name), ["Jo"]);
 });

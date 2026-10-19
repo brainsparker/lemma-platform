@@ -21,17 +21,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.contracts.contact_conversations import (
-    contact_conversation_ids,
     forget_contact_conversations,
 )
-from app.modules.agent_surfaces.contracts.contacts import (
-    forget_contact_senders,
-    redact_questions_from,
-)
+from app.modules.agent_surfaces.contracts.contacts import forget_contact_senders
 from app.modules.contacts.contracts.visitor_sessions import (
     forget_contact_visitor_sessions,
     forget_session_liveness,
@@ -43,25 +38,6 @@ from app.modules.contacts.infrastructure.repository import (
 from app.modules.datastore.contracts.contact_rows import delete_contact_rows
 
 logger = get_logger(__name__)
-
-
-#: Conversations read at a time while blanking the questions asked in them.
-_REDACT_PAGE = 500
-
-
-async def _redact_their_questions(
-    uow: SqlAlchemyUnitOfWork, pod_id: UUID, contact_id: UUID
-) -> int:
-    """Blank what of theirs reached members, a page of conversations at a time."""
-    redacted, after = 0, None
-    while True:
-        page = await contact_conversation_ids(
-            uow, pod_id=pod_id, contact_id=contact_id, after=after, limit=_REDACT_PAGE
-        )
-        redacted += await redact_questions_from(uow, conversation_ids=page)
-        if len(page) < _REDACT_PAGE:
-            return redacted
-        after = page[-1]
 
 
 async def _absorbed_by(
@@ -89,7 +65,6 @@ class Forgotten:
     conversations: int
     web_sessions: int
     senders: int
-    notifications: int
 
 
 async def forget_contact(
@@ -111,10 +86,9 @@ async def forget_contact(
     for one in everyone:
         rows += await delete_contact_rows(uow_factory, pod_id=pod_id, contact_id=one)
     async with uow_factory() as uow:
-        notifications = conversations = 0
+        conversations = 0
         ended: list[UUID] = []
         for one in everyone:
-            notifications += await _redact_their_questions(uow, pod_id, one)
             conversations += await forget_contact_conversations(
                 uow, pod_id=pod_id, contact_id=one
             )
@@ -135,7 +109,6 @@ async def forget_contact(
         conversations=conversations,
         web_sessions=len(ended),
         senders=senders,
-        notifications=notifications,
     )
     logger.info(
         "contacts.forget.contact_forgotten.observed",
@@ -146,6 +119,5 @@ async def forget_contact(
         conversations=forgotten.conversations,
         web_sessions=forgotten.web_sessions,
         senders=forgotten.senders,
-        notifications=forgotten.notifications,
     )
     return forgotten

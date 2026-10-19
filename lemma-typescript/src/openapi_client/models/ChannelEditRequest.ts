@@ -3,5 +3,9 @@
 /* tslint:disable */
 /* eslint-disable */
 export type ChannelEditRequest = {
+    /**
+     * Absent keeps the parts.
+     */
+    parts?: null;
     text: string;
 };

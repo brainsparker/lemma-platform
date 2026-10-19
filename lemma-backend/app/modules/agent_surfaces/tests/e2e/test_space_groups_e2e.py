@@ -13,6 +13,9 @@ Only the model's next move is scripted; Meta and Telegram are the fake servers.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from uuid import UUID
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -35,7 +38,12 @@ from app.modules.agent_surfaces.services.telegram_group_join import (
     claim_telegram_group_join,
 )
 from app.modules.agent_surfaces.tests.e2e.helpers import _create_surface
+from app.modules.channels.infrastructure.models import (
+    ChannelModel,
+    ChannelSourceModel,
+)
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+    FakeTelegramServer,
     wait_for_messages,
 )
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
@@ -258,10 +266,15 @@ async def test_a_clients_question_and_the_bots_answer_are_the_groups_lines(
     assert detail.status_code == 200, detail.text
     body = detail.json()
     assert body["kind"] == "GROUP"
-    assert body["attention"]["reason"] == (
+    # Read off the channel: the API shows a channel's attention only for a
+    # contact's channel.
+    db_session.expire_all()
+    waiting = await db_session.get(ChannelModel, UUID(group["channel_id"]))
+    assert waiting is not None and waiting.attention_at is not None
+    assert waiting.attention_reason == (
         "Tiago asks whether order 1182 can arrive by Friday."
     )
-    people = {(p["person"]["kind"], p["person"]["name"]) for p in body["participants"]}
+    people = {(p["person"]["kind"], p["person"]["name"]) for p in body["members"]}
     assert ("CONTACT", "Tiago") in people
 
     timeline = await authenticated_client.get(f"{channel}/messages")
@@ -435,22 +448,18 @@ async def test_a_number_meta_keeps_out_of_groups_is_told_so_not_to_retry(
     assert await _groups(authenticated_client, pod_id) == []
 
 
-async def test_a_telegram_group_joins_through_a_one_use_link(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_telegram,
-    message_store,
-    monkeypatch,
-):
-    _wire_native_telegram(monkeypatch, fake_telegram)
-    pod_id = test_pod["id"]
-    surface = await _create_surface(
-        authenticated_client, pod_id, config={"type": "TELEGRAM"}
-    )
+async def _telegram_join_link(
+    client: AsyncClient,
+    pod_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+    fake: FakeTelegramServer,
+) -> Callable[[int], SurfacePlatformWebhookIngress]:
+    """A Telegram surface, and the one-use link that brings its bot into a
+    group: the ``/start`` each use of it arrives as."""
+    _wire_native_telegram(monkeypatch, fake)
+    surface = await _create_surface(client, pod_id, config={"type": "TELEGRAM"})
 
-    response = await authenticated_client.post(
+    response = await client.post(
         f"/pods/{pod_id}/sources/telegram-links", json={"surface_name": surface["name"]}
     )
     assert response.status_code == 200, response.text
@@ -484,17 +493,35 @@ async def test_a_telegram_group_joins_through_a_one_use_link(
             headers={},
         )
 
+    return _start
+
+
+async def test_a_telegram_group_joins_through_a_one_use_link(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    message_store,
+    monkeypatch,
+):
+    pod_id = test_pod["id"]
+    _start = await _telegram_join_link(
+        authenticated_client, pod_id, monkeypatch, fake_telegram
+    )
     adapters = SurfacePlatformAdapterRegistry()
     claimed = await claim_telegram_group_join(
         SessionUnitOfWorkFactory(async_session_maker), _start(8001), adapters=adapters
     )
     assert claimed is True
 
-    [group] = await _groups(authenticated_client, pod_id)
-    assert group["sources"] == [{"platform": "TELEGRAM", "title": "Launch crew"}]
-    detail = await authenticated_client.get(f"/pods/{pod_id}/channels/{group['id']}")
-    [place] = detail.json()["source_places"]
-    settings = await _settings(authenticated_client, pod_id, place["id"])
+    place = await db_session.scalar(
+        select(ChannelSourceModel).where(
+            ChannelSourceModel.external_channel_id == str(TELEGRAM_GROUP)
+        )
+    )
+    assert place is not None and place.title == "Launch crew"
+    settings = await _settings(authenticated_client, pod_id, str(place.id))
     assert settings["owner"]["id"] == fixed_test_user["id"]
     assert settings["welcomes_outsiders"] is True
 
@@ -521,3 +548,26 @@ async def test_a_telegram_group_joins_through_a_one_use_link(
     )
     assert again is True
     assert len(message_store.get_all("TELEGRAM")) == len(sent)
+
+
+async def test_the_member_who_brought_the_bot_in_reads_the_groups_channel(
+    authenticated_client: AsyncClient,
+    test_pod,
+    fake_telegram,
+    monkeypatch,
+):
+    """A Telegram group is private: its channel is read by its people, and the
+    member who used the link is one of them from the start."""
+    pod_id = test_pod["id"]
+    _start = await _telegram_join_link(
+        authenticated_client, pod_id, monkeypatch, fake_telegram
+    )
+
+    assert await claim_telegram_group_join(
+        SessionUnitOfWorkFactory(async_session_maker),
+        _start(8101),
+        adapters=SurfacePlatformAdapterRegistry(),
+    )
+
+    [group] = await _groups(authenticated_client, pod_id)
+    assert group["sources"] == [{"platform": "TELEGRAM", "title": "Launch crew"}]

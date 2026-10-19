@@ -545,14 +545,15 @@ by its link.
 ### PS-SURF-031 — A person clears what they have dealt with
 **Status:** covered
 
-- When a person reads a channel, the system shall mark it read up to then and
-  shall reflect that in its unread count and the pod's.
+- When a person reads a channel, the system shall mark it read up to the
+  newest line they have seen, never back, and shall reflect that in its unread
+  count and the pod's.
 - The system shall keep read state per person, so one person reading something
   does not clear it for everyone.
 - A question waiting on a person stays waiting until they answer it, whether
   or not they have read the channel it is in.
 
-**Contracts:** `channel.mark_read`, `channel.list`, `channel.inbox.get`
+**Contracts:** `channel.read`, `channel.list`, `channel.inbox.get`
 
 ### PS-SURF-032 — A person can answer from the notification
 **Status:** covered

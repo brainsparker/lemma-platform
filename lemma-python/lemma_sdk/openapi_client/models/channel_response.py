@@ -10,11 +10,12 @@ from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
 from ..models.channel_kind import ChannelKind
+from ..models.contact_status import ContactStatus
+from ..models.visibility import Visibility
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.attention_response import AttentionResponse
-    from ..models.channel_settings_response import ChannelSettingsResponse
     from ..models.line_preview import LinePreview
     from ..models.person_ref import PersonRef
     from ..models.source_summary import SourceSummary
@@ -31,16 +32,20 @@ class ChannelResponse:
         created_at (datetime.datetime):
         id (UUID):
         kind (ChannelKind):
+        last_line_at (datetime.datetime):
+        visibility (Visibility):
+        agents_answer (bool | None | Unset): A contact's channel: whether its agents answer the contact.
         archived (bool | Unset):  Default: False.
+        assignee (None | PersonRef | Unset): A contact's channel: who answers them by hand.
         attention (AttentionResponse | None | Unset): The channel asks for a person, and why.
-        handler (None | PersonRef | Unset): A member who stepped in by writing to the contact: agents stay quiet until
-            they have not written for `settings.hand_back_after_hours`, or the agent is switched on again.
+        hand_back_after_hours (int | None | Unset): A contact's channel: how long the assignee holds the contact after
+            their last line before the agent answers again.
         last_line (LinePreview | None | Unset):
-        last_message_at (datetime.datetime | None | Unset):
+        last_seq (int | Unset):  Default: 0.
         person (None | PersonRef | Unset): Whose channel it is: the member's for a DIRECT one, the contact's for a
             CONTACT one; absent for a GROUP.
-        settings (ChannelSettingsResponse | Unset):
         sources (list[SourceSummary] | Unset): The outside places feeding it.
+        status (ContactStatus | None | Unset): A contact's channel: where it stands.
         title (None | str | Unset):
         topic (None | str | Unset):
         unread (UnreadResponse | Unset):
@@ -49,14 +54,18 @@ class ChannelResponse:
     created_at: datetime.datetime
     id: UUID
     kind: ChannelKind
+    last_line_at: datetime.datetime
+    visibility: Visibility
+    agents_answer: bool | None | Unset = UNSET
     archived: bool | Unset = False
+    assignee: None | PersonRef | Unset = UNSET
     attention: AttentionResponse | None | Unset = UNSET
-    handler: None | PersonRef | Unset = UNSET
+    hand_back_after_hours: int | None | Unset = UNSET
     last_line: LinePreview | None | Unset = UNSET
-    last_message_at: datetime.datetime | None | Unset = UNSET
+    last_seq: int | Unset = 0
     person: None | PersonRef | Unset = UNSET
-    settings: ChannelSettingsResponse | Unset = UNSET
     sources: list[SourceSummary] | Unset = UNSET
+    status: ContactStatus | None | Unset = UNSET
     title: None | str | Unset = UNSET
     topic: None | str | Unset = UNSET
     unread: UnreadResponse | Unset = UNSET
@@ -73,7 +82,25 @@ class ChannelResponse:
 
         kind = self.kind.value
 
+        last_line_at = self.last_line_at.isoformat()
+
+        visibility = self.visibility.value
+
+        agents_answer: bool | None | Unset
+        if isinstance(self.agents_answer, Unset):
+            agents_answer = UNSET
+        else:
+            agents_answer = self.agents_answer
+
         archived = self.archived
+
+        assignee: dict[str, Any] | None | Unset
+        if isinstance(self.assignee, Unset):
+            assignee = UNSET
+        elif isinstance(self.assignee, PersonRef):
+            assignee = self.assignee.to_dict()
+        else:
+            assignee = self.assignee
 
         attention: dict[str, Any] | None | Unset
         if isinstance(self.attention, Unset):
@@ -83,13 +110,11 @@ class ChannelResponse:
         else:
             attention = self.attention
 
-        handler: dict[str, Any] | None | Unset
-        if isinstance(self.handler, Unset):
-            handler = UNSET
-        elif isinstance(self.handler, PersonRef):
-            handler = self.handler.to_dict()
+        hand_back_after_hours: int | None | Unset
+        if isinstance(self.hand_back_after_hours, Unset):
+            hand_back_after_hours = UNSET
         else:
-            handler = self.handler
+            hand_back_after_hours = self.hand_back_after_hours
 
         last_line: dict[str, Any] | None | Unset
         if isinstance(self.last_line, Unset):
@@ -99,13 +124,7 @@ class ChannelResponse:
         else:
             last_line = self.last_line
 
-        last_message_at: None | str | Unset
-        if isinstance(self.last_message_at, Unset):
-            last_message_at = UNSET
-        elif isinstance(self.last_message_at, datetime.datetime):
-            last_message_at = self.last_message_at.isoformat()
-        else:
-            last_message_at = self.last_message_at
+        last_seq = self.last_seq
 
         person: dict[str, Any] | None | Unset
         if isinstance(self.person, Unset):
@@ -115,16 +134,20 @@ class ChannelResponse:
         else:
             person = self.person
 
-        settings: dict[str, Any] | Unset = UNSET
-        if not isinstance(self.settings, Unset):
-            settings = self.settings.to_dict()
-
         sources: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.sources, Unset):
             sources = []
             for sources_item_data in self.sources:
                 sources_item = sources_item_data.to_dict()
                 sources.append(sources_item)
+
+        status: None | str | Unset
+        if isinstance(self.status, Unset):
+            status = UNSET
+        elif isinstance(self.status, ContactStatus):
+            status = self.status.value
+        else:
+            status = self.status
 
         title: None | str | Unset
         if isinstance(self.title, Unset):
@@ -149,24 +172,30 @@ class ChannelResponse:
                 "created_at": created_at,
                 "id": id,
                 "kind": kind,
+                "last_line_at": last_line_at,
+                "visibility": visibility,
             }
         )
+        if agents_answer is not UNSET:
+            field_dict["agents_answer"] = agents_answer
         if archived is not UNSET:
             field_dict["archived"] = archived
+        if assignee is not UNSET:
+            field_dict["assignee"] = assignee
         if attention is not UNSET:
             field_dict["attention"] = attention
-        if handler is not UNSET:
-            field_dict["handler"] = handler
+        if hand_back_after_hours is not UNSET:
+            field_dict["hand_back_after_hours"] = hand_back_after_hours
         if last_line is not UNSET:
             field_dict["last_line"] = last_line
-        if last_message_at is not UNSET:
-            field_dict["last_message_at"] = last_message_at
+        if last_seq is not UNSET:
+            field_dict["last_seq"] = last_seq
         if person is not UNSET:
             field_dict["person"] = person
-        if settings is not UNSET:
-            field_dict["settings"] = settings
         if sources is not UNSET:
             field_dict["sources"] = sources
+        if status is not UNSET:
+            field_dict["status"] = status
         if title is not UNSET:
             field_dict["title"] = title
         if topic is not UNSET:
@@ -179,7 +208,6 @@ class ChannelResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.attention_response import AttentionResponse
-        from ..models.channel_settings_response import ChannelSettingsResponse
         from ..models.line_preview import LinePreview
         from ..models.person_ref import PersonRef
         from ..models.source_summary import SourceSummary
@@ -192,7 +220,37 @@ class ChannelResponse:
 
         kind = ChannelKind(d.pop("kind"))
 
+        last_line_at = isoparse(d.pop("last_line_at"))
+
+        visibility = Visibility(d.pop("visibility"))
+
+        def _parse_agents_answer(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        agents_answer = _parse_agents_answer(d.pop("agents_answer", UNSET))
+
         archived = d.pop("archived", UNSET)
+
+        def _parse_assignee(data: object) -> None | PersonRef | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                assignee_type_0 = PersonRef.from_dict(data)
+
+                return assignee_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | PersonRef | Unset, data)
+
+        assignee = _parse_assignee(d.pop("assignee", UNSET))
 
         def _parse_attention(data: object) -> AttentionResponse | None | Unset:
             if data is None:
@@ -211,22 +269,16 @@ class ChannelResponse:
 
         attention = _parse_attention(d.pop("attention", UNSET))
 
-        def _parse_handler(data: object) -> None | PersonRef | Unset:
+        def _parse_hand_back_after_hours(data: object) -> int | None | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
-            try:
-                if not isinstance(data, dict):
-                    raise TypeError()
-                handler_type_0 = PersonRef.from_dict(data)
+            return cast(int | None | Unset, data)
 
-                return handler_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | PersonRef | Unset, data)
-
-        handler = _parse_handler(d.pop("handler", UNSET))
+        hand_back_after_hours = _parse_hand_back_after_hours(
+            d.pop("hand_back_after_hours", UNSET)
+        )
 
         def _parse_last_line(data: object) -> LinePreview | None | Unset:
             if data is None:
@@ -245,22 +297,7 @@ class ChannelResponse:
 
         last_line = _parse_last_line(d.pop("last_line", UNSET))
 
-        def _parse_last_message_at(data: object) -> datetime.datetime | None | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                last_message_at_type_0 = isoparse(data)
-
-                return last_message_at_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(datetime.datetime | None | Unset, data)
-
-        last_message_at = _parse_last_message_at(d.pop("last_message_at", UNSET))
+        last_seq = d.pop("last_seq", UNSET)
 
         def _parse_person(data: object) -> None | PersonRef | Unset:
             if data is None:
@@ -279,13 +316,6 @@ class ChannelResponse:
 
         person = _parse_person(d.pop("person", UNSET))
 
-        _settings = d.pop("settings", UNSET)
-        settings: ChannelSettingsResponse | Unset
-        if isinstance(_settings, Unset):
-            settings = UNSET
-        else:
-            settings = ChannelSettingsResponse.from_dict(_settings)
-
         _sources = d.pop("sources", UNSET)
         sources: list[SourceSummary] | Unset = UNSET
         if _sources is not UNSET:
@@ -294,6 +324,23 @@ class ChannelResponse:
                 sources_item = SourceSummary.from_dict(sources_item_data)
 
                 sources.append(sources_item)
+
+        def _parse_status(data: object) -> ContactStatus | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                status_type_0 = ContactStatus(data)
+
+                return status_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(ContactStatus | None | Unset, data)
+
+        status = _parse_status(d.pop("status", UNSET))
 
         def _parse_title(data: object) -> None | str | Unset:
             if data is None:
@@ -324,14 +371,18 @@ class ChannelResponse:
             created_at=created_at,
             id=id,
             kind=kind,
+            last_line_at=last_line_at,
+            visibility=visibility,
+            agents_answer=agents_answer,
             archived=archived,
+            assignee=assignee,
             attention=attention,
-            handler=handler,
+            hand_back_after_hours=hand_back_after_hours,
             last_line=last_line,
-            last_message_at=last_message_at,
+            last_seq=last_seq,
             person=person,
-            settings=settings,
             sources=sources,
+            status=status,
             title=title,
             topic=topic,
             unread=unread,

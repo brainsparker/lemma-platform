@@ -2,7 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { SearchHit } from './SearchHit.js';
+import type { InboxItem } from './InboxItem.js';
 export type SearchResponse = {
-    items: Array<SearchHit>;
+    items: Array<InboxItem>;
+    next_cursor?: (string | null);
 };

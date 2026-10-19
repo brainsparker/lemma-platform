@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import column, select, table
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.domain.entities import Principal
@@ -19,6 +19,11 @@ from app.modules.identity.contracts.orm import User
 
 #: The most people one page names.
 MAX_NAMED = 500
+
+#: The pod's agents, read by id and pod only: who is in a roster, and what to
+#: call them. A table clause rather than the agent module's model, which this
+#: module may not import; the columns read are the stable identity of a row.
+_AGENTS = table("agents", column("id"), column("pod_id"), column("name"))
 
 
 class Names:
@@ -53,3 +58,18 @@ class Names:
             name = " ".join(part for part in (first, last) if part).strip()
             named[user_id] = name or email
         return named
+
+    async def agents(
+        self, *, pod_id: UUID, agent_ids: Iterable[UUID]
+    ) -> dict[UUID, str]:
+        """The pod's agents among ``agent_ids``, by name. An id that is not an
+        agent of this pod is absent."""
+        wanted = list(dict.fromkeys(agent_ids))[:MAX_NAMED]
+        if not wanted:
+            return {}
+        rows = await self.uow.session.execute(
+            select(_AGENTS.c.id, _AGENTS.c.name)
+            .where(_AGENTS.c.pod_id == pod_id, _AGENTS.c.id.in_(wanted))
+            .limit(len(wanted))
+        )
+        return dict(rows.tuples().all())

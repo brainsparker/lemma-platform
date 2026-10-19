@@ -28,7 +28,10 @@ from app.modules.agent_surfaces.services.agent_naming import agent_name_for_agen
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
-from app.modules.channels.infrastructure.models import ChannelSourceModel
+from app.modules.channels.infrastructure.models import (
+    ChannelSourceModel,
+    ExternalAccountModel,
+)
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -116,7 +119,12 @@ async def test_two_first_messages_at_once_open_one_conversation(
     assert (
         await _count(
             sessions,
-            ChannelSourceModel.surface_id == surface.id,
+            # A place is in the account the surface reaches it through.
+            ChannelSourceModel.account_id.in_(
+                select(ExternalAccountModel.id).where(
+                    ExternalAccountModel.surface_id == surface.id
+                )
+            ),
             ChannelSourceModel.external_user_id == person,
         )
         == 1

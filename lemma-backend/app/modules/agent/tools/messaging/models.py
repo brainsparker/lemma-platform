@@ -3,7 +3,6 @@ people of the pod."""
 
 from __future__ import annotations
 
-from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -16,24 +15,6 @@ MAX_OUTSIDER_MESSAGE_CHARS = 1000
 MAX_READ_LINES = 50
 
 
-# Declared here rather than imported from ``agent_surfaces``, which the agent
-# module must not depend on. That leaves two lists that have to agree with no
-# compiler to make them, so a test does it instead:
-# ``test_the_tool_offers_exactly_the_channels_routing_can_produce``.
-class MessageChannel(StrEnum):
-    """Where a message goes, when the agent has a reason to say.
-
-    Platforms, not surface ids: you think "reach her on WhatsApp", not "send
-    through surface 3f2a…". Every mail provider is one `email`.
-    """
-
-    EMAIL = "email"
-    SLACK = "slack"
-    TEAMS = "teams"
-    TELEGRAM = "telegram"
-    WHATSAPP = "whatsapp"
-
-
 class ChannelPostRequest(BaseModel):
     text: str = Field(
         description=(
@@ -44,8 +25,8 @@ class ChannelPostRequest(BaseModel):
         default=None,
         description=(
             "A pod member id, user id, or email address: it goes to their own "
-            "channel, and on to the chat app they last used or their email. "
-            "Use list_pod_members to find someone by name."
+            "channel in Lemma, and they are told where they are. Use "
+            "list_pod_members to find someone by name."
         ),
     )
     channel_id: UUID | None = Field(
@@ -55,16 +36,9 @@ class ChannelPostRequest(BaseModel):
     wants_answer: bool = Field(
         default=False,
         description=(
-            "Whether you need an answer. It then waits on them in their inbox, "
-            "and you get a fresh turn here once everyone you asked has answered."
-        ),
-    )
-    platform: MessageChannel | None = Field(
-        default=None,
-        description=(
-            "Only with `to`, and only for a reason: by default it goes where "
-            "they last spoke to you. Named, it is honoured or refused, never "
-            "swapped -- read `reachable_on` from list_pod_members first."
+            "Only with `to`: whether you need their answer. It then waits on "
+            "them in their inbox, and you get a fresh turn here once everyone "
+            "you asked has answered."
         ),
     )
 
@@ -72,7 +46,6 @@ class ChannelPostRequest(BaseModel):
 class ChannelPostResponse(BaseToolResponse):
     message_id: UUID | None = None
     channel_id: UUID | None = None
-    delivered_via: str | None = None
 
 
 class ChannelReadRequest(BaseModel):
@@ -94,6 +67,7 @@ class LineSummary(BaseModel):
     sender: str
     text: str | None
     at: str
+    question_kind: str | None = None
     question_state: str | None = None
     answer: dict[str, object] | None = None
     awaits: str | None = None
@@ -133,8 +107,8 @@ class AnswerQuestionRequest(BaseModel):
     question_id: UUID = Field(description="The question's id, from the open questions.")
     answer: dict[str, object] = Field(
         description=(
-            "What they said: `{text}` for a question, `{decision}` (APPROVE_ONCE "
-            "or DENY) for an approval, the form's fields for a form."
+            "What they said: `{text}` for a question, or `{answers: {header: "
+            "value}}` when it asked several; the form's fields for a form."
         )
     )
 
@@ -175,8 +149,9 @@ class PodMemberSummary(BaseModel):
     reachable_on: list[str] = Field(
         default_factory=list,
         description=(
-            "Channels that can carry a message to them right now — pass one as "
-            "channel_post's `platform`. Empty means only their channel in Lemma."
+            "Chat apps this pod can reach them on right now; a message to them "
+            "is carried where they chose to be told. Empty means only their "
+            "channel in Lemma."
         ),
     )
 

@@ -1,10 +1,13 @@
 """Getting a line meant for a member onto a platform, and leaving a way back.
 
-A message to a member is a line in their own channel first; this is the half
-that carries it to them where they are -- choosing the channel
-(``NotificationChannelResolver``), opening their conversation and sending
-(``NotificationEgress``), and the loop that tries each channel in turn
-(``DirectMessages`` over ``send_on_first_channel``).
+A message to a member is a line in their own channel first, and posting it
+plans its push (``channels``). This is the half that carries one push to them
+where they are -- choosing the channel (``NotificationChannelResolver``),
+opening their conversation and sending (``NotificationEgress``), and the push
+that tries each channel in turn (``MemberPushes`` over
+``send_on_first_channel``). Whether a push is planned at all, and what its
+delivery row records, is followed against the database in
+``e2e/test_channel_deliveries_e2e.py``.
 
 That half once shipped calling two ingress methods that were never written,
 because every suite ran in a pod with no active surface and returned before
@@ -28,7 +31,6 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.models import ColdEmailSendResult
 from app.modules.agent_surfaces.domain.ports import (
     ColdEmailThread,
@@ -40,16 +42,12 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.services import notification_dispatch
 from app.modules.agent_surfaces.services.cold_email_thread import (
     build_cold_email_thread,
     cold_thread_seed_id,
 )
-from app.modules.agent_surfaces.services.direct_messages import (
-    DirectMessage,
-    DirectMessages,
-)
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
+from app.modules.agent_surfaces.services.member_pushes import MemberPushes, Push
 from app.modules.agent_surfaces.services.notification_channels import (
     NotificationChannelResolver,
 )
@@ -63,14 +61,25 @@ from app.modules.agent_surfaces.services.notification_rate_limiter import (
     EmailBudget,
     PushBudget,
 )
+from app.modules.agent_surfaces.services.channel_places import place_of
+from app.modules.agent_surfaces.services.surface_route_types import (
+    ResolvedSurfaceRoute,
+)
+from app.modules.agent_surfaces.domain.entities import (
+    ConversationType,
+    ParsedInboundSurfaceEvent,
+)
 from app.modules.channels.contracts import (
-    NotifyLevel,
+    Channel,
+    ChannelKind,
+    ChannelMessage,
+    Member,
+    Principal,
+    Sender,
     Source,
     SourceKind,
+    Visibility,
 )
-from app.modules.channels.contracts.deliveries import DeliveryStatus
-from app.modules.agent_surfaces.tests.unit.surface_doubles import MemberChannelDouble
-from app.modules.test_support.channel_lines_double import RecordingChannelLines
 from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 
 pytestmark = pytest.mark.asyncio
@@ -113,6 +122,7 @@ def _place_for(surface: AgentSurfaceEntity, person: str = "U123") -> Source:
         id=uuid4(),
         channel_id=uuid4(),
         pod_id=surface.pod_id,
+        account_id=uuid4(),
         surface_id=surface.id,
         platform=surface.surface_type.value,
         kind=SourceKind.PRIVATE,
@@ -206,12 +216,9 @@ def conversations(monkeypatch):
     return operations
 
 
-def _egress(egress_port, *, seats=None, lines=None) -> NotificationEgress:
+def _egress(egress_port, *, seats=None) -> NotificationEgress:
     return NotificationEgress(
-        egress=egress_port,
-        uow=AsyncMock(),
-        seats=seats or InMemoryChannelSeats(),
-        lines=lines or RecordingChannelLines(),
+        egress=egress_port, uow=AsyncMock(), seats=seats or InMemoryChannelSeats()
     )
 
 
@@ -291,8 +298,8 @@ async def test_a_cold_email_places_its_thread_where_the_reply_will_arrive():
 
     egress_port = _egress_double()
     egress_port.open_cold_email_thread.return_value = thread
-    seats, lines = InMemoryChannelSeats(), RecordingChannelLines()
-    egress = _egress(egress_port, seats=seats, lines=lines)
+    seats = InMemoryChannelSeats()
+    egress = _egress(egress_port, seats=seats)
 
     sent = await egress.send(
         DeliveryChannel(surface=surface, email_address="Bob@Example.com"),
@@ -306,7 +313,6 @@ async def test_a_cold_email_places_its_thread_where_the_reply_will_arrive():
     assert place.surface_id == surface.id
     assert place.platform == "RESEND"
     assert place.kind is SourceKind.PRIVATE
-    assert place.external_channel_id == seed
     # Lowercased, because that is what the inbound parser records as the sender.
     assert place.external_user_id == "bob@example.com"
     # In the recipient's own channel, where their conversation with the agent is.
@@ -317,10 +323,53 @@ async def test_a_cold_email_places_its_thread_where_the_reply_will_arrive():
     # activity when ranking someone's channels.
     assert place.delivery_ref == thread.last_event
     assert place.last_inbound_at is None
-    # The mail is the place's first line, in the conversation it was sent from.
-    [line] = lines.opened_lines
-    assert (line.conversation_id, line.source_id) == (conversation_id, place.id)
-    assert line.external_message_id == "email-9"
+
+
+async def test_a_cold_emails_place_is_the_one_their_reply_is_heard_at():
+    """One place per correspondent on the inbox: the reply to a cold email is
+    heard at the place the email was sent from, not at a second one."""
+    surface = _email_surface()
+    outbound = _outbound()
+    seed = cold_thread_seed_id(notification_id=outbound.id, surface=surface)
+    egress_port = _egress_double()
+    egress_port.open_cold_email_thread.return_value = _thread_for(
+        surface, seed, "bob@example.com"
+    )
+    seats = InMemoryChannelSeats()
+    await _egress(egress_port, seats=seats).send(
+        DeliveryChannel(surface=surface, email_address="bob@example.com"),
+        conversation_id=uuid4(),
+        outbound=outbound,
+        message="What did you ship?",
+    )
+    [sent_from] = seats.sources.values()
+
+    reply = place_of(
+        surface=surface,
+        parsed=ParsedInboundSurfaceEvent(
+            platform=SurfacePlatform.RESEND,
+            conversation_type=ConversationType.EXTERNAL_DM,
+            external_channel_id=seed,
+            external_thread_id=seed,
+            sender_external_user_id="bob@example.com",
+            message_text="Shipped the importer.",
+            is_dm=True,
+        ),
+        route=ResolvedSurfaceRoute(
+            pod_id=outbound.pod_id,
+            agent_id=None,
+            agent_name=None,
+            agent_display_name="Assistant",
+            conversation_kind="EMAIL",
+            route_key="email",
+        ),
+        external_user_id="bob@example.com",
+    )
+
+    assert (reply.external_channel_id, reply.external_user_id) == (
+        sent_from.external_channel_id,
+        sent_from.external_user_id,
+    )
 
 
 async def test_a_platform_that_cannot_cold_open_is_reported_not_crashed():
@@ -461,12 +510,12 @@ def _resolver(*, provisioner=None, seats=None, **collaborators):
     )
 
 
-def _direct_messages(
+def _pushes(
     *, provisioner=None, email_budget=None, push_budget=None, **collaborators
-) -> DirectMessages:
-    """`DirectMessages` over the same doubles, its line and seats in memory."""
+) -> MemberPushes:
+    """`MemberPushes` over the same doubles, its places in memory."""
     surface_repo, external_users, membership = _collaborators(**collaborators)
-    return DirectMessages(
+    return MemberPushes(
         uow=AsyncMock(),
         surface_repository=surface_repo,
         external_user_repository=external_users,
@@ -474,25 +523,55 @@ def _direct_messages(
         pod_membership_port=membership,
         surface_provisioner=provisioner,
         seats=InMemoryChannelSeats(),
-        lines=RecordingChannelLines(),
         email_budget=email_budget,
         push_budget=push_budget,
     )
 
 
-@pytest.fixture(autouse=True)
-def member_channel(monkeypatch) -> MemberChannelDouble:
-    return MemberChannelDouble().install(monkeypatch)
+def _push(
+    *,
+    pod_id: UUID | None = None,
+    recipient_user_id: UUID | None = None,
+    actor_user_id: UUID | None = None,
+    actor_agent_id: UUID | None = None,
+    agent_name: str | None = None,
+    notify_via: tuple[str, ...] | None = None,
+) -> Push:
+    """A line the pod's agent posted in a member's own channel, pushed to them.
 
-
-def _message(**overrides) -> DirectMessage:
-    payload = {
-        "pod_id": uuid4(),
-        "recipient_user_id": uuid4(),
-        "text": "What did you ship yesterday?",
-    }
-    payload.update(overrides)
-    return DirectMessage(**payload)
+    ``actor_user_id`` is the member it was said for -- by default the
+    recipient themself, as for a note the pod writes them."""
+    pod_id = pod_id or uuid4()
+    recipient = recipient_user_id or uuid4()
+    now = datetime.now(timezone.utc)
+    channel = Channel(
+        id=uuid4(),
+        pod_id=pod_id,
+        kind=ChannelKind.DIRECT,
+        visibility=Visibility.PRIVATE,
+        member_user_id=recipient,
+        created_at=now,
+        last_line_at=now,
+    )
+    line = ChannelMessage(
+        id=uuid4(),
+        channel_id=channel.id,
+        pod_id=pod_id,
+        seq=1,
+        sender=Sender.agent(
+            actor_agent_id or pod_id,
+            on_behalf_of=Principal.member(actor_user_id or recipient),
+            display_name=agent_name,
+        ),
+        text="What did you ship yesterday?",
+        created_at=now,
+    )
+    return Push(
+        channel=channel,
+        line=line,
+        recipient_user_id=recipient,
+        member=Member(channel_id=channel.id, user_id=recipient, notify_via=notify_via),
+    )
 
 
 def _email_configured(monkeypatch):
@@ -953,12 +1032,11 @@ async def test_an_unknown_agent_name_is_absent_rather_than_None():
     assert "agent_display_name" not in kwargs["metadata"]
 
 
-# ------------------------------------------------- the line, then the platform
+# ------------------------------------------------- one push, to one member
 
 
 def _cold_opens(surface: AgentSurfaceEntity):
-    """The platform's cold open, threading under whatever seed it was given --
-    the line's id is not known until the line is posted."""
+    """The platform's cold open, threading under whatever seed it was given."""
 
     async def open_thread(**kwargs) -> ColdEmailThread:
         return _thread_for(surface, kwargs["thread_seed_id"], kwargs["recipient_email"])
@@ -966,101 +1044,69 @@ def _cold_opens(surface: AgentSurfaceEntity):
     return open_thread
 
 
-async def test_a_recipient_outside_the_pod_is_refused_before_any_line(member_channel):
-    """Membership fails closed, so no wiring bug becomes "any user id can be
-    messaged" -- not a line in a channel, let alone a push."""
-    messages = _direct_messages(surfaces=(_email_surface(),))
-    messages.membership.get_pod_member_id.return_value = None
+async def test_a_member_who_left_the_pod_is_not_pushed():
+    """Membership fails closed: the push names somebody no longer in the pod,
+    and nothing goes."""
+    pushes = _pushes(surfaces=(_email_surface(),))
+    pushes.membership.get_pod_member_id.return_value = None
 
-    with pytest.raises(AgentSurfaceValidationError):
-        await messages.send(_message())
+    delivered = await pushes.push(_push())
 
-    assert member_channel.lines == []
-    messages.egress.egress.open_cold_email_thread.assert_not_awaited()
+    assert delivered.sent is False
+    assert "no longer in this pod" in (delivered.reason or "")
+    pushes.egress.egress.open_cold_email_thread.assert_not_awaited()
 
 
-async def test_the_line_is_in_their_channel_even_when_nothing_can_carry_it(
-    monkeypatch, member_channel
-):
-    """Undeliverable is a delivery outcome, never a lost message.
-
-    The member reads it in Lemma; the reason it went no further is recorded on
-    the line, and is the actionable one -- here, email not being set up.
-    """
+async def test_a_push_nothing_can_carry_says_why(monkeypatch):
+    """Undeliverable is an outcome with a reason, never a raised send -- here,
+    the actionable one: email is not set up."""
     from app.core.config import settings as core_settings
 
     monkeypatch.setattr(core_settings, "resend_api_key", None)
-    messages = _direct_messages(provisioner=AsyncMock(), surfaces=())
+    pushes = _pushes(provisioner=AsyncMock(), surfaces=())
 
-    result = await messages.send(_message())
+    delivered = await pushes.push(_push())
 
-    assert [line.id for line in member_channel.lines] == [result.line.id]
-    assert result.delivered.sent is False
-    assert result.delivered.reason == UndeliverableReason.EMAIL_NOT_CONFIGURED
-    [delivery] = member_channel.deliveries
-    assert delivery["status"] is DeliveryStatus.SKIPPED
-    assert delivery["message_id"] == result.line.id
+    assert delivered.sent is False
+    assert delivered.reason == UndeliverableReason.EMAIL_NOT_CONFIGURED
 
 
-async def test_a_channel_they_read_only_in_lemma_is_not_pushed(member_channel):
-    """A member who turned the channel's notifications off is not reached
-    elsewhere -- the line waits for them in the app."""
-    member_channel.notify = NotifyLevel.NONE
-    surface = _email_surface()
-    messages = _direct_messages(surfaces=(surface,))
-
-    result = await messages.send(_message(pod_id=surface.pod_id))
-
-    assert result.delivered.sent is False
-    assert "in Lemma only" in (result.delivered.reason or "")
-    messages.egress.egress.open_cold_email_thread.assert_not_awaited()
-
-
-async def test_the_push_budget_keeps_the_line_and_skips_the_push(member_channel):
+async def test_the_push_budget_skips_the_push():
     """A runaway loop must not put forty messages on a colleague's phone; the
-    lines it writes are still in their channel."""
+    lines it writes wait in their channel."""
     surface = _email_surface()
-    messages = _direct_messages(
+    pushes = _pushes(
         surfaces=(surface,), push_budget=PushBudget(limit=0, redis=_FakeRedis())
     )
 
-    result = await messages.send(_message(pod_id=surface.pod_id))
+    delivered = await pushes.push(_push(pod_id=surface.pod_id))
 
-    assert len(member_channel.lines) == 1
-    assert result.delivered.sent is False
-    assert "this hour" in (result.delivered.reason or "")
-    messages.egress.egress.open_cold_email_thread.assert_not_awaited()
-    assert member_channel.deliveries[-1]["status"] is DeliveryStatus.SKIPPED
+    assert delivered.sent is False
+    assert "this hour" in (delivered.reason or "")
+    pushes.egress.egress.open_cold_email_thread.assert_not_awaited()
 
 
-async def test_the_daily_email_cap_stops_the_email_but_not_the_line(
-    monkeypatch, member_channel
-):
+async def test_the_daily_email_cap_stops_the_email(monkeypatch):
     """Running out of email budget is a delivery outcome, not a failed call.
 
-    The pod asked for something real and the recipient still has it in their
-    channel; what we decline is putting it on a domain every other pod also
-    sends from. So it comes back as a reason rather than an exception.
+    What we decline is putting it on a domain every other pod also sends from,
+    so it comes back as a reason rather than an exception.
     """
     _email_configured(monkeypatch)
     surface = _email_surface()
-    messages = _direct_messages(
+    pushes = _pushes(
         surfaces=(surface,), email_budget=EmailBudget(limit=0, redis=_FakeRedis())
     )
 
-    result = await messages.send(_message(pod_id=surface.pod_id))
+    delivered = await pushes.push(_push(pod_id=surface.pod_id))
 
-    assert len(member_channel.lines) == 1
-    assert result.delivered.sent is False
-    assert "emails today" in (result.delivered.reason or "")
+    assert delivered.sent is False
+    assert "emails today" in (delivered.reason or "")
     # Never reached the platform: the point is that the mail does not go out.
-    messages.egress.egress.open_cold_email_thread.assert_not_awaited()
-    assert member_channel.deliveries[-1]["status"] is DeliveryStatus.FAILED
+    pushes.egress.egress.open_cold_email_thread.assert_not_awaited()
 
 
-async def test_a_chat_channel_does_not_spend_the_email_budget(
-    monkeypatch, member_channel
-):
+async def test_a_chat_channel_does_not_spend_the_email_budget(monkeypatch):
     """The budget exists to protect one shared domain.
 
     A line carried on Slack costs that domain nothing, so charging it would let
@@ -1070,25 +1116,39 @@ async def test_a_chat_channel_does_not_spend_the_email_budget(
     redis = _FakeRedis()
     agent_id = uuid4()
     chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
-    place = _place_for(chat_surface)
-    messages = _direct_messages(
+    pushes = _pushes(
         surfaces=(chat_surface,),
         external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
         email_budget=EmailBudget(limit=0, redis=redis),
     )
-    messages.channels.seats.add(place)
+    pushes.channels.seats.add(_place_for(chat_surface))
 
-    result = await messages.send(
-        _message(pod_id=chat_surface.pod_id, actor_agent_id=agent_id)
+    delivered = await pushes.push(
+        _push(pod_id=chat_surface.pod_id, actor_agent_id=agent_id)
     )
 
-    assert result.delivered.platform == "SLACK"
+    assert delivered.platform == "SLACK"
     assert redis.counts == {}
-    [delivery] = member_channel.deliveries
-    assert (delivery["status"], delivery["source_id"]) == (
-        DeliveryStatus.SENT,
-        place.id,
+
+
+async def test_the_way_a_member_chose_beats_where_they_last_spoke(monkeypatch):
+    """``notify_via`` is the member's own answer to "where do I hear of this
+    channel": email, though the chat they last wrote on would have won."""
+    _email_configured(monkeypatch)
+    agent_id = uuid4()
+    chat = _surface_for(agent_id, SurfacePlatform.TELEGRAM)
+    mailbox = _surface_for(agent_id, SurfacePlatform.RESEND, pod_id=chat.pod_id)
+    pushes = _pushes(surfaces=(chat, mailbox), external_user=_identity("U123"))
+    pushes.channels.seats.add(_place_for(chat))
+    pushes.egress.egress.open_cold_email_thread.side_effect = _cold_opens(mailbox)
+
+    by_default = await pushes.push(_push(pod_id=chat.pod_id, actor_agent_id=agent_id))
+    chosen = await pushes.push(
+        _push(pod_id=chat.pod_id, actor_agent_id=agent_id, notify_via=("EMAIL",))
     )
+
+    assert by_default.platform == "TELEGRAM"
+    assert chosen.platform == "RESEND"
 
 
 async def test_the_copy_is_committed_before_the_platform_send(
@@ -1108,21 +1168,21 @@ async def test_the_copy_is_committed_before_the_platform_send(
     _email_configured(monkeypatch)
     agent_id = uuid4()
     chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
-    messages = _direct_messages(
+    pushes = _pushes(
         surfaces=(chat_surface,),
         external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
     )
-    messages.channels.seats.add(_place_for(chat_surface))
+    pushes.channels.seats.add(_place_for(chat_surface))
 
     order: list[str] = []
-    messages.uow.commit = AsyncMock(side_effect=lambda: order.append("commit"))
+    pushes.uow.commit = AsyncMock(side_effect=lambda: order.append("commit"))
     conversations.append_notification_message.side_effect = lambda *_a, **_k: (
         order.append("persist")
     )
-    platform = messages.egress.egress.send_agent_message_for_conversation
+    platform = pushes.egress.egress.send_agent_message_for_conversation
     platform.side_effect = lambda **_k: order.append("send") or True
 
-    await messages.send(_message(pod_id=chat_surface.pod_id, actor_agent_id=agent_id))
+    await pushes.push(_push(pod_id=chat_surface.pod_id, actor_agent_id=agent_id))
 
     assert "send" in order, "the test never reached the platform send"
     between = order[order.index("persist") : order.index("send")]
@@ -1298,23 +1358,23 @@ async def test_reachability_says_what_the_agent_can_choose_between():
 # ------------------------------------------------- what the header ends up saying
 
 
-async def _deliver_and_read_header(monkeypatch, *, actor_user_id, recipient_user_id):
-    """Deliver one cold email and hand back what went to the platform."""
+async def _push_and_read_header(monkeypatch, *, actor_user_id, recipient_user_id):
+    """Push one line by cold email and hand back what went to the platform."""
     _email_configured(monkeypatch)
 
     surface = _email_surface()
-    messages = _direct_messages(surfaces=(surface,))
-    messages.egress.egress.open_cold_email_thread.side_effect = _cold_opens(surface)
+    pushes = _pushes(surfaces=(surface,))
+    pushes.egress.egress.open_cold_email_thread.side_effect = _cold_opens(surface)
 
-    await messages.send(
-        _message(
+    await pushes.push(
+        _push(
             pod_id=surface.pod_id,
             recipient_user_id=recipient_user_id,
             actor_user_id=actor_user_id,
             agent_name="Priya",
         )
     )
-    return messages.egress.egress.open_cold_email_thread.await_args.kwargs
+    return pushes.egress.egress.open_cold_email_thread.await_args.kwargs
 
 
 async def test_a_message_to_its_own_asker_carries_no_header(monkeypatch):
@@ -1325,7 +1385,7 @@ async def test_a_message_to_its_own_asker_carries_no_header(monkeypatch):
     resolve.
     """
     same_person = uuid4()
-    kwargs = await _deliver_and_read_header(
+    kwargs = await _push_and_read_header(
         monkeypatch, actor_user_id=same_person, recipient_user_id=same_person
     )
 
@@ -1341,7 +1401,7 @@ async def test_a_colleagues_authority_is_still_named(monkeypatch):
     One bot, one name, one avatar: an agent acting for Deepak and the same agent
     acting for someone else are indistinguishable without this.
     """
-    kwargs = await _deliver_and_read_header(
+    kwargs = await _push_and_read_header(
         monkeypatch, actor_user_id=uuid4(), recipient_user_id=uuid4()
     )
 
@@ -1354,70 +1414,3 @@ async def test_a_colleagues_authority_is_still_named(monkeypatch):
     assert kwargs["metadata"]["email_sender_name"] == "Acme"
     # The subject is the message's first line, not a title nobody wrote.
     assert kwargs["subject"] == "What did you ship yesterday?"
-
-
-# ------------------------------------------- sent once, and only where it landed
-
-
-async def test_a_question_waits_on_the_person_it_was_put_to(
-    monkeypatch, member_channel
-):
-    """The asking conversation is in the ref, so its answers can wake it."""
-    _email_configured(monkeypatch)
-    surface = _email_surface()
-    messages = _direct_messages(surfaces=(surface,))
-    asking = uuid4()
-
-    result = await messages.send(
-        _message(
-            pod_id=surface.pod_id,
-            origin_conversation_id=asking,
-            wants_answer=True,
-            key="run:1:tool:1",
-        )
-    )
-
-    assert member_channel.questions == {f"msg:{asking}:run:1:tool:1": result.line}
-
-
-@pytest.mark.parametrize("wants_answer", [True, False], ids=["question", "message"])
-async def test_a_send_whose_outcome_was_never_recorded_is_not_sent_again(
-    monkeypatch, member_channel, wants_answer
-):
-    """The platform took it; writing that down failed. The retry must not post.
-
-    The line is committed before anything is sent, so a retry with the same key
-    finds the line that may already have landed rather than writing a second:
-    a question by its ref, a plain message by the run that wrote it.
-    """
-    _email_configured(monkeypatch)
-    agent_id = uuid4()
-    surface = _surface_for(agent_id, SurfacePlatform.SLACK)
-    messages = _direct_messages(
-        surfaces=(surface,),
-        external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
-    )
-    messages.channels.seats.add(_place_for(surface))
-
-    async def connection_lost(_uow, **_delivery):
-        # The connection drops as the delivery is recorded; asyncpg says so
-        # with an OSError.
-        raise OSError("connection lost recording the delivery")
-
-    monkeypatch.setattr(notification_dispatch, "record_delivery", connection_lost)
-    message = _message(
-        pod_id=surface.pod_id,
-        actor_agent_id=agent_id,
-        origin_conversation_id=uuid4(),
-        origin_run_id=uuid4(),
-        wants_answer=wants_answer,
-        key="run:1:tool:1",
-    )
-
-    with pytest.raises(OSError):
-        await messages.send(message)
-    retried = await messages.send(message)
-
-    assert retried.repeated is True
-    assert len(member_channel.lines) == 1
-    messages.egress.egress.send_agent_message_for_conversation.assert_awaited_once()

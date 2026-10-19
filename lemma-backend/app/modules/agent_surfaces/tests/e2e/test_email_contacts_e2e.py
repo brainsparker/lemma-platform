@@ -47,7 +47,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
 )
 from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     contact_channel_id,
-    deliver_member_posts,
+    send_deliveries,
     deliveries_of_line,
     direct_lines,
     member_writes,
@@ -312,7 +312,7 @@ async def test_unauthenticated_mail_is_parked_for_the_member_never_answered(
         )
         if f"Unverified email from {CUSTOMER}" in line.body
     ]
-    assert note.members_only and note.interaction_kind is None
+    assert note.members_only
 
 
 async def test_with_contacts_off_no_stranger_becomes_one(
@@ -824,7 +824,7 @@ async def test_a_members_lines_are_mailed_until_the_contact_unsubscribes(
     sent = await member_writes(
         authenticated_client, pod_id, channel, "Your order shipped today."
     )
-    await deliver_member_posts()
+    await send_deliveries()
     [delivery] = await deliveries_of_line(sent["id"])
     assert (delivery.platform, delivery.status.value) == ("RESEND", "SENT")
     mail = json.dumps(
@@ -856,28 +856,28 @@ async def test_a_members_lines_are_mailed_until_the_contact_unsubscribes(
     refused = await member_writes(
         authenticated_client, pod_id, channel, "A second note."
     )
-    await deliver_member_posts()
+    await send_deliveries()
     [held] = await deliveries_of_line(refused["id"])
     assert held.status.value == "SKIPPED"
-    assert held.error == "The contact asked not to be written to there"
+    assert held.reason == "The contact asked not to be written to there"
     assert len(message_store.get_all("RESEND")) == mailed
 
     # Writing to her took her channel: the member answers her by hand now.
     shown = await authenticated_client.get(f"/pods/{pod_id}/channels/{channel}")
-    assert shown.json()["handler"]["id"] == fixed_test_user["id"]
+    assert shown.json()["assignee"]["id"] == fixed_test_user["id"]
     # Switching the agent on hands her back to it at once.
     handed_back = await authenticated_client.patch(
         f"/pods/{pod_id}/channels/{channel}",
-        json={"settings": {"agents_answer": True}},
+        json={"agents_answer": True},
     )
     assert handed_back.status_code == 200, handed_back.text
-    assert handed_back.json()["handler"] is None
+    assert handed_back.json()["assignee"] is None
 
     # Writing again is how a contact opts back in.
     await dana_writes("follow-2")
     again = await member_writes(
         authenticated_client, pod_id, channel, "Thanks for writing back."
     )
-    await deliver_member_posts()
+    await send_deliveries()
     [delivery] = await deliveries_of_line(again["id"])
     assert delivery.status.value == "SENT"

@@ -40,6 +40,16 @@ AGENT_WAIT_POLL: Final = "agent.wait.poll"
 AGENT_WAIT_RESOLVE_CHILD: Final = "agent.wait.resolve_child"
 #: Delivers a pod-to-pod ask's answer into the asking pod.
 POD_ASK_DELIVER: Final = "pod_ask.deliver"
+#: Fans a member's line in Lemma out to one answer item per answering agent.
+AGENT_CHANNEL_LINE: Final = "agent.channel_line"
+#: Starts the turn one agent answers one member's line in Lemma with.
+AGENT_CHANNEL_ANSWER: Final = "agent.channel_answer"
+#: Posts a finished run's answer to the line in Lemma it answers.
+AGENT_CHANNEL_REPLY: Final = "agent.channel_reply"
+#: Brings a conversation's pause questions in line with what it still waits on.
+AGENT_PAUSE_QUESTIONS: Final = "agent.pause_questions"
+#: A question one conversation put to a member closed: is its batch settled?
+AGENT_ASKED_QUESTION_CLOSED: Final = "agent.asked_question_closed"
 
 
 def turn_key(run_id: UUID) -> str:
@@ -86,13 +96,39 @@ def pod_ask_key(run_id: UUID) -> str:
     return f"pod-ask:{run_id}"
 
 
-def replies_key(conversation_id: UUID) -> str:
-    """Coalesces the asker's wake-ups while one is still queued."""
-    return f"replies-arrived:{conversation_id}"
+def replies_key(batch_id: str) -> str:
+    """One wake-up per batch of questions sent together."""
+    return f"replies-arrived:{batch_id}"
+
+
+def channel_line_key(message_id: UUID) -> str:
+    return f"channel-line:{message_id}"
+
+
+def channel_answer_key(message_id: UUID, agent_id: UUID) -> str:
+    """One answer per line and agent, however often the line is announced."""
+    return f"channel-answer:{message_id}:{agent_id}"
+
+
+def channel_reply_key(run_id: UUID) -> str:
+    return f"channel-reply:{run_id}"
+
+
+def pause_questions_key(run_id: UUID) -> str:
+    return f"pause-questions:{run_id}"
+
+
+def asked_question_closed_key(message_id: UUID) -> str:
+    return f"asked-question-closed:{message_id}"
 
 
 __all__ = [
     "AGENT_APPROVAL_EXECUTE",
+    "AGENT_ASKED_QUESTION_CLOSED",
+    "AGENT_CHANNEL_ANSWER",
+    "AGENT_CHANNEL_LINE",
+    "AGENT_CHANNEL_REPLY",
+    "AGENT_PAUSE_QUESTIONS",
     "AGENT_FOLLOWUP",
     "AGENT_REPLIES_ARRIVED",
     "AGENT_SUBAGENT_RESULT",
@@ -105,9 +141,14 @@ __all__ = [
     "AGENT_WAIT_RESOLVE_CHILD",
     "POD_ASK_DELIVER",
     "approval_key",
+    "asked_question_closed_key",
+    "channel_answer_key",
+    "channel_line_key",
+    "channel_reply_key",
     "child_wait_key",
     "conversation_key",
     "followup_key",
+    "pause_questions_key",
     "pod_ask_key",
     "replies_key",
     "subagent_result_key",

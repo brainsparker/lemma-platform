@@ -18,20 +18,14 @@ SURFACE_INGEST: Final = "surface.ingest"
 SURFACE_REPLY: Final = "surface.reply"
 #: Writes the delivery row for a finished run's answer (an ``AgentRunFinished`` subscriber).
 SURFACE_REPLY_FOR_RUN: Final = "surface.reply_for_run"
-#: Starts the turn an agent answers a member's line in Lemma with.
-SURFACE_IN_APP_TURN: Final = "surface.in_app_turn"
-#: Carries a member's line written in Lemma to the outside place it is for.
-SURFACE_MEMBER_POST: Final = "surface.member_post"
-#: Brings the lines of a conversation's questions in line with its pauses.
-SURFACE_PAUSE_LINES: Final = "surface.pause_lines"
+#: Sends one channel delivery: a line to a place, or a push to a member.
+SURFACE_CHANNEL_DELIVERY: Final = "surface.channel_delivery"
 #: A perpetual poller for one credential (Telegram, Slack socket, Resend).
 SURFACE_RECEIVER: Final = "surface.receiver"
 #: Provider-side follow-ups of a webhook that is not a message (statuses, lifecycle).
 SURFACE_PLATFORM_UPDATE: Final = "surface.platform_update"
 #: Clears identities bound to a phone number a user no longer has.
 SURFACE_MOBILE_CHANGED: Final = "surfaces.mobile_changed"
-#: Gives a conversation its turn back once everybody it asked has answered.
-SURFACE_ASKED_QUESTIONS: Final = "surface.asked_questions"
 
 #: Periodic names (``periodic(name, every, kind)``).
 RECEIVERS_RECONCILE_PERIODIC: Final = "surfaces.receivers.reconcile"
@@ -46,44 +40,26 @@ def run_reply_key(run_id: UUID) -> str:
     return f"run-reply:{run_id}"
 
 
-def in_app_turn_key(message_id: UUID) -> str:
-    return f"in-app-turn:{message_id}"
-
-
-def member_post_key(message_id: UUID) -> str:
-    return f"member-post:{message_id}"
-
-
-def pause_lines_key(run_id: UUID) -> str:
-    return f"pause-lines:{run_id}"
+def channel_delivery_key(delivery_id: UUID) -> str:
+    return f"channel-delivery:{delivery_id}"
 
 
 def receiver_key(credential_key: str) -> str:
     return f"receiver:{credential_key}"
 
 
-def asked_questions_key(message_id: UUID) -> str:
-    return f"asked-questions:{message_id}"
-
-
 __all__ = [
     "ONBOARDING_CLEANUP_PERIODIC",
     "RECEIVERS_RECONCILE_PERIODIC",
-    "SURFACE_IN_APP_TURN",
-    "SURFACE_ASKED_QUESTIONS",
     "SURFACE_INGEST",
-    "SURFACE_MEMBER_POST",
-    "SURFACE_PAUSE_LINES",
+    "SURFACE_CHANNEL_DELIVERY",
     "SURFACE_MOBILE_CHANGED",
     "SURFACE_PLATFORM_UPDATE",
     "SURFACE_RECEIVER",
     "SURFACE_REPLY",
     "SURFACE_REPLY_FOR_RUN",
-    "in_app_turn_key",
     "ingest_key",
-    "asked_questions_key",
-    "member_post_key",
-    "pause_lines_key",
+    "channel_delivery_key",
     "receiver_key",
     "run_reply_key",
 ]

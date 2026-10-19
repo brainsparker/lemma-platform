@@ -1,39 +1,48 @@
-"""A channel's lines: reading the timeline and its threads, writing to it,
-and answering what it asks -- plus each member's inbox, and search.
+"""A channel's lines: the timeline and its threads, writing to it, answering
+what it asks, and where each line went.
 
-Writing in a channel takes what writing in the pod's conversations takes, and
-in a contact's channel what writing to a contact takes, since it reaches them.
-What a line asks is answered by the one person it waits on.
+Lines are numbered per channel (``seq``) and paged by number both ways. A line
+written through the API is the same line however often it is sent: the client
+names it (``client_message_id``, or an ``Idempotency-Key``). Permissions are
+tabled in ``api.access``.
 """
 
 from __future__ import annotations
 
+import hashlib
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
-from app.core.api.dependencies import CurrentUser, UoWDep, get_uow_factory
-from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.authorization.context import ResourceRef
-from app.core.authorization.current import get_current_context
+from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
-from app.modules.channels.api.access import cursor, sees_contacts, visible
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.infrastructure.work import facts
+from app.modules.channels.api.access import (
+    Caller,
+    CallerDep,
+    conflict,
+    forbidden,
+    may_manage,
+    missing,
+    require_contact_message,
+    visible,
+)
 from app.modules.channels.api.message_schemas import (
     ChannelAnswerRequest,
     ChannelEditRequest,
     ChannelMessageResponse,
     ChannelMessagesResponse,
     ChannelPostRequest,
-    InboxResponse,
-    InboxTotals,
-    SearchHit,
-    SearchResponse,
-    WaitingItem,
-    message_people,
-    message_response,
+    DeliveriesResponse,
+    DeliveryResponse,
+    ThreadResponse,
+    delivery_response,
 )
-from app.modules.channels.api.schemas import channel_people, channel_response
+from app.modules.channels.api.views import lines_response
+from app.modules.channels.contracts.facts import ChannelDeliveryDue
 from app.modules.channels.domain.entities import (
     Channel,
     ChannelKind,
@@ -41,53 +50,36 @@ from app.modules.channels.domain.entities import (
     Principal,
     SenderKind,
 )
-from app.modules.channels.domain.projection import withheld_from
-from app.modules.channels.infrastructure.inbox import InboxReads
+from app.modules.channels.infrastructure.deliveries import DeliveryRepository
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.names import Names
-from app.modules.channels.infrastructure.repository import ChannelRepository
-from app.modules.channels.infrastructure.rows import MAX_LINES
-from app.modules.channels.services.messages import (
-    LineRefused,
-    MemberLines,
-    MemberPost,
-    answer_question,
-)
+from app.modules.channels.services.messages import LineRefused, MemberLines, MemberPost
+from app.modules.channels.services.questions import AnswerRefused, answer
 
 router = APIRouter(prefix="/pods/{pod_id}/channels", tags=["Channels"])
-#: Routes with a fixed segment where a channel id would go; included first.
-inbox_router = APIRouter(prefix="/pods/{pod_id}", tags=["Channels"])
 
 
-def _refused(error: LineRefused) -> HTTPException:
+def _refused(error: LineRefused | AnswerRefused) -> HTTPException:
     return HTTPException(error.status_code, detail=str(error))
 
 
-async def _page(
-    uow: UoWDep,
-    channel: Channel,
-    lines: list[ChannelMessage],
-    *,
-    reader_id: UUID,
-    limit: int,
-) -> ChannelMessagesResponse:
-    names = await Names(uow).of(
-        pod_id=channel.pod_id,
-        people=[person for line in lines for person in message_people(line)],
-    )
-    first = lines[0] if len(lines) == limit else None
-    return ChannelMessagesResponse(
-        items=[
-            message_response(
-                line,
-                reader_id=reader_id,
-                names=names,
-                in_their_direct=channel.kind is ChannelKind.DIRECT,
-            )
-            for line in lines
-        ],
-        next_before=f"{first.created_at.isoformat()}|{first.id}" if first else None,
-    )
+async def _one(
+    uow: SqlAlchemyUnitOfWork, caller: Caller, channel: Channel, line: ChannelMessage
+) -> ChannelMessageResponse:
+    (shown,) = await lines_response(uow, caller, channel, [line])
+    return shown
+
+
+async def _line_in(
+    uow: SqlAlchemyUnitOfWork, channel: Channel, message_id: UUID
+) -> ChannelMessage:
+    line = await LineRepository(uow.session).get(message_id)
+    if line is None or line.channel_id != channel.id:
+        raise missing("Line")
+    return line
+
+
+# -- reading -----------------------------------------------------------------------
 
 
 @router.get(
@@ -96,93 +88,91 @@ async def _page(
     response_model=ChannelMessagesResponse,
     dependencies=[require_action(Permissions.CONVERSATION_READ)],
 )
-async def list_channel_messages(
+async def list_messages(
     pod_id: UUID,
     channel_id: UUID,
-    user: CurrentUser,
     uow: UoWDep,
-    limit: int = Query(default=50, ge=1, le=MAX_LINES),
-    before: str | None = Query(default=None, max_length=100),
+    caller: CallerDep,
+    before_seq: int | None = Query(default=None, ge=1),
+    after_seq: int | None = Query(default=None, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
 ) -> ChannelMessagesResponse:
-    """The channel's timeline, oldest first: who said what, when and where.
-    A thread's replies are not in it; its first line counts them."""
-    channel = await visible(
-        ChannelRepository(uow.session),
-        pod_id=pod_id,
-        channel_id=channel_id,
-        user_id=user.id,
+    """The timeline, oldest first: the newest page, the page before
+    `before_seq`, or the page after `after_seq`. A thread's replies are not in
+    it; its first line counts them."""
+    channel = await visible(uow, caller, channel_id)
+    lines = await LineRepository(uow.session).page(
+        channel.id, limit=limit + 1, before_seq=before_seq, after_seq=after_seq
     )
-    lines = await LineRepository(uow.session).recent(
-        channel.id, limit=limit, before=cursor(before), top_level=True
+    forward = after_seq is not None
+    has_more = len(lines) > limit
+    if has_more:
+        lines = lines[:limit] if forward else lines[1:]
+    items = await lines_response(uow, caller, channel, lines)
+    return ChannelMessagesResponse(
+        items=items,
+        has_more=has_more,
+        next_before_seq=(
+            items[0].seq
+            if items and (has_more or forward) and items[0].seq > 1
+            else None
+        ),
+        next_after_seq=items[-1].seq if items else after_seq,
     )
-    return await _page(uow, channel, lines, reader_id=user.id, limit=limit)
 
 
 @router.get(
     "/{channel_id}/messages/{message_id}/thread",
     operation_id="channel.message.thread",
-    response_model=ChannelMessagesResponse,
+    response_model=ThreadResponse,
     dependencies=[require_action(Permissions.CONVERSATION_READ)],
 )
 async def list_thread(
     pod_id: UUID,
     channel_id: UUID,
     message_id: UUID,
-    user: CurrentUser,
     uow: UoWDep,
-    limit: int = Query(default=50, ge=1, le=MAX_LINES),
-    before: str | None = Query(default=None, max_length=100),
-) -> ChannelMessagesResponse:
-    """A thread's replies, oldest first, the newest page of them."""
-    channel = await visible(
-        ChannelRepository(uow.session),
-        pod_id=pod_id,
-        channel_id=channel_id,
-        user_id=user.id,
-    )
+    caller: CallerDep,
+    after_seq: int | None = Query(default=None, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> ThreadResponse:
+    """A thread: its first line, and its replies oldest first after `after_seq`."""
+    channel = await visible(uow, caller, channel_id)
+    found = await _line_in(uow, channel, message_id)
     lines = LineRepository(uow.session)
-    root = await lines.get(message_id)
-    if root is None or root.channel_id != channel.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Line not found")
-    replies = await lines.thread(
-        root.thread_root_id or root.id, limit=limit, before=cursor(before)
+    root = await lines.get(found.thread_root_id) if found.thread_root_id else found
+    if root is None:
+        raise missing("Line")
+    replies = await lines.thread(root.id, limit=limit + 1, after_seq=after_seq)
+    has_more = len(replies) > limit
+    shown = await lines_response(uow, caller, channel, [root, *replies[:limit]])
+    return ThreadResponse(
+        root=shown[0],
+        items=shown[1:],
+        has_more=has_more,
+        next_after_seq=shown[-1].seq if len(shown) > 1 else after_seq,
     )
-    return await _page(uow, channel, replies, reader_id=user.id, limit=limit)
+
+
+# -- writing -----------------------------------------------------------------------
 
 
 async def _writable(
-    uow: UoWDep, pod_id: UUID, channel_id: UUID, user_id: UUID
+    uow: SqlAlchemyUnitOfWork, caller: Caller, channel_id: UUID
 ) -> Channel:
-    channel = await visible(
-        ChannelRepository(uow.session),
-        pod_id=pod_id,
-        channel_id=channel_id,
-        user_id=user_id,
-    )
+    channel = await visible(uow, caller, channel_id)
     if channel.kind is ChannelKind.CONTACT:
-        ctx = get_current_context()
-        if ctx is None or not await ctx.can(
-            Permissions.CONTACT_MESSAGE, ResourceRef.pod(pod_id)
-        ):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                detail="Writing to a contact is for the pod's editors and admins",
-            )
-    if channel.archived_at is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="This channel is archived")
+        require_contact_message(caller)
     return channel
 
 
-async def _one(
-    uow: UoWDep, channel: Channel, line: ChannelMessage, user_id: UUID
-) -> ChannelMessageResponse:
-    names = await Names(uow).of(pod_id=channel.pod_id, people=message_people(line))
-    return message_response(
-        line,
-        reader_id=user_id,
-        names=names,
-        in_their_direct=channel.kind is ChannelKind.DIRECT,
-    )
+def _client_id(body_id: str | None, idempotency_key: str | None) -> str | None:
+    """The client's name for the line: theirs, or one made from the key."""
+    if body_id is not None or idempotency_key is None:
+        return body_id
+    if len(idempotency_key) <= 64:
+        return idempotency_key
+    return hashlib.sha256(idempotency_key.encode()).hexdigest()
 
 
 @router.post(
@@ -192,30 +182,26 @@ async def _one(
     status_code=status.HTTP_201_CREATED,
     dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
 )
-async def post_channel_message(
+async def post_message(
     pod_id: UUID,
     channel_id: UUID,
     body: ChannelPostRequest,
-    user: CurrentUser,
     uow: UoWDep,
+    caller: CallerDep,
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key", min_length=1, max_length=255
+    ),
 ) -> ChannelMessageResponse:
-    """Write in the channel. It goes to one outside place -- the one named, or
-    the one the channel last heard from -- unless it is a note to members."""
-    channel = await _writable(uow, pod_id, channel_id, user.id)
-    people = [
-        Principal.member(m.id)
-        if m.kind is SenderKind.MEMBER
-        else Principal.contact(m.id)
-        for m in body.mentions
-        if m.kind is not SenderKind.AGENT
-    ]
-    agents = [m.id for m in body.mentions if m.kind is SenderKind.AGENT]
-    poster = Principal.member(user.id)
-    named = await Names(uow).of(pod_id=pod_id, people=[poster])
+    """Write in the channel. A reply goes where its thread is; otherwise to
+    the place named, or the one the channel last heard from -- unless it is a
+    note to members. Naming somebody who cannot see the channel is refused."""
+    channel = await _writable(uow, caller, channel_id)
+    poster = Principal.member(caller.user_id)
+    named = await Names(uow).of(pod_id=caller.pod_id, people=[poster])
     try:
         line = await MemberLines(uow).post(
             channel,
-            user_id=user.id,
+            user_id=caller.user_id,
             display_name=named.get(poster),
             post=MemberPost(
                 text=body.text,
@@ -224,14 +210,13 @@ async def post_channel_message(
                 thread_root_id=body.thread_root_id,
                 reply_to_id=body.reply_to_id,
                 parts=tuple(body.parts),
-                mentions=people,
-                mentioned_agents=agents,
+                client_message_id=_client_id(body.client_message_id, idempotency_key),
             ),
         )
     except LineRefused as refused:
         raise _refused(refused) from refused
     await uow.commit()
-    return await _one(uow, channel, line, user.id)
+    return await _one(uow, caller, channel, line)
 
 
 @router.patch(
@@ -240,24 +225,28 @@ async def post_channel_message(
     response_model=ChannelMessageResponse,
     dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
 )
-async def edit_channel_message(
+async def edit_message(
     pod_id: UUID,
     channel_id: UUID,
     message_id: UUID,
     body: ChannelEditRequest,
-    user: CurrentUser,
     uow: UoWDep,
+    caller: CallerDep,
 ) -> ChannelMessageResponse:
     """Change what one's own line says. A copy already sent outside stays as sent."""
-    channel = await _writable(uow, pod_id, channel_id, user.id)
+    channel = await _writable(uow, caller, channel_id)
     try:
         line = await MemberLines(uow).edit(
-            channel, message_id, user_id=user.id, text=body.text
+            channel,
+            message_id,
+            user_id=caller.user_id,
+            text=body.text,
+            parts=tuple(body.parts) if body.parts is not None else None,
         )
     except LineRefused as refused:
         raise _refused(refused) from refused
     await uow.commit()
-    return await _one(uow, channel, line, user.id)
+    return await _one(uow, caller, channel, line)
 
 
 @router.delete(
@@ -266,13 +255,13 @@ async def edit_channel_message(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
 )
-async def delete_channel_message(
-    pod_id: UUID, channel_id: UUID, message_id: UUID, user: CurrentUser, uow: UoWDep
+async def delete_message(
+    pod_id: UUID, channel_id: UUID, message_id: UUID, uow: UoWDep, caller: CallerDep
 ) -> None:
-    """Delete one's own line: it stays in its place, saying nothing."""
-    channel = await _writable(uow, pod_id, channel_id, user.id)
+    """Delete one's own line: it keeps its place, saying nothing."""
+    channel = await _writable(uow, caller, channel_id)
     try:
-        await MemberLines(uow).delete(channel, message_id, user_id=user.id)
+        await MemberLines(uow).delete(channel, message_id, user_id=caller.user_id)
     except LineRefused as refused:
         raise _refused(refused) from refused
     await uow.commit()
@@ -284,138 +273,106 @@ async def delete_channel_message(
     response_model=ChannelMessageResponse,
     dependencies=[require_action(Permissions.CONVERSATION_READ)],
 )
-async def answer_channel_question(
+async def answer_question(
     pod_id: UUID,
     channel_id: UUID,
     message_id: UUID,
     body: ChannelAnswerRequest,
-    user: CurrentUser,
+    caller: CallerDep,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> ChannelMessageResponse:
-    """Answer what this line asks the reader: a question, an approval, a form.
+    """Answer what this line asks the reader: a question, an approval (which
+    needs a `decision`), a form. Only the person it waits on may.
 
-    No session is held across the answer: what asked the question takes it in
-    its own -- a run resumed, a form submitted -- and may call out to do so.
+    No session is held across the answer: what asked takes it in its own -- a
+    run resumed, a form submitted -- and may call out to do so.
     """
     async with uow_factory() as uow:
-        channel = await visible(
-            ChannelRepository(uow.session),
-            pod_id=pod_id,
-            channel_id=channel_id,
-            user_id=user.id,
-        )
+        channel = await visible(uow, caller, channel_id)
+        await _line_in(uow, channel, message_id)
     try:
-        line = await answer_question(
+        await answer(
             uow_factory,
-            channel=channel,
             message_id=message_id,
-            user_id=user.id,
-            answer=body.answer,
+            by=Principal.member(caller.user_id),
+            given=body.answer,
         )
-    except LineRefused as refused:
+    except AnswerRefused as refused:
         raise _refused(refused) from refused
     async with uow_factory() as uow:
-        return await _one(uow, channel, line, user.id)
+        return await _one(
+            uow, caller, channel, await _line_in(uow, channel, message_id)
+        )
 
 
-@inbox_router.get(
-    "/inbox",
-    operation_id="channel.inbox.get",
-    response_model=InboxResponse,
+# -- deliveries ----------------------------------------------------------------------
+
+
+@router.get(
+    "/{channel_id}/messages/{message_id}/deliveries",
+    operation_id="channel.delivery.list",
+    response_model=DeliveriesResponse,
     dependencies=[require_action(Permissions.CONVERSATION_READ)],
 )
-async def get_inbox(pod_id: UUID, user: CurrentUser, uow: UoWDep) -> InboxResponse:
-    """What is new for the reader across the pod, and every question waiting
-    on them, newest first."""
-    totals = await InboxReads(uow.session).totals(user_id=user.id, pod_id=pod_id)
-    waiting = await LineRepository(uow.session).waiting_on(
-        user_id=user.id, pod_id=pod_id
-    )
-    channels = ChannelRepository(uow.session)
-    found: dict[UUID, Channel] = {}
-    for line in waiting:
-        if line.channel_id not in found and (
-            got := await channels.get(line.channel_id)
-        ):
-            found[line.channel_id] = got
+async def list_deliveries(
+    pod_id: UUID, channel_id: UUID, message_id: UUID, uow: UoWDep, caller: CallerDep
+) -> DeliveriesResponse:
+    """Where a line went outside Lemma, and what became of each send. A push
+    to a member is shown only to that member."""
+    channel = await visible(uow, caller, channel_id)
+    line = await _line_in(uow, channel, message_id)
+    deliveries = [
+        delivery
+        for delivery in await DeliveryRepository(uow.session).of_messages([line.id])
+        if delivery.recipient_user_id in (None, caller.user_id)
+    ]
     names = await Names(uow).of(
-        pod_id=pod_id,
+        pod_id=caller.pod_id,
         people=[
-            *(person for line in waiting for person in message_people(line)),
-            *(
-                person
-                for channel in found.values()
-                for person in channel_people(channel)
-            ),
+            Principal.member(delivery.recipient_user_id)
+            for delivery in deliveries
+            if delivery.recipient_user_id
         ],
     )
-    return InboxResponse(
-        totals=InboxTotals(
-            channels=totals.channels, mentions=totals.mentions, waiting=totals.waiting
-        ),
-        waiting=[
-            WaitingItem(
-                channel=channel_response(found[line.channel_id], names=names),
-                message=message_response(
-                    line,
-                    reader_id=user.id,
-                    names=names,
-                    in_their_direct=found[line.channel_id].kind is ChannelKind.DIRECT,
-                ),
-            )
-            for line in waiting
-            if line.channel_id in found
-        ],
+    return DeliveriesResponse(
+        items=[delivery_response(delivery, names=names) for delivery in deliveries]
     )
 
 
-@inbox_router.get(
-    "/channels/search",
-    operation_id="channel.message.search",
-    response_model=SearchResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+@router.post(
+    "/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry",
+    operation_id="channel.delivery.retry",
+    response_model=DeliveryResponse,
+    dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
 )
-async def search_channels(
+async def retry_delivery(
     pod_id: UUID,
-    user: CurrentUser,
+    channel_id: UUID,
+    message_id: UUID,
+    delivery_id: UUID,
     uow: UoWDep,
-    q: str = Query(min_length=1, max_length=200),
-    limit: int = Query(default=30, ge=1, le=100),
-) -> SearchResponse:
-    """Lines matching every word, newest first, in the channels the reader sees."""
-    kinds = (ChannelKind.DIRECT, ChannelKind.GROUP) + (
-        (ChannelKind.CONTACT,) if await sees_contacts(pod_id) else ()
+    caller: CallerDep,
+) -> DeliveryResponse:
+    """Try a failed or given-up send again, now: for who wrote the line, or
+    may change the channel."""
+    channel = await _writable(uow, caller, channel_id)
+    line = await _line_in(uow, channel, message_id)
+    deliveries = DeliveryRepository(uow.session)
+    delivery = await deliveries.get(delivery_id)
+    if delivery is None or delivery.message_id != line.id:
+        raise missing("Delivery")
+    if delivery.recipient_user_id not in (None, caller.user_id):
+        raise missing("Delivery")
+    wrote_it = (
+        line.sender.kind is SenderKind.MEMBER and line.sender.user_id == caller.user_id
     )
-    channels = await ChannelRepository(uow.session).list_for_member(
-        pod_id=pod_id, user_id=user.id, kinds=kinds, before=None, limit=MAX_LINES
+    if not wrote_it and not await may_manage(uow, caller, channel):
+        raise forbidden("Only who wrote the line, or an admin, can send it again")
+    retried = await deliveries.retry(delivery.id)
+    if retried is None:
+        raise conflict("Only a send that failed can be tried again")
+    await facts.emit(
+        uow, ChannelDeliveryDue(pod_id=channel.pod_id, delivery_id=retried.id)
     )
-    kinds_of = {channel.id: channel.kind for channel in channels}
-    found = await LineRepository(uow.session).search(
-        channel_ids=list(kinds_of), words=q, limit=limit
-    )
-    names = await Names(uow).of(
-        pod_id=pod_id,
-        people=[person for line in found for person in message_people(line)],
-    )
-    return SearchResponse(
-        items=[
-            SearchHit(
-                channel_id=line.channel_id,
-                message=message_response(
-                    line,
-                    reader_id=user.id,
-                    names=names,
-                    in_their_direct=direct,
-                ),
-            )
-            for line in found
-            # A match in an answer withheld from the reader would say what it said.
-            if not withheld_from(
-                line,
-                user_id=user.id,
-                in_their_direct=(
-                    direct := kinds_of.get(line.channel_id) is ChannelKind.DIRECT
-                ),
-            )
-        ]
-    )
+    await uow.commit()
+    return delivery_response(retried, names={})

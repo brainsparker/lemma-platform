@@ -20,7 +20,7 @@ const inbox = readInbox({
                 sender: { kind: "AGENT", id: "a", name: "Lem" },
                 text: "Which day?",
                 created_at: "2026-10-18T10:00:00Z",
-                interaction: {
+                question: {
                     kind: "ASK",
                     question: { questions: [{ header: "day", options: [{ label: "Thu" }, { label: "Fri" }] }] },
                 },
@@ -33,7 +33,7 @@ const inbox = readInbox({
                 sender: { kind: "AGENT", id: null, name: null },
                 text: "May I send it?",
                 created_at: "2026-10-18T10:00:00Z",
-                interaction: { kind: "APPROVAL", question: {} },
+                question: { kind: "APPROVAL", question: {} },
             },
         },
         {
@@ -43,7 +43,7 @@ const inbox = readInbox({
                 sender: { kind: "AGENT", id: null, name: "Lem" },
                 text: "A form",
                 created_at: "2026-10-18T10:00:00Z",
-                interaction: { kind: "FORM", question: { run_id: "r", node_id: "n" } },
+                question: { kind: "FORM", question: { run_id: "r", node_id: "n" } },
             },
         },
         { channel: {}, message: { id: "skipped" } },

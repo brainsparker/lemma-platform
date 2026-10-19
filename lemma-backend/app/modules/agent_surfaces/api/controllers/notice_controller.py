@@ -2,8 +2,8 @@
 
 A member cannot write in another member's own channel, so this is how a page
 in Lemma -- a doc comment that names somebody, say -- tells them: a line from
-the pod's agent, said on the writer's behalf, in the recipient's channel and
-carried on to where they last spoke (``services.direct_messages``).
+the pod's agent, said on the writer's behalf, in the recipient's channel. It
+is pushed to them like any line of theirs (``services.channel_deliveries``).
 """
 
 from __future__ import annotations
@@ -30,21 +30,11 @@ class NoticeRequest(BaseModel):
         description="The member to tell: a pod member id, user id, or email address.",
     )
     text: str = Field(min_length=1, max_length=4000)
-    title: str | None = Field(
-        default=None,
-        max_length=120,
-        description="An email's subject, if it goes by email.",
-    )
 
 
 class NoticeResponse(BaseModel):
     message_id: UUID
     channel_id: UUID
-    delivered_via: str | None = None
-    reason: str | None = Field(
-        default=None,
-        description="Why it went no further than their channel, if it didn't.",
-    )
 
 
 @router.post(
@@ -69,22 +59,17 @@ async def send_notice(
             status.HTTP_404_NOT_FOUND, detail="No pod member matches that."
         )
     try:
-        result = await messages.send(
+        line = await messages.send(
             DirectMessage(
                 pod_id=pod_id,
                 recipient_user_id=recipient,
                 text=body.text,
                 actor_user_id=user.id,
-                title=body.title,
             )
         )
     except AgentSurfaceValidationError as refused:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, detail=refused.message
         ) from refused
-    return NoticeResponse(
-        message_id=result.line.id,
-        channel_id=result.line.channel_id,
-        delivered_via=result.delivered.platform,
-        reason=result.delivered.reason,
-    )
+    await uow.commit()
+    return NoticeResponse(message_id=line.id, channel_id=line.channel_id)

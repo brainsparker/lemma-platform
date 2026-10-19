@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from app.modules.agent_surfaces.domain.reply_targets import (
     WhatsAppReplyTarget,
     reply_target_as,
@@ -160,7 +162,7 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
                         "text": {"body": body},
                     },
                 )
-                await remember_sent((metadata or {}).get("notification_id"), message_id)
+                await remember_sent(_line_carried(metadata), message_id)
             except platform_transport_errors():
                 if index:
                     # The person already has the first part. The caller sees
@@ -379,3 +381,9 @@ def _interactive_reply(
     if event.is_dm and flow and not recipient.is_group:
         return flow_with_message(flow, message)
     return retry_notice_interactive(bodies, metadata, recipient)
+
+
+def _line_carried(metadata: Mapping[str, object] | None) -> object:
+    """The channel line a send carried -- a push's or a place's -- if any."""
+    meta = metadata or {}
+    return meta.get("notification_id") or meta.get("channel_message_id")

@@ -22,6 +22,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.group_repository imp
 from app.modules.agent_surfaces.services.group_log import group_source
 from app.modules.channels.contracts import (
     ChannelMessage,
+    NewLine,
     Principal,
     Reader,
     Sender,
@@ -46,10 +47,12 @@ async def say(
     said = await post(
         uow,
         channel_id=source.channel_id,
-        sender=sender,
-        text=text,
-        source_id=source.id,
-        external_message_id=uuid4().hex,
+        line=NewLine(
+            sender=sender,
+            text=text,
+            source_id=source.id,
+            external_message_id=uuid4().hex,
+        ),
     )
     assert said is not None
     return said

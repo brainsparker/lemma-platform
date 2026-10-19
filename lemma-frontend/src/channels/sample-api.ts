@@ -55,7 +55,12 @@ function withReplies(line: Wire): Wire {
 function lastLineOf(channelId: string): Wire | null {
     const last = lines.get(channelId)?.at(-1);
     if (!last) return null;
-    return { sender: last.sender, text: typeof last.text === "string" ? last.text : "", created_at: last.created_at };
+    return { id: last.id, seq: last.seq, sender: last.sender, text: typeof last.text === "string" ? last.text : "", created_at: last.created_at };
+}
+
+/* The next line's place in a channel, as the API numbers them. */
+function nextSeq(channel: Wire): number {
+    return (typeof channel.last_seq === "number" ? channel.last_seq : 0) + 1;
 }
 
 function listed(channel: Wire): Wire {
@@ -89,8 +94,8 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             const wanted = channels.filter((channel) => (channel.archived === true) === (options.archived === true)
                 && (!options.kind || channel.kind === options.kind)
                 && (!options.contactId || options.contactId.endsWith(String((channel.person as Wire | null)?.id ?? "\u0000"))));
-            const sorted = [...wanted].sort((a, b) => String(b.last_message_at ?? b.created_at).localeCompare(String(a.last_message_at ?? a.created_at)));
-            return readChannelPage({ items: sorted.map(listed), next_before: null });
+            const sorted = [...wanted].sort((a, b) => String(b.last_line_at ?? b.created_at).localeCompare(String(a.last_line_at ?? a.created_at)));
+            return readChannelPage({ items: sorted.map(listed), next_cursor: null });
         },
         async get(channelId) {
             await wait(100);
@@ -99,27 +104,27 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             if (!detail) throw missing("channel");
             return detail;
         },
-        async lines(channelId, before) {
+        async lines(channelId, beforeSeq) {
             await wait(140);
             channelOf(channelId);
-            return readLinePage({ items: before ? [] : (lines.get(channelId) ?? []).map(withReplies), next_before: null });
+            return readLinePage({ items: beforeSeq ? [] : (lines.get(channelId) ?? []).map(withReplies), has_more: false, next_before_seq: null });
         },
         async thread(_channelId, rootId) {
             await wait(120);
-            return readLinePage({ items: threads.get(rootId) ?? [], next_before: null });
+            return readLinePage({ items: threads.get(rootId) ?? [], has_more: false });
         },
         async post(channelId, body) {
             await wait(250);
             const channel = channelOf(channelId);
             const line: Wire = {
-                id: id("line"), sender: ME, text: body.text, created_at: now(),
+                id: id("line"), seq: nextSeq(channel), sender: ME, text: body.text, created_at: now(),
                 members_only: body.membersOnly === true,
                 source_id: body.membersOnly ? null : body.sourceId ?? (channel.source_places as Wire[] | undefined)?.[0]?.id ?? null,
                 thread_root_id: body.threadRootId ?? null,
             };
             if (body.threadRootId) threads.set(body.threadRootId, [...(threads.get(body.threadRootId) ?? []), line]);
             else lines.set(channelId, [...(lines.get(channelId) ?? []), line]);
-            save(channelId, { last_message_at: line.created_at });
+            save(channelId, { last_line_at: line.created_at, last_seq: line.seq });
             return readLine(line) as Line;
         },
         async edit(channelId, lineId, text) {
@@ -135,18 +140,24 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             await wait(200);
             lines.set(channelId, (lines.get(channelId) ?? []).map((line) => (line.id === lineId ? { ...line, text: null, deleted: true } : line)));
         },
-        async markRead(channelId) {
+        async markRead(channelId, seq) {
             const channel = channels.find((one) => one.id === channelId);
-            if (channel) save(channelId, { unread: { ...(channel.unread as Wire), lines: 0, mentions: 0 } });
+            if (!channel) return;
+            const upto = Math.min(seq, nextSeq(channel) - 1);
+            save(channelId, {
+                unread: { ...(channel.unread as Wire), lines: 0, mentions: 0, read_seq: upto },
+                me: { ...(channel.me as Wire), read_seq: upto },
+            });
         },
         async create(body) {
             await wait(300);
             const made: Wire = {
                 id: id("sample-channel"), kind: "GROUP", title: body.title, topic: body.topic, person: null,
                 sources: [], source_places: [],
-                participants: [{ person: ME, notify: "ALL" }, ...body.members.map((member) => ({ person: { kind: "MEMBER", id: member, name: null }, notify: "ALL" }))],
-                me: { joined: true, notify: "ALL" }, unread: { lines: 0, mentions: 0, waiting: 0 },
-                created_at: now(), last_message_at: null,
+                visibility: "public",
+                members: [{ person: ME, role: "owner" }, ...body.members.map((member) => ({ person: { kind: "MEMBER", id: member, name: null }, role: "member" }))],
+                me: { joined: true, notify: "ALL", read_seq: 0, role: "owner", can_manage: true }, unread: { lines: 0, mentions: 0, waiting: 0, read_seq: 0 },
+                created_at: now(), last_line_at: now(), last_seq: 0,
             };
             channels = [made, ...channels];
             lines.set(String(made.id), []);
@@ -162,6 +173,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
         },
         async addMembers() { throw sampleOnly(); },
         async removeMember() { throw sampleOnly(); },
+        async leave() { throw sampleOnly(); },
         async setNotify(channelId, notify) {
             await wait(200);
             const channel = channelOf(channelId);
@@ -169,11 +181,9 @@ export function sampleChannelApi(_podId: string): ChannelApi {
         },
         async setAgentAnswers(channelId, on) {
             await wait(250);
-            const stored = channelOf(channelId).settings;
-            const was = stored && typeof stored === "object" ? (stored as Wire) : {};
             return readChannelDetail(listed(save(channelId, {
-                settings: { ...was, agents_answer: on },
-                ...(on ? { handler: null } : {}),
+                agents_answer: on,
+                ...(on ? { assignee: null } : {}),
             })))!;
         },
         async sources(surfaceName) {
@@ -210,8 +220,9 @@ export function sampleChannelApi(_podId: string): ChannelApi {
                 id: channelId, kind: "GROUP", title, topic: null, person: null,
                 sources: [{ platform: "WHATSAPP", title }],
                 source_places: [{ id: sourceId, platform: "WHATSAPP", kind: "SHARED", title, surface_id: "s-whatsapp", pending: true, last_inbound_at: null }],
-                participants: [{ person: ME, notify: "ALL" }], me: { joined: true, notify: "ALL" },
-                unread: { lines: 0, mentions: 0, waiting: 0 }, created_at: now(), last_message_at: null,
+                visibility: "private", members: [{ person: ME, role: "owner" }],
+                me: { joined: true, notify: "ALL", read_seq: 0, role: "owner", can_manage: true },
+                unread: { lines: 0, mentions: 0, waiting: 0, read_seq: 0 }, created_at: now(), last_line_at: now(), last_seq: 0,
             }, ...channels];
             lines.set(channelId, []);
             settings.set(sourceId, {
@@ -233,10 +244,11 @@ export function sampleChannelApi(_podId: string): ChannelApi {
                     id: channelId, kind: "GROUP", title: "Supplier chat", topic: null, person: null,
                     sources: [{ platform: "TELEGRAM", title: "Supplier chat" }],
                     source_places: [{ id: id("src-tg"), platform: "TELEGRAM", kind: "SHARED", title: "Supplier chat", surface_id: "s-telegram", pending: false, last_inbound_at: now() }],
-                    participants: [{ person: ME, notify: "ALL" }], me: { joined: true, notify: "ALL" },
-                    unread: { lines: 1, mentions: 0, waiting: 0 }, created_at: now(), last_message_at: now(),
+                    visibility: "private", members: [{ person: ME, role: "owner" }],
+                    me: { joined: true, notify: "ALL", read_seq: 0, role: "owner", can_manage: true },
+                    unread: { lines: 1, mentions: 0, waiting: 0, read_seq: 0 }, created_at: now(), last_line_at: now(), last_seq: 1,
                 }, ...channels];
-                lines.set(channelId, [{ id: id("line"), sender: { kind: "AGENT", id: "a-default", name: "Lem" }, text: "Hi, I’m Lem. Mention me or reply to me to ask something.", created_at: now() }]);
+                lines.set(channelId, [{ id: id("line"), seq: 1, sender: { kind: "AGENT", id: "a-default", name: "Lem" }, text: "Hi, I’m Lem. Mention me or reply to me to ask something.", created_at: now() }]);
             }, 6_000);
             return { url: "https://t.me/" + surfaceName.replace(/^@/, "") + "_bot?startgroup=sample", expiresAt: new Date(Date.now() + 3_600_000).toISOString() };
         },

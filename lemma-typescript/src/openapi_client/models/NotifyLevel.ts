@@ -3,7 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
- * Which lines of a channel reach a participant outside the app.
+ * Which lines of a channel reach a member outside the app.
  */
 export enum NotifyLevel {
     ALL = 'ALL',

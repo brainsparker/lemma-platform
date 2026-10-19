@@ -30,120 +30,107 @@ channel: they are private workspaces, not shared places.
 
 | Table | Meaning |
 | --- | --- |
-| `channels` | One place per pod: `kind`, a `title`, whose it is (`member_user_id` for `DIRECT`, `contact_id` for `CONTACT`, each unique per pod), `handler_user_id` -- a member who stepped in, while agents stay quiet -- and `last_message_at` |
-| `channel_participants` | The members and contacts in a channel, each with `last_read_at`. Anybody who says something there joins it |
-| `channel_sources` | The outside places a channel is fed by, keyed by surface, platform, chat and -- for a private chat -- the person's platform id. `surface_id` is kept `SET NULL` so history survives a removed bot. `last_inbound_at` is when somebody last wrote there |
-| `channel_messages` | The timeline. `sender_kind` (`MEMBER`, `CONTACT`, `AGENT`) with the sender's id; for an agent, `on_behalf_user_id` or `on_behalf_contact_id` -- whom it answered, and so whose access the answer was made with. `source_id` is where it was said (absent for a line written in Lemma); `members_only` marks a note that is never delivered and never shown outside. A platform message is one line however often it is delivered (unique on source and external message id) |
-| `channel_mentions` | Who a line names -- a member, a contact or an agent -- and when they read it: the unread mentions a member is shown |
-| `channel_message_deliveries` | Each place a line was sent out to (a source, or a member's own platform for something the pod told them), its status -- `SENT`, `FAILED`, `SKIPPED` with why -- and the platform's id for it, so a reply there finds the line |
+| `external_accounts` | An account a pod's bot speaks through -- a Slack team, a Teams tenant, a bot, an inbox, a WhatsApp number, a web widget -- keyed per pod by platform and `account_key`. A place belongs to an account rather than a surface, so a reinstalled bot keeps its places; `surface_id` is the installation that reaches it now |
+| `channels` | One place per pod: `kind`, `visibility` (`PUBLIC` or `PRIVATE`; only a group may be public), a `title` and `topic`, whose it is (`member_user_id` for `DIRECT`, `contact_id` for `CONTACT`, each unique per pod), when it was archived. A contact's channel is also an inbox item: `agents_answer`, `hand_back_after_hours`, its `assignee_user_id` (who answers by hand, and when they last wrote), `status` and a call for a person (`attention_at`, `attention_reason`). The timeline's head: `last_seq`, `last_line_id`, `last_line_at` |
+| `channel_members` | Who is in a channel -- a member, a contact or an agent -- with their `role`, how a person hears of it outside the app (`notify`, `notify_via`, `muted_until`) and, for an agent, when it answers (`answers`) |
+| `channel_read_state` | How far each member has read each channel: `last_read_seq`, so unread is exact |
+| `channel_sources` | The outside places a channel is fed by, in an account, keyed by chat and -- for a private chat -- the person's platform id. Whether the platform keeps it to its members (`is_private`), how to answer it (`delivery_ref`) and, for a group, who answers for its outsiders |
+| `channel_messages` | The timeline, numbered per channel (`seq`, gapless). `sender_kind` (`MEMBER`, `CONTACT`, `AGENT`) with the sender's id; for an agent, `on_behalf_user_id` or `on_behalf_contact_id` -- whom it answered, and so whose access the answer was made with. `source_id` is where it was said (absent for a line written in Lemma); `members_only` marks a note never delivered or shown outside; typed `parts` (mentions, files, links). One line per `client_message_id`, and per platform message |
+| `channel_mentions` | Who a line names -- a member, a contact or an agent -- at its `seq`: the unread mentions a member is shown |
+| `channel_questions` | A question a line puts to one person: its `ref` names what asked it and is unique per pod, `kind` is `ASK`, `APPROVAL` or `FORM`, and `state` runs `OPEN` → `ANSWERING` → `ANSWERED`, or `CANCELLED` / `EXPIRED`, with the answer that took effect |
+| `channel_message_deliveries` | Every send of a line outside Lemma -- to a place, or a push to a member -- unique per line and target: `PENDING`, `SENT`, `FAILED` (due again after a backoff), `SKIPPED` (and why) or `DEAD` |
 
 A line can be a reply in a thread (`thread_root_id`; a Slack or Teams thread
-is one here too), carry files (`parts`), be edited or deleted (it keeps its
-place, empty), and name people and agents (`channel_mentions`). A line can put
-a question to one person -- `interaction_kind` `ASK`, `APPROVAL` or `FORM`,
-`awaits_user_id` / `awaits_contact_id`, `interaction_state` `OPEN` until it is
-`ANSWERED`, `CANCELLED` or `EXPIRED` -- which is what the app shows as waiting
-on them. A participant hears of a channel outside the app as their `notify`
-says (`ALL`, `MENTIONS`, `NONE`). A channel can be archived, and can ask for a
-person (`attention_at`, `attention_reason`) until a member steps in. Its `settings` are a JSON
-object of the channel's own switches -- whether its agents answer a contact,
-how long a member who stepped in holds it -- each key absent until it is set.
+is one here too), be edited or deleted (it keeps its place, empty), and name
+people and agents. An agent's working -- tool calls, reasoning -- is never a
+channel message. It stays in the conversation (`agent_messages`).
 
-An agent's working -- tool calls, reasoning -- is never a channel message. It
-stays in the conversation (`agent_messages`).
+## Who sees what
 
-## Who reads what
+One rule, twice: `domain/access.may_see` and its SQL twin
+`infrastructure/access.visible_to`, which every read path uses.
 
-One rule, in `domain/projection.py`, which every reader asks:
+- A `DIRECT` channel is its member's alone.
+- A `CONTACT` channel is every member's who holds `contact.read`.
+- A `GROUP` is everybody's in the pod when public, its members' when private.
+  A group mirrored from a platform is private when the platform keeps it to
+  its members; one made in Lemma is public unless made private.
 
-- **A member** reads everything but one thing: an answer an agent made with
-  another member's own access shows only that it was given, and for whom
-  (`withheld_from`) -- except in the reader's own channel, and a question put
-  to the reader.
-- **A contact** -- a run answering them -- reads only the lines of their own
-  source, never a note, and never an answer an agent made with a member's own
-  access. An agent line whose principal is no longer known counts as a
-  member's, so it fails closed.
+Within what a reader sees, `domain/projection.py` decides what a run is shown:
+an answer an agent made with another member's own access shows only that it
+was given; a contact's run reads only its own source, never a note.
 
-## Who answers, and where a member's line goes
+## Posting a line
 
-- **In a member's own channel** the pod's agent answers every line they write
-  in Lemma; **in a group or a contact's channel** an agent answers when a line
-  names it. The answer is a line in the same thread
-  (`agent_surfaces/services/in_app_turns.py`).
-- **A member's line** goes to one outside place: the one they pick, or the one
-  the channel last heard from (`services/messages.py`); a note to members goes
-  nowhere. Writing in a contact's channel steps in: its agents stay quiet until
-  the member hands it back. Each place a line was carried to is a
-  `channel_message_deliveries` row -- sent, failed, or skipped and why (a
-  contact who said stop, WhatsApp's 24 hours, the daily limit).
-- **What the pod tells a member** -- a teammate's agent, a notice, an approval,
-  a workflow's form -- is a line in their own channel, carried on to where they
-  last spoke unless their channel says `NONE`
-  (`agent_surfaces/services/direct_messages.py`).
+`services/posting.Timeline.post` is the only way a line is written, and does
+everything that follows in the same transaction: numbers it, seats whoever
+said it, records who it names and what it asks, moves a contact's channel
+along (a member writing to them is assigned and the channel waits on the
+contact; the contact writing reopens it), plans its deliveries -- to the
+outside places it is for, and pushes to the members who hear of it -- and
+announces it (`ChannelMessagePosted`, `ChannelDeliveryDue` per delivery).
+
+Pushes go to a member for: a line naming them; a question waiting on them; a
+line in their own channel they did not write; a contact's line in a channel
+assigned to them; and, set to `ALL`, any line written in Lemma in a group
+they are in. `MENTIONS` and a note for members keep only the first two;
+`NONE` and a mute stop them all. Sending is `agent_surfaces`'
+(`services/channel_deliveries.py`); the delivery row is the only record.
+
+Agents answer a member's line written in Lemma when it names them, when they
+answer every line in the channel, or -- in a member's own channel -- the pod's
+agent; `agent` starts one turn per line and agent.
 
 ## Questions
 
-A question is answered once, on its line, by the person it waits on
-(`POST /{id}/messages/{message_id}/answer`, or the agent's `answer_question`
-in their conversation). What answering does depends on who asked:
-`contracts/questions.answers_for(kind)` registers a handler per ref prefix --
-`tool:` an agent's paused `ask_user` or approval, `wf:` a workflow's form,
-`msg:` a question one member's agent asked another -- and the line closes when
-the handler has done its part. `ChannelQuestionClosed` announces it, so an
-asker waiting on several answers is woken once the last closes.
+A question is answered once, by the person it waits on
+(`POST …/messages/{message_id}/answer`, or the agent's `answer_question`;
+an approval only by the person's own hand). The answer is claimed first, so a
+second tap finds it taken; the asker registered by ref prefix
+(`contracts/questions.answers_for`) takes it -- `tool:` an agent's paused
+`ask_user` or approval, `wf:` a workflow's form, `msg:` a question one
+member's agent asked another -- and the question closes with what took
+effect. `ChannelQuestionClosed` announces every close; a sweeper expires
+questions whose time is up.
 
 ## API
 
-`/pods/{pod_id}/channels` -- everybody named one way, a `PersonRef`
-(`MEMBER`, `CONTACT` or `AGENT`, an id, a name):
+Under `/pods/{pod_id}` -- everybody named one way, a `PersonRef`
+(`MEMBER`, `CONTACT` or `AGENT`, an id, a name). PATCH: absent is unchanged,
+`null` clears. Creates take an `Idempotency-Key`; GETs never write.
 
-- `GET` lists the channels the caller may see, most recently active first, by
-  `kind`, `archived` or `contact_id`, each with its unread lines, mentions and
-  questions waiting on the caller, and its last line; pages with an opaque
-  `before` / `next_before`. Another member's `DIRECT` channel is never listed,
-  and reads as not found; nor is a `CONTACT` channel, to a member without
-  `contact.read` (editors and admins hold it). The caller's own channel is
-  made the first time they list.
-- `POST` makes a channel in Lemma; `GET`/`PATCH /{id}` reads it with its
-  sources, participants and the caller's settings, or renames, re-describes or
-  archives it (who made it, or an admin); `POST /{id}/participants` and
-  `DELETE /{id}/participants/{member_id}`; `PUT /{id}/me` sets how the caller
-  is notified; `POST /{id}/read` marks it read.
-- `GET /{id}/messages` (oldest first, paged backwards, a thread's replies
-  counted on its line), `GET /{id}/messages/{message_id}/thread`,
-  `POST /{id}/messages` (text, a note to members, a source, a thread,
-  mentions), `PATCH`/`DELETE` one's own line, and `POST …/answer`.
-- A contact's channel is answered by hand two ways, both taking
-  `contact.message`: writing there steps in, and its agents wait while the
-  member is in the conversation (`handler`, let go after the channel's
-  `hand_back_after_hours` of quiet); `PATCH /{id}` with
-  `{"settings": {"agents_answer": false}}` switches its agents off until a
-  member switches them on, which hands the contact back at once.
-- `GET /pods/{pod_id}/inbox` -- what is new across the pod and what waits on
-  the caller -- and `GET /pods/{pod_id}/channels/search?q=` (Postgres full
-  text, in the channels the caller sees).
+- `/channels` `GET` (kind, archived, contact, assignee, status, joined;
+  cursor) · `POST`; `/channels/me` `GET` · `POST` (the caller's own channel);
+  `/channels/{c}` `GET` · `PATCH` · `DELETE` (groups made in Lemma).
+- `/channels/{c}/members` `POST`; `/members/me` `POST` (join) · `PATCH`
+  (notify, notify_via, muted_until) · `DELETE` (leave);
+  `/members/{kind}:{id}` `PATCH` · `DELETE`; `/channels/{c}/read` `POST {seq}`.
+- `/channels/{c}/messages` `GET` (`before_seq` / `after_seq`) · `POST`;
+  `/messages/{m}` `PATCH` · `DELETE`; `/thread`; `/answer`;
+  `/deliveries` `GET` and `/deliveries/{d}/retry`.
+- `/inbox` (counts, waiting, mentions) and `/search` (Postgres full text, in
+  the channels the caller sees).
 
-A group source's settings -- whether people outside the pod are answered
-there, and which member answers for them -- and bringing the bot into a group
-(a WhatsApp group, a Telegram link) are the bot's side: `/pods/{pod_id}/sources`
-in `agent_surfaces`.
+A group source's bot-side settings -- whether people outside the pod are
+answered there, who answers for them -- and bringing the bot into a group
+(a WhatsApp group, a Telegram link) are `agent_surfaces`':
+`/pods/{pod_id}/sources`.
 
 ## Contracts
 
 `contracts/` is what other modules may ask: `source_for` (a place's source,
-with its channel made the first time), `post` (a line, once per platform
-message, announced as `ChannelMessagePosted`), `background` (the recent lines
-a reader may see), `contracts/lines` (a member's channels, recent lines,
-search, a platform thread's root), `contracts/questions` (the answer registry,
-open questions), `contracts/deliveries`, `may_read`, and lookups by id.
-`agent_surfaces` writes every message it hears and every answer it delivers
-through them; `agent`'s channel tools read and post through them.
+with its channel made the first time), `post` (the write path above),
+`background` (the recent lines a reader may see), `contracts/lines` (visibility,
+channels, pages, search, a platform thread's root), `contracts/places`
+(account-scoped place lookups), `contracts/questions` (the answer registry,
+open questions), `contracts/deliveries` (claim, record, retry), and lookups by
+id. `contracts/facts` publishes `ChannelMessagePosted`, `ChannelDeliveryDue`
+and `ChannelQuestionClosed`.
 
-`contracts/facts` publishes `ChannelMessagePosted` and
-`ChannelQuestionClosed`. The module subscribes to `ContactMerged`
-(`events/contact_merged_work.py`): a merged contact's channel, participation
-and lines move to the contact that survived.
+The module subscribes to `ContactMerged` (a merged contact's channel, members
+and lines move to the survivor, renumbered) and `PodMemberRemoved` (they are
+taken out of its channels, unassigned, and their questions cancelled), and
+runs two sweeps a minute: questions that expired, deliveries due again.
 
 ## What it does not own
 
@@ -156,7 +143,7 @@ and lines move to the contact that survived.
 - **Who a contact is.** `contacts` does. A stranger in a group is made a
   contact the first time they speak there, whether or not the bot answers
   strangers, so every line has a sender.
-- **Delivery.** `agent_surfaces` sends and receives; a line is written once the
-  platform took it.
+- **Sending.** `agent_surfaces` sends and receives: it claims a delivery,
+  calls the platform, and records what became of it.
 
 Nothing here is deleted automatically.

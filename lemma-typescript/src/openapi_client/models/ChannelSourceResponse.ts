@@ -5,6 +5,10 @@
 import type { SourceKind } from './SourceKind.js';
 export type ChannelSourceResponse = {
     id: string;
+    /**
+     * The platform keeps it to its members.
+     */
+    is_private: boolean;
     kind: SourceKind;
     last_inbound_at?: (string | null);
     /**
@@ -12,7 +16,7 @@ export type ChannelSourceResponse = {
      */
     pending?: boolean;
     /**
-     * Where it is: TELEGRAM, WHATSAPP, SLACK, TEAMS, RESEND, WEB…
+     * Where it is: TELEGRAM, WHATSAPP, SLACK, TEAMS, RESEND, WEB...
      */
     platform: string;
     surface_id?: (string | null);

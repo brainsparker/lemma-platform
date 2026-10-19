@@ -57,6 +57,7 @@ def _channel_place(surface: AgentSurfaceEntity) -> Source:
         id=uuid4(),
         channel_id=uuid4(),
         pod_id=surface.pod_id,
+        account_id=uuid4(),
         surface_id=surface.id,
         platform="SLACK",
         kind=SourceKind.SHARED,

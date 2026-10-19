@@ -389,6 +389,7 @@ async def test_a_thread_on_a_pod_you_left_is_not_somewhere_to_talk(
             place=Place(
                 surface_id=surface.id,
                 platform="WHATSAPP",
+                account_key=f"surface:{surface.id}",
                 kind=SourceKind.PRIVATE,
                 external_channel_id=None,
                 external_user_id="15550001111",

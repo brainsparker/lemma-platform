@@ -1,41 +1,69 @@
-"""The wire shapes of a pod's channels, and the mappers to them.
+"""The wire shapes of a pod's channels -- the channel, its members, its
+places -- and the mappers to them.
 
 Everybody is named one way, a ``PersonRef``: a member of the pod, one of its
-contacts, or one of its agents -- everybody outside the pod is a contact.
+contacts, or one of its agents. A PATCH changes exactly the fields it names:
+absent is unchanged, an explicit ``null`` clears.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
+from app.modules.channels.contracts.people import PersonRef
 from app.modules.channels.domain.entities import (
-    HAND_BACK_AFTER_HOURS,
+    AgentAnswers,
     Channel,
     ChannelKind,
+    ContactStatus,
+    Member,
+    MemberRole,
     NotifyLevel,
-    Participant,
     Principal,
     SenderKind,
     Source,
     SourceKind,
+    Visibility,
 )
-from app.modules.channels.contracts.people import PersonRef
 from app.modules.channels.infrastructure.inbox import UNREAD_CAP, Unread
 
 #: A name lookup: what to call each person a page names.
 Names = Mapping[Principal, str | None]
+#: What to call each agent a page names.
+AgentNames = Mapping[UUID, str]
+
+Title = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
+]
+Topic = Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)]
+Platform = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, to_upper=True, min_length=1, max_length=20
+    ),
+]
+
+
+# -- reading --------------------------------------------------------------------
+
+
+class SourceSummary(BaseModel):
+    platform: str
+    title: str | None = None
 
 
 class ChannelSourceResponse(BaseModel):
     id: UUID
     platform: str = Field(
-        description="Where it is: TELEGRAM, WHATSAPP, SLACK, TEAMS, RESEND, WEB…"
+        description="Where it is: TELEGRAM, WHATSAPP, SLACK, TEAMS, RESEND, WEB..."
     )
     kind: SourceKind
+    is_private: bool = Field(description="The platform keeps it to its members.")
     title: str | None = None
     surface_id: UUID | None = None
     last_inbound_at: datetime | None = None
@@ -45,20 +73,19 @@ class ChannelSourceResponse(BaseModel):
     )
 
 
-class SourceSummary(BaseModel):
-    platform: str
-    title: str | None = None
-
-
 class UnreadResponse(BaseModel):
     lines: int = Field(
         default=0,
-        description=f"New lines since the reader last read it; stops at {UNREAD_CAP}.",
+        description=(
+            f"New lines since the reader last read it, in channels they joined; "
+            f"stops at {UNREAD_CAP}."
+        ),
     )
-    mentions: int = Field(default=0, description="Lines naming the reader, unread.")
+    mentions: int = Field(default=0, description="Unread lines naming the reader.")
     waiting: int = Field(
         default=0, description="Questions here waiting on the reader's answer."
     )
+    read_seq: int = Field(default=0, description="The last line the reader read.")
 
 
 class AttentionResponse(BaseModel):
@@ -67,41 +94,18 @@ class AttentionResponse(BaseModel):
 
 
 class LinePreview(BaseModel):
+    id: UUID
+    seq: int
     sender: PersonRef
-    text: str = Field(description="The start of what was said.")
+    text: str = Field(description="The start of what was said; empty when withheld.")
+    withheld: bool = False
     created_at: datetime
-
-
-class ChannelSettingsResponse(BaseModel):
-    agents_answer: bool = Field(
-        default=True,
-        description=(
-            "A contact's channel: whether its agents answer the contact. Off, "
-            "only members do."
-        ),
-    )
-    hand_back_after_hours: int = Field(
-        default=HAND_BACK_AFTER_HOURS,
-        description=(
-            "How long a member who stepped in holds the contact after their "
-            "last line, before the agent answers again."
-        ),
-    )
-
-
-class ChannelSettingsChange(BaseModel):
-    """Only what is named changes."""
-
-    agents_answer: bool | None = Field(
-        default=None,
-        description="Switch the agent on or off; on also hands the contact back now.",
-    )
-    hand_back_after_hours: int | None = Field(default=None, ge=1, le=720)
 
 
 class ChannelResponse(BaseModel):
     id: UUID
     kind: ChannelKind
+    visibility: Visibility
     title: str | None = None
     topic: str | None = None
     person: PersonRef | None = Field(
@@ -111,21 +115,31 @@ class ChannelResponse(BaseModel):
             "for a CONTACT one; absent for a GROUP."
         ),
     )
-    handler: PersonRef | None = Field(
+    archived: bool = False
+    created_at: datetime
+    last_line_at: datetime
+    last_seq: int = 0
+    # -- a contact's channel: the inbox -------------------------------------
+    agents_answer: bool | None = Field(
+        default=None,
+        description="A contact's channel: whether its agents answer the contact.",
+    )
+    hand_back_after_hours: int | None = Field(
         default=None,
         description=(
-            "A member who stepped in by writing to the contact: agents stay quiet "
-            "until they have not written for `settings.hand_back_after_hours`, "
-            "or the agent is switched on again."
+            "A contact's channel: how long the assignee holds the contact after "
+            "their last line before the agent answers again."
         ),
+    )
+    assignee: PersonRef | None = Field(
+        default=None, description="A contact's channel: who answers them by hand."
+    )
+    status: ContactStatus | None = Field(
+        default=None, description="A contact's channel: where it stands."
     )
     attention: AttentionResponse | None = Field(
         default=None, description="The channel asks for a person, and why."
     )
-    archived: bool = False
-    settings: ChannelSettingsResponse = Field(default_factory=ChannelSettingsResponse)
-    created_at: datetime
-    last_message_at: datetime | None = None
     sources: list[SourceSummary] = Field(
         default_factory=list, description="The outside places feeding it."
     )
@@ -133,60 +147,134 @@ class ChannelResponse(BaseModel):
     last_line: LinePreview | None = None
 
 
-class ChannelParticipantResponse(BaseModel):
-    person: PersonRef = Field(description="A member or a contact.")
-    last_read_at: datetime | None = None
-    notify: NotifyLevel = NotifyLevel.ALL
+class ChannelMemberResponse(BaseModel):
+    person: PersonRef = Field(description="A member, a contact, or an agent.")
+    role: MemberRole
+    answers: AgentAnswers | None = Field(
+        default=None, description="An agent's: when it answers here."
+    )
+    joined_at: datetime | None = None
 
 
-class MyChannelSettings(BaseModel):
+class MyMembershipResponse(BaseModel):
+    joined: bool = False
+    role: MemberRole | None = None
     notify: NotifyLevel = NotifyLevel.ALL
     notify_via: list[str] | None = Field(
         default=None,
         description="Where lines reach them outside the app; absent for the pod's rule.",
     )
-    last_read_at: datetime | None = None
-    joined: bool = False
+    muted_until: datetime | None = None
+    read_seq: int = 0
+    can_manage: bool = Field(
+        default=False,
+        description="Whether the reader may change this channel and its members.",
+    )
 
 
 class ChannelDetailResponse(ChannelResponse):
     source_places: list[ChannelSourceResponse] = Field(default_factory=list)
-    participants: list[ChannelParticipantResponse] = Field(default_factory=list)
-    me: MyChannelSettings = Field(default_factory=MyChannelSettings)
+    members: list[ChannelMemberResponse] = Field(default_factory=list)
+    me: MyMembershipResponse = Field(default_factory=MyMembershipResponse)
 
 
 class ChannelListResponse(BaseModel):
     items: list[ChannelResponse]
-    next_before: str | None = Field(
-        default=None, description="Pass as `before` for the next page."
+    next_cursor: str | None = Field(
+        default=None, description="Pass as `cursor` for the next page."
     )
+
+
+class ReadResponse(BaseModel):
+    read_seq: int
+
+
+# -- writing --------------------------------------------------------------------
+
+
+class AgentSeat(BaseModel):
+    id: UUID = Field(description="One of the pod's agents.")
+    answers: AgentAnswers = AgentAnswers.MENTIONED
 
 
 class ChannelCreateRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=255)
-    topic: str | None = Field(default=None, max_length=500)
+    title: Title
+    topic: Topic | None = None
+    visibility: Visibility = Visibility.PUBLIC
     members: list[UUID] = Field(
         default_factory=list, max_length=200, description="Members to add, by user id."
     )
+    agents: list[AgentSeat] = Field(default_factory=list, max_length=50)
 
 
 class ChannelUpdateRequest(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=255)
-    topic: str | None = Field(default=None, max_length=500)
+    """Absent is unchanged; ``null`` clears where clearing means something.
+
+    A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
+    contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+    ``status``, ``assignee`` (and needs ``contact.message``). Anything else
+    for the kind is 409.
+    """
+
+    title: Title | None = None
+    topic: Topic | None = None
+    visibility: Visibility | None = None
     archived: bool | None = None
-    settings: ChannelSettingsChange | None = Field(
+    agents_answer: bool | None = Field(
         default=None,
-        description="A contact's channel only; takes `contact.message`.",
+        description="On also hands the contact back now: nobody is assigned.",
+    )
+    hand_back_after_hours: int | None = Field(default=None, ge=1, le=720)
+    status: ContactStatus | None = None
+    assignee: UUID | None = Field(
+        default=None, description="A member's user id; `null` unassigns."
     )
 
 
-class ParticipantsAddRequest(BaseModel):
-    members: list[UUID] = Field(min_length=1, max_length=200)
+#: The fields of a PATCH each kind of channel takes.
+GROUP_FIELDS = frozenset({"title", "topic", "visibility", "archived"})
+CONTACT_FIELDS = frozenset(
+    {"agents_answer", "hand_back_after_hours", "status", "assignee"}
+)
+#: Fields whose ``null`` is refused: they have no "nothing".
+NOT_CLEARABLE = frozenset(
+    {
+        "title",
+        "visibility",
+        "archived",
+        "agents_answer",
+        "hand_back_after_hours",
+        "status",
+    }
+)
 
 
-class NotifyRequest(BaseModel):
-    notify: NotifyLevel
-    notify_via: list[str] | None = Field(default=None, max_length=10)
+class MembersAddRequest(BaseModel):
+    people: list[UUID] = Field(
+        default_factory=list, max_length=200, description="Members, by user id."
+    )
+    agents: list[AgentSeat] = Field(default_factory=list, max_length=50)
+
+
+class MemberUpdateRequest(BaseModel):
+    role: MemberRole | None = Field(default=None, description="A person's.")
+    answers: AgentAnswers | None = Field(default=None, description="An agent's.")
+
+
+class MyMembershipUpdate(BaseModel):
+    """Absent is unchanged; ``null`` clears ``notify_via`` (the pod's rule)
+    and ``muted_until`` (unmuted)."""
+
+    notify: NotifyLevel | None = None
+    notify_via: list[Platform] | None = Field(default=None, max_length=10)
+    muted_until: datetime | None = None
+
+
+class ReadRequest(BaseModel):
+    seq: int = Field(ge=0, description="The newest line the reader has seen.")
+
+
+# -- mappers --------------------------------------------------------------------
 
 
 def ref(principal: Principal, names: Names) -> PersonRef:
@@ -199,6 +287,10 @@ def ref(principal: Principal, names: Names) -> PersonRef:
     )
 
 
+def agent_ref(agent_id: UUID, agents: AgentNames) -> PersonRef:
+    return PersonRef(kind=SenderKind.AGENT, id=agent_id, name=agents.get(agent_id))
+
+
 def channel_people(channel: Channel) -> list[Principal]:
     """Everybody a channel's own row names."""
     people: list[Principal] = []
@@ -206,8 +298,8 @@ def channel_people(channel: Channel) -> list[Principal]:
         people.append(Principal.member(channel.member_user_id))
     if channel.contact_id:
         people.append(Principal.contact(channel.contact_id))
-    if channel.handler_user_id:
-        people.append(Principal.member(channel.handler_user_id))
+    if channel.assignee_user_id:
+        people.append(Principal.member(channel.assignee_user_id))
     return people
 
 
@@ -217,6 +309,29 @@ def _person(channel: Channel, names: Names) -> PersonRef | None:
     if channel.contact_id:
         return ref(Principal.contact(channel.contact_id), names)
     return None
+
+
+def _inbox_fields(channel: Channel, names: Names) -> dict[str, object]:
+    """A contact's inbox fields; and, on any channel, a call for a person --
+    a contact's run in a group asks for one there too."""
+    attention = (
+        AttentionResponse(since=channel.attention_at, reason=channel.attention_reason)
+        if channel.attention_at
+        else None
+    )
+    if channel.kind is not ChannelKind.CONTACT:
+        return {"attention": attention}
+    return {
+        "agents_answer": channel.agents_answer,
+        "hand_back_after_hours": channel.hand_back_after_hours,
+        "assignee": (
+            ref(Principal.member(channel.assignee_user_id), names)
+            if channel.assignee_user_id
+            else None
+        ),
+        "status": channel.status,
+        "attention": attention,
+    }
 
 
 def channel_response(
@@ -231,39 +346,30 @@ def channel_response(
     return ChannelResponse(
         id=channel.id,
         kind=channel.kind,
+        visibility=channel.visibility,
         title=channel.title,
         topic=channel.topic,
         person=_person(channel, names),
-        handler=(
-            ref(Principal.member(channel.handler_user_id), names)
-            if channel.handler_user_id
-            else None
-        ),
-        attention=(
-            AttentionResponse(
-                since=channel.attention_at, reason=channel.attention_reason
-            )
-            if channel.attention_at
-            else None
-        ),
-        archived=channel.archived_at is not None,
-        settings=ChannelSettingsResponse(
-            agents_answer=channel.settings.agents_answer,
-            hand_back_after_hours=channel.settings.hand_back_after_hours,
-        ),
+        archived=channel.is_archived,
         created_at=channel.created_at,
-        last_message_at=channel.last_message_at,
+        last_line_at=channel.last_line_at,
+        last_seq=channel.last_seq,
         sources=[
             SourceSummary(platform=source.platform, title=source.title)
             for source in sources or []
         ],
-        unread=UnreadResponse(
-            lines=unread.lines, mentions=unread.mentions, waiting=unread.waiting
-        )
-        if unread
-        else UnreadResponse(),
+        unread=(
+            UnreadResponse(
+                lines=unread.lines,
+                mentions=unread.mentions,
+                waiting=unread.waiting,
+                read_seq=unread.read_seq,
+            )
+            if unread
+            else UnreadResponse()
+        ),
         last_line=last_line,
-    )
+    ).model_copy(update=_inbox_fields(channel, names))
 
 
 def source_response(source: Source) -> ChannelSourceResponse:
@@ -271,6 +377,7 @@ def source_response(source: Source) -> ChannelSourceResponse:
         id=source.id,
         platform=source.platform,
         kind=source.kind,
+        is_private=source.is_private,
         title=source.title,
         surface_id=source.surface_id,
         last_inbound_at=source.last_inbound_at,
@@ -278,43 +385,34 @@ def source_response(source: Source) -> ChannelSourceResponse:
     )
 
 
-def _me(participants: list[Participant], reader_id: UUID) -> MyChannelSettings:
-    for participant in participants:
-        if participant.principal.user_id == reader_id:
-            return MyChannelSettings(
-                notify=participant.notify,
-                notify_via=(
-                    list(participant.notify_via)
-                    if participant.notify_via is not None
-                    else None
-                ),
-                last_read_at=participant.last_read_at,
-                joined=True,
-            )
-    return MyChannelSettings()
+def member_response(
+    member: Member, *, names: Names, agents: AgentNames
+) -> ChannelMemberResponse | None:
+    if member.agent_id is not None:
+        person = agent_ref(member.agent_id, agents)
+    elif member.principal is not None:
+        person = ref(member.principal, names)
+    else:
+        return None
+    return ChannelMemberResponse(
+        person=person,
+        role=member.role,
+        answers=member.answers,
+        joined_at=member.joined_at,
+    )
 
 
-def detail_response(
-    channel: Channel,
-    *,
-    sources: list[Source],
-    participants: list[Participant],
-    names: Names,
-    unread: Unread | None,
-    reader_id: UUID,
-) -> ChannelDetailResponse:
-    return ChannelDetailResponse(
-        **channel_response(
-            channel, names=names, unread=unread, sources=sources
-        ).model_dump(),
-        source_places=[source_response(source) for source in sources],
-        participants=[
-            ChannelParticipantResponse(
-                person=ref(participant.principal, names),
-                last_read_at=participant.last_read_at,
-                notify=participant.notify,
-            )
-            for participant in participants
-        ],
-        me=_me(participants, reader_id),
+def my_membership(
+    seat: Member | None, *, read_seq: int, can_manage: bool
+) -> MyMembershipResponse:
+    if seat is None:
+        return MyMembershipResponse(read_seq=read_seq, can_manage=can_manage)
+    return MyMembershipResponse(
+        joined=True,
+        role=seat.role,
+        notify=seat.notify,
+        notify_via=list(seat.notify_via) if seat.notify_via is not None else None,
+        muted_until=seat.muted_until,
+        read_seq=read_seq,
+        can_manage=can_manage,
     )

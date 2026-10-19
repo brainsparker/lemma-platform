@@ -123,6 +123,7 @@ def _email_target(
             id=uuid4(),
             channel_id=uuid4(),
             pod_id=pod_id,
+            account_id=uuid4(),
             surface_id=surface.id,
             platform=surface.surface_type.value,
             kind=SourceKind.PRIVATE,

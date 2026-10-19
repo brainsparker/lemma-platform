@@ -9,8 +9,14 @@ key it, and says which channel a place heard for the first time belongs to:
   DIRECT channel, or the contact's CONTACT channel.
 * **A group or a shared channel** is keyed by the chat, and is a GROUP channel
   of its own.
-* **An email thread** is keyed by the thread. With other people on it, it is a
-  group; between the pod and one person, it is that person's.
+* **An email** between the pod and one person is keyed by that person on the
+  inbox -- one place per correspondent, the thread kept on each line. With
+  other people copied in, the thread is a group of its own.
+
+Every place is in an **account** -- a Slack workspace, a Teams tenant, a bot,
+an inbox, a WhatsApp number (``account_key_for``) -- so a reinstalled bot
+keeps its places. A group is private in Lemma when the platform keeps it to
+its members (``is_private``).
 """
 
 from __future__ import annotations
@@ -25,8 +31,10 @@ from app.modules.agent.contracts import channel_conversations
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
+    SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
+from app.modules.agent_surfaces.domain.external_accounts import account_key_for
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -103,9 +111,9 @@ class ChannelSeats(Protocol):
     async def places_hearing(
         self,
         *,
-        platform: str | None,
+        platform: str,
         external_channel_id: str,
-        surface_ids: Collection[UUID] | None = None,
+        surface_ids: Collection[UUID] | None,
     ) -> list[Source]: ...
 
     async def conversation_at(
@@ -208,9 +216,9 @@ class ChannelSeatsInDatabase:
     async def places_hearing(
         self,
         *,
-        platform: str | None,
+        platform: str,
         external_channel_id: str,
-        surface_ids: Collection[UUID] | None = None,
+        surface_ids: Collection[UUID] | None,
     ) -> list[Source]:
         return await places.places_hearing(
             self.uow,
@@ -245,6 +253,22 @@ def is_shared(route: ResolvedSurfaceRoute, parsed: ParsedInboundSurfaceEvent) ->
     return route.conversation_kind == _EMAIL and bool(_copied(parsed))
 
 
+#: Platform conversation types a pod member who is not in them cannot read.
+_PRIVATE_TYPES = frozenset({"group", "mpim", "groupchat", "private"})
+
+
+def is_private(surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent) -> bool:
+    """Whether the platform keeps this place to its members. A Slack public
+    channel and a Teams standard channel are open to their workspace; a Slack
+    private channel or group DM, a Teams group chat or private channel, a
+    WhatsApp or Telegram group, and a copied email thread are not."""
+    if surface.surface_type not in (SurfacePlatform.SLACK, SurfacePlatform.TEAMS):
+        return True
+    kind = str(parsed.metadata.get("channel_type") or "").lower()
+    membership = str(parsed.metadata.get("membership_type") or "").lower()
+    return kind in _PRIVATE_TYPES or membership == "private"
+
+
 def place_of(
     *,
     surface: AgentSurfaceEntity,
@@ -254,6 +278,7 @@ def place_of(
 ) -> Place:
     """The place this message was said in, as a channel source names it."""
     platform = surface.surface_type.value
+    account = account_key_for(surface)
     if is_shared(route, parsed):
         where = (
             parsed.external_thread_id
@@ -263,18 +288,19 @@ def place_of(
         return Place(
             surface_id=surface.id,
             platform=platform,
+            account_key=account,
             kind=SourceKind.SHARED,
             external_channel_id=where,
             external_user_id=None,
             title=_title(surface, parsed),
+            is_private=is_private(surface, parsed),
         )
     return Place(
         surface_id=surface.id,
         platform=platform,
+        account_key=account,
         kind=SourceKind.PRIVATE,
-        external_channel_id=(
-            parsed.external_thread_id if route.conversation_kind == _EMAIL else None
-        ),
+        external_channel_id=None,
         external_user_id=external_user_id,
     )
 

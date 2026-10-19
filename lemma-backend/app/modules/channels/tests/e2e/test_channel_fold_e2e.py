@@ -1,34 +1,40 @@
 """Two contacts turn out to be one: their channels become the survivor's.
 
 Everything that names the merged contact names the survivor afterwards --
-what they said, the questions put to them and what they answered, where a line
-was sent to them, the lines that mention them -- and their channel's sources,
-lines and mentions move into the survivor's, which is the only one left.
+what they said, the questions put to them, the lines that mention them, their
+seat -- and their channel's sources, lines, questions and mentions move into
+the survivor's, numbered on after the survivor's own lines. The merged
+channel is gone.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.contracts import (
     ContactsHome,
+    NewLine,
+    NewQuestion,
     Place,
+    Principal,
+    QuestionKind,
     Sender,
     SourceKind,
     post,
     source_for,
 )
 from app.modules.channels.infrastructure.models import (
+    ChannelMemberModel,
     ChannelMentionModel,
-    ChannelMessageDeliveryModel,
     ChannelMessageModel,
     ChannelModel,
+    ChannelQuestionModel,
+    ChannelSourceModel,
 )
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
@@ -41,6 +47,7 @@ async def test_a_merged_contacts_channel_and_everything_naming_them_move_over(
 ):
     await scenario.create_org_with_pod(name_prefix="Channel fold")
     pod_id = UUID(scenario.pod_id)
+    owner = UUID(scenario.owner_user["id"])
     uow = SqlAlchemyUnitOfWork(db_session)
     people = []
     for number in ("5551001", "5551002"):
@@ -58,57 +65,38 @@ async def test_a_merged_contacts_channel_and_everything_naming_them_move_over(
             place=Place(
                 surface_id=None,
                 platform="TELEGRAM",
+                account_key="bot-1",
                 kind=SourceKind.PRIVATE,
                 external_channel_id=None,
                 external_user_id=number,
-                title=None,
             ),
             home=ContactsHome(contact.id),
         )
         await post(
             uow,
             channel_id=source.channel_id,
-            sender=Sender.contact(contact.id),
-            text=f"hello from {number}",
-            source_id=source.id,
+            line=NewLine(
+                sender=Sender.contact(contact.id),
+                text=f"hello from {number}",
+                source_id=source.id,
+            ),
         )
         people.append((contact.id, source))
     (survivor, kept), (merged, folded) = people
-    said = await db_session.scalar(
-        select(ChannelMessageModel.id).where(
-            ChannelMessageModel.sender_contact_id == merged
-        )
+    asked = await post(
+        uow,
+        channel_id=folded.channel_id,
+        line=NewLine(sender=Sender.member(owner), text="Which order?"),
+        question=NewQuestion(
+            kind=QuestionKind.ASK,
+            ref="e2e:fold",
+            question={"prompt": "Which order?"},
+            awaits=Principal.contact(merged),
+        ),
+        mentions=[Principal.contact(merged)],
     )
-    assert said is not None
-    await db_session.execute(
-        update(ChannelMessageModel)
-        .where(ChannelMessageModel.id == said)
-        .values(
-            interaction_kind="ASK",
-            interaction_state="ANSWERED",
-            awaits_contact_id=merged,
-            answered_by_contact_id=merged,
-            answered_at=datetime.now(timezone.utc),
-        )
-    )
-    db_session.add_all(
-        [
-            ChannelMentionModel(
-                message_id=said,
-                channel_id=folded.channel_id,
-                pod_id=pod_id,
-                contact_id=merged,
-            ),
-            ChannelMessageDeliveryModel(
-                message_id=said,
-                pod_id=pod_id,
-                platform="TELEGRAM",
-                recipient_contact_id=merged,
-                status="SENT",
-            ),
-        ]
-    )
-    await db_session.flush()
+    assert asked is not None
+    await db_session.commit()
 
     await ChannelRepository(db_session).fold_contact(
         pod_id=pod_id, merged_id=merged, survivor_id=survivor
@@ -117,20 +105,44 @@ async def test_a_merged_contacts_channel_and_everything_naming_them_move_over(
 
     db_session.expire_all()
     assert await db_session.get(ChannelModel, folded.channel_id) is None
-    line = await db_session.get(ChannelMessageModel, said)
-    assert line is not None
-    assert line.channel_id == kept.channel_id
-    assert line.sender_contact_id == survivor
-    assert line.awaits_contact_id == survivor
-    assert line.answered_by_contact_id == survivor
+    lines = (
+        await db_session.execute(
+            select(ChannelMessageModel.seq, ChannelMessageModel.body)
+            .where(ChannelMessageModel.channel_id == kept.channel_id)
+            .order_by(ChannelMessageModel.seq)
+        )
+    ).all()
+    assert [tuple(line) for line in lines] == [
+        (1, "hello from 5551001"),
+        (2, "hello from 5551002"),
+        (3, "Which order?"),
+    ]
+    head = await db_session.get(ChannelModel, kept.channel_id)
+    assert head is not None and head.last_seq == 3
+    said = await db_session.scalar(
+        select(ChannelMessageModel).where(
+            ChannelMessageModel.body == "hello from 5551002"
+        )
+    )
+    assert said is not None and said.sender_contact_id == survivor
+    question = await db_session.get(ChannelQuestionModel, asked.id)
+    assert question is not None
+    assert (question.channel_id, question.awaits_contact_id) == (
+        kept.channel_id,
+        survivor,
+    )
     mention = await db_session.scalar(
-        select(ChannelMentionModel).where(ChannelMentionModel.message_id == said)
+        select(ChannelMentionModel).where(ChannelMentionModel.message_id == asked.id)
     )
     assert mention is not None
     assert (mention.channel_id, mention.contact_id) == (kept.channel_id, survivor)
-    delivery = await db_session.scalar(
-        select(ChannelMessageDeliveryModel).where(
-            ChannelMessageDeliveryModel.message_id == said
+    source = await db_session.get(ChannelSourceModel, folded.id)
+    assert source is not None and source.channel_id == kept.channel_id
+    seats = (
+        await db_session.scalars(
+            select(ChannelMemberModel.contact_id).where(
+                ChannelMemberModel.contact_id.in_([survivor, merged])
+            )
         )
-    )
-    assert delivery is not None and delivery.recipient_contact_id == survivor
+    ).all()
+    assert seats == [survivor]

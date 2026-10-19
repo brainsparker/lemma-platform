@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
+
+from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.file_part import FilePart
+    from ..models.link_part import LinkPart
+    from ..models.mention_part import MentionPart
+
 
 T = TypeVar("T", bound="ChannelEditRequest")
 
@@ -14,13 +22,37 @@ class ChannelEditRequest:
     """
     Attributes:
         text (str):
+        parts (list[FilePart | LinkPart | MentionPart] | None | Unset): Absent keeps the parts.
     """
 
     text: str
+    parts: list[FilePart | LinkPart | MentionPart] | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.file_part import FilePart
+        from ..models.mention_part import MentionPart
+
         text = self.text
+
+        parts: list[dict[str, Any]] | None | Unset
+        if isinstance(self.parts, Unset):
+            parts = UNSET
+        elif isinstance(self.parts, list):
+            parts = []
+            for parts_type_0_item_data in self.parts:
+                parts_type_0_item: dict[str, Any]
+                if isinstance(parts_type_0_item_data, MentionPart):
+                    parts_type_0_item = parts_type_0_item_data.to_dict()
+                elif isinstance(parts_type_0_item_data, FilePart):
+                    parts_type_0_item = parts_type_0_item_data.to_dict()
+                else:
+                    parts_type_0_item = parts_type_0_item_data.to_dict()
+
+                parts.append(parts_type_0_item)
+
+        else:
+            parts = self.parts
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -29,16 +61,73 @@ class ChannelEditRequest:
                 "text": text,
             }
         )
+        if parts is not UNSET:
+            field_dict["parts"] = parts
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.file_part import FilePart
+        from ..models.link_part import LinkPart
+        from ..models.mention_part import MentionPart
+
         d = dict(src_dict)
         text = d.pop("text")
 
+        def _parse_parts(
+            data: object,
+        ) -> list[FilePart | LinkPart | MentionPart] | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, list):
+                    raise TypeError()
+                parts_type_0 = []
+                _parts_type_0 = data
+                for parts_type_0_item_data in _parts_type_0:
+
+                    def _parse_parts_type_0_item(
+                        data: object,
+                    ) -> FilePart | LinkPart | MentionPart:
+                        try:
+                            if not isinstance(data, dict):
+                                raise TypeError()
+                            parts_type_0_item_type_0 = MentionPart.from_dict(data)
+
+                            return parts_type_0_item_type_0
+                        except TypeError, ValueError, AttributeError, KeyError:
+                            pass
+                        try:
+                            if not isinstance(data, dict):
+                                raise TypeError()
+                            parts_type_0_item_type_1 = FilePart.from_dict(data)
+
+                            return parts_type_0_item_type_1
+                        except TypeError, ValueError, AttributeError, KeyError:
+                            pass
+                        if not isinstance(data, dict):
+                            raise TypeError()
+                        parts_type_0_item_type_2 = LinkPart.from_dict(data)
+
+                        return parts_type_0_item_type_2
+
+                    parts_type_0_item = _parse_parts_type_0_item(parts_type_0_item_data)
+
+                    parts_type_0.append(parts_type_0_item)
+
+                return parts_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(list[FilePart | LinkPart | MentionPart] | None | Unset, data)
+
+        parts = _parse_parts(d.pop("parts", UNSET))
+
         channel_edit_request = cls(
             text=text,
+            parts=parts,
         )
 
         channel_edit_request.additional_properties = d

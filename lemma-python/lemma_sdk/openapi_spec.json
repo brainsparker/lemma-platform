@@ -479,6 +479,15 @@
         "title": "AgentActionResponse",
         "type": "object"
       },
+      "AgentAnswers": {
+        "description": "When an agent in a channel answers.",
+        "enum": [
+          "MENTIONED",
+          "EVERY_LINE"
+        ],
+        "title": "AgentAnswers",
+        "type": "string"
+      },
       "AgentDetailResponse": {
         "properties": {
           "agent_runtime": {
@@ -1690,6 +1699,25 @@
           "message"
         ],
         "title": "AgentRuntimeProfileTestResponse",
+        "type": "object"
+      },
+      "AgentSeat": {
+        "properties": {
+          "answers": {
+            "$ref": "#/components/schemas/AgentAnswers",
+            "default": "MENTIONED"
+          },
+          "id": {
+            "description": "One of the pod's agents.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "AgentSeat",
         "type": "object"
       },
       "AgentSummaryResponse": {
@@ -3351,6 +3379,14 @@
       },
       "ChannelCreateRequest": {
         "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSeat"
+            },
+            "maxItems": 50,
+            "title": "Agents",
+            "type": "array"
+          },
           "members": {
             "description": "Members to add, by user id.",
             "items": {
@@ -3378,6 +3414,10 @@
               }
             ],
             "title": "Topic"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility",
+            "default": "public"
           }
         },
         "required": [
@@ -3388,10 +3428,33 @@
       },
       "ChannelDetailResponse": {
         "properties": {
+          "agents_answer": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A contact's channel: whether its agents answer the contact.",
+            "title": "Agents Answer"
+          },
           "archived": {
             "default": false,
             "title": "Archived",
             "type": "boolean"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A contact's channel: who answers them by hand."
           },
           "attention": {
             "anyOf": [
@@ -3409,16 +3472,17 @@
             "title": "Created At",
             "type": "string"
           },
-          "handler": {
+          "hand_back_after_hours": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PersonRef"
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "A member who stepped in by writing to the contact: agents stay quiet until they have not written for `settings.hand_back_after_hours`, or the agent is switched on again."
+            "description": "A contact's channel: how long the assignee holds the contact after their last line before the agent answers again.",
+            "title": "Hand Back After Hours"
           },
           "id": {
             "format": "uuid",
@@ -3438,26 +3502,24 @@
               }
             ]
           },
-          "last_message_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Message At"
+          "last_line_at": {
+            "format": "date-time",
+            "title": "Last Line At",
+            "type": "string"
+          },
+          "last_seq": {
+            "default": 0,
+            "title": "Last Seq",
+            "type": "integer"
           },
           "me": {
-            "$ref": "#/components/schemas/MyChannelSettings"
+            "$ref": "#/components/schemas/MyMembershipResponse"
           },
-          "participants": {
+          "members": {
             "items": {
-              "$ref": "#/components/schemas/ChannelParticipantResponse"
+              "$ref": "#/components/schemas/ChannelMemberResponse"
             },
-            "title": "Participants",
+            "title": "Members",
             "type": "array"
           },
           "person": {
@@ -3470,9 +3532,6 @@
               }
             ],
             "description": "Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP."
-          },
-          "settings": {
-            "$ref": "#/components/schemas/ChannelSettingsResponse"
           },
           "source_places": {
             "items": {
@@ -3488,6 +3547,17 @@
             },
             "title": "Sources",
             "type": "array"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContactStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A contact's channel: where it stands."
           },
           "title": {
             "anyOf": [
@@ -3513,18 +3583,57 @@
           },
           "unread": {
             "$ref": "#/components/schemas/UnreadResponse"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility"
           }
         },
         "required": [
           "id",
           "kind",
-          "created_at"
+          "visibility",
+          "created_at",
+          "last_line_at"
         ],
         "title": "ChannelDetailResponse",
         "type": "object"
       },
       "ChannelEditRequest": {
         "properties": {
+          "parts": {
+            "anyOf": [
+              {
+                "items": {
+                  "discriminator": {
+                    "mapping": {
+                      "file": "#/components/schemas/FilePart",
+                      "link": "#/components/schemas/LinkPart",
+                      "mention": "#/components/schemas/MentionPart"
+                    },
+                    "propertyName": "type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/MentionPart"
+                    },
+                    {
+                      "$ref": "#/components/schemas/FilePart"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LinkPart"
+                    }
+                  ]
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent keeps the parts.",
+            "title": "Parts"
+          },
           "text": {
             "maxLength": 20000,
             "minLength": 1,
@@ -3556,7 +3665,7 @@
             "title": "Items",
             "type": "array"
           },
-          "next_before": {
+          "next_cursor": {
             "anyOf": [
               {
                 "type": "string"
@@ -3565,8 +3674,8 @@
                 "type": "null"
               }
             ],
-            "description": "Pass as `before` for the next page.",
-            "title": "Next Before"
+            "description": "Pass as `cursor` for the next page.",
+            "title": "Next Cursor"
           }
         },
         "required": [
@@ -3575,8 +3684,64 @@
         "title": "ChannelListResponse",
         "type": "object"
       },
+      "ChannelMemberResponse": {
+        "properties": {
+          "answers": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentAnswers"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "An agent's: when it answers here."
+          },
+          "joined_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Joined At"
+          },
+          "person": {
+            "$ref": "#/components/schemas/PersonRef",
+            "description": "A member, a contact, or an agent."
+          },
+          "role": {
+            "$ref": "#/components/schemas/MemberRole"
+          }
+        },
+        "required": [
+          "person",
+          "role"
+        ],
+        "title": "ChannelMemberResponse",
+        "type": "object"
+      },
       "ChannelMessageResponse": {
         "properties": {
+          "channel_id": {
+            "format": "uuid",
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "client_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Message Id"
+          },
           "conversation_id": {
             "anyOf": [
               {
@@ -3587,7 +3752,6 @@
                 "type": "null"
               }
             ],
-            "description": "For an agent's line: the conversation it came from.",
             "title": "Conversation Id"
           },
           "created_at": {
@@ -3616,16 +3780,6 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
-          },
-          "interaction": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/InteractionResponse"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "last_reply_at": {
             "anyOf": [
@@ -3657,11 +3811,38 @@
           },
           "parts": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "discriminator": {
+                "mapping": {
+                  "file": "#/components/schemas/FilePart",
+                  "link": "#/components/schemas/LinkPart",
+                  "mention": "#/components/schemas/MentionPart"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/MentionPart"
+                },
+                {
+                  "$ref": "#/components/schemas/FilePart"
+                },
+                {
+                  "$ref": "#/components/schemas/LinkPart"
+                }
+              ]
             },
             "title": "Parts",
             "type": "array"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reply_count": {
             "default": 0,
@@ -3684,6 +3865,11 @@
           "sender": {
             "$ref": "#/components/schemas/PersonRef"
           },
+          "seq": {
+            "description": "Its place in the channel's timeline.",
+            "title": "Seq",
+            "type": "integer"
+          },
           "source_id": {
             "anyOf": [
               {
@@ -3694,7 +3880,7 @@
                 "type": "null"
               }
             ],
-            "description": "Where it was said; absent for a line written in Lemma.",
+            "description": "Where it was said or sent; absent for a line only in Lemma.",
             "title": "Source Id"
           },
           "text": {
@@ -3731,6 +3917,8 @@
         },
         "required": [
           "id",
+          "channel_id",
+          "seq",
           "sender",
           "created_at"
         ],
@@ -3739,82 +3927,95 @@
       },
       "ChannelMessagesResponse": {
         "properties": {
+          "has_more": {
+            "description": "Whether there are more lines in the direction read: older ones, or with `after_seq`, newer ones.",
+            "title": "Has More",
+            "type": "boolean"
+          },
           "items": {
-            "description": "Oldest first, the newest page unless `before` was given.",
+            "description": "Oldest first.",
             "items": {
               "$ref": "#/components/schemas/ChannelMessageResponse"
             },
             "title": "Items",
             "type": "array"
           },
-          "next_before": {
+          "next_after_seq": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Pass as `before` for the page before this one.",
-            "title": "Next Before"
+            "description": "Pass as `after_seq` for the newer page.",
+            "title": "Next After Seq"
+          },
+          "next_before_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `before_seq` for the older page.",
+            "title": "Next Before Seq"
           }
         },
         "required": [
-          "items"
+          "items",
+          "has_more"
         ],
         "title": "ChannelMessagesResponse",
         "type": "object"
       },
-      "ChannelParticipantResponse": {
+      "ChannelPostRequest": {
         "properties": {
-          "last_read_at": {
+          "client_message_id": {
             "anyOf": [
               {
-                "format": "date-time",
+                "maxLength": 64,
+                "minLength": 1,
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Last Read At"
+            "description": "The client's name for this line: sending it again is the same line.",
+            "title": "Client Message Id"
           },
-          "notify": {
-            "$ref": "#/components/schemas/NotifyLevel",
-            "default": "ALL"
-          },
-          "person": {
-            "$ref": "#/components/schemas/PersonRef",
-            "description": "A member or a contact."
-          }
-        },
-        "required": [
-          "person"
-        ],
-        "title": "ChannelParticipantResponse",
-        "type": "object"
-      },
-      "ChannelPostRequest": {
-        "properties": {
           "members_only": {
             "default": false,
             "description": "A note to the pod's members: never sent outside.",
             "title": "Members Only",
             "type": "boolean"
           },
-          "mentions": {
-            "items": {
-              "$ref": "#/components/schemas/Mention"
-            },
-            "maxItems": 50,
-            "title": "Mentions",
-            "type": "array"
-          },
           "parts": {
+            "description": "Mentions, files and links. Who a line names is read from here.",
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "discriminator": {
+                "mapping": {
+                  "file": "#/components/schemas/FilePart",
+                  "link": "#/components/schemas/LinkPart",
+                  "mention": "#/components/schemas/MentionPart"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/MentionPart"
+                },
+                {
+                  "$ref": "#/components/schemas/FilePart"
+                },
+                {
+                  "$ref": "#/components/schemas/LinkPart"
+                }
+              ]
             },
             "maxItems": 20,
             "title": "Parts",
@@ -3842,7 +4043,7 @@
                 "type": "null"
               }
             ],
-            "description": "Which outside place it goes to; by default the one the channel last heard from.",
+            "description": "Which outside place it goes to; by default the thread's, else the one the channel last heard from.",
             "title": "Source Id"
           },
           "text": {
@@ -3868,12 +4069,74 @@
         "title": "ChannelPostRequest",
         "type": "object"
       },
+      "ChannelRef": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChannelKind"
+          },
+          "person": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "ChannelRef",
+        "type": "object"
+      },
       "ChannelResponse": {
         "properties": {
+          "agents_answer": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A contact's channel: whether its agents answer the contact.",
+            "title": "Agents Answer"
+          },
           "archived": {
             "default": false,
             "title": "Archived",
             "type": "boolean"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A contact's channel: who answers them by hand."
           },
           "attention": {
             "anyOf": [
@@ -3891,16 +4154,17 @@
             "title": "Created At",
             "type": "string"
           },
-          "handler": {
+          "hand_back_after_hours": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PersonRef"
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "A member who stepped in by writing to the contact: agents stay quiet until they have not written for `settings.hand_back_after_hours`, or the agent is switched on again."
+            "description": "A contact's channel: how long the assignee holds the contact after their last line before the agent answers again.",
+            "title": "Hand Back After Hours"
           },
           "id": {
             "format": "uuid",
@@ -3920,17 +4184,15 @@
               }
             ]
           },
-          "last_message_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Message At"
+          "last_line_at": {
+            "format": "date-time",
+            "title": "Last Line At",
+            "type": "string"
+          },
+          "last_seq": {
+            "default": 0,
+            "title": "Last Seq",
+            "type": "integer"
           },
           "person": {
             "anyOf": [
@@ -3943,9 +4205,6 @@
             ],
             "description": "Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP."
           },
-          "settings": {
-            "$ref": "#/components/schemas/ChannelSettingsResponse"
-          },
           "sources": {
             "description": "The outside places feeding it.",
             "items": {
@@ -3953,6 +4212,17 @@
             },
             "title": "Sources",
             "type": "array"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContactStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A contact's channel: where it stands."
           },
           "title": {
             "anyOf": [
@@ -3978,64 +4248,19 @@
           },
           "unread": {
             "$ref": "#/components/schemas/UnreadResponse"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility"
           }
         },
         "required": [
           "id",
           "kind",
-          "created_at"
+          "visibility",
+          "created_at",
+          "last_line_at"
         ],
         "title": "ChannelResponse",
-        "type": "object"
-      },
-      "ChannelSettingsChange": {
-        "description": "Only what is named changes.",
-        "properties": {
-          "agents_answer": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Switch the agent on or off; on also hands the contact back now.",
-            "title": "Agents Answer"
-          },
-          "hand_back_after_hours": {
-            "anyOf": [
-              {
-                "maximum": 720.0,
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Hand Back After Hours"
-          }
-        },
-        "title": "ChannelSettingsChange",
-        "type": "object"
-      },
-      "ChannelSettingsResponse": {
-        "properties": {
-          "agents_answer": {
-            "default": true,
-            "description": "A contact's channel: whether its agents answer the contact. Off, only members do.",
-            "title": "Agents Answer",
-            "type": "boolean"
-          },
-          "hand_back_after_hours": {
-            "default": 12,
-            "description": "How long a member who stepped in holds the contact after their last line, before the agent answers again.",
-            "title": "Hand Back After Hours",
-            "type": "integer"
-          }
-        },
-        "title": "ChannelSettingsResponse",
         "type": "object"
       },
       "ChannelSourceResponse": {
@@ -4044,6 +4269,11 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "is_private": {
+            "description": "The platform keeps it to its members.",
+            "title": "Is Private",
+            "type": "boolean"
           },
           "kind": {
             "$ref": "#/components/schemas/SourceKind"
@@ -4067,7 +4297,7 @@
             "type": "boolean"
           },
           "platform": {
-            "description": "Where it is: TELEGRAM, WHATSAPP, SLACK, TEAMS, RESEND, WEB\u2026",
+            "description": "Where it is: TELEGRAM, WHATSAPP, SLACK, TEAMS, RESEND, WEB...",
             "title": "Platform",
             "type": "string"
           },
@@ -4098,13 +4328,27 @@
         "required": [
           "id",
           "platform",
-          "kind"
+          "kind",
+          "is_private"
         ],
         "title": "ChannelSourceResponse",
         "type": "object"
       },
       "ChannelUpdateRequest": {
+        "description": "Absent is unchanged; ``null`` clears where clearing means something.\n\nA group takes ``title``, ``topic``, ``visibility``, ``archived``. A\ncontact's channel takes ``agents_answer``, ``hand_back_after_hours``,\n``status``, ``assignee`` (and needs ``contact.message``). Anything else\nfor the kind is 409.",
         "properties": {
+          "agents_answer": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On also hands the contact back now: nobody is assigned.",
+            "title": "Agents Answer"
+          },
           "archived": {
             "anyOf": [
               {
@@ -4116,16 +4360,41 @@
             ],
             "title": "Archived"
           },
-          "settings": {
+          "assignee": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ChannelSettingsChange"
+                "format": "uuid",
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "A contact's channel only; takes `contact.message`."
+            "description": "A member's user id; `null` unassigns.",
+            "title": "Assignee"
+          },
+          "hand_back_after_hours": {
+            "anyOf": [
+              {
+                "maximum": 720.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hand Back After Hours"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContactStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "title": {
             "anyOf": [
@@ -4151,6 +4420,16 @@
               }
             ],
             "title": "Topic"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Visibility"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "ChannelUpdateRequest",
@@ -5146,6 +5425,16 @@
         ],
         "title": "ContactRow",
         "type": "object"
+      },
+      "ContactStatus": {
+        "description": "Where a contact's conversation stands, as the pod's inbox sees it.",
+        "enum": [
+          "open",
+          "waiting_on_contact",
+          "closed"
+        ],
+        "title": "ContactStatus",
+        "type": "string"
       },
       "ContactUpdateRequest": {
         "properties": {
@@ -7161,6 +7450,164 @@
         "title": "DecisionUsageResponse",
         "type": "object"
       },
+      "DeliveriesResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DeliveryResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "DeliveriesResponse",
+        "type": "object"
+      },
+      "DeliveryResponse": {
+        "properties": {
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "message_id": {
+            "format": "uuid",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "sent_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus"
+          },
+          "target": {
+            "$ref": "#/components/schemas/DeliveryTarget"
+          }
+        },
+        "required": [
+          "id",
+          "message_id",
+          "target",
+          "status"
+        ],
+        "title": "DeliveryResponse",
+        "type": "object"
+      },
+      "DeliveryStatus": {
+        "enum": [
+          "PENDING",
+          "SENT",
+          "FAILED",
+          "SKIPPED",
+          "DEAD"
+        ],
+        "title": "DeliveryStatus",
+        "type": "string"
+      },
+      "DeliveryTarget": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "source",
+              "member"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "person": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The member a push went to."
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "DeliveryTarget",
+        "type": "object"
+      },
       "DirectoryTreeNode": {
         "properties": {
           "children": {
@@ -8337,6 +8784,59 @@
           "limit"
         ],
         "title": "FileListResponse",
+        "type": "object"
+      },
+      "FilePart": {
+        "description": "A file of the pod's the line shares; a reader needs access to it.",
+        "properties": {
+          "mime_type": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mime Type"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "type": {
+            "const": "file",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "path",
+          "name"
+        ],
+        "title": "FilePart",
         "type": "object"
       },
       "FileSearchRequest": {
@@ -11072,15 +11572,39 @@
         "title": "ImportStatusResponse",
         "type": "object"
       },
+      "InboxItem": {
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/ChannelRef"
+          },
+          "message": {
+            "$ref": "#/components/schemas/ChannelMessageResponse"
+          }
+        },
+        "required": [
+          "channel",
+          "message"
+        ],
+        "title": "InboxItem",
+        "type": "object"
+      },
       "InboxResponse": {
         "properties": {
+          "mentions": {
+            "description": "Unread lines naming the reader, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/InboxItem"
+            },
+            "title": "Mentions",
+            "type": "array"
+          },
           "totals": {
             "$ref": "#/components/schemas/InboxTotals"
           },
           "waiting": {
-            "description": "What is waiting on the reader, newest first.",
+            "description": "Questions waiting on the reader, newest first.",
             "items": {
-              "$ref": "#/components/schemas/WaitingItem"
+              "$ref": "#/components/schemas/InboxItem"
             },
             "title": "Waiting",
             "type": "array"
@@ -11269,94 +11793,6 @@
         "title": "InstalledAppSummary",
         "type": "object"
       },
-      "InteractionKind": {
-        "description": "What a line asks of the one person it waits on.",
-        "enum": [
-          "ASK",
-          "APPROVAL",
-          "FORM"
-        ],
-        "title": "InteractionKind",
-        "type": "string"
-      },
-      "InteractionResponse": {
-        "properties": {
-          "answer": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Answer"
-          },
-          "answered_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Answered At"
-          },
-          "answered_by": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PersonRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "awaits": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PersonRef"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The one person who may answer it."
-          },
-          "kind": {
-            "$ref": "#/components/schemas/InteractionKind"
-          },
-          "question": {
-            "additionalProperties": true,
-            "description": "What is asked: a `prompt`, and `choices` or a `form` where the asking side offers them.",
-            "title": "Question",
-            "type": "object"
-          },
-          "state": {
-            "$ref": "#/components/schemas/InteractionState"
-          }
-        },
-        "required": [
-          "kind",
-          "state",
-          "question"
-        ],
-        "title": "InteractionResponse",
-        "type": "object"
-      },
-      "InteractionState": {
-        "enum": [
-          "OPEN",
-          "ANSWERED",
-          "CANCELLED",
-          "EXPIRED"
-        ],
-        "title": "InteractionState",
-        "type": "string"
-      },
       "JsonObject": {
         "additionalProperties": {
           "$ref": "#/components/schemas/JsonValue"
@@ -11371,21 +11807,71 @@
             "title": "Created At",
             "type": "string"
           },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
           "sender": {
             "$ref": "#/components/schemas/PersonRef"
           },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
           "text": {
-            "description": "The start of what was said.",
+            "description": "The start of what was said; empty when withheld.",
             "title": "Text",
             "type": "string"
+          },
+          "withheld": {
+            "default": false,
+            "title": "Withheld",
+            "type": "boolean"
           }
         },
         "required": [
+          "id",
+          "seq",
           "sender",
           "text",
           "created_at"
         ],
         "title": "LinePreview",
+        "type": "object"
+      },
+      "LinkPart": {
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "type": {
+            "const": "link",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "pattern": "^https?://",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "url"
+        ],
+        "title": "LinkPart",
         "type": "object"
       },
       "ListeningResponse": {
@@ -11708,7 +12194,69 @@
         "title": "McpEndpointResponse",
         "type": "object"
       },
-      "Mention": {
+      "MemberRole": {
+        "enum": [
+          "owner",
+          "member",
+          "guest"
+        ],
+        "title": "MemberRole",
+        "type": "string"
+      },
+      "MemberUpdateRequest": {
+        "properties": {
+          "answers": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentAnswers"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "An agent's."
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemberRole"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A person's."
+          }
+        },
+        "title": "MemberUpdateRequest",
+        "type": "object"
+      },
+      "MembersAddRequest": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSeat"
+            },
+            "maxItems": 50,
+            "title": "Agents",
+            "type": "array"
+          },
+          "people": {
+            "description": "Members, by user id.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "People",
+            "type": "array"
+          }
+        },
+        "title": "MembersAddRequest",
+        "type": "object"
+      },
+      "MentionPart": {
+        "description": "Somebody the line names, resolved: a member, a contact or an agent.",
         "properties": {
           "id": {
             "format": "uuid",
@@ -11716,14 +12264,38 @@
             "type": "string"
           },
           "kind": {
-            "$ref": "#/components/schemas/SenderKind"
+            "enum": [
+              "MEMBER",
+              "CONTACT",
+              "AGENT"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "type": {
+            "const": "mention",
+            "title": "Type",
+            "type": "string"
           }
         },
         "required": [
+          "type",
           "kind",
           "id"
         ],
-        "title": "Mention",
+        "title": "MentionPart",
         "type": "object"
       },
       "MessageKind": {
@@ -11932,14 +12504,20 @@
         "title": "MessageResponseSchema",
         "type": "object"
       },
-      "MyChannelSettings": {
+      "MyMembershipResponse": {
         "properties": {
+          "can_manage": {
+            "default": false,
+            "description": "Whether the reader may change this channel and its members.",
+            "title": "Can Manage",
+            "type": "boolean"
+          },
           "joined": {
             "default": false,
             "title": "Joined",
             "type": "boolean"
           },
-          "last_read_at": {
+          "muted_until": {
             "anyOf": [
               {
                 "format": "date-time",
@@ -11949,7 +12527,7 @@
                 "type": "null"
               }
             ],
-            "title": "Last Read At"
+            "title": "Muted Until"
           },
           "notify": {
             "$ref": "#/components/schemas/NotifyLevel",
@@ -11969,9 +12547,70 @@
             ],
             "description": "Where lines reach them outside the app; absent for the pod's rule.",
             "title": "Notify Via"
+          },
+          "read_seq": {
+            "default": 0,
+            "title": "Read Seq",
+            "type": "integer"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemberRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
-        "title": "MyChannelSettings",
+        "title": "MyMembershipResponse",
+        "type": "object"
+      },
+      "MyMembershipUpdate": {
+        "description": "Absent is unchanged; ``null`` clears ``notify_via`` (the pod's rule)\nand ``muted_until`` (unmuted).",
+        "properties": {
+          "muted_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Muted Until"
+          },
+          "notify": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NotifyLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notify_via": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 20,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notify Via"
+          }
+        },
+        "title": "MyMembershipUpdate",
         "type": "object"
       },
       "MyUsageLimitsResponse": {
@@ -12158,19 +12797,6 @@
             "title": "Text",
             "type": "string"
           },
-          "title": {
-            "anyOf": [
-              {
-                "maxLength": 120,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "An email's subject, if it goes by email.",
-            "title": "Title"
-          },
           "to": {
             "description": "The member to tell: a pod member id, user id, or email address.",
             "maxLength": 320,
@@ -12193,33 +12819,10 @@
             "title": "Channel Id",
             "type": "string"
           },
-          "delivered_via": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Delivered Via"
-          },
           "message_id": {
             "format": "uuid",
             "title": "Message Id",
             "type": "string"
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Why it went no further than their channel, if it didn't.",
-            "title": "Reason"
           }
         },
         "required": [
@@ -12230,7 +12833,7 @@
         "type": "object"
       },
       "NotifyLevel": {
-        "description": "Which lines of a channel reach a participant outside the app.",
+        "description": "Which lines of a channel reach a member outside the app.",
         "enum": [
           "ALL",
           "MENTIONS",
@@ -12238,33 +12841,6 @@
         ],
         "title": "NotifyLevel",
         "type": "string"
-      },
-      "NotifyRequest": {
-        "properties": {
-          "notify": {
-            "$ref": "#/components/schemas/NotifyLevel"
-          },
-          "notify_via": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "maxItems": 10,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Notify Via"
-          }
-        },
-        "required": [
-          "notify"
-        ],
-        "title": "NotifyRequest",
-        "type": "object"
       },
       "OAuth2DefaultsResponseSchema": {
         "properties": {
@@ -13396,25 +13972,6 @@
           "resumable"
         ],
         "title": "PartialApplyResponse",
-        "type": "object"
-      },
-      "ParticipantsAddRequest": {
-        "properties": {
-          "members": {
-            "items": {
-              "format": "uuid",
-              "type": "string"
-            },
-            "maxItems": 200,
-            "minItems": 1,
-            "title": "Members",
-            "type": "array"
-          }
-        },
-        "required": [
-          "members"
-        ],
-        "title": "ParticipantsAddRequest",
         "type": "object"
       },
       "PendingInteractionKind": {
@@ -15109,6 +15666,128 @@
         "title": "PublishStatusResponse",
         "type": "object"
       },
+      "QuestionKind": {
+        "enum": [
+          "ASK",
+          "APPROVAL",
+          "FORM"
+        ],
+        "title": "QuestionKind",
+        "type": "string"
+      },
+      "QuestionResponse": {
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "answered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answered At"
+          },
+          "answered_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "awaits": {
+            "$ref": "#/components/schemas/PersonRef",
+            "description": "The one person who may answer it."
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/QuestionKind"
+          },
+          "question": {
+            "additionalProperties": true,
+            "description": "What is asked, in the asker's shape: a `prompt`, and `choices` or a form `schema` where it offers them.",
+            "title": "Question",
+            "type": "object"
+          },
+          "state": {
+            "$ref": "#/components/schemas/QuestionState"
+          }
+        },
+        "required": [
+          "kind",
+          "state",
+          "question",
+          "awaits"
+        ],
+        "title": "QuestionResponse",
+        "type": "object"
+      },
+      "QuestionState": {
+        "enum": [
+          "OPEN",
+          "ANSWERING",
+          "ANSWERED",
+          "CANCELLED",
+          "EXPIRED"
+        ],
+        "title": "QuestionState",
+        "type": "string"
+      },
+      "ReadRequest": {
+        "properties": {
+          "seq": {
+            "description": "The newest line the reader has seen.",
+            "minimum": 0.0,
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq"
+        ],
+        "title": "ReadRequest",
+        "type": "object"
+      },
+      "ReadResponse": {
+        "properties": {
+          "read_seq": {
+            "title": "Read Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "read_seq"
+        ],
+        "title": "ReadResponse",
+        "type": "object"
+      },
       "ReasoningEffort": {
         "description": "How long a reasoning model thinks before it answers.\n\nThe values are the OpenAI Chat Completions ``reasoning_effort`` vocabulary,\nwhich is the wire format OPENAI_COMPATIBLE speaks. Which values a given\nmodel accepts is the model's business; ``none`` and ``minimal`` in\nparticular are not universal.",
         "enum": [
@@ -16314,24 +16993,6 @@
         "title": "SearchFreshness",
         "type": "string"
       },
-      "SearchHit": {
-        "properties": {
-          "channel_id": {
-            "format": "uuid",
-            "title": "Channel Id",
-            "type": "string"
-          },
-          "message": {
-            "$ref": "#/components/schemas/ChannelMessageResponse"
-          }
-        },
-        "required": [
-          "channel_id",
-          "message"
-        ],
-        "title": "SearchHit",
-        "type": "object"
-      },
       "SearchMethod": {
         "enum": [
           "VECTOR",
@@ -16345,10 +17006,21 @@
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/SearchHit"
+              "$ref": "#/components/schemas/InboxItem"
             },
             "title": "Items",
             "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
           }
         },
         "required": [
@@ -16841,7 +17513,6 @@
         "type": "object"
       },
       "SourceKind": {
-        "description": "Whether a source is read by one person outside the pod or by several.",
         "enum": [
           "PRIVATE",
           "SHARED"
@@ -18695,6 +19366,43 @@
         "title": "TelegramManagedBotSetupResponse",
         "type": "object"
       },
+      "ThreadResponse": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "description": "Replies, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/ChannelMessageResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_after_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next After Seq"
+          },
+          "root": {
+            "$ref": "#/components/schemas/ChannelMessageResponse"
+          }
+        },
+        "required": [
+          "root",
+          "items",
+          "has_more"
+        ],
+        "title": "ThreadResponse",
+        "type": "object"
+      },
       "TriggerSkipListResponse": {
         "properties": {
           "items": {
@@ -18787,14 +19495,20 @@
         "properties": {
           "lines": {
             "default": 0,
-            "description": "New lines since the reader last read it; stops at 100.",
+            "description": "New lines since the reader last read it, in channels they joined; stops at 100.",
             "title": "Lines",
             "type": "integer"
           },
           "mentions": {
             "default": 0,
-            "description": "Lines naming the reader, unread.",
+            "description": "Unread lines naming the reader.",
             "title": "Mentions",
+            "type": "integer"
+          },
+          "read_seq": {
+            "default": 0,
+            "description": "The last line the reader read.",
+            "title": "Read Seq",
             "type": "integer"
           },
           "waiting": {
@@ -20838,6 +21552,14 @@
         "title": "VerifyTokenResponse",
         "type": "object"
       },
+      "Visibility": {
+        "enum": [
+          "public",
+          "private"
+        ],
+        "title": "Visibility",
+        "type": "string"
+      },
       "WaitUntilNode": {
         "description": "Wait node. Suspends the run until the scheduler wakes it.",
         "properties": {
@@ -20946,22 +21668,6 @@
           "config"
         ],
         "title": "WaitUntilNodeResponse",
-        "type": "object"
-      },
-      "WaitingItem": {
-        "properties": {
-          "channel": {
-            "$ref": "#/components/schemas/ChannelResponse"
-          },
-          "message": {
-            "$ref": "#/components/schemas/ChannelMessageResponse"
-          }
-        },
-        "required": [
-          "channel",
-          "message"
-        ],
-        "title": "WaitingItem",
         "type": "object"
       },
       "WebLoginListResponse": {
@@ -29845,7 +30551,7 @@
     },
     "/pods/{pod_id}/channels": {
       "get": {
-        "description": "The pod's channels this member sees, most recently active first, each\nwith what is new in it for them and its last line.",
+        "description": "The channels the reader may see, most recently active first, each with\nwhat is new in it for them and its last line.",
         "operationId": "channel.list",
         "parameters": [
           {
@@ -29904,32 +30610,89 @@
             }
           },
           {
+            "description": "`me`, or a member's user id: contacts' channels assigned to them.",
             "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "before",
+            "name": "assignee",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 100,
+                  "maxLength": 36,
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "title": "Before"
+              "description": "`me`, or a member's user id: contacts' channels assigned to them.",
+              "title": "Assignee"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unassigned",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Unassigned",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ContactStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "description": "Only channels the reader is in.",
+            "in": "query",
+            "name": "joined",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Only channels the reader is in.",
+              "title": "Joined",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
             }
           }
         ],
@@ -29968,7 +30731,7 @@
         }
       },
       "post": {
-        "description": "A channel made in Lemma, with its maker and the members they named in it.",
+        "description": "A group made in Lemma: public unless asked otherwise, with its maker as\nits owner and the members and agents named in it. The same\n`Idempotency-Key` from the same member returns the group it made.",
         "operationId": "channel.create",
         "parameters": [
           {
@@ -29979,6 +30742,24 @@
               "format": "uuid",
               "title": "Pod Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
             }
           }
         ],
@@ -30030,10 +30811,10 @@
         }
       }
     },
-    "/pods/{pod_id}/channels/search": {
+    "/pods/{pod_id}/channels/me": {
       "get": {
-        "description": "Lines matching every word, newest first, in the channels the reader sees.",
-        "operationId": "channel.message.search",
+        "description": "The reader's own channel with the pod; 404 until it is made.",
+        "operationId": "channel.me.get",
         "parameters": [
           {
             "in": "path",
@@ -30044,29 +30825,6 @@
               "title": "Pod Id",
               "type": "string"
             }
-          },
-          {
-            "in": "query",
-            "name": "q",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 1,
-              "title": "Q",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 30,
-              "maximum": 100,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
           }
         ],
         "responses": {
@@ -30074,7 +30832,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SearchResponse"
+                  "$ref": "#/components/schemas/ChannelDetailResponse"
                 }
               }
             },
@@ -30091,22 +30849,129 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Search Channels",
+        "summary": "Get My Channel",
         "tags": [
           "Channels"
         ],
         "x-lemma": {
           "kind": "query",
-          "paginates": true,
-          "resource": "channel.message",
-          "result": "collection",
-          "verb": "search"
+          "paginates": false,
+          "resource": "channel.me",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "post": {
+        "description": "Make the reader's own channel with the pod; 200 with it if it exists.",
+        "operationId": "channel.me.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create My Channel",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.me"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.me",
+          "result": "entity",
+          "verb": "create"
         }
       }
     },
     "/pods/{pod_id}/channels/{channel_id}": {
+      "delete": {
+        "description": "Delete a group made in Lemma, and its timeline: its owners' or an\nadmin's. A channel an outside place feeds is archived instead.",
+        "operationId": "channel.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Channel",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
       "get": {
-        "description": "One channel, with the places it is fed from, the people in it, and how\nthe reader hears of it.",
+        "description": "One channel, with the places it is fed from, its members and agents,\nand how the reader hears of it.",
         "operationId": "channel.get",
         "parameters": [
           {
@@ -30165,7 +31030,7 @@
         }
       },
       "patch": {
-        "description": "Rename, re-describe or archive a group; switch a contact's agent.\n\nA contact's channel changes only its `settings`, and takes\n`contact.message`: switching its agent off leaves the contact to members;\nswitching it on hands them back to the agent at once, whoever stepped in.",
+        "description": "Change exactly the fields named; `null` clears.\n\nA group: `title`, `topic`, `visibility`, `archived` -- its owners' or an\nadmin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,\n`status`, `assignee` -- for who may write to contacts. Switching the agent\non hands the contact back to it now: nobody is assigned.",
         "operationId": "channel.update",
         "parameters": [
           {
@@ -30237,10 +31102,10 @@
         }
       }
     },
-    "/pods/{pod_id}/channels/{channel_id}/me": {
-      "put": {
-        "description": "How the reader hears of this channel's lines outside the app.",
-        "operationId": "channel.notify.update",
+    "/pods/{pod_id}/channels/{channel_id}/members": {
+      "post": {
+        "description": "Add members of the pod, and the pod's agents, to a group. An agent\nalready in it answers as now asked.",
+        "operationId": "channel.member.add",
         "parameters": [
           {
             "in": "path",
@@ -30267,7 +31132,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NotifyRequest"
+                "$ref": "#/components/schemas/MembersAddRequest"
               }
             }
           },
@@ -30295,17 +31160,373 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Set My Notify",
+        "summary": "Add Members",
         "tags": [
           "Channels"
         ],
         "x-lemma": {
           "invalidates": [
-            "channel.notify"
+            "channel.member"
           ],
           "kind": "mutation",
           "paginates": false,
-          "resource": "channel.notify",
+          "resource": "channel.member",
+          "result": "entity",
+          "verb": "add"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/members/me": {
+      "delete": {
+        "description": "Leave a channel. Leaving one not joined is nothing; a member's own\nchannel cannot be left.",
+        "operationId": "channel.member.leave",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Leave Channel",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.member"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.member",
+          "result": "void",
+          "verb": "leave"
+        }
+      },
+      "patch": {
+        "description": "How the reader hears of this channel's lines outside the app. Absent is\nunchanged; `null` clears `notify_via` (the pod's rule) and `muted_until`.",
+        "operationId": "channel.member.me_update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MyMembershipUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update My Membership",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.member"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.member",
+          "result": "entity",
+          "verb": "me_update"
+        }
+      },
+      "post": {
+        "description": "Join a channel the reader may see: a public group, or -- holding\n`contact.read` -- a contact's channel. Joining one already joined is\nnothing.",
+        "operationId": "channel.member.join",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Join Channel",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.member"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.member",
+          "result": "entity",
+          "verb": "join"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}": {
+      "delete": {
+        "description": "Take somebody out of a group -- its owners' or an admin's -- or leave a\nchannel oneself.",
+        "operationId": "channel.member.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SenderKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Member Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Member",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.member"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.member",
+          "result": "void",
+          "verb": "remove"
+        }
+      },
+      "patch": {
+        "description": "A person's role (`owner` or `member`), or when an agent answers.",
+        "operationId": "channel.member.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SenderKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Member Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Member",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.member"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.member",
           "result": "entity",
           "verb": "update"
         }
@@ -30313,7 +31534,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/messages": {
       "get": {
-        "description": "The channel's timeline, oldest first: who said what, when and where.\nA thread's replies are not in it; its first line counts them.",
+        "description": "The timeline, oldest first: the newest page, the page before\n`before_seq`, or the page after `after_seq`. A thread's replies are not in\nit; its first line counts them.",
         "operationId": "channel.message.list",
         "parameters": [
           {
@@ -30338,31 +31559,48 @@
           },
           {
             "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "before",
+            "name": "before_seq",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 100,
-                  "type": "string"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "title": "Before"
+              "title": "Before Seq"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_seq",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Seq"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
             }
           }
         ],
@@ -30388,7 +31626,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "List Channel Messages",
+        "summary": "List Messages",
         "tags": [
           "Channels"
         ],
@@ -30401,7 +31639,7 @@
         }
       },
       "post": {
-        "description": "Write in the channel. It goes to one outside place -- the one named, or\nthe one the channel last heard from -- unless it is a note to members.",
+        "description": "Write in the channel. A reply goes where its thread is; otherwise to\nthe place named, or the one the channel last heard from -- unless it is a\nnote to members. Naming somebody who cannot see the channel is refused.",
         "operationId": "channel.message.post",
         "parameters": [
           {
@@ -30422,6 +31660,24 @@
               "format": "uuid",
               "title": "Channel Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
             }
           }
         ],
@@ -30457,7 +31713,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Post Channel Message",
+        "summary": "Post Message",
         "tags": [
           "Channels"
         ],
@@ -30475,7 +31731,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}": {
       "delete": {
-        "description": "Delete one's own line: it stays in its place, saying nothing.",
+        "description": "Delete one's own line: it keeps its place, saying nothing.",
         "operationId": "channel.message.delete",
         "parameters": [
           {
@@ -30524,7 +31780,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Delete Channel Message",
+        "summary": "Delete Message",
         "tags": [
           "Channels"
         ],
@@ -30606,7 +31862,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Edit Channel Message",
+        "summary": "Edit Message",
         "tags": [
           "Channels"
         ],
@@ -30624,7 +31880,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer": {
       "post": {
-        "description": "Answer what this line asks the reader: a question, an approval, a form.\n\nNo session is held across the answer: what asked the question takes it in\nits own -- a run resumed, a form submitted -- and may call out to do so.",
+        "description": "Answer what this line asks the reader: a question, an approval (which\nneeds a `decision`), a form. Only the person it waits on may.\n\nNo session is held across the answer: what asked takes it in its own -- a\nrun resumed, a form submitted -- and may call out to do so.",
         "operationId": "channel.message.answer",
         "parameters": [
           {
@@ -30690,7 +31946,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Answer Channel Question",
+        "summary": "Answer Question",
         "tags": [
           "Channels"
         ],
@@ -30706,9 +31962,164 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries": {
+      "get": {
+        "description": "Where a line went outside Lemma, and what became of each send. A push\nto a member is shown only to that member.",
+        "operationId": "channel.delivery.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveriesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Deliveries",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "channel.delivery",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry": {
+      "post": {
+        "description": "Try a failed or given-up send again, now: for who wrote the line, or\nmay change the channel.",
+        "operationId": "channel.delivery.retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Delivery Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Delivery",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.delivery"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.delivery",
+          "result": "entity",
+          "verb": "retry"
+        }
+      }
+    },
     "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread": {
       "get": {
-        "description": "A thread's replies, oldest first, the newest page of them.",
+        "description": "A thread: its first line, and its replies oldest first after `after_seq`.",
         "operationId": "channel.message.thread",
         "parameters": [
           {
@@ -30743,31 +32154,31 @@
           },
           {
             "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "before",
+            "name": "after_seq",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 100,
-                  "type": "string"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "title": "Before"
+              "title": "After Seq"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
             }
           }
         ],
@@ -30776,7 +32187,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ChannelMessagesResponse"
+                  "$ref": "#/components/schemas/ThreadResponse"
                 }
               }
             },
@@ -30806,10 +32217,10 @@
         }
       }
     },
-    "/pods/{pod_id}/channels/{channel_id}/participants": {
+    "/pods/{pod_id}/channels/{channel_id}/read": {
       "post": {
-        "description": "Add members of the pod to a group.",
-        "operationId": "channel.participant.add",
+        "description": "The reader has seen the channel up to line `seq`: it never goes back,\nand never past the newest line. Mentions up to it are read too.",
+        "operationId": "channel.read",
         "parameters": [
           {
             "in": "path",
@@ -30836,7 +32247,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ParticipantsAddRequest"
+                "$ref": "#/components/schemas/ReadRequest"
               }
             }
           },
@@ -30847,7 +32258,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ChannelDetailResponse"
+                  "$ref": "#/components/schemas/ReadResponse"
                 }
               }
             },
@@ -30864,131 +32275,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Add Participants",
-        "tags": [
-          "Channels"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "channel.participant"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "channel.participant",
-          "result": "entity",
-          "verb": "add"
-        }
-      }
-    },
-    "/pods/{pod_id}/channels/{channel_id}/participants/{member_id}": {
-      "delete": {
-        "description": "Leave a channel, or -- for who may change it -- take somebody out.",
-        "operationId": "channel.participant.remove",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "channel_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Channel Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "member_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Member Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Remove Participant",
-        "tags": [
-          "Channels"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "channel.participant"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "channel.participant",
-          "result": "void",
-          "verb": "remove"
-        }
-      }
-    },
-    "/pods/{pod_id}/channels/{channel_id}/read": {
-      "post": {
-        "description": "Everything in the channel up to now has been read by this member, and\nevery line naming them.",
-        "operationId": "channel.mark_read",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "channel_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Channel Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Mark Channel Read",
+        "summary": "Mark Read",
         "tags": [
           "Channels"
         ],
@@ -30999,8 +32286,8 @@
           "kind": "mutation",
           "paginates": false,
           "resource": "channel",
-          "result": "void",
-          "verb": "mark_read"
+          "result": "entity",
+          "verb": "read"
         }
       }
     },
@@ -36521,7 +37808,7 @@
     },
     "/pods/{pod_id}/inbox": {
       "get": {
-        "description": "What is new for the reader across the pod, and every question waiting\non them, newest first.",
+        "description": "What is new for the reader across the pod: the badges, the questions\nwaiting on them, and the unread lines naming them -- newest first.",
         "operationId": "channel.inbox.get",
         "parameters": [
           {
@@ -39123,6 +40410,114 @@
           "resource": "schedule.skip",
           "result": "collection",
           "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/search": {
+      "get": {
+        "description": "Lines matching every word, newest first, in the channels the reader\nsees -- or in one of them. An answer withheld from the reader is not found\nby what it said.",
+        "operationId": "channel.search",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "channel_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Channel Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "channel",
+          "result": "collection",
+          "verb": "search"
         }
       }
     },

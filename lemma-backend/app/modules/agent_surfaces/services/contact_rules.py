@@ -1,7 +1,7 @@
 """What a business may send a contact, and how they stop it.
 
 The rules every line a member writes to a contact is held to
-(``services.member_posts``):
+(``services.channel_deliveries``):
 
 * **Never a handle they unsubscribed**, and every email carries a line, and a
   signed link, saying how to stop (``unsubscribe_token``).

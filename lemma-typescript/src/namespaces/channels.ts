@@ -1,10 +1,29 @@
 import type { GeneratedClientAdapter } from "../generated.js";
+import type { AgentAnswers } from "../openapi_client/models/AgentAnswers.js";
+import type { AgentSeat } from "../openapi_client/models/AgentSeat.js";
+import type { ChannelCreateRequest } from "../openapi_client/models/ChannelCreateRequest.js";
+import type { ChannelEditRequest } from "../openapi_client/models/ChannelEditRequest.js";
 import type { ChannelKind } from "../openapi_client/models/ChannelKind.js";
 import type { ChannelPostRequest } from "../openapi_client/models/ChannelPostRequest.js";
 import type { ChannelUpdateRequest } from "../openapi_client/models/ChannelUpdateRequest.js";
-import type { NotifyLevel } from "../openapi_client/models/NotifyLevel.js";
+import type { ContactStatus } from "../openapi_client/models/ContactStatus.js";
+import type { MemberUpdateRequest } from "../openapi_client/models/MemberUpdateRequest.js";
+import type { MyMembershipUpdate } from "../openapi_client/models/MyMembershipUpdate.js";
+import type { SenderKind } from "../openapi_client/models/SenderKind.js";
+import type { Visibility } from "../openapi_client/models/Visibility.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 import { ChannelsService } from "../openapi_client/services/ChannelsService.js";
+
+/** An agent seated in a group: by id (answers when named), or with when it answers. */
+export type ChannelAgentSeat = string | { id: string; answers?: AgentAnswers | `${AgentAnswers}` };
+
+function seats(agents: ChannelAgentSeat[] | undefined): AgentSeat[] {
+  return (agents ?? []).map((agent) =>
+    typeof agent === "string"
+      ? { id: agent }
+      : { id: agent.id, ...(agent.answers ? { answers: agent.answers as AgentAnswers } : {}) },
+  );
+}
 
 /**
  * The places a pod's members, contacts and agents talk.
@@ -12,15 +31,22 @@ import { ChannelsService } from "../openapi_client/services/ChannelsService.js";
  * A channel is one shared timeline fed by any number of outside sources -- a
  * WhatsApp chat, a Telegram group, a Slack channel, an email thread, a web
  * chat -- or by none: a channel made in Lemma. `DIRECT` is one member and the
- * pod, `CONTACT` one contact and the pod (editors and admins), `GROUP` a chat
- * several people read. Another member's direct channel is never listed.
+ * pod, `CONTACT` one contact and the pod (a support inbox), `GROUP` a
+ * conversation of several, `public` (every member sees it) or `private` (its
+ * members only).
+ *
+ * Members are addressed as `(kind, id)`: `MEMBER` and a user id, `CONTACT`
+ * and a contact id, `AGENT` and an agent id. Updates send only the fields
+ * present; `null` clears one.
  */
 export class ChannelsNamespace {
   constructor(private readonly client: GeneratedClientAdapter) {}
 
-  /** The pod's channels, most recently active first, each with what is new in
-   *  it for the caller and its last line. Pass the opaque `next_before` back
-   *  as `before` for the next page. */
+  // -- channels ---------------------------------------------------------------
+
+  /** The channels the caller may see, most recently active first, each with
+   *  what is new in it for them and its last line. `assignee` is `me` or a
+   *  member's user id. Pass `next_cursor` back as `cursor` for the next page. */
   list(
     podId: string,
     options: {
@@ -28,8 +54,13 @@ export class ChannelsNamespace {
       archived?: boolean;
       /** Only this contact's channel. */
       contactId?: string;
+      assignee?: string;
+      unassigned?: boolean;
+      status?: ContactStatus | `${ContactStatus}`;
+      /** Only channels the caller is in. */
+      joined?: boolean;
+      cursor?: string;
       limit?: number;
-      before?: string;
     } = {},
   ) {
     return this.client.request(() =>
@@ -38,121 +69,210 @@ export class ChannelsNamespace {
         options.kind as ChannelKind | undefined,
         options.archived ?? false,
         options.contactId,
+        options.assignee,
+        options.unassigned ?? false,
+        options.status as ContactStatus | undefined,
+        options.joined ?? false,
+        options.cursor,
         options.limit ?? 50,
-        options.before,
       ),
     );
   }
 
-  /** Make a channel in Lemma, with the caller and the members named in it. */
-  create(podId: string, body: { title: string; topic?: string | null; members?: string[] }) {
+  /** Make a group in Lemma, with the caller as its owner and the members (user
+   *  ids) and agents named in it. The same `idempotencyKey` returns the group
+   *  it made. */
+  create(
+    podId: string,
+    body: Omit<ChannelCreateRequest, "agents" | "visibility"> & {
+      visibility?: Visibility | `${Visibility}`;
+      agents?: ChannelAgentSeat[];
+    },
+    options: { idempotencyKey?: string } = {},
+  ) {
     return this.client.request(() =>
-      ChannelsService.channelCreate(podId, { members: [], ...body }),
+      ChannelsService.channelCreate(
+        podId,
+        {
+          ...body,
+          members: body.members ?? [],
+          agents: seats(body.agents),
+          visibility: body.visibility as Visibility | undefined,
+        },
+        options.idempotencyKey,
+      ),
     );
   }
 
-  /** One channel, with its sources, participants and the caller's settings. */
+  /** One channel, with the places it is fed from, its members and agents, and
+   *  how the caller hears of it. */
   get(podId: string, channelId: string) {
     return this.client.request(() => ChannelsService.channelGet(podId, channelId));
   }
 
-  /** Rename, re-describe or archive a group. Who made it, or an admin. */
+  /** The caller's own channel with the pod; not found until it is made. */
+  mine(podId: string) {
+    return this.client.request(() => ChannelsService.channelMeGet(podId));
+  }
+
+  /** The caller's own channel with the pod, made if it is not there yet. */
+  openMine(podId: string) {
+    return this.client.request(() => ChannelsService.channelMeCreate(podId));
+  }
+
+  /** Change exactly the fields present; `null` clears. A group: `title`,
+   *  `topic`, `visibility`, `archived`. A contact's channel: `agents_answer`,
+   *  `hand_back_after_hours`, `status`, `assignee`. */
   update(podId: string, channelId: string, body: ChannelUpdateRequest) {
     return this.client.request(() => ChannelsService.channelUpdate(podId, channelId, body));
   }
 
-  /** Whether a contact's agents answer them. Off, only members do; on hands
-   *  them back to the agent at once. Takes `contact.message`. */
+  /** Whether a contact's agent answers them. Off, only members do; on hands
+   *  them back to the agent at once (nobody is assigned). */
   setAgentAnswers(
     podId: string,
     channelId: string,
     on: boolean,
-    options: { handBackAfterHours?: number } = {},
+    options: { handBackAfterHours?: number | null } = {},
   ) {
-    return this.client.request(() =>
-      ChannelsService.channelUpdate(podId, channelId, {
-        settings: {
-          agents_answer: on,
-          ...(options.handBackAfterHours !== undefined
-            ? { hand_back_after_hours: options.handBackAfterHours }
-            : {}),
-        },
-      }),
-    );
+    return this.update(podId, channelId, {
+      agents_answer: on,
+      ...(options.handBackAfterHours !== undefined
+        ? { hand_back_after_hours: options.handBackAfterHours }
+        : {}),
+    });
   }
 
-  /** Add members of the pod to a group. */
-  addMembers(podId: string, channelId: string, members: string[]) {
-    return this.client.request(() =>
-      ChannelsService.channelParticipantAdd(podId, channelId, { members }),
-    );
+  /** Delete a group made in Lemma and its timeline. A channel an outside place
+   *  feeds is archived instead. */
+  delete(podId: string, channelId: string) {
+    return this.client.request(() => ChannelsService.channelDelete(podId, channelId));
   }
 
-  /** Leave a channel (the caller's own id), or take somebody out of it. */
-  removeMember(podId: string, channelId: string, memberId: string) {
-    return this.client.request(() =>
-      ChannelsService.channelParticipantRemove(podId, channelId, memberId),
-    );
-  }
+  // -- members ----------------------------------------------------------------
 
-  /** How the caller hears of this channel's lines outside the app. */
-  setNotify(
+  /** Add members of the pod (user ids) and the pod's agents to a group. */
+  addMembers(
     podId: string,
     channelId: string,
-    notify: NotifyLevel | `${NotifyLevel}`,
-    via?: string[] | null,
+    body: { people?: string[]; agents?: ChannelAgentSeat[] },
   ) {
     return this.client.request(() =>
-      ChannelsService.channelNotifyUpdate(podId, channelId, {
-        notify: notify as NotifyLevel,
-        notify_via: via ?? null,
+      ChannelsService.channelMemberAdd(podId, channelId, {
+        people: body.people ?? [],
+        agents: seats(body.agents),
       }),
     );
   }
 
-  /** The channel's timeline, oldest first: who said what, when and where. A
-   *  thread's replies are left out and counted on its first line. The newest
-   *  page unless `before` is the previous page's `next_before`. */
-  messages(podId: string, channelId: string, options: { limit?: number; before?: string } = {}) {
+  /** A person's role in a group, or when an agent in it answers. */
+  updateMember(
+    podId: string,
+    channelId: string,
+    kind: SenderKind | `${SenderKind}`,
+    memberId: string,
+    body: MemberUpdateRequest,
+  ) {
     return this.client.request(() =>
-      ChannelsService.channelMessageList(podId, channelId, options.limit ?? 50, options.before),
+      ChannelsService.channelMemberUpdate(podId, channelId, kind as SenderKind, memberId, body),
     );
   }
 
-  /** A thread's replies, oldest first. */
+  /** Take somebody out of a group -- its owners' or an admin's. */
+  removeMember(
+    podId: string,
+    channelId: string,
+    kind: SenderKind | `${SenderKind}`,
+    memberId: string,
+  ) {
+    return this.client.request(() =>
+      ChannelsService.channelMemberRemove(podId, channelId, kind as SenderKind, memberId),
+    );
+  }
+
+  /** Leave a channel the caller is in. */
+  leave(podId: string, channelId: string) {
+    return this.client.request(() => ChannelsService.channelMemberLeave(podId, channelId));
+  }
+
+  /** Join a channel the caller may see: a public group, or -- holding
+   *  `contact.read` -- a contact's channel. */
+  join(podId: string, channelId: string) {
+    return this.client.request(() => ChannelsService.channelMemberJoin(podId, channelId));
+  }
+
+  /** How the caller hears of this channel's lines outside the app: `notify`,
+   *  `notify_via` (`null`: the pod's rule), `muted_until` (`null` unmutes). */
+  updateMyMembership(podId: string, channelId: string, body: MyMembershipUpdate) {
+    return this.client.request(() =>
+      ChannelsService.channelMemberMeUpdate(podId, channelId, body),
+    );
+  }
+
+  /** The caller has seen the channel up to line `seq`. It never goes back, and
+   *  never past the newest line. */
+  markRead(podId: string, channelId: string, seq: number) {
+    return this.client.request(() => ChannelsService.channelRead(podId, channelId, { seq }));
+  }
+
+  // -- lines ------------------------------------------------------------------
+
+  /** The timeline, oldest first: the newest page, the page before `beforeSeq`,
+   *  or the page after `afterSeq`. A thread's replies are left out and counted
+   *  on its first line. */
+  messages(
+    podId: string,
+    channelId: string,
+    options: { limit?: number; beforeSeq?: number; afterSeq?: number } = {},
+  ) {
+    return this.client.request(() =>
+      ChannelsService.channelMessageList(
+        podId,
+        channelId,
+        options.beforeSeq,
+        options.afterSeq,
+        options.limit ?? 50,
+      ),
+    );
+  }
+
+  /** A thread: its first line, and its replies oldest first after `afterSeq`. */
   thread(
     podId: string,
     channelId: string,
     messageId: string,
-    options: { limit?: number; before?: string } = {},
+    options: { limit?: number; afterSeq?: number } = {},
   ) {
     return this.client.request(() =>
       ChannelsService.channelMessageThread(
         podId,
         channelId,
         messageId,
+        options.afterSeq,
         options.limit ?? 50,
-        options.before,
       ),
     );
   }
 
-  /** Write in a channel. It goes to one outside place -- `source_id`, or the
-   *  one the channel last heard from -- unless `members_only` makes it a note
-   *  to members. A named agent answers. */
+  /** Write in a channel. A reply goes where its thread is; otherwise to
+   *  `source_id`, or the place the channel last heard from -- unless
+   *  `members_only` makes it a note to members. Who it names is read from its
+   *  mention parts; a named agent answers. The same `client_message_id` is the
+   *  same line. */
   post(podId: string, channelId: string, body: ChannelPostRequest) {
     return this.client.request(() => ChannelsService.channelMessagePost(podId, channelId, body));
   }
 
   /** Change what one of the caller's own lines says. */
-  edit(podId: string, channelId: string, messageId: string, text: string) {
+  edit(podId: string, channelId: string, messageId: string, body: ChannelEditRequest | string) {
+    const edit = typeof body === "string" ? { text: body } : body;
     return this.client.request(() =>
-      ChannelsService.channelMessageUpdate(podId, channelId, messageId, { text }),
+      ChannelsService.channelMessageUpdate(podId, channelId, messageId, edit),
     );
   }
 
   /** Delete one of the caller's own lines; it keeps its place, empty. */
-  delete(podId: string, channelId: string, messageId: string) {
+  deleteMessage(podId: string, channelId: string, messageId: string) {
     return this.client.request(() =>
       ChannelsService.channelMessageDelete(podId, channelId, messageId),
     );
@@ -166,27 +286,49 @@ export class ChannelsNamespace {
     );
   }
 
-  /** What is new for the caller across the pod, and what waits on them. */
+  /** Where a line went outside Lemma, and what became of each send. */
+  deliveries(podId: string, channelId: string, messageId: string) {
+    return this.client.request(() =>
+      ChannelsService.channelDeliveryList(podId, channelId, messageId),
+    );
+  }
+
+  /** Try a failed or given-up send again, now. */
+  retryDelivery(podId: string, channelId: string, messageId: string, deliveryId: string) {
+    return this.client.request(() =>
+      ChannelsService.channelDeliveryRetry(podId, channelId, messageId, deliveryId),
+    );
+  }
+
+  // -- across the pod ---------------------------------------------------------
+
+  /** What is new for the caller across the pod: the badges, the questions
+   *  waiting on them, and the unread lines naming them. */
   inbox(podId: string) {
     return this.client.request(() => ChannelsService.channelInboxGet(podId));
   }
 
-  /** Lines matching every word, newest first, in the channels the caller sees. */
-  search(podId: string, q: string, options: { limit?: number } = {}) {
+  /** Lines matching every word, newest first, in the channels the caller sees
+   *  -- or in one of them. Page with `next_cursor`. */
+  search(
+    podId: string,
+    q: string,
+    options: { channelId?: string; cursor?: string; limit?: number } = {},
+  ) {
     return this.client.request(() =>
-      ChannelsService.channelMessageSearch(podId, q, options.limit ?? 30),
+      ChannelsService.channelSearch(
+        podId,
+        q,
+        options.channelId,
+        options.cursor,
+        options.limit ?? 30,
+      ),
     );
   }
 
-  /** Tell another member of the pod something: a line in their own channel,
-   *  carried on to where they last spoke. `to` is a pod member id, user id or
-   *  email address. */
-  notify(podId: string, body: { to: string; text: string; title?: string | null }) {
+  /** Tell another member of the pod something: a line in their own channel.
+   *  `to` is a pod member id, user id or email address. */
+  notify(podId: string, body: { to: string; text: string }) {
     return this.client.request(() => AgentSurfacesService.agentNoticeSend(podId, body));
-  }
-
-  /** Note that the caller has read the channel up to now. */
-  markRead(podId: string, channelId: string) {
-    return this.client.request(() => ChannelsService.channelMarkRead(podId, channelId));
   }
 }

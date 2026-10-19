@@ -7,8 +7,8 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.channel_messages_response import ChannelMessagesResponse
 from ...models.error_response import ErrorResponse
+from ...models.thread_response import ThreadResponse
 from ...types import UNSET, Response, Unset
 
 
@@ -17,20 +17,20 @@ def _get_kwargs(
     channel_id: UUID,
     message_id: UUID,
     *,
+    after_seq: int | None | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
-    params["limit"] = limit
-
-    json_before: None | str | Unset
-    if isinstance(before, Unset):
-        json_before = UNSET
+    json_after_seq: int | None | Unset
+    if isinstance(after_seq, Unset):
+        json_after_seq = UNSET
     else:
-        json_before = before
-    params["before"] = json_before
+        json_after_seq = after_seq
+    params["after_seq"] = json_after_seq
+
+    params["limit"] = limit
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -49,9 +49,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ChannelMessagesResponse | ErrorResponse | None:
+) -> ErrorResponse | ThreadResponse | None:
     if response.status_code == 200:
-        response_200 = ChannelMessagesResponse.from_dict(response.json())
+        response_200 = ThreadResponse.from_dict(response.json())
 
         return response_200
 
@@ -68,7 +68,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ChannelMessagesResponse | ErrorResponse]:
+) -> Response[ErrorResponse | ThreadResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -83,34 +83,34 @@ def sync_detailed(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    after_seq: int | None | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
-) -> Response[ChannelMessagesResponse | ErrorResponse]:
+) -> Response[ErrorResponse | ThreadResponse]:
     """List Thread
 
-     A thread's replies, oldest first, the newest page of them.
+     A thread: its first line, and its replies oldest first after `after_seq`.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
+        after_seq (int | None | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ChannelMessagesResponse | ErrorResponse]
+        Response[ErrorResponse | ThreadResponse]
     """
 
     kwargs = _get_kwargs(
         pod_id=pod_id,
         channel_id=channel_id,
         message_id=message_id,
+        after_seq=after_seq,
         limit=limit,
-        before=before,
     )
 
     response = client.get_httpx_client().request(
@@ -126,26 +126,26 @@ def sync(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    after_seq: int | None | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
-) -> ChannelMessagesResponse | ErrorResponse | None:
+) -> ErrorResponse | ThreadResponse | None:
     """List Thread
 
-     A thread's replies, oldest first, the newest page of them.
+     A thread: its first line, and its replies oldest first after `after_seq`.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
+        after_seq (int | None | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ChannelMessagesResponse | ErrorResponse
+        ErrorResponse | ThreadResponse
     """
 
     return sync_detailed(
@@ -153,8 +153,8 @@ def sync(
         channel_id=channel_id,
         message_id=message_id,
         client=client,
+        after_seq=after_seq,
         limit=limit,
-        before=before,
     ).parsed
 
 
@@ -164,34 +164,34 @@ async def asyncio_detailed(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    after_seq: int | None | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
-) -> Response[ChannelMessagesResponse | ErrorResponse]:
+) -> Response[ErrorResponse | ThreadResponse]:
     """List Thread
 
-     A thread's replies, oldest first, the newest page of them.
+     A thread: its first line, and its replies oldest first after `after_seq`.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
+        after_seq (int | None | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ChannelMessagesResponse | ErrorResponse]
+        Response[ErrorResponse | ThreadResponse]
     """
 
     kwargs = _get_kwargs(
         pod_id=pod_id,
         channel_id=channel_id,
         message_id=message_id,
+        after_seq=after_seq,
         limit=limit,
-        before=before,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -205,26 +205,26 @@ async def asyncio(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    after_seq: int | None | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
-) -> ChannelMessagesResponse | ErrorResponse | None:
+) -> ErrorResponse | ThreadResponse | None:
     """List Thread
 
-     A thread's replies, oldest first, the newest page of them.
+     A thread: its first line, and its replies oldest first after `after_seq`.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
+        after_seq (int | None | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ChannelMessagesResponse | ErrorResponse
+        ErrorResponse | ThreadResponse
     """
 
     return (
@@ -233,7 +233,7 @@ async def asyncio(
             channel_id=channel_id,
             message_id=message_id,
             client=client,
+            after_seq=after_seq,
             limit=limit,
-            before=before,
         )
     ).parsed

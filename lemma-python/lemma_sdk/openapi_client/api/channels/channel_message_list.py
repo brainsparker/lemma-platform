@@ -16,20 +16,28 @@ def _get_kwargs(
     pod_id: UUID,
     channel_id: UUID,
     *,
+    before_seq: int | None | Unset = UNSET,
+    after_seq: int | None | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
-    params["limit"] = limit
-
-    json_before: None | str | Unset
-    if isinstance(before, Unset):
-        json_before = UNSET
+    json_before_seq: int | None | Unset
+    if isinstance(before_seq, Unset):
+        json_before_seq = UNSET
     else:
-        json_before = before
-    params["before"] = json_before
+        json_before_seq = before_seq
+    params["before_seq"] = json_before_seq
+
+    json_after_seq: int | None | Unset
+    if isinstance(after_seq, Unset):
+        json_after_seq = UNSET
+    else:
+        json_after_seq = after_seq
+    params["after_seq"] = json_after_seq
+
+    params["limit"] = limit
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -80,19 +88,22 @@ def sync_detailed(
     channel_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    before_seq: int | None | Unset = UNSET,
+    after_seq: int | None | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> Response[ChannelMessagesResponse | ErrorResponse]:
-    """List Channel Messages
+    """List Messages
 
-     The channel's timeline, oldest first: who said what, when and where.
-    A thread's replies are not in it; its first line counts them.
+     The timeline, oldest first: the newest page, the page before
+    `before_seq`, or the page after `after_seq`. A thread's replies are not in
+    it; its first line counts them.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
+        before_seq (int | None | Unset):
+        after_seq (int | None | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -105,8 +116,9 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         channel_id=channel_id,
+        before_seq=before_seq,
+        after_seq=after_seq,
         limit=limit,
-        before=before,
     )
 
     response = client.get_httpx_client().request(
@@ -121,19 +133,22 @@ def sync(
     channel_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    before_seq: int | None | Unset = UNSET,
+    after_seq: int | None | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> ChannelMessagesResponse | ErrorResponse | None:
-    """List Channel Messages
+    """List Messages
 
-     The channel's timeline, oldest first: who said what, when and where.
-    A thread's replies are not in it; its first line counts them.
+     The timeline, oldest first: the newest page, the page before
+    `before_seq`, or the page after `after_seq`. A thread's replies are not in
+    it; its first line counts them.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
+        before_seq (int | None | Unset):
+        after_seq (int | None | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -147,8 +162,9 @@ def sync(
         pod_id=pod_id,
         channel_id=channel_id,
         client=client,
+        before_seq=before_seq,
+        after_seq=after_seq,
         limit=limit,
-        before=before,
     ).parsed
 
 
@@ -157,19 +173,22 @@ async def asyncio_detailed(
     channel_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    before_seq: int | None | Unset = UNSET,
+    after_seq: int | None | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> Response[ChannelMessagesResponse | ErrorResponse]:
-    """List Channel Messages
+    """List Messages
 
-     The channel's timeline, oldest first: who said what, when and where.
-    A thread's replies are not in it; its first line counts them.
+     The timeline, oldest first: the newest page, the page before
+    `before_seq`, or the page after `after_seq`. A thread's replies are not in
+    it; its first line counts them.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
+        before_seq (int | None | Unset):
+        after_seq (int | None | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -182,8 +201,9 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         channel_id=channel_id,
+        before_seq=before_seq,
+        after_seq=after_seq,
         limit=limit,
-        before=before,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -196,19 +216,22 @@ async def asyncio(
     channel_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    before_seq: int | None | Unset = UNSET,
+    after_seq: int | None | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> ChannelMessagesResponse | ErrorResponse | None:
-    """List Channel Messages
+    """List Messages
 
-     The channel's timeline, oldest first: who said what, when and where.
-    A thread's replies are not in it; its first line counts them.
+     The timeline, oldest first: the newest page, the page before
+    `before_seq`, or the page after `after_seq`. A thread's replies are not in
+    it; its first line counts them.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
+        before_seq (int | None | Unset):
+        after_seq (int | None | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -223,7 +246,8 @@ async def asyncio(
             pod_id=pod_id,
             channel_id=channel_id,
             client=client,
+            before_seq=before_seq,
+            after_seq=after_seq,
             limit=limit,
-            before=before,
         )
     ).parsed

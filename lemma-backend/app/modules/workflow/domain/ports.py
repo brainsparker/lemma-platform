@@ -232,40 +232,42 @@ class FunctionPort(ABC):
         """Cancels a dispatched function run. Best effort; see stop_conversation."""
 
 
-class WorkflowNotificationPort(Protocol):
-    """What the engine tells a person's inbox about a run.
+class FormQuestionPort(Protocol):
+    """Where a form waiting on a person is asked: a question in their inbox.
 
-    A Protocol rather than an ABC because the notifier is the one collaborator
-    the engine holds that has no domain of its own here: it exists so that a
-    form waiting on someone, a form they just answered, and a run that was
-    cancelled under them all reach the same inbox. Named at all so the engine's
-    constructor says what it needs instead of taking whatever it is handed.
+    A Protocol rather than an ABC because the asker has no domain of its own
+    here: it exists so that a form waiting on someone, a form they just
+    answered, and a run that ended under them all reach the same inbox. Named
+    at all so the engine's constructor says what it needs.
     """
 
-    async def notify_form_assignee(
+    async def ask_form(
         self,
         *,
         pod_id: UUID,
         run_id: UUID,
         flow_id: UUID,
         node_id: str,
+        wait_id: UUID,
         assigned_pod_member_id: UUID,
         flow_name: str | None,
         schema: dict[str, object] | None,
         actor_user_id: UUID | None,
+        expires_at: datetime | None,
     ) -> None:
-        """Tell the assignee a form is waiting on them."""
+        """Ask the assignee for the form, until ``expires_at``."""
 
-    async def close_form_notification(
+    async def form_answered(
         self,
         *,
         pod_id: UUID,
         run_id: UUID,
         node_id: str,
-        summary: str,
-        data: dict[str, object] | None = None,
+        wait_id: UUID,
+        data: dict[str, object],
+        by_user_id: UUID | None,
     ) -> None:
-        """Close the form's notification once it has been answered."""
+        """The form was submitted: its question is answered with what was sent."""
 
-    async def cancel_for_run(self, *, run_id: UUID) -> None:
-        """Withdraw every notification this run raised, when it is cancelled."""
+    async def run_ended(self, *, pod_id: UUID, run_id: UUID) -> None:
+        """Nothing of this run waits on anybody any more."""

@@ -16519,18 +16519,22 @@ var LemmaClient = (() => {
   var ChannelsService = class {
     /**
      * List Channels
-     * The pod's channels this member sees, most recently active first, each
-     * with what is new in it for them and its last line.
+     * The channels the reader may see, most recently active first, each with
+     * what is new in it for them and its last line.
      * @param podId
      * @param kind
      * @param archived
      * @param contactId Only this contact's channel.
+     * @param assignee `me`, or a member's user id: contacts' channels assigned to them.
+     * @param unassigned
+     * @param status
+     * @param joined Only channels the reader is in.
+     * @param cursor
      * @param limit
-     * @param before
      * @returns ChannelListResponse Successful Response
      * @throws ApiError
      */
-    static channelList(podId, kind, archived = false, contactId, limit = 50, before) {
+    static channelList(podId, kind, archived = false, contactId, assignee, unassigned = false, status, joined = false, cursor, limit = 50) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/channels",
@@ -16541,8 +16545,12 @@ var LemmaClient = (() => {
           "kind": kind,
           "archived": archived,
           "contact_id": contactId,
-          "limit": limit,
-          "before": before
+          "assignee": assignee,
+          "unassigned": unassigned,
+          "status": status,
+          "joined": joined,
+          "cursor": cursor,
+          "limit": limit
         },
         errors: {
           422: `Validation Error`
@@ -16551,18 +16559,24 @@ var LemmaClient = (() => {
     }
     /**
      * Create Channel
-     * A channel made in Lemma, with its maker and the members they named in it.
+     * A group made in Lemma: public unless asked otherwise, with its maker as
+     * its owner and the members and agents named in it. The same
+     * `Idempotency-Key` from the same member returns the group it made.
      * @param podId
      * @param requestBody
+     * @param idempotencyKey
      * @returns ChannelDetailResponse Successful Response
      * @throws ApiError
      */
-    static channelCreate(podId, requestBody) {
+    static channelCreate(podId, requestBody, idempotencyKey) {
       return request(OpenAPI, {
         method: "POST",
         url: "/pods/{pod_id}/channels",
         path: {
           "pod_id": podId
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
         },
         body: requestBody,
         mediaType: "application/json",
@@ -16572,24 +16586,59 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Search Channels
-     * Lines matching every word, newest first, in the channels the reader sees.
+     * Get My Channel
+     * The reader's own channel with the pod; 404 until it is made.
      * @param podId
-     * @param q
-     * @param limit
-     * @returns SearchResponse Successful Response
+     * @returns ChannelDetailResponse Successful Response
      * @throws ApiError
      */
-    static channelMessageSearch(podId, q, limit = 30) {
+    static channelMeGet(podId) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/pods/{pod_id}/channels/search",
+        url: "/pods/{pod_id}/channels/me",
         path: {
           "pod_id": podId
         },
-        query: {
-          "q": q,
-          "limit": limit
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create My Channel
+     * Make the reader's own channel with the pod; 200 with it if it exists.
+     * @param podId
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMeCreate(podId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/me",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Delete Channel
+     * Delete a group made in Lemma, and its timeline: its owners' or an
+     * admin's. A channel an outside place feeds is archived instead.
+     * @param podId
+     * @param channelId
+     * @returns void
+     * @throws ApiError
+     */
+    static channelDelete(podId, channelId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
         },
         errors: {
           422: `Validation Error`
@@ -16598,8 +16647,8 @@ var LemmaClient = (() => {
     }
     /**
      * Get Channel
-     * One channel, with the places it is fed from, the people in it, and how
-     * the reader hears of it.
+     * One channel, with the places it is fed from, its members and agents,
+     * and how the reader hears of it.
      * @param podId
      * @param channelId
      * @returns ChannelDetailResponse Successful Response
@@ -16620,11 +16669,12 @@ var LemmaClient = (() => {
     }
     /**
      * Update Channel
-     * Rename, re-describe or archive a group; switch a contact's agent.
+     * Change exactly the fields named; `null` clears.
      *
-     * A contact's channel changes only its `settings`, and takes
-     * `contact.message`: switching its agent off leaves the contact to members;
-     * switching it on hands them back to the agent at once, whoever stepped in.
+     * A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
+     * admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+     * `status`, `assignee` -- for who may write to contacts. Switching the agent
+     * on hands the contact back to it now: nobody is assigned.
      * @param podId
      * @param channelId
      * @param requestBody
@@ -16647,18 +16697,19 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Set My Notify
-     * How the reader hears of this channel's lines outside the app.
+     * Add Members
+     * Add members of the pod, and the pod's agents, to a group. An agent
+     * already in it answers as now asked.
      * @param podId
      * @param channelId
      * @param requestBody
      * @returns ChannelDetailResponse Successful Response
      * @throws ApiError
      */
-    static channelNotifyUpdate(podId, channelId, requestBody) {
+    static channelMemberAdd(podId, channelId, requestBody) {
       return request(OpenAPI, {
-        method: "PUT",
-        url: "/pods/{pod_id}/channels/{channel_id}/me",
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/members",
         path: {
           "pod_id": podId,
           "channel_id": channelId
@@ -16671,17 +16722,143 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * List Channel Messages
-     * The channel's timeline, oldest first: who said what, when and where.
-     * A thread's replies are not in it; its first line counts them.
+     * Leave Channel
+     * Leave a channel. Leaving one not joined is nothing; a member's own
+     * channel cannot be left.
      * @param podId
      * @param channelId
+     * @returns void
+     * @throws ApiError
+     */
+    static channelMemberLeave(podId, channelId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}/members/me",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update My Membership
+     * How the reader hears of this channel's lines outside the app. Absent is
+     * unchanged; `null` clears `notify_via` (the pod's rule) and `muted_until`.
+     * @param podId
+     * @param channelId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMemberMeUpdate(podId, channelId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/channels/{channel_id}/members/me",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Join Channel
+     * Join a channel the reader may see: a public group, or -- holding
+     * `contact.read` -- a contact's channel. Joining one already joined is
+     * nothing.
+     * @param podId
+     * @param channelId
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMemberJoin(podId, channelId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/members/me",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Remove Member
+     * Take somebody out of a group -- its owners' or an admin's -- or leave a
+     * channel oneself.
+     * @param podId
+     * @param channelId
+     * @param kind
+     * @param memberId
+     * @returns void
+     * @throws ApiError
+     */
+    static channelMemberRemove(podId, channelId, kind, memberId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "kind": kind,
+          "member_id": memberId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Member
+     * A person's role (`owner` or `member`), or when an agent answers.
+     * @param podId
+     * @param channelId
+     * @param kind
+     * @param memberId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMemberUpdate(podId, channelId, kind, memberId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "kind": kind,
+          "member_id": memberId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Messages
+     * The timeline, oldest first: the newest page, the page before
+     * `before_seq`, or the page after `after_seq`. A thread's replies are not in
+     * it; its first line counts them.
+     * @param podId
+     * @param channelId
+     * @param beforeSeq
+     * @param afterSeq
      * @param limit
-     * @param before
      * @returns ChannelMessagesResponse Successful Response
      * @throws ApiError
      */
-    static channelMessageList(podId, channelId, limit = 50, before) {
+    static channelMessageList(podId, channelId, beforeSeq, afterSeq, limit = 50) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/channels/{channel_id}/messages",
@@ -16690,8 +16867,9 @@ var LemmaClient = (() => {
           "channel_id": channelId
         },
         query: {
-          "limit": limit,
-          "before": before
+          "before_seq": beforeSeq,
+          "after_seq": afterSeq,
+          "limit": limit
         },
         errors: {
           422: `Validation Error`
@@ -16699,22 +16877,27 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Post Channel Message
-     * Write in the channel. It goes to one outside place -- the one named, or
-     * the one the channel last heard from -- unless it is a note to members.
+     * Post Message
+     * Write in the channel. A reply goes where its thread is; otherwise to
+     * the place named, or the one the channel last heard from -- unless it is a
+     * note to members. Naming somebody who cannot see the channel is refused.
      * @param podId
      * @param channelId
      * @param requestBody
+     * @param idempotencyKey
      * @returns ChannelMessageResponse Successful Response
      * @throws ApiError
      */
-    static channelMessagePost(podId, channelId, requestBody) {
+    static channelMessagePost(podId, channelId, requestBody, idempotencyKey) {
       return request(OpenAPI, {
         method: "POST",
         url: "/pods/{pod_id}/channels/{channel_id}/messages",
         path: {
           "pod_id": podId,
           "channel_id": channelId
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
         },
         body: requestBody,
         mediaType: "application/json",
@@ -16724,8 +16907,8 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Delete Channel Message
-     * Delete one's own line: it stays in its place, saying nothing.
+     * Delete Message
+     * Delete one's own line: it keeps its place, saying nothing.
      * @param podId
      * @param channelId
      * @param messageId
@@ -16747,7 +16930,7 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Edit Channel Message
+     * Edit Message
      * Change what one's own line says. A copy already sent outside stays as sent.
      * @param podId
      * @param channelId
@@ -16773,11 +16956,12 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Answer Channel Question
-     * Answer what this line asks the reader: a question, an approval, a form.
+     * Answer Question
+     * Answer what this line asks the reader: a question, an approval (which
+     * needs a `decision`), a form. Only the person it waits on may.
      *
-     * No session is held across the answer: what asked the question takes it in
-     * its own -- a run resumed, a form submitted -- and may call out to do so.
+     * No session is held across the answer: what asked takes it in its own -- a
+     * run resumed, a form submitted -- and may call out to do so.
      * @param podId
      * @param channelId
      * @param messageId
@@ -16802,17 +16986,67 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * List Thread
-     * A thread's replies, oldest first, the newest page of them.
+     * List Deliveries
+     * Where a line went outside Lemma, and what became of each send. A push
+     * to a member is shown only to that member.
      * @param podId
      * @param channelId
      * @param messageId
-     * @param limit
-     * @param before
-     * @returns ChannelMessagesResponse Successful Response
+     * @returns DeliveriesResponse Successful Response
      * @throws ApiError
      */
-    static channelMessageThread(podId, channelId, messageId, limit = 50, before) {
+    static channelDeliveryList(podId, channelId, messageId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Retry Delivery
+     * Try a failed or given-up send again, now: for who wrote the line, or
+     * may change the channel.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param deliveryId
+     * @returns DeliveryResponse Successful Response
+     * @throws ApiError
+     */
+    static channelDeliveryRetry(podId, channelId, messageId, deliveryId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId,
+          "delivery_id": deliveryId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Thread
+     * A thread: its first line, and its replies oldest first after `after_seq`.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param afterSeq
+     * @param limit
+     * @returns ThreadResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageThread(podId, channelId, messageId, afterSeq, limit = 50) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread",
@@ -16822,8 +17056,8 @@ var LemmaClient = (() => {
           "message_id": messageId
         },
         query: {
-          "limit": limit,
-          "before": before
+          "after_seq": afterSeq,
+          "limit": limit
         },
         errors: {
           422: `Validation Error`
@@ -16831,18 +17065,19 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Add Participants
-     * Add members of the pod to a group.
+     * Mark Read
+     * The reader has seen the channel up to line `seq`: it never goes back,
+     * and never past the newest line. Mentions up to it are read too.
      * @param podId
      * @param channelId
      * @param requestBody
-     * @returns ChannelDetailResponse Successful Response
+     * @returns ReadResponse Successful Response
      * @throws ApiError
      */
-    static channelParticipantAdd(podId, channelId, requestBody) {
+    static channelRead(podId, channelId, requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/pods/{pod_id}/channels/{channel_id}/participants",
+        url: "/pods/{pod_id}/channels/{channel_id}/read",
         path: {
           "pod_id": podId,
           "channel_id": channelId
@@ -16855,54 +17090,9 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Remove Participant
-     * Leave a channel, or -- for who may change it -- take somebody out.
-     * @param podId
-     * @param channelId
-     * @param memberId
-     * @returns void
-     * @throws ApiError
-     */
-    static channelParticipantRemove(podId, channelId, memberId) {
-      return request(OpenAPI, {
-        method: "DELETE",
-        url: "/pods/{pod_id}/channels/{channel_id}/participants/{member_id}",
-        path: {
-          "pod_id": podId,
-          "channel_id": channelId,
-          "member_id": memberId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Mark Channel Read
-     * Everything in the channel up to now has been read by this member, and
-     * every line naming them.
-     * @param podId
-     * @param channelId
-     * @returns void
-     * @throws ApiError
-     */
-    static channelMarkRead(podId, channelId) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/channels/{channel_id}/read",
-        path: {
-          "pod_id": podId,
-          "channel_id": channelId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
      * Get Inbox
-     * What is new for the reader across the pod, and every question waiting
-     * on them, newest first.
+     * What is new for the reader across the pod: the badges, the questions
+     * waiting on them, and the unread lines naming them -- newest first.
      * @param podId
      * @returns InboxResponse Successful Response
      * @throws ApiError
@@ -16919,90 +17109,189 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Search
+     * Lines matching every word, newest first, in the channels the reader
+     * sees -- or in one of them. An answer withheld from the reader is not found
+     * by what it said.
+     * @param podId
+     * @param q
+     * @param channelId
+     * @param cursor
+     * @param limit
+     * @returns SearchResponse Successful Response
+     * @throws ApiError
+     */
+    static channelSearch(podId, q, channelId, cursor, limit = 30) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/search",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "q": q,
+          "channel_id": channelId,
+          "cursor": cursor,
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/channels.ts
+  function seats(agents) {
+    return (agents != null ? agents : []).map(
+      (agent) => typeof agent === "string" ? { id: agent } : { id: agent.id, ...agent.answers ? { answers: agent.answers } : {} }
+    );
+  }
   var ChannelsNamespace = class {
     constructor(client) {
       __publicField(this, "client", client);
     }
-    /** The pod's channels, most recently active first, each with what is new in
-     *  it for the caller and its last line. Pass the opaque `next_before` back
-     *  as `before` for the next page. */
+    // -- channels ---------------------------------------------------------------
+    /** The channels the caller may see, most recently active first, each with
+     *  what is new in it for them and its last line. `assignee` is `me` or a
+     *  member's user id. Pass `next_cursor` back as `cursor` for the next page. */
     list(podId, options = {}) {
       return this.client.request(
         () => {
-          var _a, _b;
+          var _a, _b, _c, _d;
           return ChannelsService.channelList(
             podId,
             options.kind,
             (_a = options.archived) != null ? _a : false,
             options.contactId,
-            (_b = options.limit) != null ? _b : 50,
-            options.before
+            options.assignee,
+            (_b = options.unassigned) != null ? _b : false,
+            options.status,
+            (_c = options.joined) != null ? _c : false,
+            options.cursor,
+            (_d = options.limit) != null ? _d : 50
           );
         }
       );
     }
-    /** Make a channel in Lemma, with the caller and the members named in it. */
-    create(podId, body) {
+    /** Make a group in Lemma, with the caller as its owner and the members (user
+     *  ids) and agents named in it. The same `idempotencyKey` returns the group
+     *  it made. */
+    create(podId, body, options = {}) {
       return this.client.request(
-        () => ChannelsService.channelCreate(podId, { members: [], ...body })
+        () => {
+          var _a;
+          return ChannelsService.channelCreate(
+            podId,
+            {
+              ...body,
+              members: (_a = body.members) != null ? _a : [],
+              agents: seats(body.agents),
+              visibility: body.visibility
+            },
+            options.idempotencyKey
+          );
+        }
       );
     }
-    /** One channel, with its sources, participants and the caller's settings. */
+    /** One channel, with the places it is fed from, its members and agents, and
+     *  how the caller hears of it. */
     get(podId, channelId) {
       return this.client.request(() => ChannelsService.channelGet(podId, channelId));
     }
-    /** Rename, re-describe or archive a group. Who made it, or an admin. */
+    /** The caller's own channel with the pod; not found until it is made. */
+    mine(podId) {
+      return this.client.request(() => ChannelsService.channelMeGet(podId));
+    }
+    /** The caller's own channel with the pod, made if it is not there yet. */
+    openMine(podId) {
+      return this.client.request(() => ChannelsService.channelMeCreate(podId));
+    }
+    /** Change exactly the fields present; `null` clears. A group: `title`,
+     *  `topic`, `visibility`, `archived`. A contact's channel: `agents_answer`,
+     *  `hand_back_after_hours`, `status`, `assignee`. */
     update(podId, channelId, body) {
       return this.client.request(() => ChannelsService.channelUpdate(podId, channelId, body));
     }
-    /** Whether a contact's agents answer them. Off, only members do; on hands
-     *  them back to the agent at once. Takes `contact.message`. */
+    /** Whether a contact's agent answers them. Off, only members do; on hands
+     *  them back to the agent at once (nobody is assigned). */
     setAgentAnswers(podId, channelId, on, options = {}) {
+      return this.update(podId, channelId, {
+        agents_answer: on,
+        ...options.handBackAfterHours !== void 0 ? { hand_back_after_hours: options.handBackAfterHours } : {}
+      });
+    }
+    /** Delete a group made in Lemma and its timeline. A channel an outside place
+     *  feeds is archived instead. */
+    delete(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelDelete(podId, channelId));
+    }
+    // -- members ----------------------------------------------------------------
+    /** Add members of the pod (user ids) and the pod's agents to a group. */
+    addMembers(podId, channelId, body) {
       return this.client.request(
-        () => ChannelsService.channelUpdate(podId, channelId, {
-          settings: {
-            agents_answer: on,
-            ...options.handBackAfterHours !== void 0 ? { hand_back_after_hours: options.handBackAfterHours } : {}
-          }
-        })
+        () => {
+          var _a;
+          return ChannelsService.channelMemberAdd(podId, channelId, {
+            people: (_a = body.people) != null ? _a : [],
+            agents: seats(body.agents)
+          });
+        }
       );
     }
-    /** Add members of the pod to a group. */
-    addMembers(podId, channelId, members) {
+    /** A person's role in a group, or when an agent in it answers. */
+    updateMember(podId, channelId, kind, memberId, body) {
       return this.client.request(
-        () => ChannelsService.channelParticipantAdd(podId, channelId, { members })
+        () => ChannelsService.channelMemberUpdate(podId, channelId, kind, memberId, body)
       );
     }
-    /** Leave a channel (the caller's own id), or take somebody out of it. */
-    removeMember(podId, channelId, memberId) {
+    /** Take somebody out of a group -- its owners' or an admin's. */
+    removeMember(podId, channelId, kind, memberId) {
       return this.client.request(
-        () => ChannelsService.channelParticipantRemove(podId, channelId, memberId)
+        () => ChannelsService.channelMemberRemove(podId, channelId, kind, memberId)
       );
     }
-    /** How the caller hears of this channel's lines outside the app. */
-    setNotify(podId, channelId, notify, via) {
+    /** Leave a channel the caller is in. */
+    leave(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelMemberLeave(podId, channelId));
+    }
+    /** Join a channel the caller may see: a public group, or -- holding
+     *  `contact.read` -- a contact's channel. */
+    join(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelMemberJoin(podId, channelId));
+    }
+    /** How the caller hears of this channel's lines outside the app: `notify`,
+     *  `notify_via` (`null`: the pod's rule), `muted_until` (`null` unmutes). */
+    updateMyMembership(podId, channelId, body) {
       return this.client.request(
-        () => ChannelsService.channelNotifyUpdate(podId, channelId, {
-          notify,
-          notify_via: via != null ? via : null
-        })
+        () => ChannelsService.channelMemberMeUpdate(podId, channelId, body)
       );
     }
-    /** The channel's timeline, oldest first: who said what, when and where. A
-     *  thread's replies are left out and counted on its first line. The newest
-     *  page unless `before` is the previous page's `next_before`. */
+    /** The caller has seen the channel up to line `seq`. It never goes back, and
+     *  never past the newest line. */
+    markRead(podId, channelId, seq) {
+      return this.client.request(() => ChannelsService.channelRead(podId, channelId, { seq }));
+    }
+    // -- lines ------------------------------------------------------------------
+    /** The timeline, oldest first: the newest page, the page before `beforeSeq`,
+     *  or the page after `afterSeq`. A thread's replies are left out and counted
+     *  on its first line. */
     messages(podId, channelId, options = {}) {
       return this.client.request(
         () => {
           var _a;
-          return ChannelsService.channelMessageList(podId, channelId, (_a = options.limit) != null ? _a : 50, options.before);
+          return ChannelsService.channelMessageList(
+            podId,
+            channelId,
+            options.beforeSeq,
+            options.afterSeq,
+            (_a = options.limit) != null ? _a : 50
+          );
         }
       );
     }
-    /** A thread's replies, oldest first. */
+    /** A thread: its first line, and its replies oldest first after `afterSeq`. */
     thread(podId, channelId, messageId, options = {}) {
       return this.client.request(
         () => {
@@ -17011,26 +17300,29 @@ var LemmaClient = (() => {
             podId,
             channelId,
             messageId,
-            (_a = options.limit) != null ? _a : 50,
-            options.before
+            options.afterSeq,
+            (_a = options.limit) != null ? _a : 50
           );
         }
       );
     }
-    /** Write in a channel. It goes to one outside place -- `source_id`, or the
-     *  one the channel last heard from -- unless `members_only` makes it a note
-     *  to members. A named agent answers. */
+    /** Write in a channel. A reply goes where its thread is; otherwise to
+     *  `source_id`, or the place the channel last heard from -- unless
+     *  `members_only` makes it a note to members. Who it names is read from its
+     *  mention parts; a named agent answers. The same `client_message_id` is the
+     *  same line. */
     post(podId, channelId, body) {
       return this.client.request(() => ChannelsService.channelMessagePost(podId, channelId, body));
     }
     /** Change what one of the caller's own lines says. */
-    edit(podId, channelId, messageId, text) {
+    edit(podId, channelId, messageId, body) {
+      const edit = typeof body === "string" ? { text: body } : body;
       return this.client.request(
-        () => ChannelsService.channelMessageUpdate(podId, channelId, messageId, { text })
+        () => ChannelsService.channelMessageUpdate(podId, channelId, messageId, edit)
       );
     }
     /** Delete one of the caller's own lines; it keeps its place, empty. */
-    delete(podId, channelId, messageId) {
+    deleteMessage(podId, channelId, messageId) {
       return this.client.request(
         () => ChannelsService.channelMessageDelete(podId, channelId, messageId)
       );
@@ -17042,28 +17334,44 @@ var LemmaClient = (() => {
         () => ChannelsService.channelMessageAnswer(podId, channelId, messageId, { answer })
       );
     }
-    /** What is new for the caller across the pod, and what waits on them. */
+    /** Where a line went outside Lemma, and what became of each send. */
+    deliveries(podId, channelId, messageId) {
+      return this.client.request(
+        () => ChannelsService.channelDeliveryList(podId, channelId, messageId)
+      );
+    }
+    /** Try a failed or given-up send again, now. */
+    retryDelivery(podId, channelId, messageId, deliveryId) {
+      return this.client.request(
+        () => ChannelsService.channelDeliveryRetry(podId, channelId, messageId, deliveryId)
+      );
+    }
+    // -- across the pod ---------------------------------------------------------
+    /** What is new for the caller across the pod: the badges, the questions
+     *  waiting on them, and the unread lines naming them. */
     inbox(podId) {
       return this.client.request(() => ChannelsService.channelInboxGet(podId));
     }
-    /** Lines matching every word, newest first, in the channels the caller sees. */
+    /** Lines matching every word, newest first, in the channels the caller sees
+     *  -- or in one of them. Page with `next_cursor`. */
     search(podId, q, options = {}) {
       return this.client.request(
         () => {
           var _a;
-          return ChannelsService.channelMessageSearch(podId, q, (_a = options.limit) != null ? _a : 30);
+          return ChannelsService.channelSearch(
+            podId,
+            q,
+            options.channelId,
+            options.cursor,
+            (_a = options.limit) != null ? _a : 30
+          );
         }
       );
     }
-    /** Tell another member of the pod something: a line in their own channel,
-     *  carried on to where they last spoke. `to` is a pod member id, user id or
-     *  email address. */
+    /** Tell another member of the pod something: a line in their own channel.
+     *  `to` is a pod member id, user id or email address. */
     notify(podId, body) {
       return this.client.request(() => AgentSurfacesService.agentNoticeSend(podId, body));
-    }
-    /** Note that the caller has read the channel up to now. */
-    markRead(podId, channelId) {
-      return this.client.request(() => ChannelsService.channelMarkRead(podId, channelId));
     }
   };
 

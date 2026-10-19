@@ -107,11 +107,10 @@ not merely to sit on a question. Compare:
 `to` takes a **pod member id, user id, or email address** — a human name does not
 resolve. Without `wants_answer` it is news: nothing comes back.
 
-By default it reaches someone wherever they last spoke to *this* agent, falling back to
-the agent's mailbox. An agent with a reason to choose passes `channel` — `email`, `slack`,
-`teams`, `telegram` or `whatsapp` — and a channel it names is used or refused, never
-swapped for another; `list_pod_members` reports each member's `reachable_on` so the choice
-is a read rather than a guess.
+It is a line in the person's own channel in Lemma; how they hear of it — a push to the
+chat app or email they chose — is the channel's to decide, not the agent's.
+`list_pod_members` reports each member's `reachable_on` for information. `wants_answer`
+asks one person, so it is refused together with `channel_id`.
 
 `MESSAGING` is on for every top-level agent (and withheld from sub-agents); holding it is
 the whole grant. It is **deferred**, though — the tools are not in the prompt prefix, so

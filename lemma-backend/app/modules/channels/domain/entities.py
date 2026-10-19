@@ -1,21 +1,21 @@
 """A channel: one shared place where a pod's members, contacts and agents talk.
 
-A channel holds a timeline -- every message people saw, who said it, when and
-where -- and is fed by any number of **sources**: a WhatsApp chat, a Telegram
-group, a Slack channel, an email thread, a web chat. A source joins a channel
+A channel holds a timeline -- every line people saw, who said it, when and
+where -- numbered per channel (``seq``), and is fed by any number of
+**sources**: places in an external account (a WhatsApp chat, a Telegram
+group, a Slack channel, an email thread, a web chat). A source joins a channel
 only because the channel was made for it or a member linked it; nothing infers
 that two places are one.
 
-Three kinds, decided by who the channel is about:
+``DIRECT``  one member and the pod: what the pod tells them, their private
+            chats with its bot on every platform.
+``CONTACT`` one contact and the pod: their private chats, web chat, emails --
+            the support inbox for that person.
+``GROUP``   several people: made in Lemma, or a platform's group or channel.
+            ``public`` (every member reads it) or ``private`` (its members).
 
-``DIRECT``  one member and the pod: their private chats on every platform.
-``CONTACT`` one contact and the pod: their private chats, web chat, emails.
-``GROUP``   a chat several people read: a group, a shared channel, a thread
-            with other people on it.
-
-An agent's working -- its tool calls and reasoning -- is never a channel
-message. That stays in the conversation, which is one agent working for one
-person, attached to the channel.
+An agent's working -- tool calls, reasoning -- is never a line. That stays in
+the conversation: one agent working for one person, placed in the channel.
 """
 
 from __future__ import annotations
@@ -25,7 +25,9 @@ from enum import StrEnum
 from typing import Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
+
+from app.modules.channels.domain.parts import Part
 
 
 class ChannelKind(StrEnum):
@@ -34,12 +36,26 @@ class ChannelKind(StrEnum):
     GROUP = "GROUP"
 
 
-class SourceKind(StrEnum):
-    """Whether a source is read by one person outside the pod or by several."""
+class Visibility(StrEnum):
+    #: Every member of the pod may read it.
+    PUBLIC = "public"
+    #: Its members only.
+    PRIVATE = "private"
 
-    #: A private chat, a web chat, an email between two people.
+
+class ContactStatus(StrEnum):
+    """Where a contact's conversation stands, as the pod's inbox sees it."""
+
+    OPEN = "open"
+    #: Answered; the next move is the contact's.
+    WAITING_ON_CONTACT = "waiting_on_contact"
+    CLOSED = "closed"
+
+
+class SourceKind(StrEnum):
+    #: One person's chat with the bot.
     PRIVATE = "PRIVATE"
-    #: A group, a shared channel, an email thread with others on it.
+    #: A place several people read.
     SHARED = "SHARED"
 
 
@@ -50,31 +66,68 @@ class SenderKind(StrEnum):
 
 
 class NotifyLevel(StrEnum):
-    """Which lines of a channel reach a participant outside the app."""
+    """Which lines of a channel reach a member outside the app."""
 
     ALL = "ALL"
     MENTIONS = "MENTIONS"
     NONE = "NONE"
 
 
-class InteractionKind(StrEnum):
-    """What a line asks of the one person it waits on."""
+class MemberRole(StrEnum):
+    OWNER = "owner"
+    MEMBER = "member"
+    #: A contact in a channel.
+    GUEST = "guest"
 
-    #: A question, with choices or free text (``ask_user``).
+
+class AgentAnswers(StrEnum):
+    """When an agent in a channel answers."""
+
+    #: When a line names it.
+    MENTIONED = "MENTIONED"
+    #: Every line said there.
+    EVERY_LINE = "EVERY_LINE"
+
+
+class QuestionKind(StrEnum):
+    #: A question, with choices or free text (``ask_user``, another member's
+    #: agent asking).
     ASK = "ASK"
-    #: Whether an agent may go ahead (``request_approval``).
+    #: Whether an agent may go ahead (``request_approval``). Only a person's
+    #: tap answers it.
     APPROVAL = "APPROVAL"
     #: A workflow's form.
     FORM = "FORM"
 
 
-class InteractionState(StrEnum):
+class QuestionState(StrEnum):
     OPEN = "OPEN"
+    #: An answer is being taken; nobody else may answer meanwhile.
+    ANSWERING = "ANSWERING"
     ANSWERED = "ANSWERED"
-    #: The run that asked ended or was stopped before an answer came.
+    #: What asked ended, or was stopped, before an answer came.
     CANCELLED = "CANCELLED"
     #: Its deadline passed.
     EXPIRED = "EXPIRED"
+
+    @property
+    def is_closed(self) -> bool:
+        return self in (
+            QuestionState.ANSWERED,
+            QuestionState.CANCELLED,
+            QuestionState.EXPIRED,
+        )
+
+
+class DeliveryStatus(StrEnum):
+    PENDING = "PENDING"
+    SENT = "SENT"
+    #: Did not go; will be tried again.
+    FAILED = "FAILED"
+    #: Not sent, on purpose: a rule said not to (opt-out, a window, a cap).
+    SKIPPED = "SKIPPED"
+    #: Tried as often as it will be.
+    DEAD = "DEAD"
 
 
 class Principal(BaseModel):
@@ -104,34 +157,17 @@ class Principal(BaseModel):
         return self.contact_id is not None
 
 
-#: How long a member who stepped in holds a contact by default, unless they
-#: write again: past it, the contact's agent answers them once more.
-HAND_BACK_AFTER_HOURS = 12
+class ExternalAccount(BaseModel):
+    """An account a pod's bot speaks through: a Slack workspace, a Teams
+    tenant, a WhatsApp number, an inbox, a web widget."""
 
+    model_config = ConfigDict(frozen=True)
 
-class ChannelSettings(BaseModel):
-    """A channel's own switches, kept as one JSON object; a key never set is
-    its default, so a setting is added without a migration."""
-
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    #: Whether a contact's agents answer them here. Off, nobody but a member
-    #: does -- however long it is since one last wrote.
-    agents_answer: bool = True
-    #: A member who stepped in holds the contact this long after their last
-    #: line; then the agent answers again, and the member is told.
-    hand_back_after_hours: int = Field(default=HAND_BACK_AFTER_HOURS, ge=1, le=720)
-
-
-def read_settings(raw: object) -> ChannelSettings:
-    """A channel's settings as stored; a stored value no longer valid is its
-    default, never an error on every read of the channel."""
-    if not isinstance(raw, dict):
-        return ChannelSettings()
-    try:
-        return ChannelSettings.model_validate(raw)
-    except ValidationError:
-        return ChannelSettings()
+    id: UUID
+    pod_id: UUID
+    platform: str
+    account_key: str
+    surface_id: UUID | None = None
 
 
 class Channel(BaseModel):
@@ -140,49 +176,57 @@ class Channel(BaseModel):
     id: UUID
     pod_id: UUID
     kind: ChannelKind
+    visibility: Visibility
     title: str | None = None
+    topic: str | None = None
     #: Whose DIRECT channel this is.
     member_user_id: UUID | None = None
     #: Whose CONTACT channel this is.
     contact_id: UUID | None = None
-    #: A member who stepped in; while one has, agents do not answer here.
-    handler_user_id: UUID | None = None
-    created_at: datetime
-    last_message_at: datetime | None = None
-    #: What it is for, in a line; a channel made in Lemma has one.
-    topic: str | None = None
     created_by_user_id: UUID | None = None
+    created_at: datetime
     archived_at: datetime | None = None
-    #: Since when it has asked for a person, and why; cleared on stepping in.
+    # -- a contact's channel ---------------------------------------------------
+    agents_answer: bool = True
+    hand_back_after_hours: int = 12
+    assignee_user_id: UUID | None = None
+    assigned_at: datetime | None = None
+    assignee_last_line_at: datetime | None = None
+    status: ContactStatus = ContactStatus.OPEN
     attention_at: datetime | None = None
     attention_reason: str | None = None
-    settings: ChannelSettings = ChannelSettings()
+    # -- the timeline's head ---------------------------------------------------
+    last_seq: int = 0
+    last_line_id: UUID | None = None
+    last_line_at: datetime
+
+    @property
+    def is_archived(self) -> bool:
+        return self.archived_at is not None
 
 
 class Source(BaseModel):
-    """One outside place a channel is fed by.
-
-    Keyed by the surface it arrives on and the place on the platform: a group's
-    or a thread's id, or -- for a private chat -- the person's id on the
-    platform, so a chat that moves (a WhatsApp number reassigned in the pool)
-    stays the same source.
-    """
+    """One outside place a channel is fed by, in one external account."""
 
     model_config = ConfigDict(frozen=True)
 
     id: UUID
     channel_id: UUID
     pod_id: UUID
+    account_id: UUID
+    #: The installation the account is reached through now (the account's).
     surface_id: UUID | None
     platform: str
     kind: SourceKind
+    #: The platform keeps it to its members.
+    is_private: bool = True
     external_channel_id: str | None = None
     external_user_id: str | None = None
     title: str | None = None
     last_inbound_at: datetime | None = None
-    #: What the surface last heard here: how to write into the place cold.
+    #: How the account writes into the place cold: the adapter's own shape.
     delivery_ref: dict[str, object] | None = None
-    # -- a shared place the pod's bot is in -----------------------------------
+    # -- a shared place: its bot-side settings ---------------------------------
     owner_user_id: UUID | None = None
     answers_outsiders: bool = True
     shared_externally: bool = False
@@ -203,15 +247,32 @@ class Source(BaseModel):
         return self.answers_outsiders and self.owner_user_id is not None
 
 
-class Participant(BaseModel):
+class Member(BaseModel):
+    """Somebody in a channel: a member of the pod, a contact, or an agent."""
+
     model_config = ConfigDict(frozen=True)
 
     channel_id: UUID
-    principal: Principal
-    last_read_at: datetime | None = None
+    user_id: UUID | None = None
+    contact_id: UUID | None = None
+    agent_id: UUID | None = None
+    role: MemberRole = MemberRole.MEMBER
     notify: NotifyLevel = NotifyLevel.ALL
-    #: The platforms they chose to be reached on, or ``None`` for the pod's rule.
+    #: Platforms they chose to be reached on, or ``None`` for where they last
+    #: spoke to the pod.
     notify_via: tuple[str, ...] | None = None
+    muted_until: datetime | None = None
+    #: An agent's: when it answers here.
+    answers: AgentAnswers | None = None
+    joined_at: datetime | None = None
+
+    @property
+    def principal(self) -> Principal | None:
+        if self.user_id is not None:
+            return Principal.member(self.user_id)
+        if self.contact_id is not None:
+            return Principal.contact(self.contact_id)
+        return None
 
 
 class Sender(BaseModel):
@@ -269,6 +330,15 @@ class Sender(BaseModel):
         )
 
     @property
+    def principal(self) -> Principal | None:
+        """The person who said it: a member or a contact; not an agent."""
+        if self.user_id is not None:
+            return Principal.member(self.user_id)
+        if self.contact_id is not None:
+            return Principal.contact(self.contact_id)
+        return None
+
+    @property
     def used_a_members_access(self) -> bool:
         """An agent's line written with one member's own access.
 
@@ -280,28 +350,38 @@ class Sender(BaseModel):
         )
 
 
-class Interaction(BaseModel):
-    """What a line asks of one person, and -- once given -- their answer.
+class Question(BaseModel):
+    """What a line asks of one person, and what became of it.
 
-    ``question`` is the asking side's own shape: the choices or the form, and
-    what an answer resumes (a paused tool call, a workflow's wait). Nothing in
-    this module reads inside it.
+    ``question`` is the asker's own shape -- choices, a form's schema, the tool
+    an approval is for. ``ref`` names the asker and what an answer resumes.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    kind: InteractionKind
-    state: InteractionState
+    message_id: UUID
+    channel_id: UUID
+    pod_id: UUID
+    ref: str
+    batch_id: str | None = None
+    kind: QuestionKind
+    state: QuestionState
     question: dict[str, object]
-    #: The one person who may answer it.
-    awaits: Principal | None = None
+    awaits: Principal
     answer: dict[str, object] | None = None
-    answered_at: datetime | None = None
     answered_by: Principal | None = None
+    answered_at: datetime | None = None
+    expires_at: datetime | None = None
+    created_at: datetime | None = None
 
     @property
     def is_open(self) -> bool:
-        return self.state is InteractionState.OPEN
+        return self.state is QuestionState.OPEN
+
+    @property
+    def asker(self) -> str:
+        """What asked it: the ref's first part (``tool``, ``wf``, ``msg``)."""
+        return self.ref.partition(":")[0]
 
 
 class ChannelMessage(BaseModel):
@@ -311,29 +391,30 @@ class ChannelMessage(BaseModel):
 
     id: UUID
     channel_id: UUID
+    pod_id: UUID
+    seq: int
     sender: Sender
     text: str
-    pod_id: UUID | None = None
     created_at: datetime
+    client_message_id: str | None = None
     #: Where it was said, or ``None`` for a line written in Lemma.
     source_id: UUID | None = None
     #: A note for the pod's members only: never delivered, never shown outside.
     members_only: bool = False
+    parts: tuple[Part, ...] = ()
     conversation_id: UUID | None = None
+    agent_run_id: UUID | None = None
     external_message_id: str | None = None
     external_thread_id: str | None = None
-    #: On a line a person said on a platform: what its surface needs to answer
-    #: it in place.
+    #: On a line a person said on a platform: what answers it in place.
     reply_ref: dict[str, object] | None = None
-    #: Files, resources and voice beside the text, in the envelope's shape.
-    parts: tuple[dict[str, object], ...] = ()
-    agent_run_id: UUID | None = None
     reply_to_id: UUID | None = None
     #: The line a thread hangs from, on every reply in it.
     thread_root_id: UUID | None = None
     edited_at: datetime | None = None
     deleted_at: datetime | None = None
-    interaction: Interaction | None = None
+    #: The question it asks, if it asks one.
+    question: Question | None = None
     #: On a thread's root, as read with it: how many replies, and the last's time.
     reply_count: int = 0
     last_reply_at: datetime | None = None
@@ -341,3 +422,23 @@ class ChannelMessage(BaseModel):
     @property
     def is_deleted(self) -> bool:
         return self.deleted_at is not None
+
+
+class Delivery(BaseModel):
+    """One send of a line outside Lemma, and what became of it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: UUID
+    message_id: UUID
+    pod_id: UUID
+    source_id: UUID | None = None
+    recipient_user_id: UUID | None = None
+    platform: str | None = None
+    status: DeliveryStatus
+    reason: str | None = None
+    external_message_id: str | None = None
+    attempts: int = 0
+    next_attempt_at: datetime | None = None
+    sent_at: datetime | None = None
+    created_at: datetime | None = None

@@ -1,27 +1,37 @@
-"""The wire shapes of a channel's lines, the questions on them, and the inbox."""
+"""The wire shapes of a channel's lines, the questions they ask, their
+deliveries, the inbox and search -- and the mappers to them.
+
+A line is always shown as one member reads it (``message_response``): an
+answer an agent made with another member's own access is ``withheld`` -- the
+reader sees that it was given, and for whom, not what it said.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from app.modules.channels.api.schemas import (
-    ChannelResponse,
-    LinePreview,
+    AgentNames,
     Names,
     PersonRef,
+    agent_ref,
     ref,
 )
 from app.modules.channels.domain.entities import (
+    Channel,
+    ChannelKind,
     ChannelMessage,
-    InteractionKind,
-    InteractionState,
+    Delivery,
+    DeliveryStatus,
     Principal,
-    SenderKind,
+    QuestionKind,
+    QuestionState,
 )
+from app.modules.channels.domain.parts import MAX_PARTS, Part
 from app.modules.channels.domain.projection import withheld_from
 
 #: How much of a line a preview shows.
@@ -30,25 +40,26 @@ PREVIEW_CHARS = 140
 JsonObject = dict[str, object]
 
 
-class InteractionResponse(BaseModel):
-    kind: InteractionKind
-    state: InteractionState
+class QuestionResponse(BaseModel):
+    kind: QuestionKind
+    state: QuestionState
     question: JsonObject = Field(
         description=(
-            "What is asked: a `prompt`, and `choices` or a `form` where the "
-            "asking side offers them."
+            "What is asked, in the asker's shape: a `prompt`, and `choices` or "
+            "a form `schema` where it offers them."
         )
     )
-    awaits: PersonRef | None = Field(
-        default=None, description="The one person who may answer it."
-    )
+    awaits: PersonRef = Field(description="The one person who may answer it.")
     answer: JsonObject | None = None
-    answered_at: datetime | None = None
     answered_by: PersonRef | None = None
+    answered_at: datetime | None = None
+    expires_at: datetime | None = None
 
 
 class ChannelMessageResponse(BaseModel):
     id: UUID
+    channel_id: UUID
+    seq: int = Field(description="Its place in the channel's timeline.")
     sender: PersonRef
     on_behalf_of: PersonRef | None = Field(
         default=None,
@@ -68,15 +79,14 @@ class ChannelMessageResponse(BaseModel):
             "reader sees that it was given, and for whom, not what it said."
         ),
     )
+    parts: list[Part] = Field(default_factory=list)
+    client_message_id: str | None = None
     source_id: UUID | None = Field(
         default=None,
-        description="Where it was said; absent for a line written in Lemma.",
+        description="Where it was said or sent; absent for a line only in Lemma.",
     )
     members_only: bool = False
-    conversation_id: UUID | None = Field(
-        default=None, description="For an agent's line: the conversation it came from."
-    )
-    parts: list[JsonObject] = Field(default_factory=list)
+    conversation_id: UUID | None = None
     reply_to_id: UUID | None = None
     thread_root_id: UUID | None = Field(
         default=None, description="The line this one is a reply in the thread of."
@@ -85,22 +95,31 @@ class ChannelMessageResponse(BaseModel):
     last_reply_at: datetime | None = None
     edited_at: datetime | None = None
     deleted: bool = False
-    interaction: InteractionResponse | None = None
+    question: QuestionResponse | None = None
     created_at: datetime
 
 
 class ChannelMessagesResponse(BaseModel):
-    items: list[ChannelMessageResponse] = Field(
-        description="Oldest first, the newest page unless `before` was given."
+    items: list[ChannelMessageResponse] = Field(description="Oldest first.")
+    has_more: bool = Field(
+        description=(
+            "Whether there are more lines in the direction read: older ones, or "
+            "with `after_seq`, newer ones."
+        )
     )
-    next_before: str | None = Field(
-        default=None, description="Pass as `before` for the page before this one."
+    next_before_seq: int | None = Field(
+        default=None, description="Pass as `before_seq` for the older page."
+    )
+    next_after_seq: int | None = Field(
+        default=None, description="Pass as `after_seq` for the newer page."
     )
 
 
-class Mention(BaseModel):
-    kind: SenderKind
-    id: UUID
+class ThreadResponse(BaseModel):
+    root: ChannelMessageResponse
+    items: list[ChannelMessageResponse] = Field(description="Replies, oldest first.")
+    has_more: bool
+    next_after_seq: int | None = None
 
 
 class ChannelPostRequest(BaseModel):
@@ -111,20 +130,32 @@ class ChannelPostRequest(BaseModel):
     source_id: UUID | None = Field(
         default=None,
         description=(
-            "Which outside place it goes to; by default the one the channel "
-            "last heard from."
+            "Which outside place it goes to; by default the thread's, else the "
+            "one the channel last heard from."
         ),
     )
     thread_root_id: UUID | None = Field(
         default=None, description="Reply in the thread of this line."
     )
     reply_to_id: UUID | None = None
-    parts: list[JsonObject] = Field(default_factory=list, max_length=20)
-    mentions: list[Mention] = Field(default_factory=list, max_length=50)
+    parts: list[Part] = Field(
+        default_factory=list,
+        max_length=MAX_PARTS,
+        description="Mentions, files and links. Who a line names is read from here.",
+    )
+    client_message_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="The client's name for this line: sending it again is the same line.",
+    )
 
 
 class ChannelEditRequest(BaseModel):
     text: str = Field(min_length=1, max_length=20_000)
+    parts: list[Part] | None = Field(
+        default=None, max_length=MAX_PARTS, description="Absent keeps the parts."
+    )
 
 
 class ChannelAnswerRequest(BaseModel):
@@ -140,8 +171,40 @@ class ChannelAnswerRequest(BaseModel):
     ]
 
 
-class WaitingItem(BaseModel):
-    channel: ChannelResponse
+class DeliveryTarget(BaseModel):
+    kind: Literal["source", "member"]
+    source_id: UUID | None = None
+    person: PersonRef | None = Field(
+        default=None, description="The member a push went to."
+    )
+
+
+class DeliveryResponse(BaseModel):
+    id: UUID
+    message_id: UUID
+    target: DeliveryTarget
+    platform: str | None = None
+    status: DeliveryStatus
+    reason: str | None = None
+    attempts: int = 0
+    next_attempt_at: datetime | None = None
+    sent_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class DeliveriesResponse(BaseModel):
+    items: list[DeliveryResponse]
+
+
+class ChannelRef(BaseModel):
+    id: UUID
+    kind: ChannelKind
+    title: str | None = None
+    person: PersonRef | None = None
+
+
+class InboxItem(BaseModel):
+    channel: ChannelRef
     message: ChannelMessageResponse
 
 
@@ -153,118 +216,160 @@ class InboxTotals(BaseModel):
 
 class InboxResponse(BaseModel):
     totals: InboxTotals
-    waiting: list[WaitingItem] = Field(
-        default_factory=list, description="What is waiting on the reader, newest first."
+    waiting: list[InboxItem] = Field(
+        default_factory=list,
+        description="Questions waiting on the reader, newest first.",
+    )
+    mentions: list[InboxItem] = Field(
+        default_factory=list,
+        description="Unread lines naming the reader, newest first.",
     )
 
 
-class SearchHit(BaseModel):
-    channel_id: UUID
-    message: ChannelMessageResponse
-
-
 class SearchResponse(BaseModel):
-    items: list[SearchHit]
+    items: list[InboxItem]
+    next_cursor: str | None = None
+
+
+# -- mappers --------------------------------------------------------------------
 
 
 def message_people(message: ChannelMessage) -> list[Principal]:
     """Everybody a line names, for one name lookup per page."""
     people: list[Principal] = []
-    sender = message.sender
-    if sender.user_id:
-        people.append(Principal.member(sender.user_id))
-    if sender.contact_id:
-        people.append(Principal.contact(sender.contact_id))
-    if sender.on_behalf_of:
-        people.append(sender.on_behalf_of)
-    interaction = message.interaction
-    if interaction is not None:
-        people.extend(
-            person
-            for person in (interaction.awaits, interaction.answered_by)
-            if person is not None
-        )
+    sender = message.sender.principal
+    if sender is not None:
+        people.append(sender)
+    if message.sender.on_behalf_of:
+        people.append(message.sender.on_behalf_of)
+    question = message.question
+    if question is not None:
+        people.append(question.awaits)
+        if question.answered_by is not None:
+            people.append(question.answered_by)
     return people
 
 
-def _sender(message: ChannelMessage, names: Names) -> PersonRef:
+def message_agents(message: ChannelMessage) -> list[UUID]:
+    return [message.sender.agent_id] if message.sender.agent_id else []
+
+
+def _sender(message: ChannelMessage, names: Names, agents: AgentNames) -> PersonRef:
     sender = message.sender
-    principal = (
-        Principal.member(sender.user_id)
-        if sender.user_id
-        else Principal.contact(sender.contact_id)
-        if sender.contact_id
-        else None
-    )
-    looked_up = names.get(principal) if principal else None
-    return PersonRef(
-        kind=sender.kind,
-        id=sender.user_id or sender.contact_id or sender.agent_id,
-        name=looked_up or sender.display_name,
-    )
+    principal = sender.principal
+    if principal is not None:
+        named = ref(principal, names)
+        return named.model_copy(update={"name": named.name or sender.display_name})
+    if sender.agent_id is not None:
+        return PersonRef(
+            kind=sender.kind,
+            id=sender.agent_id,
+            name=sender.display_name or agents.get(sender.agent_id),
+        )
+    return PersonRef(kind=sender.kind, id=None, name=sender.display_name)
 
 
-def _interaction(message: ChannelMessage, names: Names) -> InteractionResponse | None:
-    interaction = message.interaction
-    if interaction is None:
+def _question(message: ChannelMessage, names: Names) -> QuestionResponse | None:
+    question = message.question
+    if question is None:
         return None
-    return InteractionResponse(
-        kind=interaction.kind,
-        state=interaction.state,
-        question={
-            key: value for key, value in interaction.question.items() if key != "ref"
-        },
-        awaits=ref(interaction.awaits, names) if interaction.awaits else None,
-        answer=dict(interaction.answer) if interaction.answer is not None else None,
-        answered_at=interaction.answered_at,
-        answered_by=(
-            ref(interaction.answered_by, names) if interaction.answered_by else None
+    return QuestionResponse(
+        kind=question.kind,
+        state=question.state,
+        question={k: v for k, v in question.question.items() if k != "ref"},
+        awaits=ref(question.awaits, names),
+        answer=dict(question.answer) if question.answer is not None else None,
+        answered_by=ref(question.answered_by, names) if question.answered_by else None,
+        answered_at=question.answered_at,
+        expires_at=question.expires_at,
+    )
+
+
+def hidden_from(message: ChannelMessage, channel: Channel, reader_id: UUID) -> bool:
+    return withheld_from(
+        message,
+        user_id=reader_id,
+        in_their_direct=(
+            channel.kind is ChannelKind.DIRECT and channel.member_user_id == reader_id
         ),
     )
 
 
 def message_response(
     message: ChannelMessage,
+    channel: Channel,
     *,
     reader_id: UUID,
     names: Names | None = None,
-    in_their_direct: bool = False,
+    agents: AgentNames | None = None,
 ) -> ChannelMessageResponse:
-    """One line as the member ``reader_id`` reads it; ``in_their_direct`` when
-    it is in the reader's own direct channel."""
+    """One line as the member ``reader_id`` reads it."""
     names = names or {}
     behalf = message.sender.on_behalf_of
-    hidden = withheld_from(message, user_id=reader_id, in_their_direct=in_their_direct)
+    hidden = hidden_from(message, channel, reader_id)
     return ChannelMessageResponse(
         id=message.id,
-        sender=_sender(message, names),
+        channel_id=message.channel_id,
+        seq=message.seq,
+        sender=_sender(message, names, agents or {}),
         on_behalf_of=ref(behalf, names) if behalf else None,
         text=None if hidden or message.is_deleted else message.text,
         withheld=hidden,
+        parts=[] if hidden else list(message.parts),
+        client_message_id=message.client_message_id,
         source_id=message.source_id,
         members_only=message.members_only,
         conversation_id=message.conversation_id,
-        parts=[] if hidden else [dict(part) for part in message.parts],
         reply_to_id=message.reply_to_id,
         thread_root_id=message.thread_root_id,
         reply_count=message.reply_count,
         last_reply_at=message.last_reply_at,
         edited_at=message.edited_at,
         deleted=message.is_deleted,
-        interaction=None if hidden else _interaction(message, names),
+        question=None if hidden else _question(message, names),
         created_at=message.created_at,
     )
 
 
-def preview(
-    message: ChannelMessage,
-    *,
-    reader_id: UUID,
-    names: Names,
-    in_their_direct: bool = False,
-) -> LinePreview:
-    hidden = withheld_from(message, user_id=reader_id, in_their_direct=in_their_direct)
-    text = "" if hidden or message.is_deleted else message.text[:PREVIEW_CHARS]
-    return LinePreview(
-        sender=_sender(message, names), text=text, created_at=message.created_at
+def delivery_response(delivery: Delivery, *, names: Names) -> DeliveryResponse:
+    if delivery.recipient_user_id is not None:
+        person = Principal.member(delivery.recipient_user_id)
+        target = DeliveryTarget(kind="member", person=ref(person, names))
+    else:
+        target = DeliveryTarget(kind="source", source_id=delivery.source_id)
+    return DeliveryResponse(
+        id=delivery.id,
+        message_id=delivery.message_id,
+        target=target,
+        platform=delivery.platform,
+        status=delivery.status,
+        reason=delivery.reason,
+        attempts=delivery.attempts,
+        next_attempt_at=delivery.next_attempt_at,
+        sent_at=delivery.sent_at,
+        created_at=delivery.created_at,
     )
+
+
+__all__ = [
+    "ChannelAnswerRequest",
+    "ChannelEditRequest",
+    "ChannelMessageResponse",
+    "ChannelMessagesResponse",
+    "ChannelPostRequest",
+    "ChannelRef",
+    "DeliveriesResponse",
+    "DeliveryResponse",
+    "InboxItem",
+    "InboxResponse",
+    "InboxTotals",
+    "QuestionResponse",
+    "SearchResponse",
+    "ThreadResponse",
+    "agent_ref",
+    "delivery_response",
+    "hidden_from",
+    "message_agents",
+    "message_people",
+    "message_response",
+]

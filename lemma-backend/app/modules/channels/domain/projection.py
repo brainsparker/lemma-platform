@@ -90,8 +90,8 @@ def withheld_from(
         return False
     if in_their_direct:
         return False
-    interaction = message.interaction
-    if interaction is not None and interaction.awaits == Principal.member(user_id):
+    question = message.question
+    if question is not None and question.awaits == Principal.member(user_id):
         return False
     behalf = sender.on_behalf_of
     return behalf is None or behalf.user_id != user_id

@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 
 from lemma_cli.cli_core.app import app
-from lemma_cli.cli_core.commands import channels
+from lemma_cli.cli_core.commands import channel_lines, channels
 
 
 class Recorder:
@@ -57,12 +57,13 @@ def test_an_unknown_kind_is_refused_before_anything_is_asked(
 
 def test_post_names_the_agents_and_members_it_mentions(runner, patch_run, json_state):
     fake = Recorder()
-    patch_run(channels, client=_client(fake), state=json_state)
+    patch_run(channel_lines, client=_client(fake), state=json_state)
 
     result = runner.invoke(
         app,
         [
             "channels",
+            "messages",
             "post",
             "ch-1",
             "Can you summarise?",
@@ -85,16 +86,25 @@ def test_post_names_the_agents_and_members_it_mentions(runner, patch_run, json_s
     ]
     assert kwargs["thread_root_id"] == "line-9"
     assert kwargs["members_only"] is False
+    assert kwargs["client_message_id"] is None
 
 
 def test_an_answer_needs_something_to_say(runner, patch_run, json_state):
     fake = Recorder()
-    patch_run(channels, client=_client(fake), state=json_state)
+    patch_run(channel_lines, client=_client(fake), state=json_state)
 
-    refused = runner.invoke(app, ["channels", "answer", "ch-1", "line-1"])
+    refused = runner.invoke(app, ["channels", "messages", "answer", "ch-1", "line-1"])
     answered = runner.invoke(
         app,
-        ["channels", "answer", "ch-1", "line-1", "-d", json.dumps({"seats": 3})],
+        [
+            "channels",
+            "messages",
+            "answer",
+            "ch-1",
+            "line-1",
+            "-d",
+            json.dumps({"seats": 3}),
+        ],
     )
 
     assert refused.exit_code != 0
@@ -123,10 +133,114 @@ def test_a_contacts_agent_is_switched_on_or_off(runner, patch_run, json_state):
     patch_run(channels, client=_client(fake), state=json_state)
 
     off = runner.invoke(app, ["channels", "agent", "ch-1", "off", "--json"])
+    on = runner.invoke(
+        app,
+        ["channels", "agent", "ch-1", "on", "--hand-back-after", "6", "--json"],
+    )
     wrong = runner.invoke(app, ["channels", "agent", "ch-1", "maybe"])
 
     assert off.exit_code == 0, off.stderr
+    assert on.exit_code == 0, on.stderr
     assert wrong.exit_code != 0
     assert fake.calls == [
-        ("set_agent_answers", ("ch-1", False), {"hand_back_after_hours": None})
+        ("set_agent_answers", ("ch-1", False), {}),
+        ("set_agent_answers", ("ch-1", True), {"hand_back_after_hours": 6}),
     ]
+
+
+def test_an_update_sends_only_what_was_named(runner, patch_run, json_state):
+    fake = Recorder()
+    patch_run(channels, client=_client(fake), state=json_state)
+
+    result = runner.invoke(
+        app,
+        [
+            "channels",
+            "update",
+            "ch-1",
+            "--clear-topic",
+            "--assignee",
+            "none",
+            "--status",
+            "CLOSED",
+            "--json",
+        ],
+    )
+    nothing = runner.invoke(app, ["channels", "update", "ch-1"])
+
+    assert result.exit_code == 0, result.stderr
+    assert nothing.exit_code != 0
+    assert fake.calls == [
+        ("update", ("ch-1",), {"topic": None, "assignee": None, "status": "closed"})
+    ]
+
+
+def test_a_member_is_named_by_kind_and_id(runner, patch_run, json_state):
+    fake = Recorder()
+    patch_run(channels, client=_client(fake), state=json_state)
+
+    result = runner.invoke(
+        app,
+        [
+            "channels",
+            "members",
+            "update",
+            "ch-1",
+            "agent:a-1",
+            "--answers",
+            "every_line",
+            "--json",
+        ],
+    )
+    unnamed = runner.invoke(
+        app, ["channels", "members", "update", "ch-1", "a-1", "--answers", "MENTIONED"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert unnamed.exit_code != 0
+    assert fake.calls == [
+        (
+            "update_member",
+            ("ch-1", "AGENT", "a-1"),
+            {"role": None, "answers": "EVERY_LINE"},
+        )
+    ]
+
+
+def test_notify_levels_go_to_your_own_membership(runner, patch_run, json_state):
+    fake = Recorder()
+    patch_run(channels, client=_client(fake), state=json_state)
+
+    result = runner.invoke(
+        app,
+        ["channels", "notify", "ch-1", "mentions", "--pod-rule", "--unmute", "--json"],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert fake.calls == [
+        (
+            "set_notify",
+            ("ch-1",),
+            {"notify": "MENTIONS", "via": None, "muted_until": None},
+        )
+    ]
+
+
+def test_read_marks_up_to_the_given_line(runner, patch_run, json_state):
+    fake = Recorder()
+    patch_run(channels, client=_client(fake), state=json_state)
+
+    result = runner.invoke(app, ["channels", "read", "ch-1", "--seq", "12", "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    assert fake.calls == [("mark_read", ("ch-1", 12), {})]
+
+
+def test_leaving_needs_only_the_channel(runner, patch_run, json_state):
+    fake = Recorder()
+    patch_run(channels, client=_client(fake), state=json_state)
+
+    result = runner.invoke(app, ["channels", "leave", "ch-1", "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    assert fake.calls == [("leave", ("ch-1",), {})]

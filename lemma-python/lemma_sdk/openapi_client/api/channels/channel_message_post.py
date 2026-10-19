@@ -10,7 +10,7 @@ from ...client import AuthenticatedClient, Client
 from ...models.channel_message_response import ChannelMessageResponse
 from ...models.channel_post_request import ChannelPostRequest
 from ...models.error_response import ErrorResponse
-from ...types import Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
@@ -18,8 +18,11 @@ def _get_kwargs(
     channel_id: UUID,
     *,
     body: ChannelPostRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
+    if not isinstance(idempotency_key, Unset):
+        headers["Idempotency-Key"] = idempotency_key
 
     _kwargs: dict[str, Any] = {
         "method": "post",
@@ -73,15 +76,18 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     body: ChannelPostRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ChannelMessageResponse | ErrorResponse]:
-    """Post Channel Message
+    """Post Message
 
-     Write in the channel. It goes to one outside place -- the one named, or
-    the one the channel last heard from -- unless it is a note to members.
+     Write in the channel. A reply goes where its thread is; otherwise to
+    the place named, or the one the channel last heard from -- unless it is a
+    note to members. Naming somebody who cannot see the channel is refused.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
+        idempotency_key (None | str | Unset):
         body (ChannelPostRequest):
 
     Raises:
@@ -96,6 +102,7 @@ def sync_detailed(
         pod_id=pod_id,
         channel_id=channel_id,
         body=body,
+        idempotency_key=idempotency_key,
     )
 
     response = client.get_httpx_client().request(
@@ -111,15 +118,18 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     body: ChannelPostRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> ChannelMessageResponse | ErrorResponse | None:
-    """Post Channel Message
+    """Post Message
 
-     Write in the channel. It goes to one outside place -- the one named, or
-    the one the channel last heard from -- unless it is a note to members.
+     Write in the channel. A reply goes where its thread is; otherwise to
+    the place named, or the one the channel last heard from -- unless it is a
+    note to members. Naming somebody who cannot see the channel is refused.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
+        idempotency_key (None | str | Unset):
         body (ChannelPostRequest):
 
     Raises:
@@ -135,6 +145,7 @@ def sync(
         channel_id=channel_id,
         client=client,
         body=body,
+        idempotency_key=idempotency_key,
     ).parsed
 
 
@@ -144,15 +155,18 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     body: ChannelPostRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ChannelMessageResponse | ErrorResponse]:
-    """Post Channel Message
+    """Post Message
 
-     Write in the channel. It goes to one outside place -- the one named, or
-    the one the channel last heard from -- unless it is a note to members.
+     Write in the channel. A reply goes where its thread is; otherwise to
+    the place named, or the one the channel last heard from -- unless it is a
+    note to members. Naming somebody who cannot see the channel is refused.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
+        idempotency_key (None | str | Unset):
         body (ChannelPostRequest):
 
     Raises:
@@ -167,6 +181,7 @@ async def asyncio_detailed(
         pod_id=pod_id,
         channel_id=channel_id,
         body=body,
+        idempotency_key=idempotency_key,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -180,15 +195,18 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     body: ChannelPostRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> ChannelMessageResponse | ErrorResponse | None:
-    """Post Channel Message
+    """Post Message
 
-     Write in the channel. It goes to one outside place -- the one named, or
-    the one the channel last heard from -- unless it is a note to members.
+     Write in the channel. A reply goes where its thread is; otherwise to
+    the place named, or the one the channel last heard from -- unless it is a
+    note to members. Naming somebody who cannot see the channel is refused.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
+        idempotency_key (None | str | Unset):
         body (ChannelPostRequest):
 
     Raises:
@@ -205,5 +223,6 @@ async def asyncio(
             channel_id=channel_id,
             client=client,
             body=body,
+            idempotency_key=idempotency_key,
         )
     ).parsed

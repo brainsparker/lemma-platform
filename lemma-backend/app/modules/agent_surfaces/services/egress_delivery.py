@@ -56,10 +56,9 @@ from app.modules.agent_surfaces.services.free_text_answer import (
     remember_a_prompt_that_arrived_as_words,
 )
 from app.modules.agent_surfaces.services.channel_lines import (
-    WRITTEN_BY_MEMBER,
+    ALREADY_A_LINE,
     ChannelLines,
     ChannelLinesInDatabase,
-    ALREADY_A_LINE,
 )
 from app.modules.agent_surfaces.services.group_names import sender_name_for
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
@@ -476,14 +475,5 @@ class SurfaceDelivery:
                 conversation_id=conversation_id,
                 text=envelope.text,
                 agent_display_name=name if isinstance(name, str) else None,
-                written_by=_member_id(metadata.get(WRITTEN_BY_MEMBER)),
             )
         return receipt
-
-
-def _member_id(value: object) -> UUID | None:
-    """The member a delivery names as its writer, if it names one."""
-    try:
-        return UUID(str(value)) if value else None
-    except ValueError:
-        return None

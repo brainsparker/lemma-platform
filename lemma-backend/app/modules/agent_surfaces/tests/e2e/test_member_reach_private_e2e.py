@@ -60,6 +60,7 @@ async def _heard(
             place=Place(
                 surface_id=surface_id,
                 platform="TELEGRAM",
+                account_key=f"surface:{surface_id}",
                 kind=SourceKind.PRIVATE if private else SourceKind.SHARED,
                 external_channel_id=None if private else f"-100{uuid4().int % 10**9}",
                 external_user_id=MEMBER if private else None,

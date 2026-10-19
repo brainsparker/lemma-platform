@@ -20,7 +20,7 @@ from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.ingress_request import SurfaceIngressRequest
-from app.modules.channels.contracts.deliveries import mark_delivery_failed
+from app.modules.channels.contracts.deliveries import delivery_undelivered
 from app.modules.agent_surfaces.platforms.whatsapp.parser import (
     WhatsAppFailedDelivery,
     failed_deliveries,
@@ -80,9 +80,9 @@ async def apply_delivery_statuses(
         )
         if notification_id is None:
             continue
-        await mark_delivery_failed(
+        await delivery_undelivered(
             uow,
             message_id=UUID(notification_id),
             platform="WHATSAPP",
-            error=failure_reason(failure),
+            reason=failure_reason(failure),
         )

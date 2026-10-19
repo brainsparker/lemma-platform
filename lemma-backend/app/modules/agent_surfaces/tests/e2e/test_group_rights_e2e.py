@@ -25,7 +25,7 @@ from app.modules.agent_surfaces.tests.e2e.group_timeline import (
     group_by_id,
     say,
 )
-from app.modules.channels.contracts import Principal, Sender
+from app.modules.channels.contracts import Principal, Sender, channel_by_id, join
 from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -141,6 +141,12 @@ async def test_what_the_bot_told_one_member_is_withheld_from_the_others(
         ("Lead times are two weeks.", bot_for(tiago, agent_id=bot)),
     ):
         await say(db_session, the_group, text, sender=sender)
+    # A WhatsApp group is private: its channel is read by the people in it,
+    # and the editor is one of them -- but not whom the first answer was for.
+    uow = SqlAlchemyUnitOfWork(db_session)
+    channel = await channel_by_id(uow, the_group.channel_id)
+    assert channel is not None
+    await join(uow, channel=channel, principal=Principal.member(UUID(editor["id"])))
     await db_session.commit()
     path = f"/pods/{scenario.pod_id}/channels/{group['channel_id']}/messages"
 
@@ -196,7 +202,7 @@ async def test_only_the_owner_or_an_admin_changes_a_group_and_the_owner_is_told(
     [notice] = await direct_lines(
         db_session, pod_id=scenario.pod_id, user_id=editor["id"]
     )
-    assert notice.members_only and notice.interaction_kind is None
+    assert notice.members_only
     assert "Acme order 1182" in notice.body
     assert "now answers for the people outside the space" in notice.body
 

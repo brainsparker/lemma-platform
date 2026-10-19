@@ -17,6 +17,7 @@ from app.modules.channels.domain.projection import Reader, may_read, readable
 pytestmark = pytest.mark.unit
 
 CHANNEL = uuid4()
+POD = uuid4()
 WHATSAPP_GROUP = uuid4()
 EMAIL_THREAD = uuid4()
 TOM = uuid4()
@@ -31,6 +32,8 @@ def _line(
     return ChannelMessage(
         id=uuid4(),
         channel_id=CHANNEL,
+        pod_id=POD,
+        seq=1,
         sender=sender,
         text="…",
         created_at=_AT,

@@ -1,9 +1,8 @@
-"""Lines, for the modules that answer them: read one, find what a conversation
-last heard, and link a line to the conversation answering it.
+"""Lines, read for runs and agent tools: one line, a member's view of the
+pod's channels, and what a run is shown of a channel around a line.
 
-A submodule rather than ``contracts/__init__``: what answers lines in Lemma --
-an agent named in a channel, the pod's agent in a member's own channel -- is
-the only reader.
+A member's view always goes through the visibility rule (``Viewer``): an
+agent working for a member sees exactly the channels that member could open.
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.channels.domain.access import Viewer, may_see
 from app.modules.channels.domain.entities import (
     Channel,
     ChannelKind,
@@ -21,10 +21,51 @@ from app.modules.channels.domain.entities import (
 )
 from app.modules.channels.domain.projection import withheld_from
 from app.modules.channels.infrastructure.lines import LineRepository
+from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
+from app.modules.channels.infrastructure.source_repository import SourceRepository
+from app.modules.pod.contracts.members import pod_member_holds
 
 #: The most channels a member's agent is shown at once.
 MAX_CHANNELS = 100
+
+__all__ = [
+    "channels_for",
+    "claim_line",
+    "last_heard_line",
+    "line_by_id",
+    "member_background",
+    "page_lines",
+    "search_lines",
+    "thread_root_at",
+    "viewer_of",
+    "visible_channel",
+]
+
+
+async def viewer_of(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, user_id: UUID
+) -> Viewer:
+    """A member as the visibility rule sees them."""
+    return Viewer(
+        user_id=user_id,
+        pod_id=pod_id,
+        sees_contacts=await pod_member_holds(uow, pod_id, user_id, "contact.read"),
+    )
+
+
+async def visible_channel(
+    uow: SqlAlchemyUnitOfWork, *, viewer: Viewer, channel_id: UUID
+) -> Channel | None:
+    """The channel, when ``viewer`` may see it."""
+    channel = await ChannelRepository(uow.session).get(channel_id)
+    if channel is None:
+        return None
+    is_member = (
+        await MemberRepository(uow.session).of_user(channel.id, viewer.user_id)
+        is not None
+    )
+    return channel if may_see(channel, viewer, is_member=is_member) else None
 
 
 async def line_by_id(
@@ -41,33 +82,11 @@ async def last_heard_line(
     return await LineRepository(uow.session).last_heard(conversation_id)
 
 
-async def last_said_by(
-    uow: SqlAlchemyUnitOfWork, *, channel_id: UUID, user_id: UUID
-) -> datetime | None:
-    """When this member last wrote to the people in this channel."""
-    return await LineRepository(uow.session).last_said_by(
-        channel_id=channel_id, user_id=user_id
-    )
-
-
-async def line_went_out(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    message_id: UUID,
-    source_id: UUID,
-    conversation_id: UUID | None = None,
-    external_message_id: str | None = None,
-    external_thread_id: str | None = None,
+async def claim_line(
+    uow: SqlAlchemyUnitOfWork, *, message_id: UUID, conversation_id: UUID
 ) -> None:
-    """A line written in Lemma went out at a place its delivery opened -- a
-    first email -- and is that place's first line: a reply continues it."""
-    await LineRepository(uow.session).went_out(
-        message_id,
-        source_id=source_id,
-        conversation_id=conversation_id,
-        external_message_id=external_message_id,
-        external_thread_id=external_thread_id,
-    )
+    """Link a line to the conversation that answers it."""
+    await LineRepository(uow.session).claim(message_id, conversation_id=conversation_id)
 
 
 async def thread_root_at(
@@ -77,31 +96,10 @@ async def thread_root_at(
     external_thread_id: str | None,
     external_message_id: str | None = None,
 ) -> UUID | None:
-    """The line a platform thread hangs from, so its replies are a thread here.
-
-    ``None`` for a message that starts its thread, or a thread whose first
-    message the pod never heard.
-    """
+    """The line a platform thread hangs from, so its replies are a thread here."""
     if not external_thread_id or external_thread_id == external_message_id:
         return None
     return await LineRepository(uow.session).at(source_id, external_thread_id)
-
-
-async def line_said_in_run(
-    uow: SqlAlchemyUnitOfWork, *, channel_id: UUID, agent_run_id: UUID, text: str
-) -> ChannelMessage | None:
-    """What one agent run already wrote in this channel, word for word: a
-    retried job finds its line instead of writing it twice."""
-    return await LineRepository(uow.session).said_in_run(
-        channel_id=channel_id, agent_run_id=agent_run_id, text=text
-    )
-
-
-async def claim_line(
-    uow: SqlAlchemyUnitOfWork, *, message_id: UUID, conversation_id: UUID
-) -> None:
-    """Link a line to the conversation that answers it."""
-    await LineRepository(uow.session).claim(message_id, conversation_id=conversation_id)
 
 
 async def member_background(
@@ -109,10 +107,9 @@ async def member_background(
 ) -> list[ChannelMessage]:
     """What a member's run answering ``line`` is shown of the channel around it.
 
-    The thread it is in, or the channel's recent lines -- but never what a
-    contact wrote (a run with a member's access is not steered by somebody
-    outside the pod), an answer made with another member's own access, or a
-    deleted line. Oldest first, without ``line`` itself.
+    The thread it is in, or the channel's recent lines -- never what a contact
+    wrote, an answer made with another member's access, or a deleted line.
+    Oldest first, without ``line`` itself.
     """
     lines = LineRepository(uow.session)
     root_id = line.thread_root_id
@@ -120,7 +117,7 @@ async def member_background(
         root = await lines.get(root_id)
         around = ([root] if root else []) + await lines.thread(root_id, limit=limit)
     else:
-        around = await lines.recent(line.channel_id, limit=limit, top_level=True)
+        around = await lines.page(line.channel_id, limit=limit)
     return [
         each
         for each in around
@@ -131,77 +128,47 @@ async def member_background(
     ][-limit:]
 
 
-async def channels_of_member(
+async def channels_for(
     uow: SqlAlchemyUnitOfWork,
     *,
-    pod_id: UUID,
-    user_id: UUID,
-    sees_contacts: bool,
+    viewer: Viewer,
     kind: ChannelKind | None = None,
+    joined_only: bool = False,
 ) -> list[tuple[Channel, list[Source]]]:
-    """The channels a member sees, most recently active first, with the
-    places feeding each."""
-    kinds = (
-        (kind,)
-        if kind
-        else (ChannelKind.DIRECT, ChannelKind.GROUP, ChannelKind.CONTACT)
+    """The channels ``viewer`` sees, most recently active first, with their places."""
+    channels = await ChannelRepository(uow.session).list_for(
+        viewer, kind=kind, joined_only=joined_only, limit=MAX_CHANNELS
     )
-    if not sees_contacts:
-        kinds = tuple(each for each in kinds if each is not ChannelKind.CONTACT)
-    if not kinds:
-        return []
-    repository = ChannelRepository(uow.session)
-    channels = await repository.list_for_member(
-        pod_id=pod_id, user_id=user_id, kinds=kinds, before=None, limit=MAX_CHANNELS
+    sources = await SourceRepository(uow.session).of_channels(
+        [channel.id for channel in channels]
     )
-    sources = await repository.sources_of_many([channel.id for channel in channels])
     return [(channel, sources.get(channel.id, [])) for channel in channels]
 
 
-async def member_may_read(
+async def page_lines(
     uow: SqlAlchemyUnitOfWork,
     *,
-    pod_id: UUID,
     channel_id: UUID,
-    user_id: UUID,
-    sees_contacts: bool,
-) -> Channel | None:
-    """The channel, when this member may read it: the pod's, not another
-    member's own, and a contact's only for who may see contacts."""
-    channel = await ChannelRepository(uow.session).get(channel_id)
-    if channel is None or channel.pod_id != pod_id:
-        return None
-    if channel.kind is ChannelKind.DIRECT and channel.member_user_id != user_id:
-        return None
-    if channel.kind is ChannelKind.CONTACT and not sees_contacts:
-        return None
-    return channel
-
-
-async def recent_lines(
-    uow: SqlAlchemyUnitOfWork, *, channel_id: UUID, limit: int
+    limit: int,
+    before_seq: int | None = None,
+    after_seq: int | None = None,
 ) -> list[ChannelMessage]:
-    """A channel's newest lines outside threads, oldest first."""
-    return await LineRepository(uow.session).recent(
-        channel_id, limit=limit, top_level=True
+    """A channel's lines outside threads, oldest first."""
+    return await LineRepository(uow.session).page(
+        channel_id, limit=limit, before_seq=before_seq, after_seq=after_seq
     )
 
 
 async def search_lines(
-    uow: SqlAlchemyUnitOfWork, *, channel_ids: list[UUID], words: str, limit: int
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    viewer: Viewer,
+    words: str,
+    limit: int,
+    channel_id: UUID | None = None,
+    before: tuple[datetime, UUID] | None = None,
 ) -> list[ChannelMessage]:
+    """Lines matching every word in channels ``viewer`` sees, newest first."""
     return await LineRepository(uow.session).search(
-        channel_ids=channel_ids, words=words, limit=limit
+        viewer, query=words, limit=limit, channel_id=channel_id, before=before
     )
-
-
-__all__ = [
-    "channels_of_member",
-    "claim_line",
-    "last_heard_line",
-    "line_by_id",
-    "member_background",
-    "member_may_read",
-    "recent_lines",
-    "search_lines",
-]

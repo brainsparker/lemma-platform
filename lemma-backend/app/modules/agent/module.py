@@ -139,6 +139,13 @@ def _register_work() -> None:
     import app.modules.agent.events.run_followup_work  # noqa: F401
     import app.modules.agent.events.turn_work  # noqa: F401
 
+    # Every process: a member's line in Lemma (API) and a run finishing
+    # (worker) write these; a question closing anywhere settles its batch.
+    # Importing the second also registers what answering a paused tool's
+    # question on its line does (``answers_for("tool")``).
+    import app.modules.agent.events.channel_answer_work  # noqa: F401
+    import app.modules.agent.events.channel_question_work  # noqa: F401
+
     # Every process: a decision (API, surfaces) writes `agent.approval.execute`
     # and `wait_for` (worker) writes the wait items; both run on the worker.
     import app.modules.agent.events.approval_work  # noqa: F401

@@ -13,29 +13,28 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
 from app.modules.agent.capabilities import open_questions
 from app.modules.agent.capabilities.open_questions import (
     OpenQuestionsCapability,
-    open_question_text,
+    Waiting,
     render_form_fields,
     render_open_questions,
+    shown_to_the_agent,
 )
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.messaging.answer import answer_question
 from app.modules.agent.tools.messaging.models import AnswerQuestionRequest
 from app.modules.channels.contracts import (
-    Channel,
-    ChannelKind,
     ChannelMessage,
-    Interaction,
-    InteractionKind,
-    InteractionState,
     Principal,
+    Question,
+    QuestionKind,
+    QuestionState,
     Sender,
 )
 from app.modules.channels.contracts.questions import AnswerRefused
@@ -59,25 +58,33 @@ _SCHEMA = {
 def _question(
     text: str,
     *,
-    kind: InteractionKind = InteractionKind.ASK,
+    kind: QuestionKind = QuestionKind.ASK,
     question: dict | None = None,
     asker: str | None = "Ops",
-    conversation_id: UUID | None = None,
-) -> ChannelMessage:
-    return ChannelMessage(
-        id=uuid4(),
-        channel_id=uuid4(),
-        sender=Sender.agent(
-            uuid4(), on_behalf_of=Principal.member(uuid4()), display_name=asker
-        ),
-        text=text,
-        created_at=NOW,
-        conversation_id=conversation_id,
-        interaction=Interaction(
+    ref: str | None = None,
+) -> Waiting:
+    line_id, channel_id, pod_id = uuid4(), uuid4(), uuid4()
+    return Waiting(
+        question=Question(
+            message_id=line_id,
+            channel_id=channel_id,
+            pod_id=pod_id,
+            ref=ref or f"msg:{uuid4()}:{uuid4().hex}",
             kind=kind,
-            state=InteractionState.OPEN,
+            state=QuestionState.OPEN,
             question=question or {},
             awaits=Principal.member(MEMBER),
+        ),
+        line=ChannelMessage(
+            id=line_id,
+            channel_id=channel_id,
+            pod_id=pod_id,
+            seq=1,
+            sender=Sender.agent(
+                uuid4(), on_behalf_of=Principal.member(uuid4()), display_name=asker
+            ),
+            text=text,
+            created_at=NOW,
         ),
     )
 
@@ -98,7 +105,7 @@ def test_a_form_names_the_fields_it_wants():
     """
     form = _question(
         "Purchase approval: how many units?",
-        kind=InteractionKind.FORM,
+        kind=QuestionKind.FORM,
         question={"schema": _SCHEMA},
     )
 
@@ -110,7 +117,7 @@ def test_a_form_names_the_fields_it_wants():
     assert "one of `low`, `high`" in rendered
     assert "answer with its fields" in rendered
     # The id the tool takes, and the tool itself.
-    assert f"`{form.id}`" in rendered
+    assert f"`{form.line.id}`" in rendered
     assert "answer_question" in rendered
 
 
@@ -187,110 +194,29 @@ def test_the_replying_agent_is_told_to_acknowledge_not_to_hold_forth():
 
 
 # -------------------------------------------------------- what reaches the run
-
-
-class _FakeUoW:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_a):
-        return False
-
-
-def _reads(monkeypatch, *, channel: Channel | None, waiting: list[ChannelMessage]):
-    seen: dict = {}
-
-    async def _channel_by_id(uow, channel_id):
-        return channel
-
-    async def _waiting(uow, *, pod_id, user_id):
-        seen["waiting"] = (pod_id, user_id)
-        return waiting
-
-    monkeypatch.setattr(
-        open_questions, "SessionUnitOfWorkFactory", lambda _maker: _FakeUoW
-    )
-    monkeypatch.setattr(open_questions, "channel_by_id", _channel_by_id)
-    monkeypatch.setattr(
-        "app.modules.channels.contracts.questions.waiting_on_member", _waiting
-    )
-    return seen
-
-
-def _direct(pod_id: UUID, member: UUID) -> Channel:
-    return Channel(
-        id=uuid4(),
-        pod_id=pod_id,
-        kind=ChannelKind.DIRECT,
-        member_user_id=member,
-        created_at=NOW,
-    )
-
-
-async def test_questions_waiting_on_the_member_reach_their_own_channels_run(
-    monkeypatch,
-):
-    pod_id = uuid4()
-    channel = _direct(pod_id, MEMBER)
-    seen = _reads(monkeypatch, channel=channel, waiting=[_question("Budget?")])
-
-    text = await open_question_text(
-        conversation_id=uuid4(), channel_id=channel.id, pod_id=pod_id, user_id=MEMBER
-    )
-
-    assert text is not None and "Budget?" in text
-    assert seen["waiting"] == (pod_id, MEMBER)
+#
+# Which questions are read (waiting on the member, in channels they may see,
+# only in their own channel's runs) is against Postgres in
+# ``tests/e2e/test_channel_tools_e2e.py``; this is what is kept of them.
 
 
 @pytest.mark.parametrize(
-    "where",
-    ["no channel", "a group", "another members own"],
+    ("kind", "ref", "shown"),
+    [
+        (QuestionKind.ASK, "msg:c:k", True),
+        (QuestionKind.FORM, "wf:r:n:w", True),
+        (QuestionKind.APPROVAL, "tool:c:call", False),
+        (QuestionKind.ASK, "tool:c:call", False),
+    ],
+    ids=["a member's question", "a form", "an approval", "a paused ask"],
 )
-async def test_only_the_members_own_channel_is_told_what_waits_on_them(
-    monkeypatch, where
-):
-    """A question put to a member is theirs to read. A group's run is read by
-    everyone in the group, and another member's channel is not theirs."""
-    pod_id = uuid4()
-    channel = {
-        "no channel": None,
-        "a group": Channel(
-            id=uuid4(), pod_id=pod_id, kind=ChannelKind.GROUP, created_at=NOW
-        ),
-        "another members own": _direct(pod_id, uuid4()),
-    }[where]
-    _reads(monkeypatch, channel=channel, waiting=[_question("Budget?")])
+def test_only_what_an_agent_may_answer_is_put_in_front_of_it(kind, ref, shown):
+    """An approval is the person's own tap, never their agent's; a question an
+    agent paused on is taken by that agent's run -- another conversation's
+    agent answering it would answer for it."""
+    waiting = _question("x", kind=kind, ref=ref)
 
-    text = await open_question_text(
-        conversation_id=uuid4(),
-        channel_id=uuid4(),
-        pod_id=pod_id,
-        user_id=MEMBER,
-    )
-
-    assert text is None
-
-
-async def test_this_conversations_own_ask_is_not_listed_as_waiting(monkeypatch):
-    """An `ask_user` of this very conversation is answered by replying here;
-    listing it would tell the agent to answer its own question."""
-    pod_id = uuid4()
-    conversation_id = uuid4()
-    channel = _direct(pod_id, MEMBER)
-    _reads(
-        monkeypatch,
-        channel=channel,
-        waiting=[_question("Which branch?", conversation_id=conversation_id)],
-    )
-
-    text = await open_question_text(
-        conversation_id=conversation_id,
-        channel_id=channel.id,
-        pod_id=pod_id,
-        user_id=MEMBER,
-    )
-
-    assert text is None
+    assert shown_to_the_agent(waiting.question) is shown
 
 
 # ------------------------------------------------------------- answer_question
@@ -314,12 +240,10 @@ async def test_an_answer_is_recorded_as_the_member_on_the_question_named(
     they had answered it in place, and the asking side validates it."""
     seen: dict = {}
 
-    async def _answer(**kwargs):
+    async def _answer(uow_factory, **kwargs):
         seen.update(kwargs)
 
-    monkeypatch.setattr(
-        "app.modules.channels.contracts.questions.answer_as_member", _answer
-    )
+    monkeypatch.setattr("app.modules.channels.contracts.questions.answer", _answer)
     ctx = _ctx()
     question_id = uuid4()
 
@@ -330,10 +254,11 @@ async def test_an_answer_is_recorded_as_the_member_on_the_question_named(
 
     assert result.success is True
     assert seen == {
-        "pod_id": ctx.deps.pod_id,
         "message_id": question_id,
-        "user_id": MEMBER,
-        "answer": {"quantity": 40},
+        "by": Principal.member(MEMBER),
+        "given": {"quantity": 40},
+        # Through an agent: channels refuses an approval answered this way.
+        "through_agent": True,
     }
 
 
@@ -341,12 +266,10 @@ async def test_a_refused_answer_comes_back_with_the_reason(monkeypatch):
     """A wrong form field, a question somebody already answered: the model
     reads why and can ask the person again."""
 
-    async def _answer(**kwargs):
+    async def _answer(uow_factory, **kwargs):
         raise AnswerRefused("`quantity` is required")
 
-    monkeypatch.setattr(
-        "app.modules.channels.contracts.questions.answer_as_member", _answer
-    )
+    monkeypatch.setattr("app.modules.channels.contracts.questions.answer", _answer)
 
     result = await answer_question(
         _ctx(), AnswerQuestionRequest(question_id=uuid4(), answer={})
@@ -360,12 +283,10 @@ async def test_a_strangers_run_answers_nothing(monkeypatch):
     """A question put to a member is answered under the member's authority;
     a contact's run has none to lend."""
 
-    async def _answer(**kwargs):  # pragma: no cover - must not be reached
+    async def _answer(uow_factory, **kwargs):  # pragma: no cover - not reached
         raise AssertionError("answered as a member from a stranger's run")
 
-    monkeypatch.setattr(
-        "app.modules.channels.contracts.questions.answer_as_member", _answer
-    )
+    monkeypatch.setattr("app.modules.channels.contracts.questions.answer", _answer)
 
     result = await answer_question(
         _ctx(audience=Audience.contact(uuid4())),

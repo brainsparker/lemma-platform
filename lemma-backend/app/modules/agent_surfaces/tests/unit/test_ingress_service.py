@@ -23,6 +23,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
     SurfaceConfig,
 )
+from app.modules.agent_surfaces.domain.external_accounts import account_key_for
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
@@ -426,6 +427,7 @@ async def _seated(service, surface, *, user_id, conversation_id, agent_id) -> So
         place=Place(
             surface_id=surface.id,
             platform="SLACK",
+            account_key=account_key_for(surface),
             kind=SourceKind.PRIVATE,
             external_channel_id=None,
             external_user_id="U123",

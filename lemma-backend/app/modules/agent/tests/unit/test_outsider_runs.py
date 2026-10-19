@@ -244,7 +244,7 @@ async def test_calling_a_person_in_flags_the_member_who_looks_after_the_run(
 ):
     """Whom it tells is the run's own member -- never someone the model names
     -- and the conversation flagged is this one. Where the flag and the note
-    land is the contract's (``direct_messages.ask_a_person``)."""
+    land is ``call_a_person_in``'s, against the database in the e2e suite."""
     seen: dict = {}
 
     async def _ask(**kwargs):
@@ -252,12 +252,13 @@ async def test_calling_a_person_in_flags_the_member_who_looks_after_the_run(
         return True
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.contracts.direct_messages.ask_a_person", _ask
+        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
     )
     deps = _deps(answers_outsider=True)
 
     result = await ask_a_person(
-        SimpleNamespace(deps=deps), AskAPersonRequest(reason="Wants a refund.")
+        SimpleNamespace(deps=deps, tool_call_id=None),
+        AskAPersonRequest(reason="Wants a refund."),
     )
 
     assert result.success is True
@@ -266,6 +267,7 @@ async def test_calling_a_person_in_flags_the_member_who_looks_after_the_run(
         "conversation_id": deps.conversation_id,
         "keeper_user_id": deps.user_id,
         "reason": "Wants a refund.",
+        "key": None,
     }
 
 
@@ -276,11 +278,11 @@ async def test_a_conversation_with_no_channel_says_nobody_can_be_called(monkeypa
         return False
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.contracts.direct_messages.ask_a_person", _ask
+        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
     )
 
     result = await ask_a_person(
-        SimpleNamespace(deps=_deps(answers_outsider=True)),
+        SimpleNamespace(deps=_deps(answers_outsider=True), tool_call_id=None),
         AskAPersonRequest(reason="Wants a refund."),
     )
 
@@ -295,11 +297,11 @@ async def test_a_members_run_has_nobody_to_call_in(monkeypatch):
         raise AssertionError("a member's run flagged a channel")
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.contracts.direct_messages.ask_a_person", _ask
+        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
     )
 
     result = await ask_a_person(
-        SimpleNamespace(deps=_deps(answers_outsider=False)),
+        SimpleNamespace(deps=_deps(answers_outsider=False), tool_call_id=None),
         AskAPersonRequest(reason="x"),
     )
 
@@ -336,7 +338,9 @@ async def test_a_strangers_run_reads_and_writes_no_channel(tool, request_):
     """The pod's channels are read as the member who looks after the run, and
     a stranger could ask for anything in them. Refused before any lookup: the
     database is never opened, so nothing here needs doubling."""
-    result = await tool(SimpleNamespace(deps=_deps(answers_outsider=True)), request_)
+    result = await tool(
+        SimpleNamespace(deps=_deps(answers_outsider=True), tool_call_id=None), request_
+    )
 
     assert result.success is False
     assert "ask_a_person" in (result.error or "")

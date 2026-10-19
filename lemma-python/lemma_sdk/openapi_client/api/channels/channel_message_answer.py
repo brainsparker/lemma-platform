@@ -77,12 +77,13 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     body: ChannelAnswerRequest,
 ) -> Response[ChannelMessageResponse | ErrorResponse]:
-    """Answer Channel Question
+    """Answer Question
 
-     Answer what this line asks the reader: a question, an approval, a form.
+     Answer what this line asks the reader: a question, an approval (which
+    needs a `decision`), a form. Only the person it waits on may.
 
-    No session is held across the answer: what asked the question takes it in
-    its own -- a run resumed, a form submitted -- and may call out to do so.
+    No session is held across the answer: what asked takes it in its own -- a
+    run resumed, a form submitted -- and may call out to do so.
 
     Args:
         pod_id (UUID):
@@ -120,12 +121,13 @@ def sync(
     client: AuthenticatedClient | Client,
     body: ChannelAnswerRequest,
 ) -> ChannelMessageResponse | ErrorResponse | None:
-    """Answer Channel Question
+    """Answer Question
 
-     Answer what this line asks the reader: a question, an approval, a form.
+     Answer what this line asks the reader: a question, an approval (which
+    needs a `decision`), a form. Only the person it waits on may.
 
-    No session is held across the answer: what asked the question takes it in
-    its own -- a run resumed, a form submitted -- and may call out to do so.
+    No session is held across the answer: what asked takes it in its own -- a
+    run resumed, a form submitted -- and may call out to do so.
 
     Args:
         pod_id (UUID):
@@ -158,12 +160,13 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     body: ChannelAnswerRequest,
 ) -> Response[ChannelMessageResponse | ErrorResponse]:
-    """Answer Channel Question
+    """Answer Question
 
-     Answer what this line asks the reader: a question, an approval, a form.
+     Answer what this line asks the reader: a question, an approval (which
+    needs a `decision`), a form. Only the person it waits on may.
 
-    No session is held across the answer: what asked the question takes it in
-    its own -- a run resumed, a form submitted -- and may call out to do so.
+    No session is held across the answer: what asked takes it in its own -- a
+    run resumed, a form submitted -- and may call out to do so.
 
     Args:
         pod_id (UUID):
@@ -199,12 +202,13 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     body: ChannelAnswerRequest,
 ) -> ChannelMessageResponse | ErrorResponse | None:
-    """Answer Channel Question
+    """Answer Question
 
-     Answer what this line asks the reader: a question, an approval, a form.
+     Answer what this line asks the reader: a question, an approval (which
+    needs a `decision`), a form. Only the person it waits on may.
 
-    No session is held across the answer: what asked the question takes it in
-    its own -- a run resumed, a form submitted -- and may call out to do so.
+    No session is held across the answer: what asked takes it in its own -- a
+    run resumed, a form submitted -- and may call out to do so.
 
     Args:
         pod_id (UUID):

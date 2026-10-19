@@ -12,7 +12,7 @@
         },
         "answer": {
           "additionalProperties": true,
-          "description": "What they said: `{text}` for a question, `{decision}` (APPROVE_ONCE or DENY) for an approval, the form's fields for a form.",
+          "description": "What they said: `{text}` for a question, or `{answers: {header: value}}` when it asked several; the form's fields for a form.",
           "type": "object"
         }
       },
@@ -621,22 +621,8 @@
   {
     "tool_name": "channel_post",
     "toolset": "MESSAGING",
-    "description": "Write to a member of the pod who is not in this conversation, or in a\nchannel.\n\nWith `to`, it goes to their own channel in Lemma, and on to the chat app\nthey last used or their email. With `channel_id`, it is a line in that\nchannel. It does **not** pause your turn, and an answer never comes back\nas a tool result. When you need answers, set `wants_answer` on each, send\nthem all, then **finish your turn**: you get a fresh one here once the last\nperson answers, and `channel_read(asked_by_me=True)` shows what they said.\n\nTo answer the person you are already talking to, just reply.",
+    "description": "Write to a member of the pod who is not in this conversation, or in a\nchannel.\n\nWith `to`, it goes to their own channel in Lemma, and they are told where\nthey are. With `channel_id`, it is a line in that channel. It does **not**\npause your turn, and an answer never comes back as a tool result. When you\nneed answers, set `wants_answer` on each (only with `to`), send them all,\nthen **finish your turn**: you get a fresh one here once the last person\nanswers, and `channel_read(asked_by_me=True)` shows what they said.\n\nTo answer the person you are already talking to, just reply.",
     "input_schema": {
-      "$defs": {
-        "MessageChannel": {
-          "description": "Where a message goes, when the agent has a reason to say.\n\nPlatforms, not surface ids: you think \"reach her on WhatsApp\", not \"send\nthrough surface 3f2a\u2026\". Every mail provider is one `email`.",
-          "enum": [
-            "email",
-            "slack",
-            "teams",
-            "telegram",
-            "whatsapp"
-          ],
-          "title": "MessageChannel",
-          "type": "string"
-        }
-      },
       "properties": {
         "text": {
           "description": "Markdown -- every surface renders it. Write it to them, not about them.",
@@ -652,7 +638,7 @@
             }
           ],
           "default": null,
-          "description": "A pod member id, user id, or email address: it goes to their own channel, and on to the chat app they last used or their email. Use list_pod_members to find someone by name."
+          "description": "A pod member id, user id, or email address: it goes to their own channel in Lemma, and they are told where they are. Use list_pod_members to find someone by name."
         },
         "channel_id": {
           "anyOf": [
@@ -669,20 +655,8 @@
         },
         "wants_answer": {
           "default": false,
-          "description": "Whether you need an answer. It then waits on them in their inbox, and you get a fresh turn here once everyone you asked has answered.",
+          "description": "Only with `to`: whether you need their answer. It then waits on them in their inbox, and you get a fresh turn here once everyone you asked has answered.",
           "type": "boolean"
-        },
-        "platform": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MessageChannel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Only with `to`, and only for a reason: by default it goes where they last spoke to you. Named, it is honoured or refused, never swapped -- read `reachable_on` from list_pod_members first."
         }
       },
       "required": [
@@ -745,17 +719,6 @@
             }
           ],
           "default": null
-        },
-        "delivered_via": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         }
       },
       "title": "ChannelPostResponse",
@@ -765,7 +728,7 @@
   {
     "tool_name": "channel_read",
     "toolset": "MESSAGING",
-    "description": "Read a channel's latest lines -- or, with `asked_by_me`, the questions\nthis conversation put to people and their answers.\n\nCall `asked_by_me` when a turn opens saying they have answered -- not in a\nloop, and not to check on people who have not answered: you are told when\nthere is something to read.",
+    "description": "Read a channel's latest lines -- or, with `asked_by_me`, the questions\nthis conversation put to people and their answers, newest first.\n\nCall `asked_by_me` when a turn opens saying they have answered -- not in a\nloop, and not to check on people who have not answered: you are told when\nthere is something to read.",
     "input_schema": {
       "properties": {
         "channel_id": {
@@ -819,6 +782,17 @@
             },
             "at": {
               "type": "string"
+            },
+            "question_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "question_state": {
               "anyOf": [
@@ -953,6 +927,17 @@
             },
             "at": {
               "type": "string"
+            },
+            "question_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "question_state": {
               "anyOf": [
@@ -1707,7 +1692,7 @@
   {
     "tool_name": "list_pod_members",
     "toolset": "MESSAGING",
-    "description": "Look up who is in this pod, to find who to write to.\n\n`channel_post` needs an id or an exact email address for `to` \u2014 a name won't resolve\n\u2014 so start here whenever you know a person by name. Each result carries a\n`to` value to pass straight through.\n\nAlso tells you `reachable_on`: the channels that can carry a message to each\nperson right now. Read it before setting `channel_post`'s `platform`, and\ndon't ask for one that isn't listed \u2014 the send will be refused rather than\nrerouted.\n\nSearches names and email addresses; omit `search` to list everyone.",
+    "description": "Look up who is in this pod, to find who to write to.\n\n`channel_post` needs an id or an exact email address for `to` \u2014 a name won't resolve\n\u2014 so start here whenever you know a person by name. Each result carries a\n`to` value to pass straight through, and `reachable_on`: the chat apps\nthis pod can reach them on right now.\n\nSearches names and email addresses; omit `search` to list everyone.",
     "input_schema": {
       "properties": {
         "search": {
@@ -1772,7 +1757,7 @@
               "type": "boolean"
             },
             "reachable_on": {
-              "description": "Channels that can carry a message to them right now \u2014 pass one as channel_post's `platform`. Empty means only their channel in Lemma.",
+              "description": "Chat apps this pod can reach them on right now; a message to them is carried where they chose to be told. Empty means only their channel in Lemma.",
               "items": {
                 "type": "string"
               },

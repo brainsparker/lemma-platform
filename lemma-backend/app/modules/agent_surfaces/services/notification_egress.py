@@ -30,10 +30,8 @@ from app.modules.agent_surfaces.domain.ports import (
 )
 from app.modules.agent_surfaces.services.cold_email_thread import cold_thread_seed_id
 from app.modules.agent_surfaces.services.group_names import sender_name_for
-from app.modules.agent_surfaces.services.channel_lines import (
-    ALREADY_A_LINE,
-    ChannelLines,
-)
+from app.modules.agent_surfaces.domain.external_accounts import account_key_for
+from app.modules.agent_surfaces.services.channel_lines import ALREADY_A_LINE
 from app.modules.agent_surfaces.services.channel_places import ChannelSeats
 from app.modules.agent_surfaces.services.notification_delivery import (
     DeliveryChannel,
@@ -57,12 +55,10 @@ class NotificationEgress:
         egress: SurfaceNotificationEgressPort,
         uow: SqlAlchemyUnitOfWork,
         seats: ChannelSeats,
-        lines: ChannelLines,
     ) -> None:
         self.egress = egress
         self.uow = uow
         self.seats = seats
-        self.lines = lines
 
     async def send(
         self,
@@ -188,12 +184,11 @@ class NotificationEgress:
         outbound: Outbound,
         message: str,
     ) -> None:
-        """The thread as a place in the recipient's channel, and the mail as
-        its first line, so their reply continues this conversation.
+        """The thread as a place in the recipient's channel, so their reply
+        continues this conversation.
 
-        The place is keyed as their reply will arrive -- the thread and their
-        address -- and made only if new, since a re-delivered notification
-        reuses the seed and so the thread. Its address is the thread's opening
+        The place is keyed as their reply will arrive -- by their address --
+        and made only if new. Its address is the thread's opening
         mail: nothing has been heard there yet.
         """
         surface = channel.surface
@@ -203,20 +198,16 @@ class NotificationEgress:
             place=Place(
                 surface_id=surface.id,
                 platform=surface.surface_type.value,
+                account_key=account_key_for(surface),
                 kind=SourceKind.PRIVATE,
-                external_channel_id=thread.external_thread_id,
+                # Keyed by the person, as their reply is heard: one place per
+                # correspondent on the inbox, the thread kept on each line.
+                external_channel_id=None,
                 external_user_id=address,
             ),
             home=MembersHome(user_id=outbound.recipient_user_id),
         )
         await self.seats.addressed_at(source.id, thread.last_event)
-        await self.lines.opened(
-            line_id=outbound.id,
-            source=source,
-            conversation_id=conversation_id,
-            external_message_id=thread.external_message_id,
-            external_thread_id=thread.external_thread_id,
-        )
 
     async def conversation_for(
         self, channel: DeliveryChannel, *, outbound: Outbound

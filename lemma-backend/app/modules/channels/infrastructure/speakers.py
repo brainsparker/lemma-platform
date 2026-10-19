@@ -13,6 +13,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.entities import (
@@ -62,7 +63,10 @@ class SpeakerReads:
                     message.channel_id,
                     message.sender_user_id,
                     message.sender_contact_id,
-                    func.max(message.sender_name),
+                    # The name they spoke under last, not the largest one.
+                    func.array_agg(
+                        aggregate_order_by(message.sender_name, message.seq.desc())
+                    )[1],
                     last_said_at,
                 )
                 .where(

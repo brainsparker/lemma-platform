@@ -51,6 +51,11 @@ REPLIES_ARRIVED = (
 )
 
 
+def replies_client_id(batch_id: str | None) -> str | None:
+    """The news of one batch, named by it: delivered twice, it is one message."""
+    return f"replies:{batch_id}" if batch_id else None
+
+
 class MessageReplyService:
     """Deliver "they have all answered" into the conversation that asked."""
 
@@ -59,17 +64,27 @@ class MessageReplyService:
         self.conversations = ConversationRepository(uow)
         self.waits = AgentConversationWaitRepository(uow)
 
-    async def deliver(self, *, conversation_id: UUID, pod_id: UUID) -> bool:
+    async def deliver(
+        self, *, conversation_id: UUID, pod_id: UUID, batch_id: str | None = None
+    ) -> bool:
         """Start (or join) a turn carrying the news. False when there is none.
 
         Returns False for a conversation that has gone — the answers are still
         recorded on their rows, and a deleted conversation is not an error worth
-        raising at somebody who just answered a question.
+        raising at somebody who just answered a question — and for a batch whose
+        news this conversation already has: a batch wakes it once.
         """
         conversation = await self.conversations.get_conversation(
             conversation_id, include_runs=False
         )
         if conversation is None:
+            return False
+        client_id = replies_client_id(batch_id)
+        if client_id is not None and (
+            await self.conversations.find_user_message_by_client_id(
+                conversation_id=conversation_id, client_message_id=client_id
+            )
+        ):
             return False
 
         token = set_current_context(
@@ -95,6 +110,7 @@ class MessageReplyService:
                 content=REPLIES_ARRIVED,
                 agent_name=None,
                 message_metadata={"source": REPLY_SOURCE},
+                client_message_id=client_id,
                 supersede_pauses=False,
             )
         finally:

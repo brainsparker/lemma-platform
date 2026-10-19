@@ -48,6 +48,13 @@ async def pod_member_id(uow, pod_id: UUID, user_id: UUID) -> UUID | None:
     return member.id if member is not None else None
 
 
+async def pod_member_user_id(uow, *, pod_id: UUID, pod_member_id: UUID) -> UUID | None:
+    """The user behind this pod membership, or ``None`` if it is not one of
+    this pod's -- what a workflow form assigned to a member is asked of."""
+    member = await PodMemberRepository(uow).get_by_pod_and_id(pod_id, pod_member_id)
+    return member.user_id if member is not None else None
+
+
 async def pod_member_holds(
     uow, pod_id: UUID, user_id: UUID, permission_id: str
 ) -> bool:

@@ -159,11 +159,12 @@ class SurfaceSteps:
         )
 
     async def own_channel_in(self, pod: JSON) -> JSON:
-        """This person's own channel with the pod: everybody has one."""
-        [mine] = items_of(
-            await self.api.get(f"/pods/{pod['id']}/channels", params={"kind": "DIRECT"})
+        """This person's own channel with the pod, made if it is not yet."""
+        return await self.api.post(
+            f"/pods/{pod['id']}/channels/me",
+            what=f"{self.label} opening their own channel",
+            status=(200, 201),
         )
-        return mine
 
     async def lines_in(self, channel: JSON, *, in_pod: JSON) -> list[JSON]:
         return items_of(
@@ -191,8 +192,9 @@ class SurfaceSteps:
             what=f"{self.label} writing in a channel",
             json={
                 "text": text,
-                "mentions": [
-                    {"kind": "MEMBER", "id": str(person.user_id)} for person in naming
+                "parts": [
+                    {"type": "mention", "kind": "MEMBER", "id": str(person.user_id)}
+                    for person in naming
                 ],
             },
         )
@@ -209,10 +211,13 @@ class SurfaceSteps:
         raise AssertionError(f"{self.label} does not see channel {channel['id']}")
 
     async def reads_channel(self, channel: JSON, *, in_pod: JSON) -> None:
+        """Read the channel up to its newest line, as the app marks it."""
+        newest = (await self.channel_seen_by_me(channel, in_pod=in_pod))["last_seq"]
         await self.api.expect(
             "POST",
             f"/pods/{in_pod['id']}/channels/{channel['id']}/read",
-            status=204,
+            status=200,
+            json={"seq": newest},
             what=f"{self.label} reading a channel",
         )
 
@@ -241,7 +246,9 @@ class SurfaceSteps:
 
     async def is_refused_reading_channel(self, channel: JSON, *, in_pod: JSON) -> int:
         response = await self.api.call(
-            "POST", f"/pods/{in_pod['id']}/channels/{channel['id']}/read"
+            "POST",
+            f"/pods/{in_pod['id']}/channels/{channel['id']}/read",
+            json={"seq": 1},
         )
         if response.status_code < 400:
             raise AssertionError(

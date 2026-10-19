@@ -46,7 +46,7 @@ from app.modules.agent_surfaces.composition import (
     build_surface_turn_starter,
 )
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.contracts.direct_messages import ask_a_person
+from app.modules.agent.tools.messaging.people import call_a_person_in
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
@@ -58,7 +58,6 @@ from app.modules.contacts.infrastructure.visitor_sessions import (
 )
 from app.modules.agent_surfaces.services.contact_keepers import UNATTENDED_WARNING
 from app.modules.agent_surfaces.tests.e2e.helpers import _resend_payload
-from app.modules.channels.infrastructure.models import ChannelMessageModel
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     record_model_requests,
@@ -67,7 +66,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
 )
 from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     contact_channel_id,
-    deliver_member_posts,
+    send_deliveries,
     deliveries_of_line,
     direct_lines,
     member_writes,
@@ -261,11 +260,12 @@ async def test_forgetting_a_contact_takes_everything_the_pod_held_about_them(
             )
         )
     await db_session.commit()
-    assert await ask_a_person(
+    assert await call_a_person_in(
         pod_id=UUID(pod_id),
         conversation_id=context.conversation_id,
         keeper_user_id=owner,
         reason="She wants to change her delivery address.",
+        key=None,
     )
     her_channel = await db_session.scalar(
         select(ChannelModel.id).where(ChannelModel.contact_id == UUID(dana))
@@ -498,7 +498,7 @@ async def test_past_the_cap_no_run_starts_and_a_person_takes_over(
     # The member was told once, in their own channel, where to look -- not
     # what she wrote: her words stay in her channel, which forgetting her takes.
     [note] = await direct_lines(db_session, pod_id=pod_id, user_id=owner)
-    assert note.members_only and note.interaction_kind is None
+    assert note.members_only
     assert "Somebody outside the space is waiting for you" in note.body
     assert "Hello again?" not in note.body and "Anyone there?" not in note.body
     # Both are on Dana's channel, which waits on a person to answer by hand.
@@ -585,11 +585,9 @@ async def test_a_contacts_agent_switched_off_leaves_them_to_members(
         monkeypatch=monkeypatch,
     )
     channel = f"/pods/{test_pod['id']}/channels/{channel_id}"
-    off = await authenticated_client.patch(
-        channel, json={"settings": {"agents_answer": False}}
-    )
+    off = await authenticated_client.patch(channel, json={"agents_answer": False})
     assert off.status_code == 200, off.text
-    assert off.json()["settings"]["agents_answer"] is False
+    assert off.json()["agents_answer"] is False
     before = await runs()
 
     await write("step-2", "Can a person look at this?")
@@ -608,9 +606,7 @@ async def test_a_contacts_agent_switched_off_leaves_them_to_members(
     )
     assert not any("will reply" in str(text) for text in replies)
 
-    on = await authenticated_client.patch(
-        channel, json={"settings": {"agents_answer": True}}
-    )
+    on = await authenticated_client.patch(channel, json={"agents_answer": True})
     assert on.status_code == 200, on.text
     await write("step-3", "Thanks, back to the bot.")
 
@@ -642,30 +638,28 @@ async def test_a_member_who_writes_holds_the_contact_until_they_go_quiet(
     )
     assert wrote.status_code == 201, wrote.text
     stepped_in = (await authenticated_client.get(channel)).json()
-    assert stepped_in["handler"]["id"] == fixed_test_user["id"]
+    assert stepped_in["assignee"]["id"] == fixed_test_user["id"]
     before = await runs()
 
     await write("step-2", "Great, what are the options?")
     assert await runs() == before
 
     window = await authenticated_client.patch(
-        channel, json={"settings": {"hand_back_after_hours": 1}}
+        channel, json={"hand_back_after_hours": 1}
     )
-    assert window.json()["handler"]["id"] == fixed_test_user["id"]
+    assert window.json()["assignee"]["id"] == fixed_test_user["id"]
+    # The member last wrote two hours ago: past the window.
     await db_session.execute(
-        update(ChannelMessageModel)
-        .where(
-            ChannelMessageModel.channel_id == channel_id,
-            ChannelMessageModel.sender_user_id == UUID(fixed_test_user["id"]),
-        )
-        .values(created_at=datetime.now(timezone.utc) - timedelta(hours=2))
+        update(ChannelModel)
+        .where(ChannelModel.id == channel_id)
+        .values(assignee_last_line_at=datetime.now(timezone.utc) - timedelta(hours=2))
     )
     await db_session.commit()
 
     await write("step-3", "Hello? Anyone there?")
 
     assert await runs() == before + 1
-    assert (await authenticated_client.get(channel)).json()["handler"] is None
+    assert (await authenticated_client.get(channel)).json()["assignee"] is None
     told = await direct_lines(
         db_session, pod_id=test_pod["id"], user_id=fixed_test_user["id"]
     )
@@ -685,8 +679,8 @@ async def test_a_contacts_run_calls_a_person_in_and_the_keeper_is_told_where(
     It used to be a notification to the member, with the contact's question
     quoted and an answer carried back through an approval card. Now the
     contact's channel waits on a person -- in Contacts, for every member who
-    sees them -- with a note there to members only, and the member who looks
-    after them is told where to look. Stepping in answers the call. A contact's
+    sees them, with the reason on it -- and the member who looks after them is
+    told where to look. Stepping in answers the call. A contact's
     run has nothing else that reaches a member: no ``channel_post``.
     """
     pod_id = test_pod["id"]
@@ -733,14 +727,7 @@ async def test_a_contacts_run_calls_a_person_in_and_the_keeper_is_told_where(
     shown = (await authenticated_client.get(channel)).json()
     assert shown["kind"] == "CONTACT"
     assert shown["attention"]["reason"] == "A refund on order 1182 is a member's call."
-    timeline = (await authenticated_client.get(f"{channel}/messages")).json()["items"]
-    [called] = [line for line in timeline if line["members_only"]]
-    assert (
-        called["text"]
-        == "This needs a person: A refund on order 1182 is a member's call."
-    )
     [notice] = await direct_lines(db_session, pod_id=pod_id, user_id=owner)
-    assert notice.members_only and notice.interaction_kind is None
     assert "A contact you look after needs a person" in notice.body
 
     # Writing to them is stepping in, and answers the call.
@@ -857,7 +844,7 @@ async def test_writing_to_a_contact_takes_an_editor_and_a_daily_limit(
     monkeypatch,
 ):
     """A member writes to a contact in the contact's channel; the line goes out
-    afterwards, by ``surface.member_post``. Past the day's limit the line is
+    afterwards, by its delivery (``surface.channel_delivery``). Past the day's limit the line is
     still the member's, in Lemma -- recorded as not sent, and why -- rather
     than the post being refused."""
     pod_id = test_pod["id"]
@@ -906,7 +893,7 @@ async def test_writing_to_a_contact_takes_an_editor_and_a_daily_limit(
     )
     assert written["sender"]["kind"] == "MEMBER"
     assert written["sender"]["id"] == fixed_test_user["id"]
-    await deliver_member_posts()
+    await send_deliveries()
     [delivery] = await deliveries_of_line(written["id"])
     assert (delivery.platform, delivery.status.value) == ("RESEND", "SENT")
     mails = message_store.get_all("RESEND")[sent_before:]
@@ -915,10 +902,10 @@ async def test_writing_to_a_contact_takes_an_editor_and_a_daily_limit(
     limited = await member_writes(
         authenticated_client, pod_id, channel, "And another thing."
     )
-    await deliver_member_posts()
+    await send_deliveries()
     [held] = await deliveries_of_line(limited["id"])
     assert held.status.value == "SKIPPED"
-    assert held.error == "That is as many messages as one contact gets in a day"
+    assert held.reason == "That is as many messages as one contact gets in a day"
     assert len(message_store.get_all("RESEND")) == sent_before + 1
 
 
@@ -1053,10 +1040,10 @@ async def test_stop_unsubscribes_the_address_it_came_from(
     written = await member_writes(
         authenticated_client, pod_id, channel, "One more thing."
     )
-    await deliver_member_posts()
+    await send_deliveries()
     [held] = await deliveries_of_line(written["id"])
     assert held.status.value == "SKIPPED"
-    assert held.error == "The contact asked not to be written to there"
+    assert held.reason == "The contact asked not to be written to there"
     assert len(message_store.get_all("RESEND")) == sent_before
 
 
@@ -1151,4 +1138,4 @@ async def test_a_contacts_history_moves_with_them_to_a_new_keeper(
     told = await direct_lines(db_session, pod_id=pod_id, user_id=fixed_test_user["id"])
     [note] = [line for line in told if "has left the space" in line.body]
     # A note to them alone, in their own channel: nothing waits on an answer.
-    assert note.members_only and note.interaction_kind is None
+    assert note.members_only

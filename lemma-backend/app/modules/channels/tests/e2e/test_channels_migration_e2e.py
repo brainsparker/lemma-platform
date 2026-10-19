@@ -30,13 +30,17 @@ _OLD = (
     "agent_surface_conversation_links",
     "agent_surface_groups",
     "agent_surface_group_messages",
+    "notifications",
 )
 _NEW = (
+    "external_accounts",
     "channels",
-    "channel_participants",
+    "channel_members",
+    "channel_read_state",
     "channel_sources",
     "channel_messages",
     "channel_mentions",
+    "channel_questions",
     "channel_message_deliveries",
 )
 
@@ -90,48 +94,46 @@ def test_channels_replace_links_and_groups_and_roll_back_cleanly() -> None:
         migrate("upgrade", AFTER)
         assert not present(*_OLD), "the link and group tables outlived channels"
         assert present(*_NEW) == set(_NEW)
-        # A group's settings and a place's address live on its source now.
+        # A place belongs to an account; a group's bot-side settings and a
+        # place's address live on its source.
         assert {
+            "account_id",
+            "is_private",
             "delivery_ref",
             "owner_user_id",
             "answers_outsiders",
-            "shared_externally",
-            "invite_link",
             "request_id",
         } <= columns("channel_sources")
-        assert "reply_ref" in columns("channel_messages")
-        # What the channel app builds on, there before it is: threads, edits,
-        # files, a question waiting on one person, notify preferences, and a
-        # channel calling for a person.
+        # Who may see a channel is its own column; a contact's inbox is
+        # columns, not settings; the timeline's head is a number.
         assert {
+            "visibility",
+            "agents_answer",
+            "hand_back_after_hours",
+            "assignee_user_id",
+            "status",
+            "last_seq",
+            "last_line_id",
+            "last_line_at",
+        } <= columns("channels")
+        assert {
+            "seq",
+            "client_message_id",
             "parts",
-            "agent_run_id",
-            "reply_to_id",
+            "search",
             "thread_root_id",
+            "reply_to_id",
             "edited_at",
             "deleted_at",
-            "interaction_kind",
-            "interaction",
-            "interaction_state",
-            "awaits_user_id",
-            "awaits_contact_id",
-            "answer",
-            "answered_at",
-            "answered_by_user_id",
-            "answered_by_contact_id",
         } <= columns("channel_messages")
-        assert {"notify", "notify_via", "last_read_at"} <= columns(
-            "channel_participants"
+        assert {"role", "notify", "notify_via", "muted_until", "answers"} <= columns(
+            "channel_members"
         )
-        assert {
-            "topic",
-            "created_by_user_id",
-            "archived_at",
-            "attention_at",
-            "attention_reason",
-        } <= columns("channels")
-        assert index("ix_channel_messages_awaiting_member") is not None
-        assert index("ix_channel_mentions_unread_member") is not None
+        assert {"ref", "kind", "state", "batch_id", "expires_at"} <= columns(
+            "channel_questions"
+        )
+        assert index("uq_channel_messages_client") is not None
+        assert index("ix_channel_mentions_user") is not None
         assert "channel_id" in columns("agent_conversations")
         one_each = index("uq_agent_conversations_channel_person")
         assert one_each is not None and "UNIQUE" in one_each, one_each

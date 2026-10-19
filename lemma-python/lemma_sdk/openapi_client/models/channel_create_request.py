@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
+from ..models.visibility import Visibility
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.agent_seat import AgentSeat
+
 
 T = TypeVar("T", bound="ChannelCreateRequest")
 
@@ -17,17 +22,28 @@ class ChannelCreateRequest:
     """
     Attributes:
         title (str):
+        agents (list[AgentSeat] | Unset):
         members (list[UUID] | Unset): Members to add, by user id.
         topic (None | str | Unset):
+        visibility (Visibility | Unset):
     """
 
     title: str
+    agents: list[AgentSeat] | Unset = UNSET
     members: list[UUID] | Unset = UNSET
     topic: None | str | Unset = UNSET
+    visibility: Visibility | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         title = self.title
+
+        agents: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.agents, Unset):
+            agents = []
+            for agents_item_data in self.agents:
+                agents_item = agents_item_data.to_dict()
+                agents.append(agents_item)
 
         members: list[str] | Unset = UNSET
         if not isinstance(self.members, Unset):
@@ -42,6 +58,10 @@ class ChannelCreateRequest:
         else:
             topic = self.topic
 
+        visibility: str | Unset = UNSET
+        if not isinstance(self.visibility, Unset):
+            visibility = self.visibility.value
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -49,17 +69,32 @@ class ChannelCreateRequest:
                 "title": title,
             }
         )
+        if agents is not UNSET:
+            field_dict["agents"] = agents
         if members is not UNSET:
             field_dict["members"] = members
         if topic is not UNSET:
             field_dict["topic"] = topic
+        if visibility is not UNSET:
+            field_dict["visibility"] = visibility
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.agent_seat import AgentSeat
+
         d = dict(src_dict)
         title = d.pop("title")
+
+        _agents = d.pop("agents", UNSET)
+        agents: list[AgentSeat] | Unset = UNSET
+        if _agents is not UNSET:
+            agents = []
+            for agents_item_data in _agents:
+                agents_item = AgentSeat.from_dict(agents_item_data)
+
+                agents.append(agents_item)
 
         _members = d.pop("members", UNSET)
         members: list[UUID] | Unset = UNSET
@@ -79,10 +114,19 @@ class ChannelCreateRequest:
 
         topic = _parse_topic(d.pop("topic", UNSET))
 
+        _visibility = d.pop("visibility", UNSET)
+        visibility: Visibility | Unset
+        if isinstance(_visibility, Unset):
+            visibility = UNSET
+        else:
+            visibility = Visibility(_visibility)
+
         channel_create_request = cls(
             title=title,
+            agents=agents,
             members=members,
             topic=topic,
+            visibility=visibility,
         )
 
         channel_create_request.additional_properties = d

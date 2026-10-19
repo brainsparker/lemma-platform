@@ -369,7 +369,13 @@ def _cutover_statements() -> list[str]:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.cutover_statements()
+    # `notifications` is dropped by 0058, which this database is past; its
+    # seed is the notifications' own, not the agent's.
+    return [
+        statement
+        for statement in module.cutover_statements()
+        if "FROM notifications" not in statement
+    ]
 
 
 async def _seed() -> None:

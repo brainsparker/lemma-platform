@@ -1,25 +1,34 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, Literal, TypedDict
 from uuid import UUID
 
 from ..openapi_client.api.agent_surfaces import agent_notice_send
 from ..openapi_client.api.channels import (
     channel_create,
+    channel_delete,
+    channel_delivery_list,
+    channel_delivery_retry,
     channel_get,
     channel_inbox_get,
     channel_list,
-    channel_mark_read,
+    channel_me_create,
+    channel_me_get,
+    channel_member_add,
+    channel_member_join,
+    channel_member_leave,
+    channel_member_me_update,
+    channel_member_remove,
+    channel_member_update,
     channel_message_answer,
     channel_message_delete,
     channel_message_list,
     channel_message_post,
-    channel_message_search,
     channel_message_thread,
     channel_message_update,
-    channel_notify_update,
-    channel_participant_add,
-    channel_participant_remove,
+    channel_read,
+    channel_search,
     channel_update,
 )
 from ..openapi_client.models.channel_answer_request import ChannelAnswerRequest
@@ -32,18 +41,69 @@ from ..openapi_client.models.channel_message_response import ChannelMessageRespo
 from ..openapi_client.models.channel_messages_response import ChannelMessagesResponse
 from ..openapi_client.models.channel_post_request import ChannelPostRequest
 from ..openapi_client.models.channel_update_request import ChannelUpdateRequest
+from ..openapi_client.models.contact_status import ContactStatus
+from ..openapi_client.models.deliveries_response import DeliveriesResponse
+from ..openapi_client.models.delivery_response import DeliveryResponse
 from ..openapi_client.models.inbox_response import InboxResponse
+from ..openapi_client.models.member_update_request import MemberUpdateRequest
+from ..openapi_client.models.members_add_request import MembersAddRequest
+from ..openapi_client.models.my_membership_update import MyMembershipUpdate
 from ..openapi_client.models.notice_request import NoticeRequest
 from ..openapi_client.models.notice_response import NoticeResponse
-from ..openapi_client.models.notify_request import NotifyRequest
-from ..openapi_client.models.participants_add_request import ParticipantsAddRequest
+from ..openapi_client.models.read_request import ReadRequest
+from ..openapi_client.models.read_response import ReadResponse
 from ..openapi_client.models.search_response import SearchResponse
+from ..openapi_client.models.sender_kind import SenderKind
+from ..openapi_client.models.thread_response import ThreadResponse
 from ..openapi_client.types import UNSET
-from .base import BoundResource, as_uuid
+from .base import BoundResource, as_uuid, compact
+
+Kind = Literal["MEMBER", "CONTACT", "AGENT"]
+Answers = Literal["MENTIONED", "EVERY_LINE"]
+Status = Literal["open", "waiting_on_contact", "closed"]
+
+
+class _Keep:
+    """Leave a field as it is: an update sends only the fields named, so
+    ``None`` can mean "clear"."""
+
+    def __repr__(self) -> str:
+        return "KEEP"
+
+
+KEEP: Final = _Keep()
+
+
+class AgentSeat(TypedDict):
+    id: str
+    answers: Answers
 
 
 def _unset(value: Any) -> Any:
     return UNSET if value is None else value
+
+
+def _named(values: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value is not KEEP}
+
+
+def _uuid_or_none(value: str | UUID | None) -> str | None:
+    return str(as_uuid(value)) if value else None
+
+
+def _seats(agents: Sequence[str | UUID | AgentSeat] | None) -> list[dict[str, str]]:
+    seats: list[dict[str, str]] = []
+    for agent in agents or []:
+        if isinstance(agent, Mapping):
+            seats.append(
+                {
+                    "id": str(as_uuid(agent["id"])),
+                    "answers": agent.get("answers", "MENTIONED"),
+                }
+            )
+        else:
+            seats.append({"id": str(as_uuid(agent)), "answers": "MENTIONED"})
+    return seats
 
 
 class PodChannels(BoundResource):
@@ -52,10 +112,16 @@ class PodChannels(BoundResource):
     A channel is one shared timeline fed by any number of outside sources -- a
     WhatsApp chat, a Telegram group, a Slack channel, an email thread, a web
     chat -- or by none: a channel made in Lemma. ``DIRECT`` is one member and
-    the pod, ``CONTACT`` one contact and the pod (editors and admins), ``GROUP``
-    a chat several people read. Another member's direct channel is never
-    listed.
+    the pod, ``CONTACT`` one contact and the pod (a support inbox), ``GROUP``
+    a conversation of several, ``public`` (every member sees it) or
+    ``private`` (its members only).
+
+    Members are addressed as ``(kind, id)``: ``MEMBER`` and a user id,
+    ``CONTACT`` and a contact id, ``AGENT`` and an agent id. Updates send only
+    the fields named; ``None`` clears one.
     """
+
+    # -- channels ------------------------------------------------------------------
 
     def list(
         self,
@@ -63,13 +129,19 @@ class PodChannels(BoundResource):
         kind: Literal["DIRECT", "CONTACT", "GROUP"] | None = None,
         archived: bool = False,
         contact_id: str | UUID | None = None,
+        assignee: str | UUID | None = None,
+        unassigned: bool = False,
+        status: Status | None = None,
+        joined: bool = False,
         limit: int = 50,
-        before: str | None = None,
+        cursor: str | None = None,
     ) -> ChannelListResponse:
-        """The pod's channels, most recently active first, each with what is new
-        in it for the caller and its last line.
+        """The channels the caller may see, most recently active first, each
+        with what is new in it for them and its last line.
 
-        Page by passing the last page's ``next_before`` as ``before``.
+        ``assignee`` is ``"me"`` or a member's user id (contacts' channels
+        assigned to them); ``joined`` keeps only channels the caller is in.
+        Page by passing the last page's ``next_cursor`` as ``cursor``.
         """
         return self._call(
             channel_list,
@@ -77,8 +149,12 @@ class PodChannels(BoundResource):
             kind=ChannelKind(kind) if kind is not None else UNSET,
             archived=archived,
             contact_id=as_uuid(contact_id) if contact_id else UNSET,
+            assignee=str(assignee) if assignee else UNSET,
+            unassigned=unassigned,
+            status=ContactStatus(status) if status is not None else UNSET,
+            joined=joined,
+            cursor=_unset(cursor),
             limit=limit,
-            before=_unset(before),
         )
 
     def create(
@@ -86,42 +162,78 @@ class PodChannels(BoundResource):
         title: str,
         *,
         topic: str | None = None,
-        members: list[str | UUID] | None = None,
+        visibility: Literal["public", "private"] = "public",
+        members: Sequence[str | UUID] | None = None,
+        agents: Sequence[str | UUID | AgentSeat] | None = None,
+        idempotency_key: str | None = None,
     ) -> ChannelDetailResponse:
-        """Make a channel in Lemma, with the caller and the members named in it."""
+        """Make a group in Lemma, with the caller as its owner and the members
+        (user ids) and agents named in it. An agent is an id (answers when
+        named) or ``{"id", "answers"}``. The same ``idempotency_key`` returns
+        the group it made."""
         return self._call(
             channel_create,
             self._pod_uuid(),
             body={
                 "title": title,
                 "topic": topic,
+                "visibility": visibility,
                 "members": [str(as_uuid(member)) for member in members or []],
+                "agents": _seats(agents),
             },
             body_model=ChannelCreateRequest,
+            idempotency_key=_unset(idempotency_key),
         )
 
     def get(self, channel_id: str | UUID) -> ChannelDetailResponse:
-        """One channel, with its sources, participants, and the caller's settings."""
+        """One channel, with the places it is fed from, its members and agents,
+        and how the caller hears of it."""
         return self._call(channel_get, self._pod_uuid(), as_uuid(channel_id))
+
+    def mine(self) -> ChannelDetailResponse:
+        """The caller's own channel with the pod. Not found until it is made:
+        ``open_mine`` makes it."""
+        return self._call(channel_me_get, self._pod_uuid())
+
+    def open_mine(self) -> ChannelDetailResponse:
+        """The caller's own channel with the pod, made if it is not there yet."""
+        return self._call(channel_me_create, self._pod_uuid())
 
     def update(
         self,
         channel_id: str | UUID,
         *,
-        title: str | None = None,
-        topic: str | None = None,
-        archived: bool | None = None,
+        title: str | None | _Keep = KEEP,
+        topic: str | None | _Keep = KEEP,
+        visibility: Literal["public", "private"] | None | _Keep = KEEP,
+        archived: bool | None | _Keep = KEEP,
+        agents_answer: bool | None | _Keep = KEEP,
+        hand_back_after_hours: int | None | _Keep = KEEP,
+        assignee: str | UUID | None | _Keep = KEEP,
+        status: Status | None | _Keep = KEEP,
     ) -> ChannelDetailResponse:
-        """Rename, re-describe or archive a group. Who made it, or an admin."""
-        body = {
-            key: value
-            for key, value in {
+        """Change exactly the fields named; ``None`` clears one.
+
+        A group: ``title``, ``topic``, ``visibility``, ``archived`` -- its
+        owners' or an admin's. A contact's channel: ``agents_answer``,
+        ``hand_back_after_hours``, ``status``, ``assignee`` (a user id).
+        """
+        body = _named(
+            {
                 "title": title,
                 "topic": topic,
+                "visibility": visibility,
                 "archived": archived,
-            }.items()
-            if value is not None
-        }
+                "agents_answer": agents_answer,
+                "hand_back_after_hours": hand_back_after_hours,
+                "assignee": (
+                    str(as_uuid(assignee))
+                    if isinstance(assignee, (str, UUID))
+                    else assignee
+                ),
+                "status": status,
+            }
+        )
         return self._call(
             channel_update,
             self._pod_uuid(),
@@ -135,74 +247,139 @@ class PodChannels(BoundResource):
         channel_id: str | UUID,
         on: bool,
         *,
-        hand_back_after_hours: int | None = None,
+        hand_back_after_hours: int | None | _Keep = KEEP,
     ) -> ChannelDetailResponse:
-        """Whether a contact's agents answer them. Off, only members do; on
-        hands them back to the agent at once. ``hand_back_after_hours`` is how
-        long a member who wrote to them holds them before the agent answers
-        again. Takes ``contact.message``."""
-        settings: dict[str, Any] = {"agents_answer": on}
-        if hand_back_after_hours is not None:
-            settings["hand_back_after_hours"] = hand_back_after_hours
-        return self._call(
-            channel_update,
-            self._pod_uuid(),
-            as_uuid(channel_id),
-            body={"settings": settings},
-            body_model=ChannelUpdateRequest,
+        """Whether a contact's agent answers them. Off, only members do; on
+        hands them back to the agent at once (nobody is assigned).
+        ``hand_back_after_hours`` is how long a member who wrote to them holds
+        them before the agent answers again; ``None`` restores the default."""
+        return self.update(
+            channel_id,
+            agents_answer=on,
+            hand_back_after_hours=hand_back_after_hours,
         )
+
+    def delete(self, channel_id: str | UUID) -> None:
+        """Delete a group made in Lemma and its timeline: its owners' or an
+        admin's. A channel an outside place feeds is archived instead."""
+        self._call(channel_delete, self._pod_uuid(), as_uuid(channel_id))
+
+    # -- members -------------------------------------------------------------------
 
     def add_members(
-        self, channel_id: str | UUID, members: list[str | UUID]
+        self,
+        channel_id: str | UUID,
+        people: Sequence[str | UUID] = (),
+        *,
+        agents: Sequence[str | UUID | AgentSeat] | None = None,
     ) -> ChannelDetailResponse:
-        """Add members of the pod to a group."""
+        """Add members of the pod (user ids) and the pod's agents to a group.
+        An agent already in it answers as now asked."""
         return self._call(
-            channel_participant_add,
+            channel_member_add,
             self._pod_uuid(),
             as_uuid(channel_id),
-            body={"members": [str(as_uuid(member)) for member in members]},
-            body_model=ParticipantsAddRequest,
+            body={
+                "people": [str(as_uuid(person)) for person in people],
+                "agents": _seats(agents),
+            },
+            body_model=MembersAddRequest,
         )
 
-    def remove_member(self, channel_id: str | UUID, member_id: str | UUID) -> None:
-        """Leave a channel (the caller's own id), or take somebody out of it."""
-        self._call(
-            channel_participant_remove,
+    def update_member(
+        self,
+        channel_id: str | UUID,
+        kind: Kind,
+        member_id: str | UUID,
+        *,
+        role: Literal["owner", "member"] | None = None,
+        answers: Answers | None = None,
+    ) -> ChannelDetailResponse:
+        """A person's role in a group, or when an agent in it answers."""
+        return self._call(
+            channel_member_update,
             self._pod_uuid(),
             as_uuid(channel_id),
+            SenderKind(kind),
+            as_uuid(member_id),
+            body=compact({"role": role, "answers": answers}),
+            body_model=MemberUpdateRequest,
+        )
+
+    def remove_member(
+        self, channel_id: str | UUID, kind: Kind, member_id: str | UUID
+    ) -> None:
+        """Take somebody out of a group -- its owners' or an admin's."""
+        self._call(
+            channel_member_remove,
+            self._pod_uuid(),
+            as_uuid(channel_id),
+            SenderKind(kind),
             as_uuid(member_id),
         )
+
+    def join(self, channel_id: str | UUID) -> ChannelDetailResponse:
+        """Join a channel the caller may see: a public group, or -- holding
+        ``contact.read`` -- a contact's channel."""
+        return self._call(channel_member_join, self._pod_uuid(), as_uuid(channel_id))
+
+    def leave(self, channel_id: str | UUID) -> None:
+        """Leave a channel the caller is in."""
+        self._call(channel_member_leave, self._pod_uuid(), as_uuid(channel_id))
 
     def set_notify(
         self,
         channel_id: str | UUID,
-        notify: Literal["ALL", "MENTIONS", "NONE"],
+        notify: Literal["ALL", "MENTIONS", "NONE"] | _Keep = KEEP,
         *,
-        via: list[str] | None = None,
+        via: list[str] | None | _Keep = KEEP,
+        muted_until: str | None | _Keep = KEEP,
     ) -> ChannelDetailResponse:
-        """How the caller hears of this channel's lines outside the app."""
+        """How the caller hears of this channel's lines outside the app.
+        ``via`` names the platforms (``None``: the pod's rule); ``muted_until``
+        is an ISO time (``None`` unmutes)."""
         return self._call(
-            channel_notify_update,
+            channel_member_me_update,
             self._pod_uuid(),
             as_uuid(channel_id),
-            body={"notify": notify, "notify_via": via},
-            body_model=NotifyRequest,
+            body=_named(
+                {"notify": notify, "notify_via": via, "muted_until": muted_until}
+            ),
+            body_model=MyMembershipUpdate,
         )
 
-    def messages(
-        self, channel_id: str | UUID, *, limit: int = 50, before: str | None = None
-    ) -> ChannelMessagesResponse:
-        """The channel's timeline, oldest first: who said what, when and where.
+    def mark_read(self, channel_id: str | UUID, seq: int) -> ReadResponse:
+        """The caller has seen the channel up to line ``seq``. It never goes
+        back, and never past the newest line."""
+        return self._call(
+            channel_read,
+            self._pod_uuid(),
+            as_uuid(channel_id),
+            body={"seq": seq},
+            body_model=ReadRequest,
+        )
 
-        A thread's replies are left out and counted on its first line. The
-        newest page unless ``before`` is the previous page's ``next_before``.
-        """
+    # -- lines ---------------------------------------------------------------------
+
+    def messages(
+        self,
+        channel_id: str | UUID,
+        *,
+        limit: int = 50,
+        before_seq: int | None = None,
+        after_seq: int | None = None,
+    ) -> ChannelMessagesResponse:
+        """The timeline, oldest first: the newest page, the page before
+        ``before_seq``, or the page after ``after_seq``. A thread's replies
+        are left out and counted on its first line. ``next_before_seq`` and
+        ``next_after_seq`` continue it."""
         return self._call(
             channel_message_list,
             self._pod_uuid(),
             as_uuid(channel_id),
+            before_seq=_unset(before_seq),
+            after_seq=_unset(after_seq),
             limit=limit,
-            before=_unset(before),
         )
 
     def thread(
@@ -211,16 +388,16 @@ class PodChannels(BoundResource):
         message_id: str | UUID,
         *,
         limit: int = 50,
-        before: str | None = None,
-    ) -> ChannelMessagesResponse:
-        """A thread's replies, oldest first."""
+        after_seq: int | None = None,
+    ) -> ThreadResponse:
+        """A thread: its first line, and its replies oldest first."""
         return self._call(
             channel_message_thread,
             self._pod_uuid(),
             as_uuid(channel_id),
             as_uuid(message_id),
+            after_seq=_unset(after_seq),
             limit=limit,
-            before=_unset(before),
         )
 
     def post(
@@ -231,15 +408,25 @@ class PodChannels(BoundResource):
         members_only: bool = False,
         source_id: str | UUID | None = None,
         thread_root_id: str | UUID | None = None,
-        mentions: list[dict[str, str]] | None = None,
+        reply_to_id: str | UUID | None = None,
+        mentions: Sequence[Mapping[str, str]] | None = None,
+        parts: Sequence[Mapping[str, Any]] | None = None,
+        client_message_id: str | None = None,
     ) -> ChannelMessageResponse:
         """Write in a channel.
 
-        It goes to one outside place -- ``source_id``, or the one the channel
-        last heard from -- unless ``members_only`` makes it a note to members.
-        ``mentions`` names people and agents (``{"kind", "id"}``); a named
-        agent answers.
+        A reply goes where its thread is; otherwise to ``source_id``, or the
+        place the channel last heard from -- unless ``members_only`` makes it a
+        note to members. ``mentions`` names people and agents
+        (``{"kind", "id"}``); a named agent answers. ``parts`` are typed parts
+        (``mention``, ``file``, ``link``) sent as they are. The same
+        ``client_message_id`` is the same line.
         """
+        all_parts: list[dict[str, Any]] = [
+            {"type": "mention", "kind": mention["kind"], "id": mention["id"]}
+            for mention in mentions or []
+        ]
+        all_parts.extend(dict(part) for part in parts or [])
         return self._call(
             channel_message_post,
             self._pod_uuid(),
@@ -247,29 +434,38 @@ class PodChannels(BoundResource):
             body={
                 "text": text,
                 "members_only": members_only,
-                "source_id": str(as_uuid(source_id)) if source_id else None,
-                "thread_root_id": (
-                    str(as_uuid(thread_root_id)) if thread_root_id else None
-                ),
-                "mentions": mentions or [],
+                "source_id": _uuid_or_none(source_id),
+                "thread_root_id": _uuid_or_none(thread_root_id),
+                "reply_to_id": _uuid_or_none(reply_to_id),
+                "parts": all_parts,
+                "client_message_id": client_message_id,
             },
             body_model=ChannelPostRequest,
         )
 
-    def edit(
-        self, channel_id: str | UUID, message_id: str | UUID, text: str
+    def edit_message(
+        self,
+        channel_id: str | UUID,
+        message_id: str | UUID,
+        text: str,
+        *,
+        parts: Sequence[Mapping[str, Any]] | None = None,
     ) -> ChannelMessageResponse:
-        """Change what one of the caller's own lines says."""
+        """Change what one of the caller's own lines says. ``parts`` replaces
+        its parts when given. A copy already sent outside stays as sent."""
+        body: dict[str, Any] = {"text": text}
+        if parts is not None:
+            body["parts"] = [dict(part) for part in parts]
         return self._call(
             channel_message_update,
             self._pod_uuid(),
             as_uuid(channel_id),
             as_uuid(message_id),
-            body={"text": text},
+            body=body,
             body_model=ChannelEditRequest,
         )
 
-    def delete(self, channel_id: str | UUID, message_id: str | UUID) -> None:
+    def delete_message(self, channel_id: str | UUID, message_id: str | UUID) -> None:
         """Delete one of the caller's own lines; it keeps its place, empty."""
         self._call(
             channel_message_delete,
@@ -295,25 +491,64 @@ class PodChannels(BoundResource):
             body_model=ChannelAnswerRequest,
         )
 
+    def deliveries(
+        self, channel_id: str | UUID, message_id: str | UUID
+    ) -> DeliveriesResponse:
+        """Where a line went outside Lemma, and what became of each send."""
+        return self._call(
+            channel_delivery_list,
+            self._pod_uuid(),
+            as_uuid(channel_id),
+            as_uuid(message_id),
+        )
+
+    def retry_delivery(
+        self,
+        channel_id: str | UUID,
+        message_id: str | UUID,
+        delivery_id: str | UUID,
+    ) -> DeliveryResponse:
+        """Try a failed or given-up send again, now."""
+        return self._call(
+            channel_delivery_retry,
+            self._pod_uuid(),
+            as_uuid(channel_id),
+            as_uuid(message_id),
+            as_uuid(delivery_id),
+        )
+
+    # -- across the pod ------------------------------------------------------------
+
     def inbox(self) -> InboxResponse:
-        """What is new for the caller across the pod, and what waits on them."""
+        """What is new for the caller across the pod: the badges, the questions
+        waiting on them, and the unread lines naming them."""
         return self._call(channel_inbox_get, self._pod_uuid())
 
-    def search(self, q: str, *, limit: int = 30) -> SearchResponse:
-        """Lines matching every word, newest first, in the channels the caller sees."""
-        return self._call(channel_message_search, self._pod_uuid(), q=q, limit=limit)
+    def search(
+        self,
+        q: str,
+        *,
+        channel_id: str | UUID | None = None,
+        cursor: str | None = None,
+        limit: int = 30,
+    ) -> SearchResponse:
+        """Lines matching every word, newest first, in the channels the caller
+        sees -- or in one of them. Page with ``next_cursor``."""
+        return self._call(
+            channel_search,
+            self._pod_uuid(),
+            q=q,
+            channel_id=as_uuid(channel_id) if channel_id else UNSET,
+            cursor=_unset(cursor),
+            limit=limit,
+        )
 
-    def notify(self, to: str, text: str, *, title: str | None = None) -> NoticeResponse:
+    def notify(self, to: str, text: str) -> NoticeResponse:
         """Tell another member of the pod something: a line in their own
-        channel, carried on to where they last spoke. ``to`` is a pod member
-        id, user id or email address."""
+        channel. ``to`` is a pod member id, user id or email address."""
         return self._call(
             agent_notice_send,
             self._pod_uuid(),
-            body={"to": to, "text": text, "title": title},
+            body={"to": to, "text": text},
             body_model=NoticeRequest,
         )
-
-    def mark_read(self, channel_id: str | UUID) -> None:
-        """Note that the caller has read the channel up to now."""
-        self._call(channel_mark_read, self._pod_uuid(), as_uuid(channel_id))

@@ -55,6 +55,7 @@ def _private_place(surface_id, *, ago: timedelta = timedelta()) -> Source:
         id=uuid4(),
         channel_id=uuid4(),
         pod_id=uuid4(),
+        account_id=uuid4(),
         surface_id=surface_id,
         platform="TELEGRAM",
         kind=SourceKind.PRIVATE,

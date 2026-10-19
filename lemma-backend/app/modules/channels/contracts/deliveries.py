@@ -1,126 +1,118 @@
-"""Where a line was sent out to, and what became of it.
+"""Deliveries: what whoever owns the platforms reads and records as it sends.
 
-A line written in Lemma for somebody outside it -- an agent's message to a
-member, a member's post to a contact -- is delivered by the module that owns
-the platforms; it records each attempt here, and the app shows it on the line.
+Channels plans a delivery for every send outside Lemma and announces it
+(``ChannelDeliveryDue``). The sender claims it, sends, and records the outcome
+here; a claimed delivery that was sent is never sent again.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import select, update
-
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.channels.infrastructure.models import ChannelMessageDeliveryModel
-from app.modules.channels.infrastructure.rows import MAX_LINES, now
+from app.modules.channels.domain.entities import Delivery
+from app.modules.channels.infrastructure.deliveries import DeliveryRepository
+
+__all__ = [
+    "claim_delivery",
+    "deliveries_of",
+    "delivery_by_external",
+    "delivery_by_id",
+    "delivery_failed",
+    "delivery_sent",
+    "delivery_skipped",
+    "delivery_undelivered",
+    "due_deliveries",
+    "retry_delivery",
+]
 
 
-class DeliveryStatus(StrEnum):
-    SENT = "SENT"
-    FAILED = "FAILED"
-    #: Nothing could carry it: it is in the app only.
-    SKIPPED = "SKIPPED"
+async def delivery_by_id(
+    uow: SqlAlchemyUnitOfWork, delivery_id: UUID
+) -> Delivery | None:
+    return await DeliveryRepository(uow.session).get(delivery_id)
 
 
-@dataclass(frozen=True, slots=True)
-class Delivery:
-    message_id: UUID
-    platform: str
-    status: DeliveryStatus
-    error: str | None
-    source_id: UUID | None
-    delivered_at: datetime | None
+async def claim_delivery(
+    uow: SqlAlchemyUnitOfWork, delivery_id: UUID, *, at: datetime
+) -> Delivery | None:
+    """Take a due delivery to send it; ``None`` when it is not due -- sent,
+    skipped, given up, or being sent by somebody else."""
+    return await DeliveryRepository(uow.session).claim(delivery_id, at=at)
 
 
-async def record_delivery(
+async def delivery_sent(
     uow: SqlAlchemyUnitOfWork,
+    delivery_id: UUID,
     *,
-    message_id: UUID,
-    pod_id: UUID,
     platform: str,
-    status: DeliveryStatus,
-    recipient_user_id: UUID | None = None,
-    recipient_contact_id: UUID | None = None,
-    source_id: UUID | None = None,
-    error: str | None = None,
-    external_message_id: str | None = None,
+    external_message_id: str | None,
 ) -> None:
-    uow.session.add(
-        ChannelMessageDeliveryModel(
-            message_id=message_id,
-            pod_id=pod_id,
-            source_id=source_id,
-            platform=platform[:20],
-            recipient_user_id=recipient_user_id,
-            recipient_contact_id=recipient_contact_id,
-            status=status.value,
-            error=error[:2000] if error else None,
-            external_message_id=external_message_id[:255]
-            if external_message_id
-            else None,
-            delivered_at=now() if status is DeliveryStatus.SENT else None,
-        )
+    await DeliveryRepository(uow.session).sent(
+        delivery_id, platform=platform, external_message_id=external_message_id
     )
-    await uow.session.flush()
 
 
-async def mark_delivery_failed(
-    uow: SqlAlchemyUnitOfWork, *, message_id: UUID, platform: str, error: str
-) -> bool:
-    """A platform reported, after the fact, that a line it took never arrived.
-
-    Whether there was a sent delivery of it there to mark.
-    """
-    result = await uow.session.execute(
-        update(ChannelMessageDeliveryModel)
-        .where(
-            ChannelMessageDeliveryModel.message_id == message_id,
-            ChannelMessageDeliveryModel.platform == platform,
-            ChannelMessageDeliveryModel.status == DeliveryStatus.SENT.value,
-        )
-        .values(status=DeliveryStatus.FAILED.value, error=error[:2000])
+async def delivery_skipped(
+    uow: SqlAlchemyUnitOfWork,
+    delivery_id: UUID,
+    *,
+    reason: str,
+    platform: str | None = None,
+) -> None:
+    """Not sent, on purpose: the reason a member reads."""
+    await DeliveryRepository(uow.session).skipped(
+        delivery_id, reason=reason, platform=platform
     )
-    return bool(getattr(result, "rowcount", 0))
+
+
+async def delivery_failed(
+    uow: SqlAlchemyUnitOfWork,
+    delivery: Delivery,
+    *,
+    reason: str,
+    platform: str | None = None,
+) -> Delivery:
+    """It did not go: due again after backoff, or given up after the last try."""
+    return await DeliveryRepository(uow.session).failed(
+        delivery, reason=reason, platform=platform
+    )
+
+
+async def retry_delivery(
+    uow: SqlAlchemyUnitOfWork, delivery_id: UUID
+) -> Delivery | None:
+    return await DeliveryRepository(uow.session).retry(delivery_id)
+
+
+async def delivery_undelivered(
+    uow: SqlAlchemyUnitOfWork, *, message_id: UUID, platform: str, reason: str
+) -> int:
+    """A line the platform took and later reported it never delivered; how
+    many of its deliveries that was."""
+    return await DeliveryRepository(uow.session).undelivered(
+        message_id=message_id, platform=platform, reason=reason
+    )
+
+
+async def delivery_by_external(
+    uow: SqlAlchemyUnitOfWork, *, platform: str, external_message_id: str
+) -> Delivery | None:
+    """The delivery a platform's status report names."""
+    return await DeliveryRepository(uow.session).by_external(
+        platform=platform, external_message_id=external_message_id
+    )
 
 
 async def deliveries_of(
     uow: SqlAlchemyUnitOfWork, message_ids: Sequence[UUID]
-) -> dict[UUID, list[Delivery]]:
-    """Each line's deliveries, oldest first."""
-    if not message_ids:
-        return {}
-    rows = await uow.session.scalars(
-        select(ChannelMessageDeliveryModel)
-        .where(
-            ChannelMessageDeliveryModel.message_id.in_(list(message_ids)[:MAX_LINES])
-        )
-        .order_by(ChannelMessageDeliveryModel.created_at)
-        .limit(MAX_LINES * 2)
-    )
-    found: dict[UUID, list[Delivery]] = {}
-    for row in rows:
-        found.setdefault(row.message_id, []).append(
-            Delivery(
-                message_id=row.message_id,
-                platform=row.platform,
-                status=DeliveryStatus(row.status),
-                error=row.error,
-                source_id=row.source_id,
-                delivered_at=row.delivered_at,
-            )
-        )
-    return found
+) -> list[Delivery]:
+    return await DeliveryRepository(uow.session).of_messages(message_ids)
 
 
-__all__ = [
-    "Delivery",
-    "DeliveryStatus",
-    "deliveries_of",
-    "mark_delivery_failed",
-    "record_delivery",
-]
+async def due_deliveries(
+    uow: SqlAlchemyUnitOfWork, *, at: datetime, limit: int = 100
+) -> list[UUID]:
+    return await DeliveryRepository(uow.session).due(at=at, limit=limit)

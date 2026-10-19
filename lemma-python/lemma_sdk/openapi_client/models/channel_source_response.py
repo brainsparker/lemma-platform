@@ -20,8 +20,9 @@ class ChannelSourceResponse:
     """
     Attributes:
         id (UUID):
-        kind (SourceKind): Whether a source is read by one person outside the pod or by several.
-        platform (str): Where it is: TELEGRAM, WHATSAPP, SLACK, TEAMS, RESEND, WEB…
+        is_private (bool): The platform keeps it to its members.
+        kind (SourceKind):
+        platform (str): Where it is: TELEGRAM, WHATSAPP, SLACK, TEAMS, RESEND, WEB...
         last_inbound_at (datetime.datetime | None | Unset):
         pending (bool | Unset): A group the bot asked the platform for, not confirmed yet. Default: False.
         surface_id (None | Unset | UUID):
@@ -29,6 +30,7 @@ class ChannelSourceResponse:
     """
 
     id: UUID
+    is_private: bool
     kind: SourceKind
     platform: str
     last_inbound_at: datetime.datetime | None | Unset = UNSET
@@ -39,6 +41,8 @@ class ChannelSourceResponse:
 
     def to_dict(self) -> dict[str, Any]:
         id = str(self.id)
+
+        is_private = self.is_private
 
         kind = self.kind.value
 
@@ -73,6 +77,7 @@ class ChannelSourceResponse:
         field_dict.update(
             {
                 "id": id,
+                "is_private": is_private,
                 "kind": kind,
                 "platform": platform,
             }
@@ -92,6 +97,8 @@ class ChannelSourceResponse:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
         id = UUID(d.pop("id"))
+
+        is_private = d.pop("is_private")
 
         kind = SourceKind(d.pop("kind"))
 
@@ -144,6 +151,7 @@ class ChannelSourceResponse:
 
         channel_source_response = cls(
             id=id,
+            is_private=is_private,
             kind=kind,
             platform=platform,
             last_inbound_at=last_inbound_at,

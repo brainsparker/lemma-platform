@@ -24,17 +24,15 @@ from app.modules.agent.contracts import channel_conversations
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
-from app.modules.agent.contracts.agents import agent_name_for_id
 from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.surface_route_types import (
     SurfaceEgressTarget,
 )
-from app.modules.channels.contracts.lines import line_went_out, thread_root_at
-from app.modules.channels.contracts.places import reply_address
+from app.modules.channels.contracts.lines import thread_root_at
 from app.modules.channels.contracts import (
-    ChannelMessage,
     ContactsHome,
+    NewLine,
     Place,
     Principal,
     Sender,
@@ -45,10 +43,6 @@ from app.modules.channels.contracts import (
     source_for,
 )
 
-
-#: Delivery metadata naming the member who wrote what is being sent -- a
-#: follow-up -- so its line is theirs, not the agent's.
-WRITTEN_BY_MEMBER = "written_by_member_id"
 
 #: Delivery metadata naming the line being delivered, which is on the timeline
 #: already: the delivery writes no second one.
@@ -62,10 +56,12 @@ WEB = "WEB"
 
 
 def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
-    """A visitor's chat on one widget: keyed by the widget and their session."""
+    """A visitor's chat on one widget: keyed by the widget and their session.
+    The widget is its own account; no surface carries it."""
     return Place(
         surface_id=None,
         platform=WEB,
+        account_key=f"widget:{widget_id}",
         kind=SourceKind.PRIVATE,
         external_channel_id=str(widget_id),
         external_user_id=str(session_id),
@@ -84,17 +80,6 @@ class ChannelLines(Protocol):
         conversation_id: UUID,
         text: str,
         agent_display_name: str | None = None,
-        written_by: UUID | None = None,
-    ) -> None: ...
-
-    async def opened(
-        self,
-        *,
-        line_id: UUID,
-        source: Source,
-        conversation_id: UUID,
-        external_message_id: str | None,
-        external_thread_id: str | None,
     ) -> None: ...
 
 
@@ -114,7 +99,6 @@ class ChannelLinesInDatabase:
         conversation_id: UUID,
         text: str,
         agent_display_name: str | None = None,
-        written_by: UUID | None = None,
     ) -> None:
         await note_said(
             self.uow,
@@ -122,27 +106,6 @@ class ChannelLinesInDatabase:
             conversation_id=conversation_id,
             text=text,
             agent_display_name=agent_display_name,
-            written_by=written_by,
-        )
-
-    async def opened(
-        self,
-        *,
-        line_id: UUID,
-        source: Source,
-        conversation_id: UUID,
-        external_message_id: str | None,
-        external_thread_id: str | None,
-    ) -> None:
-        """The line a delivery carried, as the first line of the place it
-        opened -- not a second line saying the same."""
-        await line_went_out(
-            self.uow,
-            message_id=line_id,
-            source_id=source.id,
-            conversation_id=conversation_id,
-            external_message_id=external_message_id,
-            external_thread_id=external_thread_id,
         )
 
 
@@ -173,14 +136,16 @@ async def note_heard(
     await post(
         uow,
         channel_id=source.channel_id,
-        sender=sender,
-        text=text,
-        source_id=source.id,
-        conversation_id=context.conversation_id,
-        external_message_id=context.message_external_message_id,
-        external_thread_id=context.event.external_thread_id,
-        # What answers this line in place: its thread, the message replied to.
-        reply_ref=context.event.model_dump(mode="json"),
+        line=NewLine(
+            sender=sender,
+            text=text,
+            source_id=source.id,
+            conversation_id=context.conversation_id,
+            external_message_id=context.message_external_message_id,
+            external_thread_id=context.event.external_thread_id,
+            # What answers this line in place: its thread, the message replied to.
+            reply_ref=context.event.model_dump(mode="json"),
+        ),
     )
 
 
@@ -212,10 +177,12 @@ async def note_heard_on_web(
     await post(
         uow,
         channel_id=source.channel_id,
-        sender=Sender.contact(contact_id, display_name=display_name),
-        text=text,
-        source_id=source.id,
-        conversation_id=conversation_id,
+        line=NewLine(
+            sender=Sender.contact(contact_id, display_name=display_name),
+            text=text,
+            source_id=source.id,
+            conversation_id=conversation_id,
+        ),
     )
 
 
@@ -226,46 +193,39 @@ async def note_said(
     conversation_id: UUID,
     text: str,
     agent_display_name: str | None = None,
-    written_by: UUID | None = None,
 ) -> None:
-    """What was delivered, as its line in the channel.
-
-    The agent's, said for the person it answered -- or, for what a member
-    wrote (``written_by``), that member's. After the platform took it, so the
-    timeline never holds a line nobody saw.
-    """
+    """What the agent delivered, as its line in the channel, said for the
+    person it answered. After the platform took it, so the timeline never
+    holds a line nobody saw."""
     if target.conversation_user_id is None:
         return
     source = target.source
     agent_id = effective_agent_id(
         target.agent_id or target.surface.agent_id, pod_id=target.pod_id
     )
+    thread_root_id = (
+        await thread_root_at(
+            uow, source_id=source.id, external_thread_id=target.event.external_thread_id
+        )
+        if source.kind is SourceKind.SHARED and source.platform in THREADED
+        else None
+    )
     await post(
         uow,
         channel_id=source.channel_id,
-        sender=(
-            Sender.member(written_by)
-            if written_by is not None
-            else Sender.agent(
+        line=NewLine(
+            sender=Sender.agent(
                 agent_id,
                 on_behalf_of=answered_for(target.audience, target.conversation_user_id),
                 display_name=agent_display_name,
-            )
-        ),
-        text=text,
-        source_id=source.id,
-        conversation_id=conversation_id,
-        # The thread it went to, so the place knows the agent is in it.
-        external_thread_id=target.event.external_thread_id,
-        # A Slack or Teams thread is a thread here too.
-        thread_root_id=(
-            await thread_root_at(
-                uow,
-                source_id=source.id,
-                external_thread_id=target.event.external_thread_id,
-            )
-            if source.kind is SourceKind.SHARED and source.platform in THREADED
-            else None
+            ),
+            text=text,
+            source_id=source.id,
+            conversation_id=conversation_id,
+            # The thread it went to, so the place knows the agent is in it.
+            external_thread_id=target.event.external_thread_id,
+            # A Slack or Teams thread is a thread here too.
+            thread_root_id=thread_root_id,
         ),
     )
 
@@ -293,59 +253,13 @@ async def note_answered_on(
     await post(
         uow,
         channel_id=source.channel_id,
-        sender=Sender.agent(
-            effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id),
-            on_behalf_of=answered_for(conversation.audience, conversation.user_id),
+        line=NewLine(
+            sender=Sender.agent(
+                effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id),
+                on_behalf_of=answered_for(conversation.audience, conversation.user_id),
+            ),
+            text=text,
+            source_id=source.id,
+            conversation_id=conversation_id,
         ),
-        text=text,
-        source_id=source.id,
-        conversation_id=conversation_id,
-    )
-
-
-async def note_answered_in_lemma(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    line: ChannelMessage,
-    conversation_id: UUID,
-    run_id: UUID,
-    text: str,
-) -> None:
-    """An answer to a line written in Lemma, as the agent's line beside it: in
-    its thread, said for the person the conversation answers."""
-    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
-    if conversation is None:
-        return
-    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
-    await post(
-        uow,
-        channel_id=line.channel_id,
-        sender=Sender.agent(
-            agent_id,
-            on_behalf_of=answered_for(conversation.audience, conversation.user_id),
-            display_name=await agent_name_for_id(uow.session, agent_id),
-        ),
-        text=text,
-        conversation_id=conversation_id,
-        agent_run_id=run_id,
-        thread_root_id=line.thread_root_id,
-    )
-
-
-async def note_written_by_member(
-    uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, user_id: UUID, text: str
-) -> None:
-    """What a member wrote to the conversation's person where no platform
-    delivers it -- a web chat, read on their next visit -- as the member's line."""
-    address = await reply_address(uow, conversation_id)
-    if address is None:
-        return
-    source = address.source
-    await post(
-        uow,
-        channel_id=source.channel_id,
-        sender=Sender.member(user_id),
-        text=text,
-        source_id=source.id,
-        conversation_id=conversation_id,
     )

@@ -4,22 +4,34 @@ from typing import Any, Callable
 
 import typer
 
+from ..confirm import confirm_destructive
 from ..io import emit, to_plain
-from ..payload import read_json
 from ..sdk import pod_client
 from ..state import run_with_client, state_from_ctx
+from .channel_lines import deliveries_app, messages_app
 
 app = typer.Typer(
     help="Channel commands: where a pod's members, contacts and agents talk."
 )
+members_app = typer.Typer(help="Who is in a group: people and agents.")
 source_app = typer.Typer(
     help="A group source's settings, and bringing the bot into a group."
 )
+app.add_typer(members_app, name="members")
+app.add_typer(members_app, name="member", hidden=True)
+app.add_typer(messages_app, name="messages")
+app.add_typer(messages_app, name="message", hidden=True)
+app.add_typer(deliveries_app, name="deliveries")
 app.add_typer(source_app, name="source")
 app.add_typer(source_app, name="sources", hidden=True)
 
 _KINDS = ("DIRECT", "CONTACT", "GROUP")
+_MEMBER_KINDS = ("MEMBER", "CONTACT", "AGENT")
 _NOTIFY = ("ALL", "MENTIONS", "NONE")
+_ANSWERS = ("MENTIONED", "EVERY_LINE")
+_ROLES = ("owner", "member")
+_STATUSES = ("open", "waiting_on_contact", "closed")
+_VISIBILITIES = ("public", "private")
 
 
 def _run(ctx: typer.Context, pod: str | None, call: Callable[[Any], Any]) -> None:
@@ -32,13 +44,36 @@ def _run(ctx: typer.Context, pod: str | None, call: Callable[[Any], Any]) -> Non
         emit(state, result)
 
 
+def _pick(value: str, allowed: tuple[str, ...], flag: str) -> str:
+    for option in allowed:
+        if value.lower() == option.lower():
+            return option
+    raise typer.BadParameter(f"{flag} is one of {', '.join(allowed)}.")
+
+
 def _choice(value: str | None, allowed: tuple[str, ...], flag: str) -> str | None:
-    if value is None:
-        return None
-    upper = value.upper()
-    if upper not in allowed:
-        raise typer.BadParameter(f"{flag} is one of {', '.join(allowed)}.")
-    return upper
+    return None if value is None else _pick(value, allowed, flag)
+
+
+def _member_ref(value: str) -> tuple[str, str]:
+    """`KIND:ID` -- `MEMBER:<user id>`, `CONTACT:<contact id>`, `AGENT:<agent id>`."""
+    kind, sep, member_id = value.partition(":")
+    if not sep or not member_id:
+        raise typer.BadParameter(
+            "MEMBER is KIND:ID -- MEMBER:<user id>, CONTACT:<contact id> or AGENT:<agent id>."
+        )
+    return _pick(kind, _MEMBER_KINDS, "KIND"), member_id
+
+
+def _agent_seat(value: str) -> dict[str, str]:
+    """`ID` (answers when named) or `ID:EVERY_LINE`."""
+    agent_id, sep, answers = value.partition(":")
+    if not sep:
+        return {"id": agent_id, "answers": "MENTIONED"}
+    return {"id": agent_id, "answers": _pick(answers, _ANSWERS, "--agent ID:ANSWERS")}
+
+
+# -- channels ----------------------------------------------------------------------
 
 
 @app.command("list")
@@ -47,13 +82,23 @@ def list_channels(
     kind: str | None = typer.Option(None, "--kind", help="DIRECT, CONTACT or GROUP."),
     archived: bool = typer.Option(False, "--archived", help="Archived ones instead."),
     contact: str | None = typer.Option(None, "--contact", help="Only this contact's."),
+    assignee: str | None = typer.Option(
+        None, "--assignee", help="Contacts' channels assigned to `me` or a user id."
+    ),
+    unassigned: bool = typer.Option(
+        False, "--unassigned", help="Contacts' channels nobody is assigned."
+    ),
+    status: str | None = typer.Option(
+        None, "--status", help="open, waiting_on_contact or closed."
+    ),
+    joined: bool = typer.Option(False, "--joined", help="Only channels you are in."),
     limit: int = typer.Option(50, "--limit"),
-    before: str | None = typer.Option(
-        None, "--before", help="The previous page's next_before."
+    cursor: str | None = typer.Option(
+        None, "--cursor", help="The previous page's next_cursor."
     ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """The channels you can see, most recently active first, with what is new."""
+    """List the channels you can see, most recently active first."""
     _run(
         ctx,
         pod,
@@ -61,8 +106,12 @@ def list_channels(
             kind=_choice(kind, _KINDS, "--kind"),
             archived=archived,
             contact_id=contact,
+            assignee=assignee,
+            unassigned=unassigned,
+            status=_choice(status, _STATUSES, "--status"),
+            joined=joined,
             limit=limit,
-            before=before,
+            cursor=cursor,
         ),
     )
 
@@ -73,8 +122,17 @@ def get_channel(
     channel_id: str = typer.Argument(..., help="Channel id."),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """One channel: its sources, participants and your settings."""
+    """Show one channel: its sources, members, agents and your settings."""
     _run(ctx, pod, lambda p: p.channels.get(channel_id))
+
+
+@app.command("mine")
+def my_channel(
+    ctx: typer.Context,
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Show your own channel with the pod, making it if it is not there yet."""
+    _run(ctx, pod, lambda p: p.channels.open_mine())
 
 
 @app.command("create")
@@ -82,162 +140,88 @@ def create_channel(
     ctx: typer.Context,
     title: str = typer.Argument(..., help="What to call it."),
     topic: str | None = typer.Option(None, "--topic"),
+    private: bool = typer.Option(
+        False, "--private", help="Only its members see it (public by default)."
+    ),
     member: list[str] = typer.Option(
         [], "--member", help="A member's user id to add. Repeat for more."
     ),
-    pod: str | None = typer.Option(None, "--pod"),
-) -> None:
-    """Make a channel in Lemma, with you and the members named in it."""
-    _run(ctx, pod, lambda p: p.channels.create(title, topic=topic, members=member))
-
-
-@app.command("messages")
-def list_messages(
-    ctx: typer.Context,
-    channel_id: str = typer.Argument(..., help="Channel id."),
-    limit: int = typer.Option(50, "--limit"),
-    before: str | None = typer.Option(
-        None, "--before", help="The previous page's next_before."
-    ),
-    pod: str | None = typer.Option(None, "--pod"),
-) -> None:
-    """The timeline, oldest first; a thread's replies are counted on its line."""
-    _run(
-        ctx,
-        pod,
-        lambda p: p.channels.messages(channel_id, limit=limit, before=before),
-    )
-
-
-@app.command("thread")
-def list_thread(
-    ctx: typer.Context,
-    channel_id: str = typer.Argument(..., help="Channel id."),
-    message_id: str = typer.Argument(..., help="The thread's first line."),
-    limit: int = typer.Option(50, "--limit"),
-    pod: str | None = typer.Option(None, "--pod"),
-) -> None:
-    """A thread's replies, oldest first."""
-    _run(ctx, pod, lambda p: p.channels.thread(channel_id, message_id, limit=limit))
-
-
-@app.command("post")
-def post_message(
-    ctx: typer.Context,
-    channel_id: str = typer.Argument(..., help="Channel id."),
-    text: str = typer.Argument(..., help="What to say."),
-    members_only: bool = typer.Option(
-        False, "--members-only", help="A note to members: never sent outside."
-    ),
-    source: str | None = typer.Option(
-        None, "--source", help="Which outside place it goes to (a source id)."
-    ),
-    thread: str | None = typer.Option(
-        None, "--thread", help="Reply in the thread of this line."
-    ),
     agent: list[str] = typer.Option(
-        [], "--mention-agent", help="An agent id to name; it answers. Repeat for more."
-    ),
-    member: list[str] = typer.Option(
-        [], "--mention", help="A member's user id to name. Repeat for more."
+        [],
+        "--agent",
+        help="An agent id to seat (answers when named), or ID:EVERY_LINE. Repeat for more.",
     ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Write in a channel: to the place it last heard from, unless a note."""
-    mentions = [{"kind": "AGENT", "id": a} for a in agent] + [
-        {"kind": "MEMBER", "id": m} for m in member
-    ]
+    """Make a group in Lemma, with you as its owner."""
+    seats = [_agent_seat(value) for value in agent]
     _run(
         ctx,
         pod,
-        lambda p: p.channels.post(
-            channel_id,
-            text,
-            members_only=members_only,
-            source_id=source,
-            thread_root_id=thread,
-            mentions=mentions,
+        lambda p: p.channels.create(
+            title,
+            topic=topic,
+            visibility="private" if private else "public",
+            members=member,
+            agents=seats,
         ),
     )
 
 
-@app.command("answer")
-def answer_question(
+@app.command("update")
+def update_channel(
     ctx: typer.Context,
     channel_id: str = typer.Argument(..., help="Channel id."),
-    message_id: str = typer.Argument(..., help="The line asking you."),
-    text: str | None = typer.Option(None, "--text", help="A written answer."),
-    choice: str | None = typer.Option(None, "--choice", help="One of its choices."),
-    decision: str | None = typer.Option(
-        None, "--decision", help="APPROVE_ONCE or DENY, for an approval."
-    ),
-    json_payload: str | None = typer.Option(
-        None, "--data", "-d", help="The answer as JSON: a form's fields."
-    ),
-    pod: str | None = typer.Option(None, "--pod"),
-) -> None:
-    """Answer what a line asks you."""
-    answer: dict[str, Any] = read_json(json_payload, None) if json_payload else {}
-    for key, value in (("text", text), ("choice", choice), ("decision", decision)):
-        if value is not None:
-            answer[key] = value
-    if not answer:
-        raise typer.BadParameter("Pass --text, --choice, --decision or --data.")
-    _run(ctx, pod, lambda p: p.channels.answer(channel_id, message_id, answer))
-
-
-@app.command("inbox")
-def inbox(
-    ctx: typer.Context,
-    pod: str | None = typer.Option(None, "--pod"),
-) -> None:
-    """What is new for you across the pod, and what is waiting on you."""
-    _run(ctx, pod, lambda p: p.channels.inbox())
-
-
-@app.command("search")
-def search(
-    ctx: typer.Context,
-    query: str = typer.Argument(..., help="Every word must match."),
-    limit: int = typer.Option(30, "--limit"),
-    pod: str | None = typer.Option(None, "--pod"),
-) -> None:
-    """Lines matching every word, newest first, in the channels you see."""
-    _run(ctx, pod, lambda p: p.channels.search(query, limit=limit))
-
-
-@app.command("read")
-def mark_read(
-    ctx: typer.Context,
-    channel_id: str = typer.Argument(..., help="Channel id."),
-    pod: str | None = typer.Option(None, "--pod"),
-) -> None:
-    """Note that you have read the channel up to now."""
-    _run(ctx, pod, lambda p: p.channels.mark_read(channel_id) or {"read": True})
-
-
-@app.command("notify")
-def set_notify(
-    ctx: typer.Context,
-    channel_id: str = typer.Argument(..., help="Channel id."),
-    level: str = typer.Argument(..., help="ALL, MENTIONS or NONE."),
-    pod: str | None = typer.Option(None, "--pod"),
-) -> None:
-    """How you hear of this channel's lines outside the app."""
-    chosen = _choice(level, _NOTIFY, "LEVEL")
-    _run(ctx, pod, lambda p: p.channels.set_notify(channel_id, chosen))
-
-
-@app.command("tell")
-def tell(
-    ctx: typer.Context,
-    to: str = typer.Argument(..., help="A pod member id, user id or email."),
-    text: str = typer.Argument(..., help="What to tell them."),
     title: str | None = typer.Option(None, "--title"),
+    topic: str | None = typer.Option(None, "--topic"),
+    clear_topic: bool = typer.Option(False, "--clear-topic"),
+    visibility: str | None = typer.Option(
+        None, "--visibility", help="public or private."
+    ),
+    archived: bool | None = typer.Option(
+        None, "--archive/--unarchive", help="Archive the group, or bring it back."
+    ),
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help="A contact's channel: open, waiting_on_contact or closed.",
+    ),
+    assignee: str | None = typer.Option(
+        None, "--assignee", help="A contact's channel: a member's user id, or `none`."
+    ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Tell another member something, in their own channel."""
-    _run(ctx, pod, lambda p: p.channels.notify(to, text, title=title))
+    """Update a channel: only the fields given change."""
+    changes: dict[str, Any] = {}
+    if title is not None:
+        changes["title"] = title
+    if clear_topic:
+        changes["topic"] = None
+    elif topic is not None:
+        changes["topic"] = topic
+    if visibility is not None:
+        changes["visibility"] = _choice(visibility, _VISIBILITIES, "--visibility")
+    if archived is not None:
+        changes["archived"] = archived
+    if status is not None:
+        changes["status"] = _choice(status, _STATUSES, "--status")
+    if assignee is not None:
+        changes["assignee"] = None if assignee.lower() == "none" else assignee
+    if not changes:
+        raise typer.BadParameter("Name something to change.")
+    _run(ctx, pod, lambda p: p.channels.update(channel_id, **changes))
+
+
+@app.command("delete")
+def delete_channel(
+    ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="Channel id."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Delete a group made in Lemma and its timeline (one an outside place feeds is archived)."""
+    confirm_destructive(f"Delete channel {channel_id}?", yes)
+    _run(ctx, pod, lambda p: p.channels.delete(channel_id) or {"deleted": True})
 
 
 @app.command("agent")
@@ -252,18 +236,208 @@ def switch_agent(
     ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Whether a contact's agent answers them. Off, only members do; on hands
-    them back to the agent at once."""
+    """Switch whether a contact's agent answers them (on hands them back at once)."""
     on = {"on": True, "off": False}.get(state.lower())
     if on is None:
         raise typer.BadParameter("STATE is on or off.")
+    extra: dict[str, Any] = {}
+    if hand_back_after is not None:
+        extra["hand_back_after_hours"] = hand_back_after
+    _run(ctx, pod, lambda p: p.channels.set_agent_answers(channel_id, on, **extra))
+
+
+# -- your membership -----------------------------------------------------------------
+
+
+@app.command("join")
+def join_channel(
+    ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="Channel id."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Join a public group, or a contact's channel."""
+    _run(ctx, pod, lambda p: p.channels.join(channel_id))
+
+
+@app.command("leave")
+def leave_channel(
+    ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="Channel id."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Leave a channel you are in."""
+    _run(ctx, pod, lambda p: p.channels.leave(channel_id) or {"left": True})
+
+
+@app.command("notify")
+def set_notify(
+    ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="Channel id."),
+    level: str | None = typer.Argument(None, help="ALL, MENTIONS or NONE."),
+    via: list[str] = typer.Option(
+        [], "--via", help="A platform to hear of it on. Repeat for more."
+    ),
+    pod_rule: bool = typer.Option(
+        False, "--pod-rule", help="Hear of it wherever the pod's rule says."
+    ),
+    mute_until: str | None = typer.Option(
+        None, "--mute-until", help="An ISO time to stay quiet until."
+    ),
+    unmute: bool = typer.Option(False, "--unmute"),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Set how you hear of this channel's lines outside the app."""
+    changes: dict[str, Any] = {}
+    if level is not None:
+        changes["notify"] = _choice(level, _NOTIFY, "LEVEL")
+    if pod_rule:
+        changes["via"] = None
+    elif via:
+        changes["via"] = list(via)
+    if unmute:
+        changes["muted_until"] = None
+    elif mute_until is not None:
+        changes["muted_until"] = mute_until
+    if not changes:
+        raise typer.BadParameter(
+            "Pass LEVEL, --via, --pod-rule, --mute-until or --unmute."
+        )
+    _run(ctx, pod, lambda p: p.channels.set_notify(channel_id, **changes))
+
+
+@app.command("read")
+def mark_read(
+    ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="Channel id."),
+    seq: int | None = typer.Option(
+        None, "--seq", help="The line read up to; the newest line by default."
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Mark the channel read, up to its newest line or --seq."""
+
+    def call(p: Any) -> Any:
+        upto = seq if seq is not None else p.channels.get(channel_id).last_seq
+        return p.channels.mark_read(channel_id, upto)
+
+    _run(ctx, pod, call)
+
+
+# -- members -------------------------------------------------------------------------
+
+
+@members_app.command("add")
+def add_members(
+    ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="A group's id."),
+    person: list[str] = typer.Option(
+        [], "--person", help="A member's user id. Repeat for more."
+    ),
+    agent: list[str] = typer.Option(
+        [],
+        "--agent",
+        help="An agent id (answers when named), or ID:EVERY_LINE. Repeat for more.",
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Add pod members and agents to a group."""
+    if not person and not agent:
+        raise typer.BadParameter("Pass --person or --agent.")
+    seats = [_agent_seat(value) for value in agent]
+    _run(ctx, pod, lambda p: p.channels.add_members(channel_id, person, agents=seats))
+
+
+@members_app.command("update")
+def update_member(
+    ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="A group's id."),
+    member: str = typer.Argument(..., help="KIND:ID, e.g. MEMBER:<user id>."),
+    role: str | None = typer.Option(None, "--role", help="A person: owner or member."),
+    answers: str | None = typer.Option(
+        None, "--answers", help="An agent: MENTIONED or EVERY_LINE."
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Change a person's role in a group, or when an agent in it answers."""
+    kind, member_id = _member_ref(member)
+    chosen_role = _choice(role, _ROLES, "--role")
+    chosen_answers = _choice(answers, _ANSWERS, "--answers")
+    if chosen_role is None and chosen_answers is None:
+        raise typer.BadParameter("Pass --role or --answers.")
     _run(
         ctx,
         pod,
-        lambda p: p.channels.set_agent_answers(
-            channel_id, on, hand_back_after_hours=hand_back_after
+        lambda p: p.channels.update_member(
+            channel_id, kind, member_id, role=chosen_role, answers=chosen_answers
         ),
     )
+
+
+@members_app.command("remove")
+def remove_member(
+    ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="A group's id."),
+    member: str = typer.Argument(..., help="KIND:ID, e.g. AGENT:<agent id>."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Take somebody out of a group."""
+    kind, member_id = _member_ref(member)
+    confirm_destructive(f"Remove {kind}:{member_id} from channel {channel_id}?", yes)
+    _run(
+        ctx,
+        pod,
+        lambda p: (
+            p.channels.remove_member(channel_id, kind, member_id) or {"removed": True}
+        ),
+    )
+
+
+# -- across the pod ------------------------------------------------------------------
+
+
+@app.command("inbox")
+def inbox(
+    ctx: typer.Context,
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Show what is new for you across the pod, and what is waiting on you."""
+    _run(ctx, pod, lambda p: p.channels.inbox())
+
+
+@app.command("search")
+def search(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Every word must match."),
+    channel: str | None = typer.Option(None, "--channel", help="Only this channel."),
+    limit: int = typer.Option(30, "--limit"),
+    cursor: str | None = typer.Option(
+        None, "--cursor", help="The previous page's next_cursor."
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Search lines matching every word, newest first, in the channels you see."""
+    _run(
+        ctx,
+        pod,
+        lambda p: p.channels.search(
+            query, channel_id=channel, cursor=cursor, limit=limit
+        ),
+    )
+
+
+@app.command("tell")
+def tell(
+    ctx: typer.Context,
+    to: str = typer.Argument(..., help="A pod member id, user id or email."),
+    text: str = typer.Argument(..., help="What to tell them."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Tell another member something, in their own channel."""
+    _run(ctx, pod, lambda p: p.channels.notify(to, text))
+
+
+# -- sources -------------------------------------------------------------------------
 
 
 @source_app.command("get")

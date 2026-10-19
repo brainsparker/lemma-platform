@@ -5,20 +5,22 @@ from app.core.registry import LemmaModule
 
 def _routers():
     from app.modules.channels.api.controller import router as channels
-    from app.modules.channels.api.message_controller import (
-        inbox_router,
-        router as lines,
-    )
+    from app.modules.channels.api.inbox_controller import router as inbox
+    from app.modules.channels.api.member_controller import router as members
+    from app.modules.channels.api.message_controller import router as lines
 
-    # The inbox and search have fixed segments where a channel's id would go,
-    # so they are matched first.
-    return [inbox_router, channels, lines]
+    # The inbox and search have fixed segments under the pod, and
+    # `/channels/me` is declared before `/channels/{channel_id}`; members'
+    # `me` routes before `{kind}:{id}`.
+    return [inbox, channels, members, lines]
 
 
 def _register_work() -> None:
     # Every process: a merge of two contacts (API, a web visitor proving an
     # email) writes this through `ContactMerged`.
     import app.modules.channels.events.contact_merged_work  # noqa: F401
+    import app.modules.channels.events.member_left_work  # noqa: F401
+    import app.modules.channels.events.sweeps  # noqa: F401
 
 
 module = LemmaModule(name="channels", routers=_routers, register_work=_register_work)

@@ -11,10 +11,9 @@ someone else -- or a channel -- and returns before anyone replies.
    or simply end your turn: you get a fresh one here once everyone you asked
    has answered. Then call `channel_read(asked_by_me=True)`. Never loop.
 
-Leave `platform` unset to reach them where they last spoke to you. A named
-platform must appear in `reachable_on`; it is used or refused, never
-substituted. A message always lands in their channel in Lemma, whether or not
-a platform carried it.
+A message to someone lands in their own channel in Lemma, and they are told
+where they chose to be told. `wants_answer` asks one person: it is refused
+with `channel_id`.
 
 `channel_list`, `channel_read` and `channel_search` show the pod's channels you
 can see -- groups, your own channel, and contacts' channels if you may see

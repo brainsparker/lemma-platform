@@ -5,11 +5,19 @@
 import type { ChannelMessageResponse } from './ChannelMessageResponse.js';
 export type ChannelMessagesResponse = {
     /**
-     * Oldest first, the newest page unless `before` was given.
+     * Whether there are more lines in the direction read: older ones, or with `after_seq`, newer ones.
+     */
+    has_more: boolean;
+    /**
+     * Oldest first.
      */
     items: Array<ChannelMessageResponse>;
     /**
-     * Pass as `before` for the page before this one.
+     * Pass as `after_seq` for the newer page.
      */
-    next_before?: (string | null);
+    next_after_seq?: (number | null);
+    /**
+     * Pass as `before_seq` for the older page.
+     */
+    next_before_seq?: (number | null);
 };

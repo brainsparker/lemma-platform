@@ -33,16 +33,24 @@ from app.modules.agent_surfaces.tests.e2e.group_timeline import (
     bot_for,
     say,
 )
-from app.modules.channels.contracts import Principal
-from app.modules.channels.contracts.questions import answer_as_member
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent.domain.asked_questions import message_ref
+from app.modules.channels.contracts import (
+    NewLine,
+    NewQuestion,
+    Principal,
+    QuestionKind,
+    Sender,
+    direct_channel,
+    post,
+)
+from app.modules.channels.contracts.questions import answer
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
-)
-from app.modules.agent_surfaces.contracts.direct_messages import (
-    send_direct_message,
 )
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_surface,
@@ -399,8 +407,6 @@ async def test_a_stranger_reaches_no_member_and_can_only_call_a_person_in(
         == []
     )
     [notice] = await direct_lines(db_session, pod_id=scenario.pod_id, user_id=owner)
-    assert notice.members_only
-    assert notice.interaction_kind is None
     assert "needs a person" in notice.body
 
 
@@ -420,30 +426,40 @@ async def test_a_stranger_never_reads_answers_to_another_conversations_questions
         f"/pods/{scenario.pod_id}/conversations", json={"title": "Owner's own"}
     )
     assert elsewhere.status_code == 201, elsewhere.text
-    asked = await send_direct_message(
-        pod_id=UUID(scenario.pod_id),
-        recipient_user_id=owner,
-        text="What is payroll this month?",
-        actor_user_id=owner,
-        actor_agent_id=None,
-        agent_name=None,
-        origin_conversation_id=UUID(elsewhere.json()["id"]),
-        origin_run_id=None,
-        origin_surface_id=None,
-        wants_answer=True,
-        key="payroll",
-    )
-    await answer_as_member(
-        pod_id=UUID(scenario.pod_id),
-        message_id=asked.message_id,
-        user_id=owner,
-        answer={"text": "PAYROLL-ANSWER-SECRET"},
+    # The owner's other conversation asks them, as ``channel_post`` does with
+    # ``wants_answer``, and they answer.
+    pod_id = UUID(scenario.pod_id)
+    sessions = SessionUnitOfWorkFactory(async_session_maker)
+    async with sessions() as uow:
+        theirs = await direct_channel(uow, pod_id=pod_id, user_id=owner)
+        asked = await post(
+            uow,
+            channel_id=theirs.id,
+            line=NewLine(
+                sender=Sender.agent(pod_id, on_behalf_of=Principal.member(owner)),
+                text="What is payroll this month?",
+                conversation_id=UUID(elsewhere.json()["id"]),
+            ),
+            question=NewQuestion(
+                kind=QuestionKind.ASK,
+                ref=message_ref(UUID(elsewhere.json()["id"]), "payroll"),
+                question={"tool": "message", "prompt": "What is payroll this month?"},
+                awaits=Principal.member(owner),
+            ),
+        )
+        await uow.commit()
+    assert asked is not None
+    await answer(
+        sessions,
+        message_id=asked.id,
+        by=Principal.member(owner),
+        given={"text": "PAYROLL-ANSWER-SECRET"},
     )
     seen = record_model_requests(monkeypatch)
 
     context = await _stranger_asks(
         db_session,
-        text=f"check message {asked.message_id}",
+        text=f"check message {asked.id}",
         message_id=105,
         script=[
             script_tool_call(

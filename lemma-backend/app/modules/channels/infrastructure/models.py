@@ -1,9 +1,11 @@
 """Tables for channels: the place, who is in it, where it is fed from, what was said.
 
-Everything cascades from the pod. A channel's sources go with it; a source's
-surface going away leaves the source -- and the history said there -- behind,
-pointing at nothing. Nothing here is swept on a timer: a timeline is the pod's
-until a member deletes it.
+Everything cascades from the pod. A place belongs to an external account -- a
+Slack workspace, a Teams tenant, a WhatsApp number, an inbox, a web widget --
+so reinstalling a bot keeps its places and their history. Lines are numbered
+per channel (``seq``): the order a client reads, and what read state counts.
+A question a line asks is its own row, and every send to a place outside Lemma
+is a delivery row, unique per line and target.
 """
 
 from __future__ import annotations
@@ -12,29 +14,76 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
+    Integer,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.infrastructure.db.base import UUIDAuditBase
+from app.core.infrastructure.db.base import Base, UUIDAuditBase
+
+
+class ExternalAccountModel(UUIDAuditBase):
+    """An account a pod's bot speaks through: what a place belongs to."""
+
+    __tablename__ = "external_accounts"
+    __table_args__ = (
+        UniqueConstraint("pod_id", "platform", "account_key"),
+        UniqueConstraint("id", "pod_id", name="uq_external_accounts_id_pod"),
+        Index("ix_external_accounts_surface", "surface_id"),
+    )
+
+    pod_id: Mapped[UUID] = mapped_column(
+        ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
+    )
+    platform: Mapped[str] = mapped_column(String(20), nullable=False)
+    #: The platform's own name for the account: a Slack team id, a Teams
+    #: tenant id, a WhatsApp phone number id, a bot id, an inbox address, a
+    #: web widget id.
+    account_key: Mapped[str] = mapped_column(String(320), nullable=False)
+    #: The installation it is reached through now; another after a reinstall.
+    surface_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_surfaces.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class ChannelModel(UUIDAuditBase):
     __tablename__ = "channels"
     __table_args__ = (
         CheckConstraint(
+            "kind IN ('DIRECT', 'CONTACT', 'GROUP')", name="ck_channels_kind"
+        ),
+        CheckConstraint(
+            "visibility IN ('public', 'private')", name="ck_channels_visibility"
+        ),
+        CheckConstraint(
+            "status IN ('open', 'waiting_on_contact', 'closed')",
+            name="ck_channels_status",
+        ),
+        CheckConstraint(
+            "hand_back_after_hours BETWEEN 1 AND 720",
+            name="ck_channels_hand_back_after_hours",
+        ),
+        CheckConstraint(
             "(kind = 'DIRECT') = (member_user_id IS NOT NULL)"
             " AND (kind = 'CONTACT') = (contact_id IS NOT NULL)",
             name="ck_channels_kind_names_its_person",
         ),
+        CheckConstraint(
+            "kind = 'GROUP' OR visibility = 'private'",
+            name="ck_channels_only_a_group_is_public",
+        ),
+        UniqueConstraint("id", "pod_id", name="uq_channels_id_pod"),
         Index(
             "uq_channels_direct_member",
             "pod_id",
@@ -44,17 +93,20 @@ class ChannelModel(UUIDAuditBase):
         ),
         Index(
             "uq_channels_contact",
-            "pod_id",
             "contact_id",
             unique=True,
             postgresql_where=text("kind = 'CONTACT'"),
         ),
-        Index("ix_channels_pod_activity", "pod_id", "last_message_at", "id"),
+        Index("ix_channels_pod_activity", "pod_id", "last_line_at", "id"),
         Index(
-            "ix_channels_pod_attention",
-            "pod_id",
-            "attention_at",
-            postgresql_where=text("attention_at IS NOT NULL"),
+            "ix_channels_assignee",
+            "assignee_user_id",
+            postgresql_where=text("assignee_user_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_channels_created_by",
+            "created_by_user_id",
+            postgresql_where=text("created_by_user_id IS NOT NULL"),
         ),
     )
 
@@ -62,349 +114,132 @@ class ChannelModel(UUIDAuditBase):
         ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
     )
     kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    #: ``public``: every member of the pod may read it. ``private``: its
+    #: members only. DIRECT and CONTACT are always private, read by their own
+    #: rules.
+    visibility: Mapped[str] = mapped_column(String(10), nullable=False)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    topic: Mapped[str | None] = mapped_column(String(500), nullable=True)
     member_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
     contact_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
     )
-    handler_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    last_message_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    topic: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    #: Since when the channel has asked for a person -- an agent that could not
-    #: help a contact, say -- and why. Cleared once somebody steps in.
+    # -- a contact's channel: who answers them ---------------------------------
+    #: Whether its agents answer the contact at all.
+    agents_answer: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    #: How long an assignee who wrote holds the contact before the agent
+    #: answers again.
+    hand_back_after_hours: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=12, server_default=text("12")
+    )
+    assignee_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: When the assignee last wrote to the contact: the hand-back window runs
+    #: from here.
+    assignee_last_line_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="open", server_default=text("'open'")
+    )
+    #: Since when the channel has asked for a person, and why.
     attention_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     attention_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    #: The channel's own settings (``domain.entities.ChannelSettings``); a key
-    #: that is absent is its default.
-    settings: Mapped[dict[str, object]] = mapped_column(
-        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    # -- the timeline's head ---------------------------------------------------
+    #: The newest line's number; the next line takes ``last_seq + 1`` under
+    #: this row's lock.
+    last_seq: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    #: The newest line outside a thread, for lists; no FK (it is a pointer
+    #: the timeline keeps, not a relation).
+    last_line_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    last_line_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
 
-class ChannelParticipantModel(UUIDAuditBase):
-    __tablename__ = "channel_participants"
+class ChannelMemberModel(UUIDAuditBase):
+    """Who is in a channel: a member, a contact, or an agent."""
+
+    __tablename__ = "channel_members"
     __table_args__ = (
         CheckConstraint(
-            "num_nonnulls(user_id, contact_id) = 1",
-            name="ck_channel_participants_one_person",
+            "num_nonnulls(user_id, contact_id, agent_id) = 1",
+            name="ck_channel_members_one_principal",
+        ),
+        CheckConstraint(
+            "role IN ('owner', 'member', 'guest')", name="ck_channel_members_role"
+        ),
+        CheckConstraint(
+            "notify IN ('ALL', 'MENTIONS', 'NONE')", name="ck_channel_members_notify"
+        ),
+        CheckConstraint(
+            "(agent_id IS NOT NULL) = (answers IS NOT NULL)"
+            " AND (answers IS NULL OR answers IN ('MENTIONED', 'EVERY_LINE'))",
+            name="ck_channel_members_agent_answers",
+        ),
+        ForeignKeyConstraint(
+            ["channel_id", "pod_id"],
+            ["channels.id", "channels.pod_id"],
+            ondelete="CASCADE",
         ),
         Index(
-            "uq_channel_participants_member",
+            "uq_channel_members_user",
             "channel_id",
             "user_id",
             unique=True,
             postgresql_where=text("user_id IS NOT NULL"),
         ),
         Index(
-            "uq_channel_participants_contact",
+            "uq_channel_members_contact",
             "channel_id",
             "contact_id",
             unique=True,
             postgresql_where=text("contact_id IS NOT NULL"),
         ),
-        Index("ix_channel_participants_member", "user_id", "pod_id"),
-    )
-
-    channel_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
-    )
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
-    )
-    user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
-    )
-    contact_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
-    )
-    last_read_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    #: Which lines reach them outside the app: ``ALL``, ``MENTIONS`` or ``NONE``.
-    notify: Mapped[str] = mapped_column(
-        String(10), nullable=False, default="ALL", server_default=text("'ALL'")
-    )
-    #: Where those lines go -- the platforms they chose -- or ``None`` for the
-    #: pod's rule.
-    notify_via: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
-
-
-class ChannelSourceModel(UUIDAuditBase):
-    __tablename__ = "channel_sources"
-    __table_args__ = (
-        # One row per place a surface hears, per pod: a personal DM arrives
-        # through a company's installation and is the person's own pod's. A
-        # group the bot asked a platform to create has no id yet, and is keyed
-        # by its request instead.
         Index(
-            "uq_channel_sources_place",
-            "pod_id",
-            "surface_id",
-            "platform",
-            text("coalesce(external_channel_id, '')"),
-            text("coalesce(external_user_id, '')"),
+            "uq_channel_members_agent",
+            "channel_id",
+            "agent_id",
             unique=True,
-            postgresql_where=text(
-                "surface_id IS NOT NULL AND (external_channel_id IS NOT NULL"
-                " OR external_user_id IS NOT NULL)"
-            ),
+            postgresql_where=text("agent_id IS NOT NULL"),
         ),
         Index(
-            "uq_channel_sources_request",
-            "platform",
-            "request_id",
-            unique=True,
-            postgresql_where=text("request_id IS NOT NULL"),
-        ),
-        # A web chat is a widget's, not a surface's: keyed by the widget and
-        # the browser's session instead.
-        Index(
-            "uq_channel_sources_web_place",
-            "pod_id",
-            "platform",
-            "external_channel_id",
-            "external_user_id",
-            unique=True,
-            postgresql_where=text("surface_id IS NULL"),
-        ),
-        Index("ix_channel_sources_channel", "channel_id"),
-        # The surfaces that hear one chat, and the private places of one person.
-        Index("ix_channel_sources_chat", "platform", "external_channel_id"),
-        Index(
-            "ix_channel_sources_person",
-            "platform",
-            "external_user_id",
-            postgresql_where=text("kind = 'PRIVATE'"),
-        ),
-    )
-
-    channel_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
-    )
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
-    )
-    surface_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_surfaces.id", ondelete="SET NULL"), nullable=True
-    )
-    platform: Mapped[str] = mapped_column(String(20), nullable=False)
-    kind: Mapped[str] = mapped_column(String(10), nullable=False)
-    external_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    last_inbound_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    #: What the surface last heard here, as its adapter reads it: how to write
-    #: into this place when nothing is being answered (a notification, a
-    #: follow-up). The surface's own shape; nothing else reads inside it.
-    delivery_ref: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
-    # -- a shared place the pod's bot is in: a group, a shared channel --------
-    #: The member who answers for the people here from outside the pod.
-    owner_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    #: Whether people outside the pod are answered here at all.
-    answers_outsiders: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default=text("true")
-    )
-    #: A Slack channel shared with another company.
-    shared_externally: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=text("false")
-    )
-    #: The link people join by, where joining is by link (WhatsApp).
-    invite_link: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    #: The platform's id for a creation the bot asked for; kept once confirmed,
-    #: to recognise a replayed confirmation.
-    request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
-
-class ChannelMessageModel(UUIDAuditBase):
-    __tablename__ = "channel_messages"
-    __table_args__ = (
-        # At most one: a member or an agent removed since leaves the line,
-        # said by somebody no longer named (the ids are SET NULL).
-        CheckConstraint(
-            "num_nonnulls(sender_user_id, sender_contact_id, sender_agent_id) <= 1",
-            name="ck_channel_messages_one_sender",
-        ),
-        CheckConstraint(
-            "num_nonnulls(on_behalf_user_id, on_behalf_contact_id) <= 1"
-            " AND (sender_kind = 'AGENT'"
-            " OR num_nonnulls(on_behalf_user_id, on_behalf_contact_id) = 0)",
-            name="ck_channel_messages_only_an_agent_acts_for_someone",
-        ),
-        Index("ix_channel_messages_timeline", "channel_id", "created_at", "id"),
-        Index(
-            "uq_channel_messages_external",
-            "source_id",
-            "external_message_id",
-            unique=True,
-            postgresql_where=text("external_message_id IS NOT NULL"),
-        ),
-        # A conversation's latest line, for the source it is answering.
-        Index("ix_channel_messages_conversation", "conversation_id", "created_at"),
-        Index(
-            "ix_channel_messages_search",
-            text("to_tsvector('simple', body)"),
-            postgresql_using="gin",
-        ),
-        CheckConstraint(
-            "(interaction_kind IS NULL) = (interaction_state IS NULL)"
-            " AND num_nonnulls(awaits_user_id, awaits_contact_id) <= 1",
-            name="ck_channel_messages_interaction_shape",
-        ),
-        Index(
-            "ix_channel_messages_thread",
-            "thread_root_id",
-            "created_at",
-            "id",
-            postgresql_where=text("thread_root_id IS NOT NULL"),
-        ),
-        Index(
-            "ix_channel_messages_awaiting_member",
-            "awaits_user_id",
-            "pod_id",
-            "created_at",
-            postgresql_where=text("interaction_state = 'OPEN'"),
-        ),
-        Index(
-            "ix_channel_messages_awaiting_contact",
-            "awaits_contact_id",
-            "created_at",
-            postgresql_where=text("interaction_state = 'OPEN'"),
-        ),
-    )
-
-    channel_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
-    )
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
-    )
-    source_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("channel_sources.id", ondelete="SET NULL"), nullable=True
-    )
-    sender_kind: Mapped[str] = mapped_column(String(10), nullable=False)
-    sender_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    sender_contact_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
-    )
-    sender_agent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
-    )
-    on_behalf_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    on_behalf_contact_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
-    )
-    sender_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    body: Mapped[str] = mapped_column(Text, nullable=False)
-    members_only: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=text("false")
-    )
-    conversation_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_conversations.id", ondelete="SET NULL"), nullable=True
-    )
-    external_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    external_thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    #: On a line a person said on a platform: what its surface needs to answer
-    #: it in place -- its thread, the message replied to, the number it came
-    #: to. The surface's own shape; nothing else reads inside it.
-    reply_ref: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
-    #: Files, resources and voice beside the text, in the envelope's shape.
-    parts: Mapped[list[dict[str, object]] | None] = mapped_column(JSONB, nullable=True)
-    agent_run_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
-    )
-    reply_to_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("channel_messages.id", ondelete="SET NULL"), nullable=True
-    )
-    #: The line a thread hangs from, on every reply in it.
-    thread_root_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("channel_messages.id", ondelete="SET NULL"), nullable=True
-    )
-    edited_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    deleted_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    # -- a question this line puts to one person, and their answer ------------
-    #: ``ASK``, ``APPROVAL`` or ``FORM``; ``None`` on an ordinary line.
-    interaction_kind: Mapped[str | None] = mapped_column(String(12), nullable=True)
-    #: The question as asked -- choices, a form's fields -- and what it resumes:
-    #: the paused tool call, or the workflow's wait.
-    interaction: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
-    #: ``OPEN``, ``ANSWERED``, ``CANCELLED`` or ``EXPIRED``.
-    interaction_state: Mapped[str | None] = mapped_column(String(12), nullable=True)
-    #: The one person who may answer it: whom it is waiting on.
-    awaits_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    awaits_contact_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
-    )
-    answer: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
-    answered_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    answered_by_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    answered_by_contact_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
-    )
-
-
-class ChannelMentionModel(UUIDAuditBase):
-    """Somebody a line names: a member, a contact or an agent, read or not."""
-
-    __tablename__ = "channel_mentions"
-    __table_args__ = (
-        CheckConstraint(
-            "num_nonnulls(user_id, contact_id, agent_id) = 1",
-            name="ck_channel_mentions_one_named",
-        ),
-        Index(
-            "uq_channel_mentions_named",
-            "message_id",
-            text("coalesce(user_id, contact_id, agent_id)"),
-            unique=True,
-        ),
-        Index(
-            "ix_channel_mentions_unread_member",
+            "ix_channel_members_user",
             "user_id",
             "pod_id",
-            "created_at",
-            postgresql_where=text("read_at IS NULL AND user_id IS NOT NULL"),
+            postgresql_where=text("user_id IS NOT NULL"),
         ),
-        Index("ix_channel_mentions_channel", "channel_id"),
+        Index(
+            "ix_channel_members_contact",
+            "contact_id",
+            postgresql_where=text("contact_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_channel_members_agent",
+            "agent_id",
+            postgresql_where=text("agent_id IS NOT NULL"),
+        ),
     )
 
-    message_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channel_messages.id", ondelete="CASCADE"), nullable=False
-    )
-    channel_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
-    )
+    channel_id: Mapped[UUID] = mapped_column(nullable=False)
     pod_id: Mapped[UUID] = mapped_column(
         ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
     )
@@ -417,52 +252,156 @@ class ChannelMentionModel(UUIDAuditBase):
     agent_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("agents.id", ondelete="CASCADE"), nullable=True
     )
-    read_at: Mapped[datetime | None] = mapped_column(
+    role: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="member", server_default=text("'member'")
+    )
+    #: Which lines reach a person outside the app.
+    notify: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="ALL", server_default=text("'ALL'")
+    )
+    #: Where they reach them -- platforms they chose -- or ``None`` for where
+    #: they last spoke to the pod.
+    notify_via: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    muted_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: An agent's: ``MENTIONED`` answers when named, ``EVERY_LINE`` answers
+    #: everything said here.
+    answers: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    added_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
 
-class ChannelMessageDeliveryModel(UUIDAuditBase):
-    """One place a line was sent out to -- a source, or a member's own
-    platform for a notification -- and what became of it."""
+class ChannelReadStateModel(Base):
+    """How far a member has read a channel: the newest line they have seen."""
 
-    __tablename__ = "channel_message_deliveries"
+    __tablename__ = "channel_read_state"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    channel_id: Mapped[UUID] = mapped_column(
+        ForeignKey("channels.id", ondelete="CASCADE"), primary_key=True
+    )
+    last_read_seq: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class ChannelSourceModel(UUIDAuditBase):
+    __tablename__ = "channel_sources"
     __table_args__ = (
-        Index("ix_channel_message_deliveries_message", "message_id"),
+        CheckConstraint(
+            "kind IN ('PRIVATE', 'SHARED')", name="ck_channel_sources_kind"
+        ),
+        ForeignKeyConstraint(
+            ["channel_id", "pod_id"],
+            ["channels.id", "channels.pod_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["account_id", "pod_id"],
+            ["external_accounts.id", "external_accounts.pod_id"],
+            ondelete="CASCADE",
+        ),
+        # One row per place an account hears: a chat, or one person in it.
         Index(
-            "ix_channel_message_deliveries_external",
+            "uq_channel_sources_place",
+            "account_id",
+            text("coalesce(external_channel_id, '')"),
+            text("coalesce(external_user_id, '')"),
+            unique=True,
+            postgresql_where=text(
+                "external_channel_id IS NOT NULL OR external_user_id IS NOT NULL"
+            ),
+        ),
+        # A group the bot asked a platform for has no id yet.
+        Index(
+            "uq_channel_sources_request",
+            "account_id",
+            "request_id",
+            unique=True,
+            postgresql_where=text("request_id IS NOT NULL"),
+        ),
+        Index("ix_channel_sources_channel", "channel_id", "last_inbound_at"),
+        # What every inbound message reads: the chat it was said in, or the
+        # person who said it privately.
+        Index(
+            "ix_channel_sources_chat",
+            "external_channel_id",
             "platform",
-            "external_message_id",
-            postgresql_where=text("external_message_id IS NOT NULL"),
+            postgresql_where=text("external_user_id IS NULL"),
         ),
         Index(
-            "ix_channel_message_deliveries_pending",
-            "pod_id",
-            "created_at",
-            postgresql_where=text("status = 'PENDING'"),
+            "ix_channel_sources_person",
+            "external_user_id",
+            "platform",
+            postgresql_where=text("external_user_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_channel_sources_owner",
+            "owner_user_id",
+            postgresql_where=text("owner_user_id IS NOT NULL"),
         ),
     )
 
-    message_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channel_messages.id", ondelete="CASCADE"), nullable=False
-    )
+    channel_id: Mapped[UUID] = mapped_column(nullable=False)
     pod_id: Mapped[UUID] = mapped_column(
         ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
     )
-    source_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("channel_sources.id", ondelete="SET NULL"), nullable=True
-    )
+    account_id: Mapped[UUID] = mapped_column(nullable=False)
     platform: Mapped[str] = mapped_column(String(20), nullable=False)
-    recipient_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    #: ``PRIVATE``: one person's chat with the bot. ``SHARED``: several people.
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    #: The platform keeps it to its members (a private Slack channel, a group
+    #: DM, a Teams group chat, a WhatsApp or Telegram group): its channel is
+    #: private in Lemma too.
+    is_private: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
-    recipient_contact_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
-    )
-    #: ``PENDING``, ``SENT``, ``FAILED`` or ``SKIPPED``.
-    status: Mapped[str] = mapped_column(String(12), nullable=False)
-    error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    external_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    delivered_at: Mapped[datetime | None] = mapped_column(
+    external_channel_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_inbound_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: How the account writes into this place when nothing is being answered:
+    #: the adapter's own shape.
+    delivery_ref: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    # -- a shared place: its bot-side settings ---------------------------------
+    owner_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    answers_outsiders: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    shared_externally: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    invite_link: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+# Kept apart for size, and named here so every reader finds them in one place.
+from app.modules.channels.infrastructure.message_models import (  # noqa: E402
+    ChannelMentionModel,
+    ChannelMessageDeliveryModel,
+    ChannelMessageModel,
+    ChannelQuestionModel,
+)
+
+__all__ = [
+    "ChannelMemberModel",
+    "ChannelMentionModel",
+    "ChannelMessageDeliveryModel",
+    "ChannelMessageModel",
+    "ChannelModel",
+    "ChannelQuestionModel",
+    "ChannelReadStateModel",
+    "ChannelSourceModel",
+    "ExternalAccountModel",
+]

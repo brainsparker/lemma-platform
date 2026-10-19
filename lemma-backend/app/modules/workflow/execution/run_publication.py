@@ -28,7 +28,7 @@ from app.core.infrastructure.work import WorkWriter, facts
 from app.core.log.log import get_logger
 from app.modules.workflow.contracts.run_work import WorkflowRunFinished
 from app.modules.workflow.domain.events import WorkflowRunTerminalEvent
-from app.modules.workflow.domain.ports import WorkflowNotificationPort
+from app.modules.workflow.domain.ports import FormQuestionPort
 from app.modules.workflow.domain.run import (
     TERMINAL_STATUSES,
     WorkflowRunEntity,
@@ -58,7 +58,7 @@ class RunPublication:
     flow_repo: SqlAlchemyWorkflowRepository
     run_repo: SqlAlchemyWorkflowRunRepository
     wait_repo: SqlAlchemyWorkflowRunWaitRepository
-    notification_adapter: WorkflowNotificationPort
+    form_questions: FormQuestionPort
 
     async def _record_transition(
         self, run: WorkflowRunEntity, *, admit: bool = True

@@ -9,6 +9,7 @@ from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.channel_kind import ChannelKind
 from ...models.channel_list_response import ChannelListResponse
+from ...models.contact_status import ContactStatus
 from ...models.error_response import ErrorResponse
 from ...types import UNSET, Response, Unset
 
@@ -19,8 +20,12 @@ def _get_kwargs(
     kind: ChannelKind | None | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
+    assignee: None | str | Unset = UNSET,
+    unassigned: bool | Unset = False,
+    status: ContactStatus | None | Unset = UNSET,
+    joined: bool | Unset = False,
+    cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -45,14 +50,34 @@ def _get_kwargs(
         json_contact_id = contact_id
     params["contact_id"] = json_contact_id
 
-    params["limit"] = limit
-
-    json_before: None | str | Unset
-    if isinstance(before, Unset):
-        json_before = UNSET
+    json_assignee: None | str | Unset
+    if isinstance(assignee, Unset):
+        json_assignee = UNSET
     else:
-        json_before = before
-    params["before"] = json_before
+        json_assignee = assignee
+    params["assignee"] = json_assignee
+
+    params["unassigned"] = unassigned
+
+    json_status: None | str | Unset
+    if isinstance(status, Unset):
+        json_status = UNSET
+    elif isinstance(status, ContactStatus):
+        json_status = status.value
+    else:
+        json_status = status
+    params["status"] = json_status
+
+    params["joined"] = joined
+
+    json_cursor: None | str | Unset
+    if isinstance(cursor, Unset):
+        json_cursor = UNSET
+    else:
+        json_cursor = cursor
+    params["cursor"] = json_cursor
+
+    params["limit"] = limit
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -104,21 +129,30 @@ def sync_detailed(
     kind: ChannelKind | None | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
+    assignee: None | str | Unset = UNSET,
+    unassigned: bool | Unset = False,
+    status: ContactStatus | None | Unset = UNSET,
+    joined: bool | Unset = False,
+    cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> Response[ChannelListResponse | ErrorResponse]:
     """List Channels
 
-     The pod's channels this member sees, most recently active first, each
-    with what is new in it for them and its last line.
+     The channels the reader may see, most recently active first, each with
+    what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
+        assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
+            them.
+        unassigned (bool | Unset):  Default: False.
+        status (ContactStatus | None | Unset):
+        joined (bool | Unset): Only channels the reader is in. Default: False.
+        cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -133,8 +167,12 @@ def sync_detailed(
         kind=kind,
         archived=archived,
         contact_id=contact_id,
+        assignee=assignee,
+        unassigned=unassigned,
+        status=status,
+        joined=joined,
+        cursor=cursor,
         limit=limit,
-        before=before,
     )
 
     response = client.get_httpx_client().request(
@@ -151,21 +189,30 @@ def sync(
     kind: ChannelKind | None | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
+    assignee: None | str | Unset = UNSET,
+    unassigned: bool | Unset = False,
+    status: ContactStatus | None | Unset = UNSET,
+    joined: bool | Unset = False,
+    cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> ChannelListResponse | ErrorResponse | None:
     """List Channels
 
-     The pod's channels this member sees, most recently active first, each
-    with what is new in it for them and its last line.
+     The channels the reader may see, most recently active first, each with
+    what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
+        assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
+            them.
+        unassigned (bool | Unset):  Default: False.
+        status (ContactStatus | None | Unset):
+        joined (bool | Unset): Only channels the reader is in. Default: False.
+        cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -181,8 +228,12 @@ def sync(
         kind=kind,
         archived=archived,
         contact_id=contact_id,
+        assignee=assignee,
+        unassigned=unassigned,
+        status=status,
+        joined=joined,
+        cursor=cursor,
         limit=limit,
-        before=before,
     ).parsed
 
 
@@ -193,21 +244,30 @@ async def asyncio_detailed(
     kind: ChannelKind | None | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
+    assignee: None | str | Unset = UNSET,
+    unassigned: bool | Unset = False,
+    status: ContactStatus | None | Unset = UNSET,
+    joined: bool | Unset = False,
+    cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> Response[ChannelListResponse | ErrorResponse]:
     """List Channels
 
-     The pod's channels this member sees, most recently active first, each
-    with what is new in it for them and its last line.
+     The channels the reader may see, most recently active first, each with
+    what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
+        assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
+            them.
+        unassigned (bool | Unset):  Default: False.
+        status (ContactStatus | None | Unset):
+        joined (bool | Unset): Only channels the reader is in. Default: False.
+        cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -222,8 +282,12 @@ async def asyncio_detailed(
         kind=kind,
         archived=archived,
         contact_id=contact_id,
+        assignee=assignee,
+        unassigned=unassigned,
+        status=status,
+        joined=joined,
+        cursor=cursor,
         limit=limit,
-        before=before,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -238,21 +302,30 @@ async def asyncio(
     kind: ChannelKind | None | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
+    assignee: None | str | Unset = UNSET,
+    unassigned: bool | Unset = False,
+    status: ContactStatus | None | Unset = UNSET,
+    joined: bool | Unset = False,
+    cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
 ) -> ChannelListResponse | ErrorResponse | None:
     """List Channels
 
-     The pod's channels this member sees, most recently active first, each
-    with what is new in it for them and its last line.
+     The channels the reader may see, most recently active first, each with
+    what is new in it for them and its last line.
 
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
+        assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
+            them.
+        unassigned (bool | Unset):  Default: False.
+        status (ContactStatus | None | Unset):
+        joined (bool | Unset): Only channels the reader is in. Default: False.
+        cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -269,7 +342,11 @@ async def asyncio(
             kind=kind,
             archived=archived,
             contact_id=contact_id,
+            assignee=assignee,
+            unassigned=unassigned,
+            status=status,
+            joined=joined,
+            cursor=cursor,
             limit=limit,
-            before=before,
         )
     ).parsed

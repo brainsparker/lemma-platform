@@ -45,6 +45,8 @@ def _answer(*, for_: Principal | None) -> ChannelMessage:
     return ChannelMessage(
         id=uuid4(),
         channel_id=uuid4(),
+        pod_id=uuid4(),
+        seq=1,
         sender=(
             Sender.agent(agent, on_behalf_of=for_)
             if for_ is not None

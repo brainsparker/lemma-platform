@@ -11,7 +11,7 @@ import { AgentSwitch } from "./agent-switch";
 import { ChannelPanel } from "./channel-panel";
 import { Composer } from "./composer";
 import { mentionables } from "./mentions";
-import { channelTitle, platformsOf, whoAnswers, withLine, type ChannelDetail, type Line, type Page } from "./model";
+import { channelTitle, newestSeq, platformsOf, whoAnswers, withLine, type ChannelDetail, type Line, type LinePage } from "./model";
 import { linesKey, refreshLists, useChannel, useLines, useMarkRead } from "./queries";
 import { platformName } from "./sources";
 import { ThreadPanel } from "./thread-panel";
@@ -67,17 +67,20 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
     const [side, setSide] = useState<"about" | "thread" | null>(null);
     const [threadRoot, setThreadRoot] = useState<string | null>(null);
     const [pin, setPin] = useState(0);
-    const newest = timeline.lines.at(-1)?.id ?? null;
-    useMarkRead(pod.id, channel.id, newest, visible);
+    /* A thread's replies are counted on its first line rather than shown, so
+       the newest line may be a reply the timeline does not hold: reading the
+       channel reads as far as the newest line it knows of. */
+    const newest = timeline.isPending ? null : Math.max(newestSeq(timeline.lines) ?? 0, channel.lastSeq) || null;
+    useMarkRead(pod.id, channel.id, newest, channel.me.readSeq, visible);
 
     const people = useMemo(
-        () => mentionables(agents.data ?? [], channel.participants.map((one) => one.person), me),
-        [agents.data, channel.participants, me],
+        () => mentionables(agents.data ?? [], channel.members.map((one) => one.person), me),
+        [agents.data, channel.members, me],
     );
     const root = threadRoot ? timeline.lines.find((line) => line.id === threadRoot) ?? null : null;
     const platforms = platformsOf(channel);
     const posted = (line: Line) => {
-        cache.setQueryData<InfiniteData<Page<Line>>>(linesKey(pod.id, channel.id), (was) => was ? { ...was, pages: withLine(was.pages, line) } : was);
+        cache.setQueryData<InfiniteData<LinePage>>(linesKey(pod.id, channel.id), (was) => was ? { ...was, pages: withLine(was.pages, line) } : was);
         setPin((count) => count + 1);
         refreshLists(cache, pod.id);
     };
@@ -115,7 +118,7 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
                     </button>
                 </header>
                 {channel.archived && <p className="cpage__note" role="status">This channel is archived. It still reads and writes; bring it back from About to list it again.</p>}
-                {channel.kind === "CONTACT" && channel.attention && !channel.handler && (
+                {channel.kind === "CONTACT" && channel.attention && !channel.assignee && (
                     <p className="cpage__note cpage__note--ask" role="status">
                         {channel.person?.name ?? "This contact"} is waiting on a person{channel.attention.reason ? ": " + channel.attention.reason : "."}{" "}
                         Write below to answer them.

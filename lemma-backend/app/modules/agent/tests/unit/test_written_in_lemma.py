@@ -360,7 +360,7 @@ async def test_the_keepers_own_question_is_never_passed_back_to_them(monkeypatch
         return True
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.contracts.direct_messages.ask_a_person", _ask
+        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
     )
 
     result = await ask_a_person(
@@ -381,7 +381,7 @@ async def test_a_strangers_run_still_calls_the_keeper_in(monkeypatch):
         return True
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.contracts.direct_messages.ask_a_person", _ask
+        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
     )
 
     result = await ask_a_person(

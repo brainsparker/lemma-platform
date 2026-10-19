@@ -4,7 +4,7 @@ The line is already in their channel when this runs: what is decided here is
 only whether a platform carries it too, and which. The outbound copy is
 written into their conversation before the platform is called, so a failed
 send still leaves the agent handling their reply a record of what was asked.
-Each attempt is recorded on the line (``channels.contracts.deliveries``).
+What became of it is the caller's to record, on the line's delivery.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from app.modules.agent_surfaces.services.notification_rate_limiter import (
     EmailBudget,
     EmailSendLimitExceeded,
 )
-from app.modules.channels.contracts.deliveries import DeliveryStatus, record_delivery
 
 logger = get_logger(__name__)
 
@@ -49,6 +48,7 @@ async def send_on_first_channel(
     comes to read as spam.
     """
     last_error: str | None = None
+    outage = False
     for channel in channels:
         conversation_id: UUID | None = None
         sent = False
@@ -84,6 +84,7 @@ async def send_on_first_channel(
             # Deliberately not `Exception`: a bug in our own code must surface
             # rather than be reported as "that channel didn't work".
             last_error = f"{channel.platform.value}: {exc}"
+            outage = True
             logger.warning(
                 "agent_surfaces.notification_service.channel_send_failed.degraded",
                 notification_id=str(outbound.id),
@@ -92,29 +93,12 @@ async def send_on_first_channel(
             )
         else:
             if sent and conversation_id is not None:
-                await record_delivery(
-                    uow,
-                    message_id=outbound.id,
-                    pod_id=outbound.pod_id,
-                    platform=channel.platform.value,
-                    status=DeliveryStatus.SENT,
-                    recipient_user_id=outbound.recipient_user_id,
-                    source_id=channel.source.id if channel.source else None,
-                )
                 return Delivered(
                     platform=channel.platform.value, conversation_id=conversation_id
                 )
-    reason = last_error or "No channel accepted the message."
-    await record_delivery(
-        uow,
-        message_id=outbound.id,
-        pod_id=outbound.pod_id,
-        platform=channels[0].platform.value if channels else "LEMMA",
-        status=DeliveryStatus.FAILED if channels else DeliveryStatus.SKIPPED,
-        recipient_user_id=outbound.recipient_user_id,
-        error=reason,
+    return Delivered(
+        reason=last_error or "No channel accepted the message.", retryable=outage
     )
-    return Delivered(reason=reason)
 
 
 async def _email_budget_refusal(

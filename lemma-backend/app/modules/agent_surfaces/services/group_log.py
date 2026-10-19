@@ -66,6 +66,7 @@ from app.modules.agent_surfaces.services.workspace_channels import (
     note_workspace_channel,
 )
 from app.modules.channels.contracts import (
+    NewLine,
     Principal,
     Reader,
     Sender,
@@ -152,24 +153,27 @@ class GroupLog:
         )
         threaded = parsed.platform in WORKSPACE_PLATFORMS
         for group in known:
+            # A Slack or Teams thread is a thread here too.
+            root = (
+                await thread_root_at(
+                    self.uow,
+                    source_id=group.id,
+                    external_thread_id=parsed.external_thread_id,
+                    external_message_id=parsed.external_message_id,
+                )
+                if threaded
+                else None
+            )
             await post(
                 self.uow,
                 channel_id=group.channel_id,
-                sender=await self._speaker(group, parsed),
-                text=parsed.message_text,
-                source_id=group.id,
-                external_message_id=parsed.external_message_id,
-                external_thread_id=parsed.external_thread_id,
-                # A Slack or Teams thread is a thread here too.
-                thread_root_id=(
-                    await thread_root_at(
-                        self.uow,
-                        source_id=group.id,
-                        external_thread_id=parsed.external_thread_id,
-                        external_message_id=parsed.external_message_id,
-                    )
-                    if threaded
-                    else None
+                line=NewLine(
+                    sender=await self._speaker(group, parsed),
+                    text=parsed.message_text,
+                    source_id=group.id,
+                    external_message_id=parsed.external_message_id,
+                    external_thread_id=parsed.external_thread_id,
+                    thread_root_id=root,
                 ),
             )
         return wrote or bool(known)

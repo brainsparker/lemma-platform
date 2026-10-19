@@ -1,7 +1,8 @@
 """The group tables come and go with their migration, and only with it.
 
 They lasted until channels (``0058_channels``), which keep a group as a place of
-its own channel; at head they are gone.
+its own channel and drop the notifications table its columns were added to; at
+head both are gone.
 """
 
 import os
@@ -79,4 +80,5 @@ def test_the_group_tables_upgrade_and_roll_back_cleanly() -> None:
 
         migrate("upgrade", "head")
         assert tables() == (None, None)
-        assert origin_columns() == everything
+        # The notifications those columns were on went with ``0058_channels``.
+        assert origin_columns() == set()

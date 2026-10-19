@@ -77,7 +77,9 @@ from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
 from app.modules.agent_surfaces.services.member_reach import MemberReach
+from app.modules.agent_surfaces.services.channel_deliveries import ChannelDeliveries
 from app.modules.agent_surfaces.services.direct_messages import DirectMessages
+from app.modules.agent_surfaces.services.member_pushes import MemberPushes
 from app.modules.agent_surfaces.services.notification_rate_limiter import (
     EmailBudget,
     PushBudget,
@@ -241,6 +243,12 @@ def build_surface_turn_starter(uow_factory: UnitOfWorkFactory) -> SurfaceTurnSta
 
 def build_direct_messages(uow: SqlAlchemyUnitOfWork) -> DirectMessages:
     return DirectMessages(
+        uow=uow, pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow)
+    )
+
+
+def build_member_pushes(uow: SqlAlchemyUnitOfWork) -> MemberPushes:
+    return MemberPushes(
         uow=uow,
         surface_repository=build_surface_repository(uow),
         external_user_repository=ExternalSurfaceUserRepository(uow),
@@ -249,6 +257,16 @@ def build_direct_messages(uow: SqlAlchemyUnitOfWork) -> DirectMessages:
         surface_provisioner=_build_system_email_provisioner(uow),
         email_budget=EmailBudget(),
         push_budget=PushBudget(),
+    )
+
+
+def build_channel_deliveries(uow_factory: UnitOfWorkFactory) -> ChannelDeliveries:
+    """The worker's half: each send scopes its own short units of work, and no
+    pooled connection is held across a platform call."""
+    return ChannelDeliveries(
+        uow_factory,
+        egress_for=build_surface_egress,
+        pushes_for=build_member_pushes,
     )
 
 

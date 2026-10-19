@@ -76,16 +76,23 @@ def sync_detailed(
 ) -> Response[ChannelDetailResponse | ErrorResponse]:
     """Update Channel
 
-     Rename, re-describe or archive a group; switch a contact's agent.
+     Change exactly the fields named; `null` clears.
 
-    A contact's channel changes only its `settings`, and takes
-    `contact.message`: switching its agent off leaves the contact to members;
-    switching it on hands them back to the agent at once, whoever stepped in.
+    A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
+    admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+    `status`, `assignee` -- for who may write to contacts. Switching the agent
+    on hands the contact back to it now: nobody is assigned.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
-        body (ChannelUpdateRequest):
+        body (ChannelUpdateRequest): Absent is unchanged; ``null`` clears where clearing means
+            something.
+
+            A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
+            contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+            ``status``, ``assignee`` (and needs ``contact.message``). Anything else
+            for the kind is 409.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -117,16 +124,23 @@ def sync(
 ) -> ChannelDetailResponse | ErrorResponse | None:
     """Update Channel
 
-     Rename, re-describe or archive a group; switch a contact's agent.
+     Change exactly the fields named; `null` clears.
 
-    A contact's channel changes only its `settings`, and takes
-    `contact.message`: switching its agent off leaves the contact to members;
-    switching it on hands them back to the agent at once, whoever stepped in.
+    A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
+    admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+    `status`, `assignee` -- for who may write to contacts. Switching the agent
+    on hands the contact back to it now: nobody is assigned.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
-        body (ChannelUpdateRequest):
+        body (ChannelUpdateRequest): Absent is unchanged; ``null`` clears where clearing means
+            something.
+
+            A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
+            contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+            ``status``, ``assignee`` (and needs ``contact.message``). Anything else
+            for the kind is 409.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -153,16 +167,23 @@ async def asyncio_detailed(
 ) -> Response[ChannelDetailResponse | ErrorResponse]:
     """Update Channel
 
-     Rename, re-describe or archive a group; switch a contact's agent.
+     Change exactly the fields named; `null` clears.
 
-    A contact's channel changes only its `settings`, and takes
-    `contact.message`: switching its agent off leaves the contact to members;
-    switching it on hands them back to the agent at once, whoever stepped in.
+    A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
+    admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+    `status`, `assignee` -- for who may write to contacts. Switching the agent
+    on hands the contact back to it now: nobody is assigned.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
-        body (ChannelUpdateRequest):
+        body (ChannelUpdateRequest): Absent is unchanged; ``null`` clears where clearing means
+            something.
+
+            A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
+            contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+            ``status``, ``assignee`` (and needs ``contact.message``). Anything else
+            for the kind is 409.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -192,16 +213,23 @@ async def asyncio(
 ) -> ChannelDetailResponse | ErrorResponse | None:
     """Update Channel
 
-     Rename, re-describe or archive a group; switch a contact's agent.
+     Change exactly the fields named; `null` clears.
 
-    A contact's channel changes only its `settings`, and takes
-    `contact.message`: switching its agent off leaves the contact to members;
-    switching it on hands them back to the agent at once, whoever stepped in.
+    A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
+    admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+    `status`, `assignee` -- for who may write to contacts. Switching the agent
+    on hands the contact back to it now: nobody is assigned.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
-        body (ChannelUpdateRequest):
+        body (ChannelUpdateRequest): Absent is unchanged; ``null`` clears where clearing means
+            something.
+
+            A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
+            contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+            ``status``, ``assignee`` (and needs ``contact.message``). Anything else
+            for the kind is 409.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

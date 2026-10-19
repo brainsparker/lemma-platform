@@ -43,6 +43,7 @@ async def apply_platform_update(
             return
         await apply_group_updates(uow, request, adapters=adapters)
         await apply_delivery_statuses(uow, request)
+        await uow.commit()
 
 
 def register_platform_update_work(registry: WorkRegistry) -> None:

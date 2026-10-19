@@ -18,6 +18,7 @@ from app.modules.contacts.domain.entities import (
     IdentityStrength,
     normalize_handle,
 )
+from app.modules.contacts.domain.handles import issuer_of
 from app.modules.contacts.infrastructure.models import (
     ContactIdentityModel,
     ContactModel,
@@ -60,7 +61,8 @@ def _identity(row: ContactIdentityModel) -> ContactHandle:
         strength=IdentityStrength(row.strength),
         verified_at=row.verified_at,
         last_inbound_at=row.last_inbound_at,
-        unsubscribed_at=row.unsubscribed_at,
+        issuer=row.issuer,
+        value_raw=row.value_raw,
     )
 
 
@@ -121,6 +123,30 @@ class ContactRepository:
             return None
         return await self.get(pod_id=pod_id, contact_id=contact_id)
 
+    async def find_by_user_part(
+        self, *, pod_id: UUID, kind: IdentityKind, user_id: str
+    ) -> Contact | None:
+        """The contact whose ``{workspace}:{user}`` handle has this user part,
+        when exactly one does: a Slack mention names the user, not the
+        workspace, and a user id is one person across workspaces."""
+        if not user_id or ":" in user_id:
+            return None
+        escaped = user_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = await self.session.scalars(
+            select(ContactIdentityModel.contact_id)
+            .where(
+                ContactIdentityModel.pod_id == pod_id,
+                ContactIdentityModel.kind == kind.value,
+                ContactIdentityModel.value.like(f"%:{escaped}", escape="\\"),
+            )
+            .distinct()
+            .limit(2)
+        )
+        found = list(rows)
+        if len(found) != 1:
+            return None
+        return await self.get(pod_id=pod_id, contact_id=found[0])
+
     async def open(
         self,
         *,
@@ -159,6 +185,8 @@ class ContactRepository:
                         value=handle,
                         strength=strength.value,
                         verified_at=now,
+                        issuer=issuer_of(kind, handle),
+                        value_raw=value.strip()[:320],
                     )
                 )
                 await self.session.flush()
@@ -239,10 +267,7 @@ class ContactRepository:
     async def note_inbound(
         self, *, pod_id: UUID, kind: IdentityKind, value: str
     ) -> None:
-        """The contact just wrote from this handle: they want an answer here.
-
-        Writing again is also how a contact who unsubscribed opts back in.
-        """
+        """The contact just wrote from this handle: they want an answer here."""
         await self.session.execute(
             update(ContactIdentityModel)
             .where(
@@ -250,30 +275,8 @@ class ContactRepository:
                 ContactIdentityModel.kind == kind.value,
                 ContactIdentityModel.value == normalize_handle(kind, value),
             )
-            .values(last_inbound_at=datetime.now(timezone.utc), unsubscribed_at=None)
+            .values(last_inbound_at=datetime.now(timezone.utc))
         )
-
-    async def unsubscribe(self, *, identity_id: UUID) -> None:
-        await self.session.execute(
-            update(ContactIdentityModel)
-            .where(ContactIdentityModel.id == identity_id)
-            .values(unsubscribed_at=datetime.now(timezone.utc))
-        )
-
-    async def unsubscribe_handle(
-        self, *, pod_id: UUID, kind: IdentityKind, value: str
-    ) -> bool:
-        """The contact wrote "STOP" from this handle. Whether there was one."""
-        result = await self.session.execute(
-            update(ContactIdentityModel)
-            .where(
-                ContactIdentityModel.pod_id == pod_id,
-                ContactIdentityModel.kind == kind.value,
-                ContactIdentityModel.value == normalize_handle(kind, value),
-            )
-            .values(unsubscribed_at=datetime.now(timezone.utc))
-        )
-        return bool(result.rowcount)
 
     async def lock(self, *, pod_id: UUID, contact_ids: Sequence[UUID]) -> list[Contact]:
         """These contacts, row-locked in id order, so two merges of one pair queue.
@@ -322,6 +325,8 @@ class ContactRepository:
                         value=handle,
                         strength=strength.value,
                         verified_at=datetime.now(timezone.utc),
+                        issuer=issuer_of(kind, handle),
+                        value_raw=value.strip()[:320],
                     )
                 )
                 await self.session.flush()

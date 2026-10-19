@@ -133,45 +133,14 @@ class MemberLines:
     async def _named(
         self, channel: Channel, parts: Sequence[Part]
     ) -> tuple[list[Principal], list[UUID]]:
-        people: list[Principal] = []
-        agents: list[UUID] = []
-        refused: list[str] = []
-        for part in parts:
-            if not isinstance(part, MentionPart):
-                continue
-            if part.kind == "AGENT":
-                agents.append(part.id)
-            elif part.kind == "MEMBER":
-                if await self._member_sees(channel, part.id):
-                    people.append(Principal.member(part.id))
-                else:
-                    refused.append(part.name or "Somebody")
-            else:
-                person = Principal.contact(part.id)
-                if await self.members.of_principal(channel.id, person) is not None:
-                    people.append(person)
-                else:
-                    refused.append(part.name or "A contact")
-        if refused:
+        named = await Naming(self.uow).of(channel, parts)
+        if named.refused:
             raise LineRefused(
-                ", ".join(dict.fromkeys(refused))
+                ", ".join(dict.fromkeys(named.refused))
                 + " cannot see this channel. Add them first, or do not name them.",
                 status_code=422,
             )
-        return people, list(dict.fromkeys(agents))
-
-    async def _member_sees(self, channel: Channel, user_id: UUID) -> bool:
-        if await pod_member_id(self.uow, channel.pod_id, user_id) is None:
-            return False
-        viewer = Viewer(
-            user_id=user_id,
-            pod_id=channel.pod_id,
-            sees_contacts=await pod_member_holds(
-                self.uow, channel.pod_id, user_id, _CONTACT_READ
-            ),
-        )
-        is_member = await self.members.of_user(channel.id, user_id) is not None
-        return may_see(channel, viewer, is_member=is_member)
+        return named.people, named.agents
 
     async def _where_it_goes(
         self, channel: Channel, post: MemberPost, root: ChannelMessage | None
@@ -240,3 +209,63 @@ class MemberLines:
         if line.sender.kind is not SenderKind.MEMBER or line.sender.user_id != user_id:
             raise LineRefused("Only who wrote a line may change it", status_code=403)
         return line
+
+
+@dataclass(frozen=True, slots=True)
+class Named:
+    """Who a line's parts name: the people who may be told of it, the agents,
+    and the names of anybody it may not name."""
+
+    people: list[Principal]
+    agents: list[UUID]
+    refused: list[str]
+
+
+class Naming:
+    """The rule for naming somebody in a channel: a member must be able to see
+    it, a contact must be in it. A member's line naming anybody else is
+    refused; a line heard on a platform keeps its words, and only the people
+    who may see the channel are told."""
+
+    def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
+        self.uow = uow
+        self.members = MemberRepository(uow.session)
+
+    async def of(self, channel: Channel, parts: Sequence[Part]) -> Named:
+        people: list[Principal] = []
+        agents: list[UUID] = []
+        refused: list[str] = []
+        for part in parts:
+            if not isinstance(part, MentionPart):
+                continue
+            if part.kind == "AGENT":
+                agents.append(part.id)
+            elif part.kind == "MEMBER":
+                if await self._member_sees(channel, part.id):
+                    people.append(Principal.member(part.id))
+                else:
+                    refused.append(part.name or "Somebody")
+            else:
+                person = Principal.contact(part.id)
+                if await self.members.of_principal(channel.id, person) is not None:
+                    people.append(person)
+                else:
+                    refused.append(part.name or "A contact")
+        return Named(
+            people=list(dict.fromkeys(people)),
+            agents=list(dict.fromkeys(agents)),
+            refused=refused,
+        )
+
+    async def _member_sees(self, channel: Channel, user_id: UUID) -> bool:
+        if await pod_member_id(self.uow, channel.pod_id, user_id) is None:
+            return False
+        viewer = Viewer(
+            user_id=user_id,
+            pod_id=channel.pod_id,
+            sees_contacts=await pod_member_holds(
+                self.uow, channel.pod_id, user_id, _CONTACT_READ
+            ),
+        )
+        is_member = await self.members.of_user(channel.id, user_id) is not None
+        return may_see(channel, viewer, is_member=is_member)

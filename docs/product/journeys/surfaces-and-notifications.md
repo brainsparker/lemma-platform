@@ -637,7 +637,8 @@ remember where the bot is, who is in there, or what is waiting on them.
 ### PS-SURF-041 — A member steps in for somebody outside the pod the bot cannot help
 **Status:** planned
 
-> Proven at module level by `agent_surfaces/tests/e2e/test_contact_care_e2e.py`.
+> Proven at module level by `agent_surfaces/tests/e2e/test_contact_care_e2e.py`
+> and `test_contact_acknowledgement_e2e.py`.
 
 - When the bot cannot give somebody outside the pod what they need, the system
   shall flag that person's channel as waiting on a person and tell the member
@@ -647,11 +648,15 @@ remember where the bot is, who is in there, or what is waiting on them.
   member is in the conversation; once the member has not written there for the
   channel's hand-back window, the bot shall answer again and tell them.
 - Where a member switches the channel's agent off, the system shall start no
-  run for that person and tell them nothing, and shall flag the channel as
-  waiting on a reply, until a member switches it on again -- which hands the
-  person back to the bot at once.
+  run for that person, and shall flag the channel as waiting on a reply, until
+  a member switches it on again -- which hands the person back to the bot at
+  once.
+- While the agent is off, the system shall tell the person nothing unless the
+  pod set a line to say then; that line it shall say once, until a member
+  writes to them or the channel is closed, and never to a handle that asked the
+  pod to stop.
 
-**Contracts:** `channel.update`, `channel.message.post`
+**Contracts:** `channel.update`, `channel.message.post`, `pod.update`
 
 ### PS-SURF-042 — A member adds the pod's Telegram bot to a group from Lemma
 **Status:** planned
@@ -814,11 +819,15 @@ Public, the way a group's people from outside it are.
 **Status:** planned
 
 > Proven at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`,
-> `test_web_widgets_e2e.py` and `test_contact_email_follow_ups_e2e.py`, and at
-> unit level by `agent_surfaces/tests/unit/test_contact_rules.py`.
+> `test_web_widgets_e2e.py` and `test_contact_outreach_e2e.py`.
 
 - The system shall let a member write to a contact in the contact's most recent
   conversation, on the channel it lives on.
+- The system shall let a member start a contact's conversation on any handle
+  the contact has where its platform allows it -- email any time, WhatsApp
+  where they wrote within 24 hours -- and shall refuse, saying why and posting
+  nothing, a handle that is not theirs, one that asked the pod to stop, or one
+  a bot cannot write to first.
 - The system shall write on WhatsApp only within 24 hours of the contact's last
   message there, and shall leave a web visitor's message for their next visit.
 - When the member asks for email, the system shall send the follow-up to the
@@ -830,7 +839,7 @@ Public, the way a group's people from outside it are.
 - The system shall not unsubscribe anybody for opening the link; only the
   button on the page it opens does.
 
-**Contracts:** `channel.message.post`
+**Contracts:** `channel.message.post`, `contact.outreach.send`
 
 ### PS-SURF-051 — People outside the pod add rows to a table it opened to them
 **Status:** planned

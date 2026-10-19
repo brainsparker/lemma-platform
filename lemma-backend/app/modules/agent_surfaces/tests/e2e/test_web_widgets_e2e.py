@@ -362,8 +362,11 @@ async def test_a_signed_in_customer_of_the_shop_is_answered_as_a_contact(
             )
         )
     ).scalar_one()
-    # Keyed by the pod, so another of its widgets meets the same contact.
-    assert identity.value == "host:cust-42"
+    # Keyed by the pod and the product the widget speaks for, so another of
+    # its widgets for that product meets the same contact.
+    assert widget["host_issuer"] == "default"
+    assert identity.value == "host:default:cust-42"
+    assert identity.issuer == "default"
     assert identity.strength == "HOST"
     assert identity.contact_id == contact_id
 
@@ -385,6 +388,39 @@ async def test_a_signed_in_customer_of_the_shop_is_answered_as_a_contact(
             )
         )
     ).scalars().all() == [identity]
+
+    # Another product's user 42 is somebody else.
+    elsewhere = await _widget(
+        authenticated_client, pod_id, name="Partner app", host_issuer="Partner-App"
+    )
+    assert elsewhere["host_issuer"] == "partner-app"
+    partner = await _session(
+        authenticated_client,
+        elsewhere["public_key"],
+        host_token=_host_token(
+            elsewhere["signing_secret"], elsewhere["public_key"], subject="cust-42"
+        ),
+    )
+    assert partner["is_contact"] is True
+    db_session.expire_all()
+    hosts = (
+        await db_session.execute(
+            select(ContactIdentityModel.value, ContactIdentityModel.contact_id).where(
+                ContactIdentityModel.pod_id == UUID(pod_id),
+                ContactIdentityModel.kind == "HOST",
+            )
+        )
+    ).all()
+    assert {value for value, _ in hosts} == {
+        "host:default:cust-42",
+        "host:partner-app:cust-42",
+    }
+    assert len({contact for _, contact in hosts}) == 2
+    unnamed = await authenticated_client.post(
+        f"/pods/{pod_id}/web-widgets",
+        json={"name": "Bad issuer", "host_issuer": "two words"},
+    )
+    assert unnamed.status_code == 422, unnamed.text
 
     # Rotating the secret retires every token signed with the old one, and the
     # sessions they opened.

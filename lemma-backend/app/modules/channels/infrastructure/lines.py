@@ -26,6 +26,7 @@ from app.modules.channels.domain.entities import (
 from app.modules.channels.domain.parts import Part, dump_parts
 from app.modules.channels.infrastructure.access import visible_to
 from app.modules.channels.infrastructure.models import (
+    ChannelMessageDeliveryModel,
     ChannelMessageModel,
     ChannelModel,
     ChannelQuestionModel,
@@ -331,13 +332,26 @@ class LineRepository:
         return message_entity(row) if row is not None else None
 
     async def at(self, source_id: UUID, external_message_id: str) -> UUID | None:
-        """The line a platform message became at this source, if it is one."""
-        return await self.session.scalar(
+        """The line a platform message is at this source, if it is one: heard
+        there, or written in Lemma and delivered there as that message."""
+        heard = await self.session.scalar(
             select(ChannelMessageModel.id).where(
                 ChannelMessageModel.source_id == source_id,
                 func.md5(ChannelMessageModel.external_message_id)
                 == func.md5(external_message_id),
             )
+        )
+        if heard is not None:
+            return heard
+        return await self.session.scalar(
+            select(ChannelMessageDeliveryModel.message_id)
+            .where(
+                ChannelMessageDeliveryModel.source_id == source_id,
+                ChannelMessageDeliveryModel.external_message_id.is_not(None),
+                func.md5(ChannelMessageDeliveryModel.external_message_id)
+                == func.md5(external_message_id),
+            )
+            .limit(1)
         )
 
     async def search(

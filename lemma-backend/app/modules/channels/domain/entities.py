@@ -195,6 +195,8 @@ class Channel(BaseModel):
     status: ContactStatus = ContactStatus.OPEN
     attention_at: datetime | None = None
     attention_reason: str | None = None
+    #: When the contact was last told a person will reply (``acknowledge``).
+    acknowledged_at: datetime | None = None
     # -- the timeline's head ---------------------------------------------------
     last_seq: int = 0
     last_line_id: UUID | None = None
@@ -440,5 +442,7 @@ class Delivery(BaseModel):
     external_message_id: str | None = None
     attempts: int = 0
     next_attempt_at: datetime | None = None
+    #: While a sender holds it (``claim``); cleared with the outcome.
+    claimed_at: datetime | None = None
     sent_at: datetime | None = None
     created_at: datetime | None = None

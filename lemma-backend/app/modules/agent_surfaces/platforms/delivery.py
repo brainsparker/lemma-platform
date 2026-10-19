@@ -9,9 +9,10 @@ with bounded exponential backoff, honouring a server's ``Retry-After``.
 What it cannot wait out inline it reports instead: a caller that wraps its
 sends in :func:`track_sends` learns that the platform asked for more time than
 an inline retry should spend (or that every attempt hit a transient failure),
-and how long it asked for. The final answer's sender uses that to hand the
-reply to the destination pump's durable retry (``surface_deliveries``) rather
-than lose it.
+and how long it asked for. A sender with a durable retry -- a channel
+delivery, the destination pump's ``surface_deliveries`` -- uses that to try
+again later rather than lose the message, and never repeats one that partly
+arrived.
 """
 
 from __future__ import annotations

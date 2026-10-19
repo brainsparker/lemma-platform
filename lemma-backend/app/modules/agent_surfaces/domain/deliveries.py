@@ -1,8 +1,9 @@
 """One outbound message the platform must receive exactly once.
 
-Written in the transaction that produced its content -- a run's answer, a
-held WhatsApp reply, a "please send that again" -- and sent by the destination
-pump (``surface.reply``)::
+Written in the transaction that produced its content -- a held WhatsApp reply,
+a reply outside any run, a "please send that again" -- and sent by the
+destination pump (``surface.reply``). A run's answer is not one of these: it is
+a channel line, sent as its channel delivery (``channel_deliveries``)::
 
     PENDING -> SENDING -> SENT
                        -> PENDING   (a transient refusal: not before Retry-After)

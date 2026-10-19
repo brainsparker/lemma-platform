@@ -112,11 +112,6 @@ EXPECTED = [
         200,
     ),
     (
-        "surface_contact_follow_ups_per_contact_per_day",
-        "SURFACE_CONTACT_FOLLOW_UPS_PER_CONTACT_PER_DAY",
-        10,
-    ),
-    (
         "surface_parked_mail_notes_per_surface_per_hour",
         "SURFACE_PARKED_MAIL_NOTES_PER_SURFACE_PER_HOUR",
         20,

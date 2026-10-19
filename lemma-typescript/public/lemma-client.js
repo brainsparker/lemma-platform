@@ -17375,6 +17375,39 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/openapi_client/services/ContactOutreachService.ts
+  var ContactOutreachService = class {
+    /**
+     * Send Outreach
+     * Write to a contact first, on one of their handles: email any time,
+     * WhatsApp within 24 hours of their last message there. The line goes in
+     * their channel, at that handle's place -- opened if new -- and is sent from
+     * there.
+     * @param podId
+     * @param contactId
+     * @param requestBody
+     * @returns OutreachResponse Successful Response
+     * @throws ApiError
+     */
+    static contactOutreachSend(podId, contactId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/contacts/{contact_id}/outreach",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          404: `No such contact.`,
+          409: `They asked not to be written to there, or the pod has nowhere to write from.`,
+          422: `Not one of their handles, or not one that may be written to first now.`
+        }
+      });
+    }
+  };
+
   // src/openapi_client/services/ContactsService.ts
   var ContactsService = class {
     /**
@@ -17918,6 +17951,15 @@ var LemmaClient = (() => {
     rename(podId, contactId, displayName) {
       return this.client.request(
         () => ContactsService.contactUpdate(podId, contactId, { display_name: displayName })
+      );
+    }
+    /** Write to a contact first, on one of their handles: email any time,
+     *  WhatsApp within 24 hours of their last message there, never a handle that
+     *  asked the pod to stop. Returns the line, in their channel at that handle's
+     *  place (opened if new), and its delivery -- `PENDING` until it goes. */
+    outreach(podId, contactId, payload) {
+      return this.client.request(
+        () => ContactOutreachService.contactOutreachSend(podId, contactId, payload)
       );
     }
     /** One page of everything the pod holds about a contact: handles,

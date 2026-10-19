@@ -161,6 +161,11 @@ class ChannelModel(UUIDAuditBase):
         DateTime(timezone=True), nullable=True
     )
     attention_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: When the contact was told a person will reply, this open period: the
+    #: one acknowledgement it gets until a member writes or it is closed.
+    acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # -- the timeline's head ---------------------------------------------------
     #: The newest line's number; the next line takes ``last_seq + 1`` under
     #: this row's lock.

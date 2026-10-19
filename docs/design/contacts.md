@@ -346,16 +346,33 @@ one:
   contact on a contact-owned table. `/public/web/widget.js` is the chat and the
   form drawer. Limits per widget,
   session, address and email, failing closed.
+- **Outreach policy** is `contacts`' (`contacts.contracts.outreach`), and every
+  line to a contact's place -- a member's, an agent's answer, an
+  acknowledgement -- is held to it before it goes, in this order: **opt-out
+  first** (a `contact_suppressions` row for the handle's sha256: `stop`,
+  `unsubscribe`, `bounce`; it outlives the contact being forgotten, and holds
+  with nobody looking after contacts), then a handle of the place's kind, then
+  the platform's window (WhatsApp: 24 hours from the contact's last message to
+  that number, the place's `last_inbound_at`), then, for a member's line,
+  `CONTACTS_MEMBER_LINES_PER_CONTACT_PER_DAY`, counted once per line in Redis
+  (Redis away is retried, never sent uncounted). A whole message "STOP" (or an
+  email whose subject is "unsubscribe") opts the handle out, even from a
+  machine; "START" or any message the person typed -- a vouched-for sender, no
+  automatic-mail header -- opts it back in. Email to a contact ends with a
+  signed unsubscribe link and carries `List-Unsubscribe` (the link and a
+  `mailto:` the bot receives) with `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
+  (RFC 8058), whose `POST` the unsubscribe controller takes. Handles are
+  normalised: phones E.164 (`phonenumbers`, in `CONTACTS_DEFAULT_PHONE_REGION`
+  when one is set, else read as international), email trimmed and lower-cased,
+  host identities `host:{issuer}:{sub}` with the issuer a widget declares
+  (`host_issuer`, `default` unless given at creation).
 - **Follow-ups.** `POST /pods/{pod_id}/contacts/{id}/messages` (`contact.message`,
-  editors and up; at most `SURFACE_CONTACT_FOLLOW_UPS_PER_CONTACT_PER_DAY` per
-  contact) writes to a contact in their most recent conversation, sent first
+  editors and up; held to the outreach policy above) writes to a contact in their most recent conversation, sent first
   and recorded as not sent when the platform refuses it: WhatsApp within 24 hours of their
   last message (`contact_identities.last_inbound_at`), Telegram any time, email
   with an unsubscribe line and a signed link (`/public/contacts/unsubscribe`,
   a confirmation page whose button does it), a web chat by leaving it for
-  their next visit. Never to a handle they unsubscribed
-  (`unsubscribed_at`); writing again opts them back in, except a message that
-  is only "STOP" or "unsubscribe", which unsubscribes the handle instead. A bot
+  their next visit. Never to a handle that opted out. A bot
   for known contacts gives a stranger one short refusal a day.
   `channel` on the request is `latest` (the default, all of the above) or
   `email`: to the contact's most recently verified email handle (strength
@@ -408,8 +425,7 @@ one:
 - **Every public endpoint is under `/public/`.** The rule, its exceptions and
   the gate that holds it are in CONTRIBUTING.md.
 
-Not built yet: WhatsApp templates (follow-ups past the 24-hour window), a
-`List-Unsubscribe` header on follow-up email, newsletters to subscribers,
+Not built yet: WhatsApp templates (follow-ups past the 24-hour window), newsletters to subscribers,
 step-up codes for contact functions (the `requires` strength), pod bundles
 carrying `contact_owned`, `contact_columns`, `contacts_invoke` and
 `include_outside_rows`, and a hand-back control in the app for a conversation

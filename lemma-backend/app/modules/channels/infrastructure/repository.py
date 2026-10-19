@@ -223,10 +223,16 @@ class ChannelRepository:
         if unknown:
             raise ValueError(f"Not a channel field: {sorted(unknown)}")
         if values:
+            closing = values.get("status") == ContactStatus.CLOSED.value
             await self.session.execute(
                 update(ChannelModel)
                 .where(ChannelModel.id == channel_id)
-                .values(**values, updated_at=now())
+                .values(
+                    **values,
+                    # Closing ends the open period its acknowledgement was for.
+                    **({"acknowledged_at": None} if closing else {}),
+                    updated_at=now(),
+                )
             )
 
     async def assign(self, channel_id: UUID, user_id: UUID | None) -> None:
@@ -257,6 +263,32 @@ class ChannelRepository:
                     func.coalesce(ChannelModel.assignee_last_line_at, at), at
                 )
             )
+        )
+
+    async def acknowledge(self, channel_id: UUID) -> bool:
+        """Claim the contact's one "a person will reply" of this open period:
+        whether this caller is the one to say it. Conditional, so two
+        messages arriving together say it once."""
+        claimed = await self.session.scalar(
+            update(ChannelModel)
+            .where(
+                ChannelModel.id == channel_id,
+                ChannelModel.acknowledged_at.is_(None),
+            )
+            .values(acknowledged_at=now())
+            .returning(ChannelModel.id)
+        )
+        return claimed is not None
+
+    async def end_open_period(self, channel_id: UUID) -> None:
+        """A member wrote: the next wait is a new one, acknowledged afresh."""
+        await self.session.execute(
+            update(ChannelModel)
+            .where(
+                ChannelModel.id == channel_id,
+                ChannelModel.acknowledged_at.is_not(None),
+            )
+            .values(acknowledged_at=None)
         )
 
     async def call_for_person(self, channel_id: UUID, *, reason: str | None) -> None:

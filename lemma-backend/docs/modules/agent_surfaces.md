@@ -20,7 +20,7 @@ Resend address.
 | --- | --- |
 | API routers | Pod surface CRUD/setup/catalog/send, current-user defaults, public webhooks/verification |
 | Request-time intake | Every webhook route and receiver classifies a delivery, answers provider-deadline interactions in the request, and writes each message as a `surface_inbound_messages` row plus a `surface.ingest` item in one transaction |
-| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination) and `surface.reply_for_run` (subscribes `AgentRunFinished`), `surface.receiver` (`receivers`, one leased item per polling credential), `surface.in_app_turn` (a member's line in Lemma an agent answers), `surface.pause_lines` (an agent's questions as lines; subscribes `AgentRunFinished`), `surface.asked_questions` (gives a conversation its turn back once everybody it asked has answered; subscribes `ChannelQuestionClosed`), `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
+| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination, for held and resent messages), `surface.reply_for_run` (subscribes `AgentRunFinished`; posts the answer as the agent's line with a delivery to its place) and `surface.channel_delivery` (sends one channel delivery and records the platform's message id on it), `surface.receiver` (`receivers`, one leased item per polling credential), `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
 | Periodic work | `surfaces.receivers.reconcile` (15 s), `surfaces.onboarding_cleanup` (1 min), `surfaces.web_visitors` (hourly), `surfaces.retention` (daily) |
 
 ## Main data model
@@ -39,7 +39,7 @@ Resend address.
 | `agent_surface_web_codes` | One-time codes sent to email addresses web visitors typed, stored salted with their session, expiring in ten minutes after five guesses at most, each counted before it is compared. `events/visitor_retention.py` sweeps ended sessions and spent codes hourly; a visitor's conversation is a contact's, and is never swept |
 | `surface_inbound_messages` | One row per inbound message any webhook or receiver accepted, unique on (receiver scope, the platform's event id), so a delivery retried a minute or three days later is the same row. RECEIVED → INGESTING → ROUTED, DROPPED or FAILED; the `surface.ingest` item that turns it into a turn is written with it. ROUTED and DROPPED rows are kept 7 days, FAILED 30 |
 | `surface_message_claims` | The durable message-level claim: one row per platform message, owned by the inbound row that took it, taken in the transaction that routes it so a duplicate under another scope is answered once. Kept 7 days |
-| `surface_deliveries` | Every outbound message the platform owes: a run's answer, a held reply, a "please resend". Unique on an idempotency key; PENDING → SENDING → SENT, or UNKNOWN when a send's outcome was lost (never re-sent), or FAILED. One `surface.reply` pump per destination sends them in order |
+| `surface_deliveries` | The outbound messages with no channel line of their own: a held reply, a reply outside any run, a "please resend". A run's answer is a channel line and goes out as its `channel_message_deliveries` row. Unique on an idempotency key; PENDING → SENDING → SENT, or UNKNOWN when a send's outcome was lost (never re-sent), or FAILED. One `surface.reply` pump per destination sends them in order |
 | `surface_receiver_state` | One cursor per polling receiver (Telegram offset, Resend cursor, the Telegram manager bot), written in the transaction that stores the messages before it, so a receiver that moves to another worker resumes without a gap or a duplicate |
 
 Where a message was said, and where a conversation's answer goes, are the
@@ -90,14 +90,16 @@ sequenceDiagram
     participant DB as surface_inbound_messages
     participant In as surface.ingest
     participant A as Agent module
-    participant Out as surface.reply
+    participant Out as surface.channel_delivery
     P->>API: webhook / poll / socket event
     API->>API: verify, classify, answer deadline interactions
     API->>DB: row + surface.ingest item (one transaction), return quickly
     DB->>In: resolve surface, identity, claim, place and conversation
     In->>A: user message + agent.turn (one transaction)
-    A-->>Out: AgentRunFinished -> surface_deliveries row
-    Out-->>P: reply in original channel/thread
+    A-->>Out: AgentRunFinished -> agent's line + delivery row
+    Out-->>P: reply in original channel/thread (or finish the live stream)
+    Out-->>Out: delivery SENT + platform message id
+    P-->>API: status webhook (WhatsApp 131047) -> delivery DEAD by that id
 ```
 
 Adapters share a contract for parse, enrich, sender profile, `send_message`,
@@ -216,7 +218,13 @@ observer renders them on the surface and a submission resumes the run.
   the only place a surface decides which conversation a message joins.
 - **Every line lands on the channel's timeline** (`services/channel_lines.py`):
   the message a run answers, as it enters the conversation, and every answer
-  the platform took, said by the agent for the person it answered.
+  the platform took, said by the agent for the person it answered. Platform
+  markup is read once, there (`domain/markup.py`, `services/line_markup.py`):
+  Slack's `<@U…>` and `<url|label>`, Teams' `<at>` entities, Telegram's
+  entities and WhatsApp's `@number` become `@Name` in the text and mention and
+  link parts on the line. A mention tells only somebody who may see the
+  channel (`channels.contracts.named_in`). A heard line keeps its event as
+  `reply_ref`, so a member's reply to it in Lemma goes to its platform thread.
 - **History is not the surface's.** A surface never trims or reshapes what the
   model sees. Once a message is bound to a conversation, the agent module alone
   decides how much history the run carries (run cap, whole recent runs,
@@ -472,12 +480,19 @@ window -- past it, the member is let go and told). If so the message is kept
 -- in the conversation and on the channel's timeline -- and no run starts. At
 the cap the member is told and the person hears once a day that a person will
 reply; with the agent off the channel waits on a reply and the member who
-looks after them is told; a member who stepped in reads it where they write. A web chat's answers go on the channel's timeline
-rather than to any platform thread the same conversation has
-(`events/reply_for_run_work.py`), and a member's follow-up is the member's
+looks after them is told, and -- if the pod set `config.contacts.auto_acknowledge`
+-- the contact hears that line once, until a member writes to them or the
+channel is closed (`services/contact_acknowledgement.py`); a member who stepped
+in reads it where they write. A web chat's answers go on the channel's timeline,
+their delivery `SENT` at once, rather than to any platform thread the same
+conversation has (`services/run_reply_lines.py`), and a member's follow-up is the member's
 line there, not the agent's. `SurfaceTurnStarter` calls it for chat and
 email surfaces, before the typing indicator and any file handling. Writing first to a
-contact takes `contact.message`.
+contact takes `contact.message`: `POST /pods/{pod}/contacts/{id}/outreach`
+(`services/contact_outreach.py`) posts the member's line at the place one of
+the contact's handles is reached through -- for email the pod's mailbox,
+opened if new; for WhatsApp and Telegram only a place they wrote from -- once
+`contacts.contracts.outreach.may_send` allows it.
 
 A contact shared during Telegram signup is matched by `onboarding_contact`: a
 verified profile number first, then -- only with

@@ -75,6 +75,8 @@ class Delivered:
 
     platform: str | None = None
     conversation_id: UUID | None = None
+    #: The platform's id for what it sent, when it named one.
+    external_message_id: str | None = None
     reason: str | None = None
     #: Nothing took it because a platform failed, not because nothing could:
     #: worth trying again.
@@ -83,6 +85,13 @@ class Delivered:
     @property
     def sent(self) -> bool:
         return self.platform is not None
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformSent:
+    """A platform took it; its id for the message, when it named one."""
+
+    external_message_id: str | None = None
 
 
 # The name an agent uses for "reach them by mail", whichever provider carries it.

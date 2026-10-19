@@ -256,6 +256,9 @@ class _EmptyScalarResult:
 
 
 class _EmptyExecuteResult:
+    #: An update or delete that matched nothing.
+    rowcount = 0
+
     def __iter__(self):
         return iter(())
 
@@ -560,7 +563,6 @@ def build_egress(
             for_surface=AsyncMock(return_value={}),
             for_platform=AsyncMock(return_value={}),
         ),
-        channel_lines=RecordingChannelLines(),
     )
     return SurfaceEgress(
         uow=doubles.uow,

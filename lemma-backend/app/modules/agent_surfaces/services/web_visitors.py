@@ -64,6 +64,7 @@ from app.modules.contacts.contracts import (
     find_contact,
     prove_handle,
 )
+from app.modules.contacts.contracts.outreach import host_handle
 from app.modules.contacts.contracts.visitor_sessions import (
     VisitorSession,
     VisitorStrength,
@@ -122,9 +123,10 @@ class StartedSession:
     expires_in: int
 
 
-def host_contact_key(subject: str) -> str:
-    """How a customer's user is known in a pod, through any of its widgets."""
-    return f"host:{subject}"
+def host_contact_key(widget: WebWidget, subject: str) -> str:
+    """How a customer's user is known in a pod: as a user of the product the
+    widget speaks for, through any of the pod's widgets for it."""
+    return host_handle(widget.host_issuer, subject)
 
 
 def verify_host_token(token: str, *, secret: str, public_key: str) -> HostClaims | None:
@@ -292,7 +294,7 @@ class WebVisitors:
             uow,
             widget,
             IdentityKind.HOST,
-            host_contact_key(claims.subject),
+            host_contact_key(widget, claims.subject),
             IdentityStrength.HOST,
             claims.name,
             # A vouched session is one person's already; only an anonymous
@@ -325,7 +327,7 @@ class WebVisitors:
                     uow,
                     widget,
                     IdentityKind.HOST,
-                    host_contact_key(claims.subject),
+                    host_contact_key(widget, claims.subject),
                     IdentityStrength.HOST,
                     claims.name,
                 )

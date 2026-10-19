@@ -198,6 +198,7 @@ class Timeline:
             await self.channels.change(
                 channel.id, {"status": ContactStatus.WAITING_ON_CONTACT.value}
             )
+            await self.channels.end_open_period(channel.id)
         elif sender.kind is SenderKind.CONTACT:
             await self.channels.change(channel.id, {"status": ContactStatus.OPEN.value})
 

@@ -38,6 +38,7 @@ from app.modules.agent.contracts import (
 from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.envelope import (
+    DeliveryReceipt,
     PartDelivery,
     SurfaceEnvelope,
 )
@@ -158,7 +159,30 @@ class SurfaceEgress:
         sender_only: bool = False,
         at: Source | None = None,
     ) -> bool:
-        """Send a message; ``attach_files_of`` names the run whose held files ride it.
+        """Send a message; whether it arrived. See ``deliver_message``."""
+        receipt = await self.deliver_message(
+            conversation_id=conversation_id,
+            message=message,
+            metadata=metadata,
+            attach_files_of=attach_files_of,
+            sender_only=sender_only,
+            at=at,
+        )
+        return receipt is not None
+
+    async def deliver_message(
+        self,
+        *,
+        conversation_id: UUID,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        attach_files_of: RunFiles | None = None,
+        sender_only: bool = False,
+        at: Source | None = None,
+    ) -> DeliveryReceipt | None:
+        """Send a message; its receipt -- with the platform's id for it -- or
+        None when it reached nobody. ``attach_files_of`` names the run whose
+        held files ride it.
 
         ``at`` is a place chosen for it -- a notification's -- rather than where
         the conversation's answer would go.
@@ -170,7 +194,7 @@ class SurfaceEgress:
         """
         target = await self.delivery.resolve_egress_target(conversation_id, at=at)
         if target is None:
-            return False
+            return None
         if sender_only:
             target = target.to_sender_only()
         # Safety net: never deliver model reasoning/thinking tokens
@@ -178,7 +202,7 @@ class SurfaceEgress:
         # OpenAI-compatible models emit these inline in the text content.
         clean_message = sanitize_user_visible_text(message)
         if not clean_message:
-            return False
+            return None
         # A failure notice is not the reply the files were shown for. Attaching
         # them to it sent a person a half-finished run's files under an apology,
         # and -- since held files were drained on read -- spent them on it.
@@ -210,7 +234,7 @@ class SurfaceEgress:
         conversation_id: UUID,
         run: RunFiles | None,
         held: list[str],
-    ) -> bool:
+    ) -> DeliveryReceipt | None:
         """Deliver an envelope; release the held files only if theirs arrived.
 
         A reply can land while its attachments do not, and releasing on "the
@@ -224,7 +248,7 @@ class SurfaceEgress:
             conversation_id=conversation_id,
         )
         if receipt is None:
-            return False
+            return None
         files_arrived = all(
             outcome is not PartDelivery.UNDELIVERED
             for part, outcome in receipt.parts.items()
@@ -234,7 +258,7 @@ class SurfaceEgress:
             await release_held_files(
                 uow=self.uow, conversation_id=conversation_id, run=run, paths=held
             )
-        return True
+        return receipt
 
     async def send_display_resource_for_conversation(
         self,
@@ -374,7 +398,7 @@ class SurfaceEgress:
             conversation_id=conversation_id,
             run=attach_files_of,
         )
-        return await self._deliver_with_held_files(
+        receipt = await self._deliver_with_held_files(
             target,
             # The lead-in and the question are one thing the person receives.
             # Sent as two, they arrive as two on a chat surface and as two
@@ -385,6 +409,7 @@ class SurfaceEgress:
             run=attach_files_of,
             held=held,
         )
+        return receipt is not None
 
     async def send_prompt_as_text_for_conversation(
         self,
@@ -537,7 +562,7 @@ class SurfaceEgress:
             conversation_id=conversation_id,
             run=attach_files_of,
         )
-        return await self._deliver_with_held_files(
+        receipt = await self._deliver_with_held_files(
             target,
             envelope=SurfaceEnvelope(
                 text=narration,
@@ -551,6 +576,7 @@ class SurfaceEgress:
             run=attach_files_of,
             held=held,
         )
+        return receipt is not None
 
     async def send_voice_note_for_conversation(
         self,

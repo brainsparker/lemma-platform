@@ -34,6 +34,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +46,9 @@ from app.modules.agent_surfaces.composition import (
     build_direct_messages,
 )
 from app.modules.agent_surfaces.config import surface_settings
+from app.modules.contacts.config import contacts_settings
+from app.modules.contacts.contracts import IdentityKind
+from app.modules.contacts.contracts.outreach import SuppressionReason, opt_out
 from app.modules.agent_surfaces.contracts.direct_messages import (
     send_direct_message,
 )
@@ -63,8 +67,20 @@ from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     member_writes,
 )
 from app.modules.agent_surfaces.tests.e2e.test_contact_care_e2e import _dana_writes
-from app.modules.agent_surfaces.tests.e2e.test_email_contacts_e2e import _email_bot
-from app.modules.channels.contracts import Delivery, DeliveryStatus, direct_channel
+from app.modules.agent_surfaces.tests.e2e.test_email_contacts_e2e import (
+    CUSTOMER,
+    _email_bot,
+)
+from app.modules.channels.contracts import (
+    Delivery,
+    DeliveryStatus,
+    NewLine,
+    Principal,
+    Sender,
+    direct_channel,
+    post,
+    sources_of,
+)
 from app.modules.channels.contracts.deliveries import delivery_by_id
 from app.modules.channels.infrastructure.deliveries import MAX_ATTEMPTS
 from app.modules.channels.infrastructure.models import (
@@ -643,7 +659,7 @@ async def test_a_platform_that_keeps_refusing_is_tried_again_then_given_up(
     )
     # Each try is one more line to her today; the cap is not what is tested.
     monkeypatch.setattr(
-        surface_settings, "surface_contact_follow_ups_per_contact_per_day", 100
+        contacts_settings, "contacts_member_lines_per_contact_per_day", 100
     )
     await _resend_unreachable(db_session, fixed_test_user)
     written = await member_writes(
@@ -695,7 +711,7 @@ async def test_retrying_a_failed_line_does_not_spend_the_contacts_day(
         monkeypatch=monkeypatch,
     )
     monkeypatch.setattr(
-        surface_settings, "surface_contact_follow_ups_per_contact_per_day", 1
+        contacts_settings, "contacts_member_lines_per_contact_per_day", 1
     )
     await _resend_unreachable(db_session, fixed_test_user)
     written = await member_writes(
@@ -856,3 +872,109 @@ async def test_a_mailbox_on_a_local_url_needs_polling(
         assert (await _row(push.id)).status is DeliveryStatus.SKIPPED
         assert "creating a mailbox for it failed" in reason
         assert surfaces == [], "no surface when the gate blocks it"
+
+
+# ------------------------------------------------------- a contact's rules
+
+
+async def _dana_opts_out(pod_id: str) -> None:
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        await opt_out(
+            uow,
+            pod_id=UUID(pod_id),
+            kind=IdentityKind.EMAIL,
+            value=CUSTOMER,
+            reason=SuppressionReason.STOP,
+        )
+        await uow.commit()
+
+
+async def test_an_agents_line_to_a_contact_who_opted_out_is_skipped(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    message_store,
+    monkeypatch,
+):
+    """Opt-out first on every path: not only a member's lines -- an agent's
+    answer, an acknowledgement -- and before anything else is asked."""
+    pod_id = test_pod["id"]
+    channel = await _contact_channel(
+        authenticated_client,
+        db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+    )
+    await _dana_opts_out(pod_id)
+    mailed = len(message_store.get_all("RESEND"))
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        [place] = await sources_of(uow, UUID(channel))
+        line = await post(
+            uow,
+            channel_id=UUID(channel),
+            line=NewLine(
+                sender=Sender.agent(
+                    UUID(pod_id),
+                    on_behalf_of=Principal.member(UUID(fixed_test_user["id"])),
+                ),
+                text="Following up on your order.",
+            ),
+            deliver_to=[place.id],
+        )
+        await uow.commit()
+    assert line is not None
+    [delivery] = await deliveries_of_line(line.id)
+
+    await _deliver(delivery.id)
+
+    skipped = await _row(delivery.id)
+    assert skipped.status is DeliveryStatus.SKIPPED
+    assert skipped.reason == "The contact asked not to be written to there"
+    assert len(message_store.get_all("RESEND")) == mailed
+
+
+async def test_a_member_line_waits_out_redis_rather_than_going_uncounted(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    message_store,
+    monkeypatch,
+):
+    """The contact's day could not be counted: tried again, never given up,
+    and never sent uncounted."""
+    pod_id = test_pod["id"]
+    channel = await _contact_channel(
+        authenticated_client,
+        db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+    )
+    mailed = len(message_store.get_all("RESEND"))
+    written = await member_writes(
+        authenticated_client, pod_id, channel, "Your order shipped today."
+    )
+    [delivery] = await deliveries_of_line(written["id"])
+
+    class _RedisAway:
+        async def eval(self, *args, **kwargs):
+            raise RedisConnectionError("connection refused")
+
+    blind = build_channel_deliveries(SessionUnitOfWorkFactory(async_session_maker))
+    blind.redis = _RedisAway()  # type: ignore[assignment]
+    await blind.deliver(delivery.id)
+
+    failed = await _row(delivery.id)
+    assert failed.status is DeliveryStatus.FAILED
+    assert len(message_store.get_all("RESEND")) == mailed
+
+    await _due_now(delivery.id)
+    await _deliver(delivery.id)
+    assert (await _row(delivery.id)).status is DeliveryStatus.SENT

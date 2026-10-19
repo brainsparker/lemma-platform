@@ -37,6 +37,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.web_widget.list` | GET | `/pods/{pod_id}/web-widgets` | List Widgets |
 | `agent.web_widget.reissue` | POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | Reissue Widget |
 | `agent.web_widget.update` | PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | Update Widget |
+| `contact.outreach.send` | POST | `/pods/{pod_id}/contacts/{contact_id}/outreach` | Send Outreach |
 | `public.web.challenge.read` | GET | `/public/web/{public_key}/challenge` | Web Challenge |
 | `public.web.code.send` | POST | `/public/web/{public_key}/code` | Web Send Code |
 | `public.web.code.verify` | POST | `/public/web/{public_key}/code/verify` | Web Verify Code |

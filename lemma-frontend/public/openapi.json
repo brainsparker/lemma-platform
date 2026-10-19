@@ -13935,6 +13935,171 @@
         "title": "OrganizationUpdateRequest",
         "type": "object"
       },
+      "OutreachDelivery": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus",
+            "description": "PENDING until the line is sent; SENT, SKIPPED or FAILED after."
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "OutreachDelivery",
+        "type": "object"
+      },
+      "OutreachLine": {
+        "properties": {
+          "channel_id": {
+            "format": "uuid",
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "channel_id",
+          "seq",
+          "text",
+          "created_at"
+        ],
+        "title": "OutreachLine",
+        "type": "object"
+      },
+      "OutreachRequest": {
+        "properties": {
+          "client_message_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The same id twice is the same line: a retry sends nothing new.",
+            "title": "Client Message Id"
+          },
+          "handle": {
+            "description": "One of the contact's handles to write to: an email address, a phone number (WhatsApp), a Telegram user id.",
+            "maxLength": 320,
+            "minLength": 1,
+            "title": "Handle",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which kind of handle it is, when the value could be two."
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle",
+          "text"
+        ],
+        "title": "OutreachRequest",
+        "type": "object"
+      },
+      "OutreachResponse": {
+        "properties": {
+          "delivery": {
+            "$ref": "#/components/schemas/OutreachDelivery"
+          },
+          "line": {
+            "$ref": "#/components/schemas/OutreachLine"
+          }
+        },
+        "required": [
+          "line",
+          "delivery"
+        ],
+        "title": "OutreachResponse",
+        "type": "object"
+      },
       "PartialApplyResponse": {
         "description": "What a stopped import already wrote to the pod, and how to continue it.\n\nApply is not transactional: each step commits in its own unit of work, so an\nimport that fails or is cancelled part-way leaves the pod changed and there\nis no rollback. `committed_steps` says which steps landed, but a bare list\nof integers does not tell anyone that the pod was modified at all, nor that\nre-applying resumes instead of duplicating. This does.",
         "properties": {
@@ -14223,6 +14388,16 @@
       "PodConfig": {
         "description": "Typed pod-level configuration.",
         "properties": {
+          "contacts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodContactSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "default_profile_id": {
             "anyOf": [
               {
@@ -14268,6 +14443,27 @@
           }
         },
         "title": "PodConfig",
+        "type": "object"
+      },
+      "PodContactSettings": {
+        "description": "How the pod treats the people outside it who write to it.",
+        "properties": {
+          "auto_acknowledge": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Said once to a contact who writes while their channel's agents are off -- for example \"Thanks, someone from {pod} will reply\" -- until a member writes to them or their channel is closed. ``{pod}`` is the pod's name. Omitted means nothing is said.",
+            "title": "Auto Acknowledge"
+          }
+        },
+        "title": "PodContactSettings",
         "type": "object"
       },
       "PodCreateRequest": {
@@ -21886,6 +22082,19 @@
             "default": "off",
             "description": "Whom it answers. Off until a member chooses."
           },
+          "host_issuer": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The product whose users the widget's host tokens name, such as `acme-app`: give two widgets of one product the same issuer, and widgets of two products different ones, so their user 42s are two people. Letters, digits, dots, dashes and underscores. Fixed once the widget is made; `default` if omitted.",
+            "title": "Host Issuer"
+          },
           "looked_after_by": {
             "anyOf": [
               {
@@ -21938,6 +22147,11 @@
             "title": "Embed",
             "type": "string"
           },
+          "host_issuer": {
+            "description": "The product whose users this widget's host tokens name: a host contact is known as that product's user. Widgets of one product share it.",
+            "title": "Host Issuer",
+            "type": "string"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -21983,6 +22197,7 @@
           "answer",
           "looked_after_by",
           "created_at",
+          "host_issuer",
           "embed",
           "page_url",
           "signing_secret"
@@ -22033,6 +22248,11 @@
             "title": "Embed",
             "type": "string"
           },
+          "host_issuer": {
+            "description": "The product whose users this widget's host tokens name: a host contact is known as that product's user. Widgets of one product share it.",
+            "title": "Host Issuer",
+            "type": "string"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -22073,6 +22293,7 @@
           "answer",
           "looked_after_by",
           "created_at",
+          "host_issuer",
           "embed",
           "page_url"
         ],
@@ -32632,6 +32853,100 @@
           "resource": "contact",
           "result": "entity",
           "verb": "export"
+        }
+      }
+    },
+    "/pods/{pod_id}/contacts/{contact_id}/outreach": {
+      "post": {
+        "description": "Write to a contact first, on one of their handles: email any time,\nWhatsApp within 24 hours of their last message there. The line goes in\ntheir channel, at that handle's place -- opened if new -- and is sent from\nthere.",
+        "operationId": "contact.outreach.send",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Contact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutreachRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutreachResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such contact."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "They asked not to be written to there, or the pod has nowhere to write from."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not one of their handles, or not one that may be written to first now."
+          }
+        },
+        "summary": "Send Outreach",
+        "tags": [
+          "Contact Outreach"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "contact.outreach"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "contact.outreach",
+          "result": "entity",
+          "verb": "send"
         }
       }
     },

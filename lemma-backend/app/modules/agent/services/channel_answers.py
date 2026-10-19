@@ -28,7 +28,10 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import channel_conversations
-from app.modules.agent.contracts.run_replies import run_reply_material
+from app.modules.agent.contracts.run_replies import (
+    answer_line_client_id,
+    run_reply_material,
+)
 from app.modules.agent.infrastructure.models import AgentModel
 from app.modules.agent.infrastructure.models.conversation import (
     ConversationModel,
@@ -70,7 +73,7 @@ def turn_client_id(message_id: UUID) -> str:
 
 def answer_client_id(run_id: UUID) -> str:
     """The line a run's answer is, named by the run: a retry is the same line."""
-    return f"run:{run_id}"
+    return answer_line_client_id(run_id)
 
 
 async def answer_line(

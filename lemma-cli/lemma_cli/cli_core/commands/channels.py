@@ -437,6 +437,37 @@ def tell(
     _run(ctx, pod, lambda p: p.channels.notify(to, text))
 
 
+@app.command("outreach")
+def outreach(
+    ctx: typer.Context,
+    contact_id: str = typer.Argument(..., help="The contact's id."),
+    handle: str = typer.Argument(
+        ..., help="One of their handles: an email or a number."
+    ),
+    text: str = typer.Argument(..., help="What to write to them."),
+    kind: str | None = typer.Option(
+        None, "--kind", help="EMAIL, PHONE, ... when the handle could be two."
+    ),
+    client_message_id: str | None = typer.Option(
+        None, "--client-message-id", help="The same id twice is one line."
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Write to a contact first, in their channel: email any time, WhatsApp
+    within 24 hours of their last message, never a handle that said stop."""
+    _run(
+        ctx,
+        pod,
+        lambda p: p.contacts.outreach(
+            contact_id,
+            handle=handle,
+            text=text,
+            kind=kind,
+            client_message_id=client_message_id,
+        ),
+    )
+
+
 # -- sources -------------------------------------------------------------------------
 
 

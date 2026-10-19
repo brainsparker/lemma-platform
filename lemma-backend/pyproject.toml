@@ -10,6 +10,10 @@ dependencies = [
     # web_login scoping; see app/modules/web_login/services/scope.py. Already
     # present transitively -- named here because that module imports it.
     "tldextract>=5.3.2",
+    # E.164 for contact phone numbers (contacts/domain/handles.py), so a number
+    # a member types and the one WhatsApp names are one handle. Already present
+    # transitively -- named here because that module imports it.
+    "phonenumbers>=9.0.37",
     "pydantic>=2.11.9",
     "email-validator>=2.1.0",
     "structlog>=25.4.0",

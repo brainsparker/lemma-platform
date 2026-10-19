@@ -7,6 +7,11 @@ Rendering and attachment handling reuse the shared email modules.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
+from app.modules.contacts.contracts.outreach import (
+    UNSUBSCRIBE_TOKEN_KEY,
+    unsubscribe_headers,
+)
 from app.modules.agent_surfaces.domain.reply_targets import (
     EmailReplyTarget,
     reply_target_as,
@@ -68,6 +73,37 @@ def classify_resend_error(exc: Exception) -> DeliveryClassification:
     if isinstance(exc, httpx.RequestError):
         return DeliveryClassification.TRANSIENT
     return DeliveryClassification.PERMANENT
+
+
+def _idempotency_key(metadata: dict[str, Any] | None) -> str | None:
+    key = (metadata or {}).get(IDEMPOTENCY_KEY)
+    return str(key) if key else None
+
+
+def _unsubscribe_headers(
+    metadata: dict[str, Any] | None, *, mailto: str | None
+) -> dict[str, str]:
+    """``List-Unsubscribe`` and one-click for an email to a contact: the send's
+    metadata carries the token when the contact's rules let it through."""
+    token = (metadata or {}).get(UNSUBSCRIBE_TOKEN_KEY)
+    if not isinstance(token, str) or not token:
+        return {}
+    return unsubscribe_headers(token, mailto=mailto)
+
+
+def _mail_headers(
+    in_reply_to: str | None,
+    references: list[str],
+    extra: dict[str, str] | None,
+) -> dict[str, str]:
+    """The thread's headers, and whatever else the send carries
+    (``List-Unsubscribe`` to a contact)."""
+    headers = dict(extra or {})
+    if in_reply_to:
+        headers["In-Reply-To"] = in_reply_to
+    if references:
+        headers["References"] = " ".join(references)
+    return headers
 
 
 def _resend_retry_after(exc: Exception) -> float | None:
@@ -134,9 +170,11 @@ class ResendPlatformService:
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
+        """Send the reply; Resend's id for the email, which its later bounce
+        report names."""
         target = reply_target_as(event, EmailReplyTarget)
-        await self._send_email(
+        sent = await self._send_email(
             recipient_email=target.recipient_email or "",
             subject=target.subject,
             in_reply_to=target.in_reply_to,
@@ -146,7 +184,11 @@ class ResendPlatformService:
             attachments=list((metadata or {}).get("attachments") or []),
             from_name=self._sender_name(metadata),
             cc=list(target.cc),
+            idempotency_key=_idempotency_key(metadata),
+            extra_headers=_unsubscribe_headers(metadata, mailto=self._from_address),
         )
+        email_id = sent.get("id")
+        return str(email_id) if email_id else None
 
     def _raise_unsendable(self, recipient_email: str) -> None:
         """Say which part is missing, and raise something delivery can catch.
@@ -290,6 +332,7 @@ class ResendPlatformService:
             attachments=[],
             is_reply=False,
             from_name=self._sender_name(metadata),
+            extra_headers=_unsubscribe_headers(metadata, mailto=self._from_address),
         )
         return ColdEmailSendResult(
             external_thread_id=thread_seed_id,
@@ -323,6 +366,8 @@ class ResendPlatformService:
         is_reply: bool = True,
         from_name: str | None = None,
         cc: list[str] | None = None,
+        idempotency_key: str | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         if not recipient_email or not self._api_key or not self._from_address:
             self._raise_unsendable(recipient_email)
@@ -353,11 +398,7 @@ class ResendPlatformService:
             # Reply to all: the thread's other people stay on it, as a person
             # replying would keep them.
             payload["cc"] = cc
-        headers: dict[str, str] = {}
-        if in_reply_to:
-            headers["In-Reply-To"] = in_reply_to
-        if references:
-            headers["References"] = " ".join(references)
+        headers = _mail_headers(in_reply_to, references, extra_headers)
         if headers:
             payload["headers"] = headers
         if attachments:
@@ -372,8 +413,10 @@ class ResendPlatformService:
         await assert_safe_api_base(self._api_base, platform="Resend")
         # One key for every attempt of this send. A retry after a timeout may be
         # retrying a request Resend already accepted, and without the key that
-        # is a second email; with it Resend returns the first one's result.
-        idempotency_key = str(uuid4())
+        # is a second email; with it Resend returns the first one's result. A
+        # caller sending a delivery passes its own, so the delivery's later
+        # tries are the same email too.
+        idempotency_key = idempotency_key or str(uuid4())
 
         async def post_email_once() -> dict[str, Any]:
             async with outbound_http(_SEND_TIMEOUT) as client:

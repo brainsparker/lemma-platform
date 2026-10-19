@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 from app.modules.agent_surfaces.domain.reply_targets import (
     WhatsAppReplyTarget,
     reply_target_as,
@@ -34,7 +32,6 @@ from app.modules.agent_surfaces.platforms.whatsapp import media
 from app.modules.agent_surfaces.platforms.whatsapp.indicators import (
     acknowledge_inbound,
 )
-from app.modules.agent_surfaces.platforms.whatsapp.sent_messages import remember_sent
 from app.core.config import reveal_secret
 from app.modules.agent_surfaces.domain.credentials import (
     CredentialsLike,
@@ -128,7 +125,9 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
+        """Send the message; the id of its first part, which is what Meta's
+        later status report about it names."""
         phone_number_id = self._arrival_number(event)
         recipient = recipient_of(event)
         if recipient is None or not phone_number_id or not self._access_token:
@@ -144,12 +143,12 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
         bodies = whatsapp_message_bodies(message)
         interactive = _interactive_reply(event, message, bodies, metadata, recipient)
         if interactive is not None:
-            await self._client.send_interactive(
+            return await self._client.send_interactive(
                 phone_number_id=phone_number_id,
                 to=recipient.to,
                 interactive=interactive,
             )
-            return
+        first: str | None = None
         for index, body in enumerate(bodies):
             try:
                 message_id = await self._client.send_message_payload(
@@ -162,7 +161,7 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
                         "text": {"body": body},
                     },
                 )
-                await remember_sent(_line_carried(metadata), message_id)
+                first = first or message_id
             except platform_transport_errors():
                 if index:
                     # The person already has the first part. The caller sees
@@ -177,6 +176,7 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
                         exc_info=True,
                     )
                 raise
+        return first
 
     async def acknowledge_interaction(
         self,
@@ -381,9 +381,3 @@ def _interactive_reply(
     if event.is_dm and flow and not recipient.is_group:
         return flow_with_message(flow, message)
     return retry_notice_interactive(bodies, metadata, recipient)
-
-
-def _line_carried(metadata: Mapping[str, object] | None) -> object:
-    """The channel line a send carried -- a push's or a place's -- if any."""
-    meta = metadata or {}
-    return meta.get("notification_id") or meta.get("channel_message_id")

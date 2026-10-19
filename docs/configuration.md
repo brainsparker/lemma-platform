@@ -1079,6 +1079,7 @@ authoritative answer for anything this document does not name.
 | Agents | `lemma-backend/app/modules/agent/config.py` |
 | Chat surfaces | `lemma-backend/app/modules/agent_surfaces/config.py` |
 | Connectors | `lemma-backend/app/modules/connectors/config.py` |
+| Contacts: phone region, daily lines to a contact | `lemma-backend/app/modules/contacts/config.py` |
 | Datastore and document processing | `lemma-backend/app/modules/datastore/config.py` |
 | Pod bundles | `lemma-backend/app/modules/pod_bundle/config.py` |
 | Apps, icons, schedules | `app/modules/{apps,icon,schedule}/config.py` |

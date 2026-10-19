@@ -79,6 +79,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PATCH | `/pods/{pod_id}/sources/{source_id}` | `agent.source.update` | Update Source |
 | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.update` | Update Surface |
 | PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.update` | Update Widget |
+| POST | `/pods/{pod_id}/contacts/{contact_id}/outreach` | `contact.outreach.send` | Send Outreach |
 | POST | `/pods/{pod_id}/notices` | `agent.notice.send` | Send Notice |
 | POST | `/pods/{pod_id}/sources/telegram-links` | `agent.source.telegram_link.create` | Telegram Link |
 | POST | `/pods/{pod_id}/sources/whatsapp-groups` | `agent.source.whatsapp_group.start` | Start Whatsapp Group |

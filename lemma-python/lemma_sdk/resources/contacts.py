@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from ..openapi_client.api.contact_outreach import contact_outreach_send
 from ..openapi_client.api.contacts import (
     contact_delete,
     contact_export,
@@ -13,6 +14,8 @@ from ..openapi_client.models.contact_export_response import ContactExportRespons
 from ..openapi_client.models.contact_list_response import ContactListResponse
 from ..openapi_client.models.contact_response import ContactResponse
 from ..openapi_client.models.contact_update_request import ContactUpdateRequest
+from ..openapi_client.models.outreach_request import OutreachRequest
+from ..openapi_client.models.outreach_response import OutreachResponse
 from ..openapi_client.types import UNSET
 from .base import BoundResource, as_uuid
 
@@ -56,6 +59,37 @@ class PodContacts(BoundResource):
             as_uuid(contact_id),
             body={"display_name": display_name},
             body_model=ContactUpdateRequest,
+        )
+
+    def outreach(
+        self,
+        contact_id: str | UUID,
+        *,
+        handle: str,
+        text: str,
+        kind: str | None = None,
+        client_message_id: str | None = None,
+    ) -> OutreachResponse:
+        """Write to a contact first, on one of their handles.
+
+        Email any time; WhatsApp only within 24 hours of their last message
+        there; never a handle that asked the pod to stop. The line goes in the
+        contact's channel at that handle's place -- opened if new -- and is
+        sent from there: the response is the line and its delivery, ``PENDING``
+        until it goes. ``kind`` (``EMAIL``, ``PHONE``, ...) only when the value
+        could name two handles; the same ``client_message_id`` twice is one line.
+        """
+        body: dict[str, object] = {"handle": handle, "text": text}
+        if kind is not None:
+            body["kind"] = kind
+        if client_message_id is not None:
+            body["client_message_id"] = client_message_id
+        return self._call(
+            contact_outreach_send,
+            self._pod_uuid(),
+            as_uuid(contact_id),
+            body=body,
+            body_model=OutreachRequest,
         )
 
     def export(

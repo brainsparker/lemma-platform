@@ -49,7 +49,7 @@ def _event(
             SurfacePlatform.WHATSAPP,
             "+44 7700 900123",
             IdentityKind.PHONE,
-            "447700900123",
+            "+447700900123",
         ),
         (SurfacePlatform.TELEGRAM, None, IdentityKind.TELEGRAM, "U777"),
     ],

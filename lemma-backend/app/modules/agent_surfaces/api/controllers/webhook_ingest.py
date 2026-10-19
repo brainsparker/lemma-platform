@@ -49,6 +49,10 @@ from app.modules.agent_surfaces.platforms.resend.inbound import (
 from app.modules.agent_surfaces.domain.source_event_ids import (
     resend_webhook_source_event_id,
 )
+from app.modules.agent_surfaces.services.email_delivery_status import (
+    apply_email_event,
+    is_delivery_event,
+)
 from app.modules.agent_surfaces.services.resend_recipients import (
     surface_for_recipients,
 )
@@ -230,6 +234,13 @@ async def _handle_resend_webhook(
     # Authenticate the Svix signature over the raw body BEFORE trusting any
     # of it (Resend does not go through assert_platform_request_allowed).
     await security_service.verify_resend_request(headers=headers, raw_body=raw_body)
+    if is_delivery_event(payload):
+        # A bounce, a complaint, a failed send: about mail the pod sent, so
+        # there is nobody to route it to -- it is recorded on its delivery.
+        async with uow_scope(uow_factory) as uow:
+            known = await apply_email_event(uow, payload)
+            await uow.commit()
+        return {"message": "Recorded" if known else "Ignored: nothing to record"}
     normalized = _normalize_resend_inbound(payload)
     recipients = normalized.get("recipients") or []
     if not recipients:

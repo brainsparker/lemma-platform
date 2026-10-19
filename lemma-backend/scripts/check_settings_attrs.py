@@ -86,6 +86,7 @@ SETTINGS_SOURCES = {
     "app.modules.agent_surfaces.config": ("surface_settings",),
     "app.modules.apps.config": ("apps_settings",),
     "app.modules.connectors.config": ("connector_settings",),
+    "app.modules.contacts.config": ("contacts_settings",),
     "app.modules.datastore.config": ("datastore_settings",),
     "app.modules.decisions.config": ("decisions_settings",),
     "app.modules.function.config": ("function_settings", "revision_settings"),

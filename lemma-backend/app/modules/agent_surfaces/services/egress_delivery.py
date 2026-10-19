@@ -55,11 +55,6 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 from app.modules.agent_surfaces.services.free_text_answer import (
     remember_a_prompt_that_arrived_as_words,
 )
-from app.modules.agent_surfaces.services.channel_lines import (
-    ALREADY_A_LINE,
-    ChannelLines,
-    ChannelLinesInDatabase,
-)
 from app.modules.agent_surfaces.services.group_names import sender_name_for
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 from app.modules.channels.contracts import Source, SourceKind
@@ -88,7 +83,6 @@ class SurfaceDelivery:
         surface_repository: SurfaceInstallationRepositoryPort,
         adapter_registry: SurfacePlatformAdapterRegistry,
         credential_resolver: SurfaceCredentialResolver,
-        channel_lines: ChannelLines | None = None,
         seats: ChannelSeats | None = None,
     ) -> None:
         # Every one of these is required, and `uow` most of all. The service
@@ -100,7 +94,6 @@ class SurfaceDelivery:
         self.surface_repository = surface_repository
         self.adapter_registry = adapter_registry
         self.credential_resolver = credential_resolver
-        self.channel_lines = channel_lines or ChannelLinesInDatabase(uow)
         self.seats = seats or ChannelSeatsInDatabase(uow)
 
     async def egress_credentials(
@@ -131,20 +124,6 @@ class SurfaceDelivery:
         itself is `agent_naming`, shared with routing.
         """
         return await agent_name_for_surface(self.uow, surface)
-
-    async def note_shown(self, conversation_id: UUID, *, text: str) -> None:
-        """An answer the person already sees -- a live message finished in
-        place, sent by no envelope -- as its line in the channel."""
-        if not text.strip():
-            return
-        target = await self.resolve_egress_target(conversation_id)
-        if target is None:
-            return
-        await self.channel_lines.said(
-            target=target,
-            conversation_id=conversation_id,
-            text=text,
-        )
 
     async def resolve_egress_target(
         self, conversation_id: UUID, *, at: Source | None = None
@@ -468,12 +447,4 @@ class SurfaceDelivery:
             envelope=envelope,
             receipt=receipt,
         )
-        if envelope.text and not metadata.get(ALREADY_A_LINE):
-            name = metadata.get("agent_display_name")
-            await self.channel_lines.said(
-                target=target,
-                conversation_id=conversation_id,
-                text=envelope.text,
-                agent_display_name=name if isinstance(name, str) else None,
-            )
         return receipt

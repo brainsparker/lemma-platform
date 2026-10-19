@@ -419,6 +419,11 @@ class ChannelMessageDeliveryModel(UUIDAuditBase):
     next_attempt_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: Set while a sender holds it, cleared with the outcome: a claim that
+    #: lapsed with this still set is a send nobody finished.
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

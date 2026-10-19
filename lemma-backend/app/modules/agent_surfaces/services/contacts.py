@@ -23,8 +23,15 @@ looks after contacts is told, and may answer by hand if it is genuine. **Mail a
 machine sent** -- an out-of-office, a bounce, a list, one of our own bots -- is
 not answered either, nor parked: answering it is how two robots loop.
 
-**"STOP"** from a contact unsubscribes the handle it came from and starts
-nothing, rather than counting as the contact writing again (which opts back in).
+**What a person says about hearing from the pod** is read first, before
+anything decides whether they are answered (``preferences``): whoever looks
+after contacts, whether the bot answers them at all, whether they are a
+contact yet. "STOP" -- or an email whose subject is "unsubscribe", which is
+what a mail client's unsubscribe button sends -- opts the handle out
+(``contacts.contracts.outreach``) and starts nothing, even from a machine:
+opting out is never the wrong way to fail. A message the person typed opts
+them back in, "START" explicitly; one a machine sent (an out-of-office, a
+bounce) or one nothing vouched for (unauthenticated mail) never does.
 """
 
 from __future__ import annotations
@@ -68,10 +75,15 @@ from app.modules.contacts.contracts import (
     ContactRef,
     IdentityStrength,
     find_contact,
-    is_stop_request,
     note_inbound,
     open_contact,
-    unsubscribe_by_handle,
+)
+from app.modules.contacts.contracts.outreach import (
+    SuppressionReason,
+    heard_from,
+    is_start_request,
+    is_stop_request,
+    opt_out,
 )
 from app.modules.pod.contracts.members import pod_member_id
 
@@ -120,6 +132,16 @@ def machine_mail(
     if domain and sender.endswith(f"@{domain}"):
         return "our_own_address"
     return None
+
+
+def _asks_to_stop(parsed: ParsedInboundSurfaceEvent) -> bool:
+    """A whole message asking to stop, or an email whose whole subject does:
+    what a mail client sends to a ``List-Unsubscribe`` mailto, with a body of
+    its own words."""
+    if is_stop_request(parsed.message_text):
+        return True
+    subject = parsed.metadata.get("subject") if parsed.platform.is_email else None
+    return isinstance(subject, str) and is_stop_request(subject)
 
 
 def _our_addresses(surface: AgentSurfaceEntity) -> set[str]:
@@ -194,6 +216,46 @@ class ContactDoor:
         self.limiter = limiter or ContactTurnLimiter()
         self.windows = windows or ContactWindows()
 
+    async def preferences(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        sender: ResolvedSurfaceUser,
+    ) -> bool:
+        """Record what an outsider's private message says about hearing from
+        the pod; whether that is all it said (STOP, START), and nothing runs.
+
+        Asked of every private message to the pod's own bot from somebody not
+        in the pod, before anything else about them: an opt-out holds with
+        nobody looking after contacts, and for a handle no contact has yet.
+        """
+        handle = private_handle(parsed)
+        if not parsed.is_dm or handle is None or not is_pods_own_bot(surface):
+            return False
+        if sender.internal_user_id is not None and await self._in_pod(
+            sender.internal_user_id, surface.pod_id
+        ):
+            return False
+        if _asks_to_stop(parsed):
+            await self._stop(surface, handle)
+            return True
+        typed = handle.vouched_for and machine_mail(surface, parsed) is None
+        lifted = await heard_from(
+            self.uow,
+            pod_id=surface.pod_id,
+            kind=handle.kind,
+            value=handle.value,
+            typed=typed,
+        )
+        if lifted:
+            logger.info(
+                "agent_surfaces.contacts.opted_back_in.observed",
+                surface_id=str(surface.id),
+                explicitly=is_start_request(parsed.message_text),
+            )
+        return is_start_request(parsed.message_text)
+
     async def applies(
         self,
         *,
@@ -258,14 +320,13 @@ class ContactDoor:
             )
             await self._park(surface=surface, parsed=parsed, owner=owner)
             return None
-        if is_stop_request(parsed.message_text):
-            await self._stop(surface, handle)
-            return None
         contact = await self._contact(surface=surface, handle=handle, parsed=parsed)
         if contact is None:
             return await self._refusal(surface, parsed, handle, route)
         if not await self.limiter.allow(surface_id=surface.id, contact_id=contact.id):
             return None
+        # Stamped again now that they are a contact: a stranger's first message
+        # had no handle row for ``preferences`` to stamp.
         await note_inbound(
             self.uow, pod_id=surface.pod_id, kind=handle.kind, value=handle.value
         )
@@ -334,13 +395,17 @@ class ContactDoor:
         return pod_id in set(await self.membership.get_user_pod_ids(user_id))
 
     async def _stop(self, surface: AgentSurfaceEntity, handle: SenderHandle) -> None:
-        known = await unsubscribe_by_handle(
-            self.uow, pod_id=surface.pod_id, kind=handle.kind, value=handle.value
+        newly = await opt_out(
+            self.uow,
+            pod_id=surface.pod_id,
+            kind=handle.kind,
+            value=handle.value,
+            reason=SuppressionReason.STOP,
         )
         logger.info(
-            "agent_surfaces.contacts.unsubscribed_by_message.observed",
+            "agent_surfaces.contacts.opted_out_by_message.observed",
             surface_id=str(surface.id),
-            known=known,
+            newly=newly,
         )
 
     async def _contact(

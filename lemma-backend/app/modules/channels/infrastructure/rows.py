@@ -77,6 +77,7 @@ def channel_entity(row: ChannelModel) -> Channel:
         status=ContactStatus(row.status),
         attention_at=row.attention_at,
         attention_reason=row.attention_reason,
+        acknowledged_at=row.acknowledged_at,
         last_seq=row.last_seq,
         last_line_id=row.last_line_id,
         last_line_at=row.last_line_at,
@@ -211,6 +212,7 @@ def delivery_entity(row: ChannelMessageDeliveryModel) -> Delivery:
         external_message_id=row.external_message_id,
         attempts=row.attempts,
         next_attempt_at=row.next_attempt_at,
+        claimed_at=row.claimed_at,
         sent_at=row.sent_at,
         created_at=row.created_at,
     )

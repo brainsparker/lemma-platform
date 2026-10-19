@@ -57,6 +57,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, PartDelivery
 from app.modules.agent_surfaces.domain.models import ColdEmailSendResult
 from app.modules.agent_surfaces.services.cold_email_thread import (
     build_cold_email_thread,
@@ -257,11 +258,13 @@ class RecordingEgress:
     async def agent_name_for_surface(self, surface):
         return self.agent_side.name_for(surface.agent_id)
 
-    async def send_agent_message_for_conversation(
+    async def deliver_message(
         self, *, conversation_id, message, metadata=None, at=None
     ):
         self.sent.append((conversation_id, message))
-        return True
+        return DeliveryReceipt(
+            parts={"text": PartDelivery.NATIVE}, external_message_id="chat-1"
+        )
 
     async def open_cold_email_thread(
         self, *, surface, recipient_email, subject, message, thread_seed_id, metadata

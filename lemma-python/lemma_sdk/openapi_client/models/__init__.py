@@ -406,6 +406,10 @@ _NAME_TO_MODULE = {
     'OrganizationRole': 'organization_role',
     'OrganizationSlugAvailabilityResponse': 'organization_slug_availability_response',
     'OrganizationUpdateRequest': 'organization_update_request',
+    'OutreachDelivery': 'outreach_delivery',
+    'OutreachLine': 'outreach_line',
+    'OutreachRequest': 'outreach_request',
+    'OutreachResponse': 'outreach_response',
     'PartialApplyResponse': 'partial_apply_response',
     'PendingInteractionKind': 'pending_interaction_kind',
     'PendingInteractionListResponse': 'pending_interaction_list_response',
@@ -415,6 +419,7 @@ _NAME_TO_MODULE = {
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
     'PodConfig': 'pod_config',
+    'PodContactSettings': 'pod_contact_settings',
     'PodCreateRequest': 'pod_create_request',
     'PodEffectivePermissionsResponse': 'pod_effective_permissions_response',
     'PodJoinPolicy': 'pod_join_policy',
@@ -1085,6 +1090,10 @@ if TYPE_CHECKING:
     from .organization_role import OrganizationRole
     from .organization_slug_availability_response import OrganizationSlugAvailabilityResponse
     from .organization_update_request import OrganizationUpdateRequest
+    from .outreach_delivery import OutreachDelivery
+    from .outreach_line import OutreachLine
+    from .outreach_request import OutreachRequest
+    from .outreach_response import OutreachResponse
     from .partial_apply_response import PartialApplyResponse
     from .pending_interaction_kind import PendingInteractionKind
     from .pending_interaction_list_response import PendingInteractionListResponse
@@ -1094,6 +1103,7 @@ if TYPE_CHECKING:
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
     from .pod_config import PodConfig
+    from .pod_contact_settings import PodContactSettings
     from .pod_create_request import PodCreateRequest
     from .pod_effective_permissions_response import PodEffectivePermissionsResponse
     from .pod_join_policy import PodJoinPolicy
@@ -1777,6 +1787,10 @@ __all__ = [
     'OrganizationRole',
     'OrganizationSlugAvailabilityResponse',
     'OrganizationUpdateRequest',
+    'OutreachDelivery',
+    'OutreachLine',
+    'OutreachRequest',
+    'OutreachResponse',
     'PartialApplyResponse',
     'PendingInteractionKind',
     'PendingInteractionListResponse',
@@ -1786,6 +1800,7 @@ __all__ = [
     'PlanStepResponse',
     'PlanStepResponseDetail',
     'PodConfig',
+    'PodContactSettings',
     'PodCreateRequest',
     'PodEffectivePermissionsResponse',
     'PodJoinPolicy',

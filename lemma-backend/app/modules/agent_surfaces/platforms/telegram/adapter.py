@@ -186,8 +186,8 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await TelegramPlatformService(credentials).send_message(
+    ) -> str | None:
+        return await TelegramPlatformService(credentials).send_message(
             event, message, metadata
         )
 

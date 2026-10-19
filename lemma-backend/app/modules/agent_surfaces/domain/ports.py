@@ -11,6 +11,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
 from app.modules.identity.contracts import UserPreferences
 
 if TYPE_CHECKING:
@@ -251,14 +252,14 @@ class SurfaceNotificationEgressPort(Protocol):
         self, surface: AgentSurfaceEntity
     ) -> str | None: ...
 
-    async def send_agent_message_for_conversation(
+    async def deliver_message(
         self,
         *,
         conversation_id: UUID,
         message: str,
         metadata: dict[str, Any] | None = None,
         at: Source | None = None,
-    ) -> bool: ...
+    ) -> DeliveryReceipt | None: ...
 
     async def open_cold_email_thread(
         self,

@@ -1,5 +1,12 @@
 """How a contact stops a pod's email: the signed link every email to them
-carries, and the page it opens."""
+carries, the page it opens, and the one-click ``POST`` a mail client sends for
+the ``List-Unsubscribe`` header (RFC 8058).
+
+The link is a ``GET`` that only asks: mail scanners follow every link in a
+message, and an unsubscribe on ``GET`` would unsubscribe whoever's mail they
+scanned. The ``POST`` -- the page's button, or the client's one-click with
+``List-Unsubscribe=One-Click`` in its body and the token in the URL -- does it.
+What it records is ``contacts``': an opt-out kept by the handle's hash."""
 
 from __future__ import annotations
 
@@ -10,8 +17,10 @@ from fastapi.responses import HTMLResponse
 
 from app.core.api.dependencies import get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent_surfaces.services.contact_rules import handle_for_unsubscribe
-from app.modules.contacts.contracts import unsubscribe_handle
+from app.modules.contacts.contracts.outreach import (
+    opt_out_by_token,
+    read_unsubscribe_token,
+)
 
 public_router = APIRouter(prefix="/public/contacts", tags=["Contacts"])
 
@@ -34,7 +43,7 @@ def _page(heading: str, body: str, form: str = "") -> HTMLResponse:
     include_in_schema=False,
 )
 async def unsubscribe_page(token: str = Query(max_length=256)) -> HTMLResponse:
-    if handle_for_unsubscribe(token) is None:
+    if read_unsubscribe_token(token) is None:
         return _page("This link doesn't work", "It may have been copied incompletely.")
     return _page(
         "Stop these emails?",
@@ -52,14 +61,15 @@ async def unsubscribe_page(token: str = Query(max_length=256)) -> HTMLResponse:
     include_in_schema=False,
 )
 async def unsubscribe(
-    token: str = Form(max_length=256),
+    token: str | None = Form(default=None, max_length=256),
+    query_token: str | None = Query(default=None, alias="token", max_length=256),
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> HTMLResponse:
-    handle_id = handle_for_unsubscribe(token)
-    if handle_id is None:
+    target = read_unsubscribe_token(token or query_token or "")
+    if target is None:
         return _page("This link doesn't work", "It may have been copied incompletely.")
     async with uow_factory() as uow:
-        await unsubscribe_handle(uow, handle_id=handle_id)
+        await opt_out_by_token(uow, target)
         await uow.commit()
     return _page("You're unsubscribed", "You won't get emails like this again.")
 

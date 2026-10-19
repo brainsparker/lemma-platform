@@ -7,7 +7,8 @@ Two ways, both on the contact's channel (``channels``):
   until somebody turns them back on.
 * **A member stepped in** by writing to the contact: they are its assignee.
   Their agent stays quiet while the member is in the conversation. An
-  assignee who has not written in ``hand_back_after_hours`` has let go: the
+  assignee who has not written in ``hand_back_after_hours`` -- counted from
+  being assigned, until they first write -- has let go: the
   contact's next message is the agent's again, and the member is told.
 
 Turning the agents on is also how a member hands a contact back at once.
@@ -58,7 +59,9 @@ async def held_by_a_member(
     member = channel.assignee_user_id
     if member is None:
         return None
-    last = channel.assignee_last_line_at
+    # From their last line there, or from being assigned if they have not
+    # written yet: a member just handed a contact has the whole window.
+    last = channel.assignee_last_line_at or channel.assigned_at
     window = timedelta(hours=channel.hand_back_after_hours)
     if last is not None and (now or datetime.now(timezone.utc)) - last < window:
         return MemberHold.STEPPED_IN

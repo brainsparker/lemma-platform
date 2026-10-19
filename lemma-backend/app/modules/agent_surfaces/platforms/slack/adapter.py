@@ -89,8 +89,8 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await self._service(credentials).send_message(
+    ) -> str | None:
+        return await self._service(credentials).send_message(
             event=event,
             message=message,
             metadata=metadata,

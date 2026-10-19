@@ -57,7 +57,11 @@ async def forget_contact_senders(
         result = await uow.session.execute(
             delete(AgentSurfaceExternalUser).where(
                 AgentSurfaceExternalUser.platform == platform,
-                AgentSurfaceExternalUser.external_user_id == value,
+                # A number is E.164 in contacts and bare digits as WhatsApp
+                # names its sender (``wa_id``).
+                AgentSurfaceExternalUser.external_user_id.in_(
+                    {value, value.removeprefix("+")}
+                ),
                 AgentSurfaceExternalUser.resolved_user_id.is_(None),
             )
         )

@@ -21,11 +21,17 @@ class Recorder:
         return call
 
 
-def _client(channels_fake: Recorder, sources_fake: Recorder | None = None):
+def _client(
+    channels_fake: Recorder,
+    sources_fake: Recorder | None = None,
+    contacts_fake: Recorder | None = None,
+):
     class FakeClient:
         def pod(self, pod_id):
             return SimpleNamespace(
-                channels=channels_fake, sources=sources_fake or Recorder()
+                channels=channels_fake,
+                sources=sources_fake or Recorder(),
+                contacts=contacts_fake or Recorder(),
             )
 
     return FakeClient()
@@ -244,3 +250,38 @@ def test_leaving_needs_only_the_channel(runner, patch_run, json_state):
 
     assert result.exit_code == 0, result.stderr
     assert fake.calls == [("leave", ("ch-1",), {})]
+
+
+def test_outreach_writes_to_a_contact_on_the_named_handle(
+    runner, patch_run, json_state
+):
+    contacts_fake = Recorder()
+    patch_run(
+        channels,
+        client=_client(Recorder(), contacts_fake=contacts_fake),
+        state=json_state,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "channels",
+            "outreach",
+            "c-1",
+            "ana@example.com",
+            "Your order shipped.",
+            "--client-message-id",
+            "k1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    [(name, args, kwargs)] = contacts_fake.calls
+    assert (name, args) == ("outreach", ("c-1",))
+    assert kwargs == {
+        "handle": "ana@example.com",
+        "text": "Your order shipped.",
+        "kind": None,
+        "client_message_id": "k1",
+    }

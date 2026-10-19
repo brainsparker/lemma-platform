@@ -61,6 +61,10 @@ from app.modules.agent_surfaces.domain.models import (
 Payload = dict[str, Any]
 OutboundMetadata = dict[str, Any]
 
+#: Outbound metadata naming the send, for a platform that dedupes on a key
+#: (Resend): every try of one delivery is then the same message.
+IDEMPOTENCY_KEY = "idempotency_key"
+
 
 class InboundParser(Protocol):
     """Reading a platform's payload into the module's events. No I/O."""
@@ -191,9 +195,11 @@ class OutboundDelivery(Protocol):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: OutboundMetadata | None = None,
-    ) -> None:
+    ) -> str | None:
         """The text primitive `deliver` degrades onto, and the only way to say
-        something before a conversation exists."""
+        something before a conversation exists. The platform's id for what it
+        sent (the first message of a long one), when it names one: what a
+        later status report about it, or a reply in its thread, refers to."""
         ...
 
     async def add_processing_indicator(

@@ -14,7 +14,9 @@ surface asks first, before any run starts, and when the cap is reached:
 A member can also answer a contact by hand, whatever the cap
 (``contact_hold``): while the contact's channel has its agents off, or a member
 has stepped in there, no run starts for them either -- and they are not told
-"a person will reply", since one is, or has chosen to.
+"a person will reply" here, since one is, or has chosen to. With the agents
+off the pod's own acknowledgement may be said instead, once per open period
+(``contact_acknowledgement``).
 
 Used by every place a run for somebody outside the pod starts: the chat and
 email surfaces (``SurfaceTurnStarter``) and web chat. All of it is in the
@@ -34,6 +36,9 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent.contracts.contact_conversations import hold_outside_turn
 from app.modules.agent.contracts import channel_conversations
+from app.modules.agent_surfaces.services.contact_acknowledgement import (
+    acknowledge_contact,
+)
 from app.modules.agent_surfaces.services.direct_messages import tell_member
 from app.modules.agent_surfaces.services.contact_windows import ContactWindows
 from app.modules.agent_surfaces.services.contact_hold import (
@@ -224,13 +229,24 @@ async def _keep_for_a_member(
 ) -> None:
     """Their message, kept for the member answering them by hand.
 
-    Nothing is said to the contact: a member is answering them, or has chosen
-    to. A member who stepped in reads it in the channel they are writing in;
-    with the agents off, the channel asks for a reply and the member who looks
-    after them is told, once a day.
+    A member who stepped in reads it in the channel they are writing in, and
+    nothing is said to the contact: a member is answering them. With the
+    agents off, the channel asks for a reply, the member who looks after them
+    is told once a day, and the contact is told -- once until a member writes
+    -- what the pod set to say then, if it set anything
+    (``contact_acknowledgement``).
     """
+    acknowledged = (
+        await acknowledge_contact(uow, pod_id=pod_id, conversation_id=conversation_id)
+        if hold is MemberHold.AGENTS_OFF
+        else None
+    )
     await hold_outside_turn(
-        uow, conversation_id=conversation_id, text=text, metadata=metadata, reply=None
+        uow,
+        conversation_id=conversation_id,
+        text=text,
+        metadata=metadata,
+        reply=acknowledged,
     )
     if hold is MemberHold.STEPPED_IN:
         return

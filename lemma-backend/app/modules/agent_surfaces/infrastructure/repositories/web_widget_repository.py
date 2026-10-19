@@ -40,6 +40,7 @@ def _widget(row: WebWidgetModel) -> WebWidget:
         answer=WidgetAnswer(row.answer),
         looked_after_by=row.looked_after_by,
         created_at=row.created_at,
+        host_issuer=row.host_issuer,
     )
 
 
@@ -60,6 +61,7 @@ class WebWidgetRepository:
         allowed_origins: list[str],
         answer: WidgetAnswer,
         looked_after_by: UUID | None,
+        host_issuer: str,
     ) -> WebWidget:
         """The new widget. Raises ``WidgetNameTaken`` for a name the pod has.
 
@@ -75,6 +77,7 @@ class WebWidgetRepository:
             allowed_origins=allowed_origins,
             answer=answer.value,
             looked_after_by=looked_after_by,
+            host_issuer=host_issuer,
         )
         try:
             async with self.session.begin_nested():

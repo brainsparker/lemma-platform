@@ -21,6 +21,7 @@ from app.modules.agent_surfaces.services.notification_delivery import (
     Delivered,
     DeliveryChannel,
     Outbound,
+    PlatformSent,
     UndeliverableReason,
 )
 from app.modules.agent_surfaces.services.notification_egress import NotificationEgress
@@ -51,7 +52,7 @@ async def send_on_first_channel(
     outage = False
     for channel in channels:
         conversation_id: UUID | None = None
-        sent = False
+        sent: PlatformSent | None = None
         try:
             refusal = await _email_budget_refusal(channel, outbound, email_budget)
             if refusal is not None:
@@ -74,7 +75,7 @@ async def send_on_first_channel(
                 message=message,
                 agent_name=agent_name,
             )
-            if not sent:
+            if sent is None:
                 last_error = (
                     UndeliverableReason.COLD_OPEN_UNSUPPORTED
                     if channel.source is None
@@ -92,9 +93,11 @@ async def send_on_first_channel(
                 error=str(exc),
             )
         else:
-            if sent and conversation_id is not None:
+            if sent is not None and conversation_id is not None:
                 return Delivered(
-                    platform=channel.platform.value, conversation_id=conversation_id
+                    platform=channel.platform.value,
+                    conversation_id=conversation_id,
+                    external_message_id=sent.external_message_id,
                 )
     return Delivered(
         reason=last_error or "No channel accepted the message.", retryable=outage

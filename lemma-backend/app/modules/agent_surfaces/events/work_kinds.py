@@ -16,7 +16,7 @@ from uuid import UUID
 SURFACE_INGEST: Final = "surface.ingest"
 #: Sends one ``surface_deliveries`` row to its platform.
 SURFACE_REPLY: Final = "surface.reply"
-#: Writes the delivery row for a finished run's answer (an ``AgentRunFinished`` subscriber).
+#: Posts a finished run's answer as a line with a delivery (an ``AgentRunFinished`` subscriber).
 SURFACE_REPLY_FOR_RUN: Final = "surface.reply_for_run"
 #: Sends one channel delivery: a line to a place, or a push to a member.
 SURFACE_CHANNEL_DELIVERY: Final = "surface.channel_delivery"

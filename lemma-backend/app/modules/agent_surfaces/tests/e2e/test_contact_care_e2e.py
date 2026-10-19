@@ -45,7 +45,7 @@ from app.modules.agent_surfaces.composition import (
     build_surface_ingress,
     build_surface_turn_starter,
 )
-from app.modules.agent_surfaces.config import surface_settings
+from app.modules.contacts.config import contacts_settings
 from app.modules.agent.tools.messaging.people import call_a_person_in
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -76,8 +76,10 @@ from app.modules.agent_surfaces.tests.e2e.test_email_contacts_e2e import (
     _email_bot,
 )
 from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
+from app.modules.contacts.domain.handles import handle_hash
 from app.modules.contacts.infrastructure.models import (
     ContactIdentityModel,
+    ContactSuppressionModel,
     ContactModel,
 )
 from app.modules.datastore.contracts import contact_rows
@@ -885,8 +887,10 @@ async def test_writing_to_a_contact_takes_an_editor_and_a_daily_limit(
     assert refused.status_code == 404, refused.text
 
     monkeypatch.setattr(
-        surface_settings, "surface_contact_follow_ups_per_contact_per_day", 1
+        contacts_settings, "contacts_member_lines_per_contact_per_day", 1
     )
+    # The agent's answer to her rides its own delivery: let it go first.
+    await send_deliveries()
     sent_before = len(message_store.get_all("RESEND"))
     written = await member_writes(
         authenticated_client, pod_id, channel, "Your order shipped today."
@@ -1033,7 +1037,17 @@ async def test_stop_unsubscribes_the_address_it_came_from(
             ContactIdentityModel.contact_id == UUID(dana)
         )
     )
-    assert identity is not None and identity.unsubscribed_at is not None
+    assert identity is not None
+    assert (
+        await db_session.scalar(
+            select(ContactSuppressionModel.reason).where(
+                ContactSuppressionModel.pod_id == UUID(pod_id),
+                ContactSuppressionModel.value_hash
+                == handle_hash(IdentityKind.EMAIL, identity.value),
+            )
+        )
+        == "stop"
+    )
     # A member's line to her afterwards stays in Lemma, recorded as not sent.
     sent_before = len(message_store.get_all("RESEND"))
     channel = await contact_channel_id(authenticated_client, pod_id, dana)

@@ -36,7 +36,13 @@ from app.modules.channels.domain.entities import (
     SourceKind,
     Visibility,
 )
-from app.modules.channels.domain.parts import FilePart, LinkPart, MentionPart, Part
+from app.modules.channels.domain.parts import (
+    MAX_PARTS,
+    FilePart,
+    LinkPart,
+    MentionPart,
+    Part,
+)
 from app.modules.channels.domain.projection import (
     Reader,
     may_read,
@@ -45,6 +51,7 @@ from app.modules.channels.domain.projection import (
 )
 from app.modules.channels.infrastructure.lines import LineRepository, NewLine
 from app.modules.channels.infrastructure.members import MemberRepository
+from app.modules.channels.infrastructure.names import Names
 from app.modules.channels.infrastructure.questions import NewQuestion
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.source_repository import SourceRepository
@@ -61,9 +68,16 @@ from app.modules.channels.services.places import (
     MembersHome,
     Place,
 )
+from app.modules.channels.services.messages import (
+    LineRefused,
+    MemberLines,
+    MemberPost,
+    Naming,
+)
 from app.modules.channels.services.posting import ChannelNotFound, Post, Timeline
 
 __all__ = [
+    "MAX_PARTS",
     "AgentAnswers",
     "Channel",
     "ChannelKind",
@@ -77,6 +91,7 @@ __all__ = [
     "FilePart",
     "GroupHome",
     "Home",
+    "LineRefused",
     "LinkPart",
     "Member",
     "MemberRole",
@@ -110,6 +125,10 @@ __all__ = [
     "may_read",
     "may_see",
     "member_of",
+    "acknowledge",
+    "agent_names",
+    "named_in",
+    "names_of",
     "post",
     "readable",
     "source_by_id",
@@ -117,6 +136,7 @@ __all__ = [
     "sources_of",
     "speakers_in",
     "withheld_from",
+    "write_as_member",
 ]
 
 
@@ -205,6 +225,58 @@ async def post(
     )
 
 
+async def named_in(
+    uow: SqlAlchemyUnitOfWork, *, channel_id: UUID, parts: Sequence[Part]
+) -> tuple[list[Principal], list[UUID]]:
+    """Whom these parts name that may be told of a line in this channel -- the
+    people who can see it -- and the agents they name. Anybody else named
+    keeps their name on the line and is not told: a platform's words are
+    what was said there, not a request to show them this channel."""
+    channel = await ChannelRepository(uow.session).get(channel_id)
+    if channel is None:
+        return [], []
+    named = await Naming(uow).of(channel, parts)
+    return named.people, named.agents
+
+
+async def names_of(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, people: Collection[Principal]
+) -> dict[Principal, str | None]:
+    """What the pod calls these people: a member's name, a contact's."""
+    return await Names(uow).of(pod_id=pod_id, people=people)
+
+
+async def agent_names(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, agent_ids: Collection[UUID]
+) -> dict[UUID, str]:
+    """The pod's agents among these, by name."""
+    return await Names(uow).agents(pod_id=pod_id, agent_ids=agent_ids)
+
+
+async def write_as_member(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    channel_id: UUID,
+    user_id: UUID,
+    text: str,
+    source_id: UUID | None = None,
+    client_message_id: str | None = None,
+) -> ChannelMessage:
+    """A member's line, by the rules a line written in the app is held to,
+    carried to ``source_id`` (one of the channel's places). Raises
+    ``LineRefused`` with the reason for the member; ``ChannelNotFound``."""
+    channel = await ChannelRepository(uow.session).get(channel_id)
+    if channel is None:
+        raise ChannelNotFound(str(channel_id))
+    return await MemberLines(uow).post(
+        channel,
+        user_id=user_id,
+        post=MemberPost(
+            text=text, source_id=source_id, client_message_id=client_message_id
+        ),
+    )
+
+
 async def background(
     uow: SqlAlchemyUnitOfWork, *, channel_id: UUID, reader: Reader, limit: int
 ) -> list[ChannelMessage]:
@@ -233,6 +305,13 @@ async def assign(
     """Somebody answers this contact by hand now -- or, with ``None``, nobody:
     its agent answers them again."""
     await ChannelRepository(uow.session).assign(channel_id, user_id)
+
+
+async def acknowledge(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> bool:
+    """Claim the contact's one acknowledgement of this open period -- until a
+    member writes to them or the channel is closed. Whether it is this
+    caller's to send."""
+    return await ChannelRepository(uow.session).acknowledge(channel_id)
 
 
 async def assignee_of(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> UUID | None:

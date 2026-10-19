@@ -6,7 +6,7 @@ from collections.abc import Callable, Collection, Mapping
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, delete, func, or_, select, update
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +29,7 @@ from app.modules.channels.infrastructure.models import (
     ChannelReadStateModel,
     ChannelSourceModel,
 )
+from app.modules.channels.infrastructure.revisions import next_rev, touch_channel
 from app.modules.channels.infrastructure.rows import MAX_LINES, channel_entity, now
 
 #: What a caller may change on a channel through ``change``.
@@ -224,6 +225,7 @@ class ChannelRepository:
             raise ValueError(f"Not a channel field: {sorted(unknown)}")
         if values:
             closing = values.get("status") == ContactStatus.CLOSED.value
+            await touch_channel(self.session, channel_id)
             await self.session.execute(
                 update(ChannelModel)
                 .where(ChannelModel.id == channel_id)
@@ -249,6 +251,7 @@ class ChannelRepository:
                 "attention_reason": None,
                 "status": ContactStatus.OPEN.value,
             }
+        await touch_channel(self.session, channel_id)
         await self.session.execute(
             update(ChannelModel).where(ChannelModel.id == channel_id).values(**values)
         )
@@ -293,6 +296,7 @@ class ChannelRepository:
 
     async def call_for_person(self, channel_id: UUID, *, reason: str | None) -> None:
         """The channel asks for a person, until somebody is assigned."""
+        await touch_channel(self.session, channel_id)
         await self.session.execute(
             update(ChannelModel)
             .where(ChannelModel.id == channel_id, ChannelModel.attention_at.is_(None))
@@ -314,6 +318,8 @@ class ChannelRepository:
         )
 
     async def delete(self, channel_id: UUID) -> None:
+        # Its live subscribers hear, and find it gone.
+        await touch_channel(self.session, channel_id)
         await self.session.execute(
             delete(ChannelModel).where(ChannelModel.id == channel_id)
         )
@@ -330,20 +336,40 @@ class ChannelRepository:
         assignee_user_id: UUID | None = None,
         unassigned: bool = False,
         status: ContactStatus | None = None,
+        needs_person: bool = False,
         joined_only: bool = False,
+        channel_ids: Collection[UUID] | None = None,
+        every_group: bool = False,
         limit: int,
         before: tuple[datetime, UUID] | None = None,
     ) -> list[Channel]:
-        """The channels ``viewer`` may see, most recently active first."""
+        """The channels ``viewer`` may see, most recently active first --
+        among ``channel_ids``, when given. ``every_group``: the pod's private
+        groups too, seen or not (a pod admin's view of a bot's groups)."""
+        if channel_ids is not None and not channel_ids:
+            return []
         channel = ChannelModel
+        shown = (
+            or_(
+                visible_to(viewer),
+                and_(
+                    channel.pod_id == viewer.pod_id,
+                    channel.kind == ChannelKind.GROUP.value,
+                ),
+            )
+            if every_group
+            else visible_to(viewer)
+        )
         statement = select(channel).where(
-            visible_to(viewer),
+            shown,
             channel.archived_at.is_not(None)
             if archived
             else channel.archived_at.is_(None),
         )
         if kind is not None:
             statement = statement.where(channel.kind == kind.value)
+        if channel_ids is not None:
+            statement = statement.where(channel.id.in_(list(channel_ids)))
         if contact_id is not None:
             statement = statement.where(channel.contact_id == contact_id)
         if assignee_user_id is not None:
@@ -352,6 +378,17 @@ class ChannelRepository:
             statement = statement.where(channel.assignee_user_id.is_(None))
         if status is not None:
             statement = statement.where(channel.status == status.value)
+        if needs_person:
+            # A contact waiting on somebody: open, nobody on it, and either
+            # the agent is off or it asked for a person.
+            statement = statement.where(
+                channel.kind == ChannelKind.CONTACT.value,
+                channel.status == ContactStatus.OPEN.value,
+                channel.assignee_user_id.is_(None),
+                or_(
+                    channel.attention_at.is_not(None), channel.agents_answer.is_(False)
+                ),
+            )
         if joined_only:
             member = ChannelMemberModel
             statement = statement.where(
@@ -360,12 +397,12 @@ class ChannelRepository:
                 )
             )
         if before is not None:
+            # A row comparison, so the page is a range of
+            # ``ix_channels_pod_activity`` walked from the cursor; the same
+            # test spelled with ``OR`` reads every channel older than it.
             at, channel_id = before
             statement = statement.where(
-                or_(
-                    channel.last_line_at < at,
-                    and_(channel.last_line_at == at, channel.id < channel_id),
-                )
+                tuple_(channel.last_line_at, channel.id) < tuple_(at, channel_id)
             )
         rows = await self.session.scalars(
             statement.order_by(channel.last_line_at.desc(), channel.id.desc()).limit(
@@ -412,6 +449,10 @@ class ChannelRepository:
         moved = await self.session.scalar(
             select(func.count()).where(ChannelMessageModel.channel_id == merged.id)
         )
+        # The survivor's subscribers are sent the lines it gained; the merged
+        # channel's find it gone.
+        rev = await next_rev(self.session, survivor.id)
+        await touch_channel(self.session, merged.id)
         renumbered = (
             select(
                 ChannelMessageModel.id.label("id"),
@@ -426,7 +467,7 @@ class ChannelRepository:
         await self.session.execute(
             update(ChannelMessageModel)
             .where(ChannelMessageModel.id == renumbered.c.id)
-            .values(channel_id=survivor.id, seq=renumbered.c.seq)
+            .values(channel_id=survivor.id, seq=renumbered.c.seq, rev=rev or 0)
         )
         for table in (ChannelSourceModel, ChannelMentionModel, ChannelQuestionModel):
             await self.session.execute(

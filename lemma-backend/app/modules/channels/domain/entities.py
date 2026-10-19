@@ -38,9 +38,9 @@ class ChannelKind(StrEnum):
 
 class Visibility(StrEnum):
     #: Every member of the pod may read it.
-    PUBLIC = "public"
+    PUBLIC = "PUBLIC"
     #: Its members only.
-    PRIVATE = "private"
+    PRIVATE = "PRIVATE"
 
 
 class ContactStatus(StrEnum):

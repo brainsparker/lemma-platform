@@ -9,6 +9,8 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.live.signals import signal_after_commit
+
 from app.modules.channels.domain.entities import (
     AgentAnswers,
     Channel,
@@ -21,6 +23,11 @@ from app.modules.channels.infrastructure.models import (
     ChannelMemberModel,
     ChannelModel,
     ChannelReadStateModel,
+)
+from app.modules.channels.infrastructure.revisions import (
+    read_signal,
+    touch_channel,
+    touch_channels,
 )
 from app.modules.channels.infrastructure.rows import MAX_LINES, member_entity, now
 
@@ -41,7 +48,7 @@ class MemberRepository:
         added_by_user_id: UUID | None = None,
     ) -> None:
         """Put a member or a contact in the channel; nothing if already in it."""
-        await self.session.execute(
+        seated = await self.session.execute(
             insert(ChannelMemberModel)
             .values(
                 channel_id=channel.id,
@@ -55,7 +62,10 @@ class MemberRepository:
                 added_by_user_id=added_by_user_id,
             )
             .on_conflict_do_nothing()
+            .returning(ChannelMemberModel.id)
         )
+        if seated.first() is not None:
+            await touch_channel(self.session, channel.id)
 
     async def add_agent(
         self,
@@ -66,6 +76,7 @@ class MemberRepository:
         added_by_user_id: UUID | None = None,
     ) -> None:
         """Put an agent in the channel, or change when it answers there."""
+        await touch_channel(self.session, channel.id)
         await self.session.execute(
             insert(ChannelMemberModel)
             .values(
@@ -101,10 +112,13 @@ class MemberRepository:
             statement = statement.where(member.agent_id == agent_id)
         else:
             return False
+        # The channel before the seat, the order a new line takes them in.
+        await touch_channel(self.session, channel_id)
         result = await self.session.execute(statement.returning(member.id))
         return result.first() is not None
 
     async def set_role(self, channel_id: UUID, user_id: UUID, role: MemberRole) -> None:
+        await touch_channel(self.session, channel_id)
         await self.session.execute(
             update(ChannelMemberModel)
             .where(
@@ -184,6 +198,20 @@ class MemberRepository:
         )
         return {row for row in rows if row is not None}
 
+    async def channels_of(
+        self, user_id: UUID, channel_ids: Collection[UUID]
+    ) -> set[UUID]:
+        """Which of ``channel_ids`` the member is in."""
+        if not channel_ids:
+            return set()
+        rows = await self.session.scalars(
+            select(ChannelMemberModel.channel_id).where(
+                ChannelMemberModel.user_id == user_id,
+                ChannelMemberModel.channel_id.in_(sorted(channel_ids)),
+            )
+        )
+        return set(rows)
+
     async def agents(self, channel_id: UUID) -> list[Member]:
         rows = await self.session.scalars(
             select(ChannelMemberModel)
@@ -210,12 +238,16 @@ class MemberRepository:
 
     async def remove_from_pod(self, *, pod_id: UUID, user_id: UUID) -> None:
         """A member who left the pod is in none of its channels."""
-        await self.session.execute(
-            delete(ChannelMemberModel).where(
-                ChannelMemberModel.pod_id == pod_id,
-                ChannelMemberModel.user_id == user_id,
-            )
+        seats = (
+            ChannelMemberModel.pod_id == pod_id,
+            ChannelMemberModel.user_id == user_id,
         )
+        # The channels first (``revisions``): their subscribers re-check who
+        # may still read them.
+        await touch_channels(
+            self.session, select(ChannelMemberModel.channel_id).where(*seats)
+        )
+        await self.session.execute(delete(ChannelMemberModel).where(*seats))
 
     # -- read state ---------------------------------------------------------------
 
@@ -237,7 +269,13 @@ class MemberRepository:
             )
             .returning(state.last_read_seq)
         )
-        return int(await self.session.scalar(statement) or 0)
+        read_seq = int(await self.session.scalar(statement) or 0)
+        pod_id = await self.session.scalar(
+            select(ChannelModel.pod_id).where(ChannelModel.id == channel_id)
+        )
+        if pod_id is not None:
+            signal_after_commit(self.session, pod_id, read_signal(channel_id, user_id))
+        return read_seq
 
     async def read_seq(self, *, channel_id: UUID, user_id: UUID) -> int:
         found = await self.session.scalar(

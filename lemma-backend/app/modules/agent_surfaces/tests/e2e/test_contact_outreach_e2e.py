@@ -164,6 +164,19 @@ async def test_an_email_contact_is_written_to_where_they_wrote(
     assert again.status_code == retried.status_code == 201, retried.text
     assert again.json()["line"]["id"] == retried.json()["line"]["id"]
 
+    # So is one with the same Idempotency-Key.
+    once = f"outreach-{dana}"
+    keyed = [
+        await authenticated_client.post(
+            f"/pods/{pod_id}/contacts/{dana}/outreach",
+            json={"handle": CUSTOMER, "text": "keyed"},
+            headers={"Idempotency-Key": once},
+        )
+        for _ in range(2)
+    ]
+    assert [r.status_code for r in keyed] == [201, 201], keyed[1].text
+    assert keyed[0].json()["line"]["id"] == keyed[1].json()["line"]["id"]
+
 
 async def test_an_email_address_nobody_wrote_from_opens_a_place(
     authenticated_client: AsyncClient,

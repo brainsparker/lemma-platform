@@ -71,7 +71,7 @@ def sync_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Remove Member
 
-     Take somebody out of a group -- its owners' or an admin's -- or leave a
+     Take somebody out of a group -- its owners' or an editor's -- or leave a
     channel oneself.
 
     Args:
@@ -112,7 +112,7 @@ def sync(
 ) -> Any | ErrorResponse | None:
     """Remove Member
 
-     Take somebody out of a group -- its owners' or an admin's -- or leave a
+     Take somebody out of a group -- its owners' or an editor's -- or leave a
     channel oneself.
 
     Args:
@@ -148,7 +148,7 @@ async def asyncio_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Remove Member
 
-     Take somebody out of a group -- its owners' or an admin's -- or leave a
+     Take somebody out of a group -- its owners' or an editor's -- or leave a
     channel oneself.
 
     Args:
@@ -187,7 +187,7 @@ async def asyncio(
 ) -> Any | ErrorResponse | None:
     """Remove Member
 
-     Take somebody out of a group -- its owners' or an admin's -- or leave a
+     Take somebody out of a group -- its owners' or an editor's -- or leave a
     channel oneself.
 
     Args:

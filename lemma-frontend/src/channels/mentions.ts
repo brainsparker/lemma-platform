@@ -10,6 +10,8 @@ export interface Mentionable {
     kind: "MEMBER" | "CONTACT" | "AGENT";
     id: string;
     name: string;
+    /** In the channel already. An agent from outside it answers once. */
+    inChannel?: boolean;
 }
 
 export interface Mention {
@@ -28,14 +30,14 @@ export function mentionAt(text: string, caret: number): { start: number; query: 
 }
 
 /** Who the menu offers for what was typed: anyone a word of whose name starts
- *  with it, agents first, then in the order given. */
+ *  with it, in the order given -- `mentionables` puts the channel's agents
+ *  first. */
 export function matchMentionable(people: readonly Mentionable[], query: string, limit = 6): Mentionable[] {
     const wanted = query.toLowerCase();
     const fits = (who: Mentionable) => !wanted
         || who.name.toLowerCase().startsWith(wanted)
         || who.name.toLowerCase().split(/\s+/).some((word) => word.startsWith(wanted));
-    const found = people.filter(fits);
-    return [...found.filter((who) => who.kind === "AGENT"), ...found.filter((who) => who.kind !== "AGENT")].slice(0, limit);
+    return people.filter(fits).slice(0, limit);
 }
 
 /** The text with the `@query` at the caret replaced by the person picked,
@@ -65,8 +67,10 @@ export function mentionsIn(text: string, picked: readonly Mentionable[]): Mentio
     return out;
 }
 
-/** Everyone who can be named in a channel: its agents, then the people in it
- *  other than the reader. Each once; nobody without an id or a name. */
+/** Everyone who can be named in a channel, in the order the `@` menu offers
+ *  them: the channel's own agents, then the people in it other than the
+ *  reader, then the pod's other agents -- naming one answers once. Each
+ *  once; nobody without an id or a name. */
 export function mentionables(
     agents: readonly { id: string; label: string }[],
     people: readonly { kind: "MEMBER" | "CONTACT" | "AGENT"; id: string | null; name: string | null }[],
@@ -80,11 +84,33 @@ export function mentionables(
         seen.add(key);
         out.push(who);
     };
-    for (const agent of agents) if (agent.id && agent.label) add({ kind: "AGENT", id: agent.id, name: agent.label });
     for (const person of people) {
-        if (!person.id || !person.name) continue;
-        if (person.kind === "MEMBER" && person.id === me) continue;
-        add({ kind: person.kind, id: person.id, name: person.name });
+        if (person.kind !== "AGENT" || !person.id || !person.name) continue;
+        add({ kind: "AGENT", id: person.id, name: person.name, inChannel: true });
     }
+    for (const person of people) {
+        if (person.kind === "AGENT" || !person.id || !person.name) continue;
+        if (person.kind === "MEMBER" && person.id === me) continue;
+        add({ kind: person.kind, id: person.id, name: person.name, inChannel: true });
+    }
+    for (const agent of agents) if (agent.id && agent.label) add({ kind: "AGENT", id: agent.id, name: agent.label, inChannel: false });
     return out;
+}
+
+/** The text with one picked name taken out -- its chip removed -- and the
+ *  space after it, so "ask @Lem now" becomes "ask now". */
+export function removeMention(text: string, who: Pick<Mentionable, "name">): string {
+    return text.replace(new RegExp("(^|\\s)@" + escaped(who.name) + "(?![\\p{L}\\p{N}_]) ?", "u"), "$1");
+}
+
+/** The people picked whose names are still in the text: the chips. */
+export function pickedIn(text: string, picked: readonly Mentionable[]): Mentionable[] {
+    const named = new Set(mentionsIn(text, picked).map((one) => one.kind + ":" + one.id));
+    const seen = new Set<string>();
+    return picked.filter((who) => {
+        const key = who.kind + ":" + who.id;
+        if (!named.has(key) || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
 }

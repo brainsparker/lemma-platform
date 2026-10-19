@@ -56,6 +56,37 @@ One rule, twice: `domain/access.may_see` and its SQL twin
   A group mirrored from a platform is private when the platform keeps it to
   its members; one made in Lemma is public unless made private.
 
+### Permissions
+
+On top of seeing a channel, one table (`api/access.py` holds the same one).
+`channel.manage` implies `channel.write`, which implies `channel.read`;
+`contact.message` implies `contact.read`.
+
+| What | Takes |
+|---|---|
+| Reading channels, lines, members, threads, deliveries, the inbox, search | `channel.read` |
+| One's own channel (`/channels/me`); joining a public group or a contact's channel; leaving; one's own notify settings; marking read | `channel.read` |
+| Joining a private group nobody let them into, on request (logged: `channels.member.joined_private_by_right.observed`) | `channel.manage` |
+| Answering a question | `channel.read`, and being the person it waits on |
+| Writing, editing and deleting one's own lines; starting a group; retrying one's own line's delivery; notices | `channel.write` (+ `contact.message` in a `CONTACT` channel) |
+| A group's title, topic, visibility, archive, delete, members, roles, agents | `channel.write` and being its owner -- or `channel.manage` |
+| A contact's channel: assignee, status, the agent switch, the hand-back window | `channel.write` + `contact.message` |
+| Seeing a `CONTACT` channel at all | `contact.read` |
+| A group source's settings (`/channels/{c}/sources/{s}`) | the bot's `agent.read`; changing them, `agent.update` and answering for the group -- or nobody in the pod does, or a pod admin |
+
+| Role | Holds |
+|---|---|
+| Viewer | `channel.read` |
+| User | `channel.write` |
+| Editor | `channel.manage`, `contact.message` |
+| Admin | everything an editor holds |
+
+Viewers read and answer what is asked of them; users talk in the pod and keep
+the groups they make; editors -- who already change the pod's agents and apps
+-- keep every group, and are the ones who speak to contacts. Another pod
+linked to this one never holds `channel.read` here: a channel carries what
+contacts said to this pod.
+
 Within what a reader sees, `domain/projection.py` decides what a run is shown:
 an answer an agent made with another member's own access shows only that it
 was given; a contact's run reads only its own source, never a note.
@@ -81,6 +112,22 @@ Agents answer a member's line written in Lemma when it names them, when they
 answer every line in the channel, or -- in a member's own channel -- the pod's
 agent; `agent` starts one turn per line and agent.
 
+## Live
+
+Channels provides the pod live socket's `channel` and `inbox` topics and its
+`typing` and `read` calls ([live.md](live.md) has the protocol). Every change a
+channel's watchers are shown takes the next number of the channel's change
+counter (`channels.last_rev`) under its row lock and stamps what changed
+(`channel_messages.rev`, `channels.changed_rev` for its own fields and
+members) -- `infrastructure/revisions.py`. The counter is taken before the
+line or question it covers is touched, in the order a new line takes the
+channel lock. A per-process hub per pod (`services/live/hub.py`) hears the
+commit's signal and reads `rev > its cursor`, so a missed signal costs only
+latency. Lines go out through the REST mapper (`message_response`) for each
+reader, so the socket shows exactly what a GET would. An agent answering a
+line in Lemma says so (`contracts/live.announce_answering`), and the hub
+relays the run's tokens to the member it answers as `line.streaming`.
+
 ## Questions
 
 A question is answered once, by the person it waits on
@@ -99,22 +146,63 @@ Under `/pods/{pod_id}` -- everybody named one way, a `PersonRef`
 (`MEMBER`, `CONTACT` or `AGENT`, an id, a name). PATCH: absent is unchanged,
 `null` clears. Creates take an `Idempotency-Key`; GETs never write.
 
-- `/channels` `GET` (kind, archived, contact, assignee, status, joined;
-  cursor) · `POST`; `/channels/me` `GET` · `POST` (the caller's own channel);
-  `/channels/{c}` `GET` · `PATCH` · `DELETE` (groups made in Lemma).
-- `/channels/{c}/members` `POST`; `/members/me` `POST` (join) · `PATCH`
-  (notify, notify_via, muted_until) · `DELETE` (leave);
+- `/channels` `GET` (kind, archived, contact, assignee -- `me` or a user
+  id --, unassigned, status, `needs_person` -- contacts waiting on a person:
+  open, unassigned, the agent off or asking for one --, joined,
+  `source_surface`; cursor) · `POST`; `/channels/me`
+  `GET` · `POST` (the caller's own channel: made when they join the pod, by
+  `POST` for a member from before); `/channels/{c}` `GET` · `PATCH`
+  (`assignee` takes `me`) · `DELETE` (groups made in Lemma).
+- `/channels/{c}/members` `POST`; `/members/me` `POST` (join -- a private
+  group too, for `channel.manage`) · `PATCH` (notify, notify_via,
+  muted_until) · `DELETE` (leave);
   `/members/{kind}:{id}` `PATCH` · `DELETE`; `/channels/{c}/read` `POST {seq}`.
 - `/channels/{c}/messages` `GET` (`before_seq` / `after_seq`) · `POST`;
   `/messages/{m}` `PATCH` · `DELETE`; `/thread`; `/answer`;
-  `/deliveries` `GET` and `/deliveries/{d}/retry`.
+  `/deliveries` `GET` and `/deliveries/{d}/retry`;
+  `/files/{file_id}` `GET` (below). A reader's own lines carry `delivered`:
+  each place outside Lemma the line went to, with its status and why --
+  sent again on the socket when a send moves.
 - `/inbox` (counts, waiting, mentions) and `/search` (Postgres full text, in
   the channels the caller sees).
+- `/pods/{pod_id}/members/{member}/notices` `POST {text}` (`agent_surfaces`'
+  route): tell another member something -- a line from the pod's agent on the
+  caller's behalf in the member's own channel, pushed like any of theirs.
+  `member` is a pod member id, a user id or an email.
 
 A group source's bot-side settings -- whether people outside the pod are
 answered there, who answers for them -- and bringing the bot into a group
-(a WhatsApp group, a Telegram link) are `agent_surfaces`':
-`/pods/{pod_id}/sources`.
+are under the channels too, but `agent_surfaces`' routes, since they talk to
+the platforms: `/channels/{c}/sources/{s}` `GET` · `PATCH` (`answers_outsiders`,
+`owner: "me"`), `/channels/whatsapp-groups` `POST` (the channel is made with
+it; `Idempotency-Key`), `/channels/telegram-links` `POST`. They are included
+before this module's routers, so the literal segments win over
+`/channels/{channel_id}`. The bot's settings page lists its groups with
+`GET /channels?source_surface={name}`: each channel carries its
+`source_settings`, from the lister `agent_surfaces` registers
+(`contracts/source_settings`). A holder of `channel.manage` is listed the
+bot's private groups they are not in too -- `joined: false`, with no last line
+and nothing unread -- so a pod admin can find a group and join it to take it
+over. Every channel row says whether the reader is in it (`joined`).
+
+Creates replay by `Idempotency-Key` -- channels, lines (`client_message_id`
+or the key), notices, outreach, a WhatsApp group start -- and a key is the
+caller's own: two members who pick one key never name one line.
+
+## Files on a line
+
+A `file` part names a pod file, and whoever writes the line must be able to
+read it (the datastore's own rule, with their access) -- else the line is
+refused, 422. It is stored by the file's id (`file_id`) and its own path, not
+the `/me/…` it was written as. Readers read it through the line,
+`GET …/messages/{m}/files/{file_id}`: whoever may see the line (not where it
+is withheld from them), as its writer reads the file -- gone once the line
+is, or once the writer can no longer read it. So a file shared in a private
+group, a member's own channel or a contact's is read by that channel's
+readers and nobody else. The app uploads a channel's attachments to the
+writer's own `/me/channels/{channel_id}/`, which no other member can open
+directly (`api/attachments.py`). Only raster images are served inline;
+anything else is a download.
 
 ## Contracts
 
@@ -128,8 +216,10 @@ id. `contracts/facts` publishes `ChannelMessagePosted`, `ChannelDeliveryDue`
 and `ChannelQuestionClosed`.
 
 The module subscribes to `ContactMerged` (a merged contact's channel, members
-and lines move to the survivor, renumbered) and `PodMemberRemoved` (they are
-taken out of its channels, unassigned, and their questions cancelled), and
+and lines move to the survivor, renumbered), `PodMemberAdded` (their own
+channel is made, or brought back from the archive) and `PodMemberRemoved`
+(they are taken out of its channels, unassigned, their questions cancelled
+and their own channel archived), and
 runs two sweeps a minute: questions that expired, deliveries due again.
 
 ## What it does not own

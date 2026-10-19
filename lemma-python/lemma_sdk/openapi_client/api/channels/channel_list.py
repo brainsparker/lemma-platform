@@ -23,7 +23,9 @@ def _get_kwargs(
     assignee: None | str | Unset = UNSET,
     unassigned: bool | Unset = False,
     status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
     joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
     cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
 ) -> dict[str, Any]:
@@ -68,7 +70,16 @@ def _get_kwargs(
         json_status = status
     params["status"] = json_status
 
+    params["needs_person"] = needs_person
+
     params["joined"] = joined
+
+    json_source_surface: None | str | Unset
+    if isinstance(source_surface, Unset):
+        json_source_surface = UNSET
+    else:
+        json_source_surface = source_surface
+    params["source_surface"] = json_source_surface
 
     json_cursor: None | str | Unset
     if isinstance(cursor, Unset):
@@ -132,7 +143,9 @@ def sync_detailed(
     assignee: None | str | Unset = UNSET,
     unassigned: bool | Unset = False,
     status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
     joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
     cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
 ) -> Response[ChannelListResponse | ErrorResponse]:
@@ -150,7 +163,11 @@ def sync_detailed(
             them.
         unassigned (bool | Unset):  Default: False.
         status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
         joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
         cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
 
@@ -170,7 +187,9 @@ def sync_detailed(
         assignee=assignee,
         unassigned=unassigned,
         status=status,
+        needs_person=needs_person,
         joined=joined,
+        source_surface=source_surface,
         cursor=cursor,
         limit=limit,
     )
@@ -192,7 +211,9 @@ def sync(
     assignee: None | str | Unset = UNSET,
     unassigned: bool | Unset = False,
     status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
     joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
     cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
 ) -> ChannelListResponse | ErrorResponse | None:
@@ -210,7 +231,11 @@ def sync(
             them.
         unassigned (bool | Unset):  Default: False.
         status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
         joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
         cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
 
@@ -231,7 +256,9 @@ def sync(
         assignee=assignee,
         unassigned=unassigned,
         status=status,
+        needs_person=needs_person,
         joined=joined,
+        source_surface=source_surface,
         cursor=cursor,
         limit=limit,
     ).parsed
@@ -247,7 +274,9 @@ async def asyncio_detailed(
     assignee: None | str | Unset = UNSET,
     unassigned: bool | Unset = False,
     status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
     joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
     cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
 ) -> Response[ChannelListResponse | ErrorResponse]:
@@ -265,7 +294,11 @@ async def asyncio_detailed(
             them.
         unassigned (bool | Unset):  Default: False.
         status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
         joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
         cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
 
@@ -285,7 +318,9 @@ async def asyncio_detailed(
         assignee=assignee,
         unassigned=unassigned,
         status=status,
+        needs_person=needs_person,
         joined=joined,
+        source_surface=source_surface,
         cursor=cursor,
         limit=limit,
     )
@@ -305,7 +340,9 @@ async def asyncio(
     assignee: None | str | Unset = UNSET,
     unassigned: bool | Unset = False,
     status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
     joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
     cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
 ) -> ChannelListResponse | ErrorResponse | None:
@@ -323,7 +360,11 @@ async def asyncio(
             them.
         unassigned (bool | Unset):  Default: False.
         status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
         joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
         cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
 
@@ -345,7 +386,9 @@ async def asyncio(
             assignee=assignee,
             unassigned=unassigned,
             status=status,
+            needs_person=needs_person,
             joined=joined,
+            source_surface=source_surface,
             cursor=cursor,
             limit=limit,
         )

@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, StringConstraints
 
 from app.modules.channels.contracts.people import PersonRef
+from app.modules.channels.contracts.source_settings import SourceSettingsResponse
 from app.modules.channels.domain.entities import (
     AgentAnswers,
     Channel,
@@ -116,6 +117,14 @@ class ChannelResponse(BaseModel):
         ),
     )
     archived: bool = False
+    joined: bool = Field(
+        default=False,
+        description=(
+            "Whether the reader is in it. A pod admin listing a bot's groups "
+            "(`source_surface`) is shown its private ones too, not joined and "
+            "without their last line, until they join."
+        ),
+    )
     created_at: datetime
     last_line_at: datetime
     last_seq: int = 0
@@ -145,6 +154,13 @@ class ChannelResponse(BaseModel):
     )
     unread: UnreadResponse = Field(default_factory=UnreadResponse)
     last_line: LinePreview | None = None
+    source_settings: SourceSettingsResponse | None = Field(
+        default=None,
+        description=(
+            "Listed by `source_surface`: that bot's settings for its place here "
+            "-- who answers its people outside the pod, and whether they are."
+        ),
+    )
 
 
 class ChannelMemberResponse(BaseModel):
@@ -226,8 +242,9 @@ class ChannelUpdateRequest(BaseModel):
     )
     hand_back_after_hours: int | None = Field(default=None, ge=1, le=720)
     status: ContactStatus | None = None
-    assignee: UUID | None = Field(
-        default=None, description="A member's user id; `null` unassigns."
+    assignee: UUID | Literal["me"] | None = Field(
+        default=None,
+        description="`me`, or a member's user id; `null` unassigns.",
     )
 
 
@@ -351,6 +368,7 @@ def channel_response(
         topic=channel.topic,
         person=_person(channel, names),
         archived=channel.is_archived,
+        joined=unread.joined if unread else False,
         created_at=channel.created_at,
         last_line_at=channel.last_line_at,
         last_seq=channel.last_seq,

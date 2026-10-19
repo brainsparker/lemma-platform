@@ -119,6 +119,12 @@ def _routers():
     ]
 
 
+def _live():
+    from app.modules.agent.services.live_conversation import live_contribution
+
+    return live_contribution()
+
+
 def _register_analytics() -> None:
     # Every process: a memory file written anywhere -- including the shell's
     # `lemma files write`, which commits in the API -- drops the cached brief
@@ -179,6 +185,7 @@ module = LemmaModule(
     name="agent",
     resource_names=_resource_names,
     routers=_routers,
+    live=_live,
     register_analytics=_register_analytics,
     register_work=_register_work,
     register_periodic_work=_register_periodic_work,

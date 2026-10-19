@@ -1,9 +1,9 @@
 """Everything between "we picked a channel" and "the platform has it".
 
-Split out of ``notification_service`` so that file stays under the size ceiling,
-but the seam is a real one rather than a filing convenience: this half talks to
-surfaces and conversations, the other half owns notification *state* — creation,
-response, expiry — and never needs to know how a message physically leaves.
+The seam is a real one rather than a filing convenience: this half talks to
+surfaces and conversations, while what a push *is* -- the line, its delivery
+row and what became of it -- is the channels module's, which never needs to
+know how a message physically leaves.
 
 The collaborator is held as :class:`SurfaceNotificationEgressPort`, not as an
 untyped kwarg. That is not decoration. Both of the ``AttributeError`` crashes

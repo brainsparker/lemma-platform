@@ -10,7 +10,7 @@ from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
 from ...models.outreach_request import OutreachRequest
 from ...models.outreach_response import OutreachResponse
-from ...types import Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
@@ -18,8 +18,11 @@ def _get_kwargs(
     contact_id: UUID,
     *,
     body: OutreachRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
+    if not isinstance(idempotency_key, Unset):
+        headers["Idempotency-Key"] = idempotency_key
 
     _kwargs: dict[str, Any] = {
         "method": "post",
@@ -83,17 +86,20 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     body: OutreachRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | OutreachResponse]:
     """Send Outreach
 
      Write to a contact first, on one of their handles: email any time,
     WhatsApp within 24 hours of their last message there. The line goes in
     their channel, at that handle's place -- opened if new -- and is sent from
-    there.
+    there. The same `client_message_id`, or `Idempotency-Key`, from the same
+    member is the same line: a retry sends nothing new.
 
     Args:
         pod_id (UUID):
         contact_id (UUID):
+        idempotency_key (None | str | Unset):
         body (OutreachRequest):
 
     Raises:
@@ -108,6 +114,7 @@ def sync_detailed(
         pod_id=pod_id,
         contact_id=contact_id,
         body=body,
+        idempotency_key=idempotency_key,
     )
 
     response = client.get_httpx_client().request(
@@ -123,17 +130,20 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     body: OutreachRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> ErrorResponse | OutreachResponse | None:
     """Send Outreach
 
      Write to a contact first, on one of their handles: email any time,
     WhatsApp within 24 hours of their last message there. The line goes in
     their channel, at that handle's place -- opened if new -- and is sent from
-    there.
+    there. The same `client_message_id`, or `Idempotency-Key`, from the same
+    member is the same line: a retry sends nothing new.
 
     Args:
         pod_id (UUID):
         contact_id (UUID):
+        idempotency_key (None | str | Unset):
         body (OutreachRequest):
 
     Raises:
@@ -149,6 +159,7 @@ def sync(
         contact_id=contact_id,
         client=client,
         body=body,
+        idempotency_key=idempotency_key,
     ).parsed
 
 
@@ -158,17 +169,20 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     body: OutreachRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | OutreachResponse]:
     """Send Outreach
 
      Write to a contact first, on one of their handles: email any time,
     WhatsApp within 24 hours of their last message there. The line goes in
     their channel, at that handle's place -- opened if new -- and is sent from
-    there.
+    there. The same `client_message_id`, or `Idempotency-Key`, from the same
+    member is the same line: a retry sends nothing new.
 
     Args:
         pod_id (UUID):
         contact_id (UUID):
+        idempotency_key (None | str | Unset):
         body (OutreachRequest):
 
     Raises:
@@ -183,6 +197,7 @@ async def asyncio_detailed(
         pod_id=pod_id,
         contact_id=contact_id,
         body=body,
+        idempotency_key=idempotency_key,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -196,17 +211,20 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     body: OutreachRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> ErrorResponse | OutreachResponse | None:
     """Send Outreach
 
      Write to a contact first, on one of their handles: email any time,
     WhatsApp within 24 hours of their last message there. The line goes in
     their channel, at that handle's place -- opened if new -- and is sent from
-    there.
+    there. The same `client_message_id`, or `Idempotency-Key`, from the same
+    member is the same line: a retry sends nothing new.
 
     Args:
         pod_id (UUID):
         contact_id (UUID):
+        idempotency_key (None | str | Unset):
         body (OutreachRequest):
 
     Raises:
@@ -223,5 +241,6 @@ async def asyncio(
             contact_id=contact_id,
             client=client,
             body=body,
+            idempotency_key=idempotency_key,
         )
     ).parsed

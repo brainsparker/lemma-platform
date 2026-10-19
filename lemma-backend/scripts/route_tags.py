@@ -22,6 +22,7 @@ TAG_MODULES = {
     "Apps": "apps",
     "Auth": "identity",
     "Connectors": "connectors",
+    "Channel Sources": "agent_surfaces",
     "Channels": "channels",
     "Contact Outreach": "agent_surfaces",
     "Contacts": "contacts",

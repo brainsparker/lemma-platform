@@ -23,6 +23,7 @@ def _get_kwargs(
     parent_id: None | Unset | UUID = UNSET,
     archived: bool | Unset = False,
     search: None | str | Unset = UNSET,
+    in_channel: bool | None | Unset = UNSET,
     page_token: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> dict[str, Any]:
@@ -71,6 +72,13 @@ def _get_kwargs(
     else:
         json_search = search
     params["search"] = json_search
+
+    json_in_channel: bool | None | Unset
+    if isinstance(in_channel, Unset):
+        json_in_channel = UNSET
+    else:
+        json_in_channel = in_channel
+    params["in_channel"] = json_in_channel
 
     json_page_token: None | str | Unset
     if isinstance(page_token, Unset):
@@ -134,6 +142,7 @@ def sync_detailed(
     parent_id: None | Unset | UUID = UNSET,
     archived: bool | Unset = False,
     search: None | str | Unset = UNSET,
+    in_channel: bool | None | Unset = UNSET,
     page_token: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[ConversationListResponse | ErrorResponse]:
@@ -155,6 +164,8 @@ def sync_detailed(
         parent_id (None | Unset | UUID):
         archived (bool | Unset):  Default: False.
         search (None | str | Unset):
+        in_channel (bool | None | Unset): false: only conversations of no channel (the chats
+            list); true: only those in a channel. Omitted: both.
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 
@@ -174,6 +185,7 @@ def sync_detailed(
         parent_id=parent_id,
         archived=archived,
         search=search,
+        in_channel=in_channel,
         page_token=page_token,
         limit=limit,
     )
@@ -195,6 +207,7 @@ def sync(
     parent_id: None | Unset | UUID = UNSET,
     archived: bool | Unset = False,
     search: None | str | Unset = UNSET,
+    in_channel: bool | None | Unset = UNSET,
     page_token: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> ConversationListResponse | ErrorResponse | None:
@@ -216,6 +229,8 @@ def sync(
         parent_id (None | Unset | UUID):
         archived (bool | Unset):  Default: False.
         search (None | str | Unset):
+        in_channel (bool | None | Unset): false: only conversations of no channel (the chats
+            list); true: only those in a channel. Omitted: both.
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 
@@ -236,6 +251,7 @@ def sync(
         parent_id=parent_id,
         archived=archived,
         search=search,
+        in_channel=in_channel,
         page_token=page_token,
         limit=limit,
     ).parsed
@@ -251,6 +267,7 @@ async def asyncio_detailed(
     parent_id: None | Unset | UUID = UNSET,
     archived: bool | Unset = False,
     search: None | str | Unset = UNSET,
+    in_channel: bool | None | Unset = UNSET,
     page_token: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[ConversationListResponse | ErrorResponse]:
@@ -272,6 +289,8 @@ async def asyncio_detailed(
         parent_id (None | Unset | UUID):
         archived (bool | Unset):  Default: False.
         search (None | str | Unset):
+        in_channel (bool | None | Unset): false: only conversations of no channel (the chats
+            list); true: only those in a channel. Omitted: both.
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 
@@ -291,6 +310,7 @@ async def asyncio_detailed(
         parent_id=parent_id,
         archived=archived,
         search=search,
+        in_channel=in_channel,
         page_token=page_token,
         limit=limit,
     )
@@ -310,6 +330,7 @@ async def asyncio(
     parent_id: None | Unset | UUID = UNSET,
     archived: bool | Unset = False,
     search: None | str | Unset = UNSET,
+    in_channel: bool | None | Unset = UNSET,
     page_token: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> ConversationListResponse | ErrorResponse | None:
@@ -331,6 +352,8 @@ async def asyncio(
         parent_id (None | Unset | UUID):
         archived (bool | Unset):  Default: False.
         search (None | str | Unset):
+        in_channel (bool | None | Unset): false: only conversations of no channel (the chats
+            list); true: only those in a channel. Omitted: both.
         page_token (None | str | Unset):
         limit (int | Unset):  Default: 20.
 
@@ -352,6 +375,7 @@ async def asyncio(
             parent_id=parent_id,
             archived=archived,
             search=search,
+            in_channel=in_channel,
             page_token=page_token,
             limit=limit,
         )

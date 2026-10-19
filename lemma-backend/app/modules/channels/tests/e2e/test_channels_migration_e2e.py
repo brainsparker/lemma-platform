@@ -6,7 +6,8 @@ the link and group tables and makes the channel ones, and the downgrade makes
 the old tables again, empty. What is checked is the schema each way -- the
 index that keeps one conversation per person, agent and channel, and the
 columns and tables the channel app will build on without a migration of its
-own.
+own -- and that every member already in a pod has their own channel when the
+upgrade is done, as joining a pod makes it from then on.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -43,6 +45,66 @@ _NEW = (
     "channel_questions",
     "channel_message_deliveries",
 )
+
+
+def _seed_members(plain_url: str) -> dict[UUID, set[UUID]]:
+    """Two pods of one organization at 0057: Asha in both, Ben in one, and
+    Chen in the organization but in neither. Each pod's members, by pod."""
+    org, asha, ben, chen = uuid4(), uuid4(), uuid4(), uuid4()
+    pods = {uuid4(): {asha, ben}, uuid4(): {asha}}
+    with psycopg.connect(plain_url) as connection:
+        run = connection.execute
+        run(
+            "INSERT INTO organizations (id, name, slug, join_policy, created_at, "
+            "updated_at) VALUES (%s, 'Org', %s, 'INVITE_ONLY', now(), now())",
+            (org, f"org-{org.hex[:8]}"),
+        )
+        members: dict[UUID, UUID] = {}
+        for user_id in (asha, ben, chen):
+            run(
+                "INSERT INTO users (id, email, is_verified, is_active, "
+                "is_superuser, is_deleted, created_at, updated_at) "
+                "VALUES (%s, %s, true, true, false, false, now(), now())",
+                (user_id, f"{user_id.hex[:8]}@example.com"),
+            )
+            members[user_id] = uuid4()
+            run(
+                "INSERT INTO organization_members (id, user_id, organization_id, "
+                "role, created_at, updated_at) "
+                "VALUES (%s, %s, %s, 'ORG_MEMBER', now(), now())",
+                (members[user_id], user_id, org),
+            )
+        for pod_id, people in pods.items():
+            run(
+                "INSERT INTO pods (id, user_id, organization_id, name, config, "
+                "is_deleted, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, '{}', false, now(), now())",
+                (pod_id, asha, org, f"Pod {pod_id.hex[:8]}"),
+            )
+            for user_id in people:
+                run(
+                    "INSERT INTO pod_members (id, pod_id, organization_member_id, "
+                    "created_at, updated_at) VALUES (%s, %s, %s, now(), now())",
+                    (uuid4(), pod_id, members[user_id]),
+                )
+    return pods
+
+
+def _own_channels(plain_url: str) -> dict[UUID, set[UUID]]:
+    """Each pod's DIRECT channels' members, by pod -- one channel each, with
+    its member seated as its owner."""
+    with psycopg.connect(plain_url) as connection:
+        rows = connection.execute(
+            "SELECT c.pod_id, c.member_user_id, c.visibility, m.user_id, m.role "
+            "FROM channels c LEFT JOIN channel_members m ON m.channel_id = c.id "
+            "WHERE c.kind = 'DIRECT'"
+        ).fetchall()
+    found: dict[UUID, set[UUID]] = {}
+    for pod_id, owner, visibility, seated, role in rows:
+        assert (visibility, seated, role) == ("PRIVATE", owner, "owner"), rows
+        assert owner not in found.get(pod_id, set()), "two channels for one member"
+        found.setdefault(pod_id, set()).add(owner)
+    return found
 
 
 def test_channels_replace_links_and_groups_and_roll_back_cleanly() -> None:
@@ -90,8 +152,12 @@ def test_channels_replace_links_and_groups_and_roll_back_cleanly() -> None:
         migrate("upgrade", BEFORE)
         assert present(*_OLD) == set(_OLD)
         assert not present(*_NEW)
+        pods = _seed_members(plain_url)
 
         migrate("upgrade", AFTER)
+        # Every member already in a pod has their own channel there; somebody
+        # in the organization but in no pod has none.
+        assert _own_channels(plain_url) == pods
         assert not present(*_OLD), "the link and group tables outlived channels"
         assert present(*_NEW) == set(_NEW)
         # A place belongs to an account; a group's bot-side settings and a
@@ -144,4 +210,7 @@ def test_channels_replace_links_and_groups_and_roll_back_cleanly() -> None:
         assert not present(*_NEW)
         assert "channel_id" not in columns("agent_conversations")
 
+        # Upgrading again makes them again, once each.
+        migrate("upgrade", AFTER)
+        assert _own_channels(plain_url) == pods
         migrate("upgrade", "head")

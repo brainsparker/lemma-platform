@@ -74,8 +74,8 @@ test("offers Take it on only to whoever may, where nobody or somebody else answe
     assert.equal(offersTakeOn({ kind: "someone", name: "Priya" }, true), true);
     assert.equal(offersTakeOn({ kind: "someone", name: "Priya" }, false), false);
     assert.equal(offersTakeOn({ kind: "bot-off", platform: "TELEGRAM" }, true), false);
-    assert.deepEqual(takeOn(source), { take_over: true });
-    assert.deepEqual(takeOn(as({ answersOutsiders: false })), { take_over: true, answers_outsiders: true });
+    assert.deepEqual(takeOn(source), { owner: "me" });
+    assert.deepEqual(takeOn(as({ answersOutsiders: false })), { owner: "me", answers_outsiders: true });
 });
 
 test("tells anyone who may not change it who can, and an admin who is told", () => {

@@ -129,7 +129,7 @@ class ResendPlatformService:
         """The display name for this send, from whatever the caller knew.
 
         Read off metadata rather than added to every signature between here and
-        the notification service: ``agent_display_name`` already travels that
+        the push path (``notification_dispatch``): ``agent_display_name`` already travels that
         way for the chat platforms, and both send paths already forward the
         dict. ``email_sender_name`` is mail's own key and wins where it is set:
         it names the pod when the pod's assistant is writing, and a chat bot
@@ -193,10 +193,10 @@ class ResendPlatformService:
     def _raise_unsendable(self, recipient_email: str) -> None:
         """Say which part is missing, and raise something delivery can catch.
 
-        ``AgentSurfaceError``, not ``ValueError``: notification delivery catches
-        the former per channel, while a bare ``ValueError`` escapes ``notify()``
-        and rolls back the notification row that was deliberately written before
-        the send — losing the very record that design exists to keep. Naming the
+        ``AgentSurfaceError``, not ``ValueError``: a push
+        (``notification_dispatch``) catches the former per channel and records
+        it as the reason on the line's delivery, while a bare ``ValueError``
+        escapes and fails the delivery with no reason a member can read. Naming the
         missing field matters too: this message has been read three times as
         "Resend is unconfigured" when the key was present and only the
         surface-derived sender was absent.

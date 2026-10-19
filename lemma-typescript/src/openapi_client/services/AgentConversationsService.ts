@@ -29,6 +29,7 @@ export class AgentConversationsService {
      * @param parentId
      * @param archived
      * @param search
+     * @param inChannel false: only conversations of no channel (the chats list); true: only those in a channel. Omitted: both.
      * @param pageToken
      * @param limit
      * @returns ConversationListResponse Successful Response
@@ -42,6 +43,7 @@ export class AgentConversationsService {
         parentId?: (string | null),
         archived: boolean = false,
         search?: (string | null),
+        inChannel?: (boolean | null),
         pageToken?: (string | null),
         limit: number = 20,
     ): CancelablePromise<ConversationListResponse> {
@@ -58,6 +60,7 @@ export class AgentConversationsService {
                 'parent_id': parentId,
                 'archived': archived,
                 'search': search,
+                'in_channel': inChannel,
                 'page_token': pageToken,
                 'limit': limit,
             },

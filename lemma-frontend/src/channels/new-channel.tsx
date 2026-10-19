@@ -6,6 +6,7 @@ import type { Member, Pod } from "@/data";
 import { useMe } from "@/session/use-me";
 import { Modal } from "@/shell/modal";
 import { channelApi } from "./api";
+import type { Visibility } from "./model";
 import { keepChannel } from "./queries";
 
 /** A channel made in Lemma: a name, what it is for, and who of the space is
@@ -21,13 +22,14 @@ export function NewChannel({ pod, onClose, onMade }: {
     const [title, setTitle] = useState("");
     const [topic, setTopic] = useState("");
     const [members, setMembers] = useState<Set<string>>(new Set());
+    const [visibility, setVisibility] = useState<Visibility>("PUBLIC");
     const nameField = useRef<HTMLInputElement>(null);
     useEffect(() => { nameField.current?.focus(); }, []);
     /* People, not teammates; and not the reader, who is in it already. */
     const people = pod.members.filter((member): member is Member & { userId: string } =>
         member.kind !== "teammate" && Boolean(member.userId) && member.userId !== me);
     const make = useMutation({
-        mutationFn: () => channelApi(pod.id).create({ title: title.trim(), topic: topic.trim() || null, members: [...members] }),
+        mutationFn: () => channelApi(pod.id).create({ title: title.trim(), topic: topic.trim() || null, members: [...members], visibility }),
         onSuccess: (made) => { keepChannel(cache, pod.id, made); onMade(made.id); },
     });
     const submit = (event: FormEvent) => {
@@ -50,6 +52,17 @@ export function NewChannel({ pod, onClose, onMade }: {
                     <span className="gsheet__label">What it is for <span className="gsheet__hint">(optional)</span></span>
                     <input value={topic} maxLength={500} placeholder="Beta launch, week of the 20th" onChange={(event) => setTopic(event.target.value)} />
                 </label>
+                <fieldset className="cnew__visibility">
+                    <legend className="gsheet__label">Who can find it</legend>
+                    <label className="gsheet__check">
+                        <input type="radio" name={ids + "-visibility"} checked={visibility === "PUBLIC"} onChange={() => setVisibility("PUBLIC")} />
+                        <span>Everyone in {pod.name} <span className="gsheet__hint">— anyone can read it and join</span></span>
+                    </label>
+                    <label className="gsheet__check">
+                        <input type="radio" name={ids + "-visibility"} checked={visibility === "PRIVATE"} onChange={() => setVisibility("PRIVATE")} />
+                        <span>Only the people in it <span className="gsheet__hint">— private</span></span>
+                    </label>
+                </fieldset>
                 <fieldset className="cnew__people" aria-describedby={ids + "-people"}>
                     <legend className="gsheet__label">Who is in it</legend>
                     <span className="gsheet__hint" id={ids + "-people"}>You are. Add anyone else from {pod.name}; more can join later.</span>

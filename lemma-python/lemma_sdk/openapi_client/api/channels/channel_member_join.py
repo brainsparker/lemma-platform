@@ -67,8 +67,9 @@ def sync_detailed(
     """Join Channel
 
      Join a channel the reader may see: a public group, or -- holding
-    `contact.read` -- a contact's channel. Joining one already joined is
-    nothing.
+    `contact.read` -- a contact's channel. Holding `channel.manage`, a private
+    group too, on request: how a pod admin finds and takes over a group nobody
+    let them into; it is logged. Joining one already joined is nothing.
 
     Args:
         pod_id (UUID):
@@ -103,8 +104,9 @@ def sync(
     """Join Channel
 
      Join a channel the reader may see: a public group, or -- holding
-    `contact.read` -- a contact's channel. Joining one already joined is
-    nothing.
+    `contact.read` -- a contact's channel. Holding `channel.manage`, a private
+    group too, on request: how a pod admin finds and takes over a group nobody
+    let them into; it is logged. Joining one already joined is nothing.
 
     Args:
         pod_id (UUID):
@@ -134,8 +136,9 @@ async def asyncio_detailed(
     """Join Channel
 
      Join a channel the reader may see: a public group, or -- holding
-    `contact.read` -- a contact's channel. Joining one already joined is
-    nothing.
+    `contact.read` -- a contact's channel. Holding `channel.manage`, a private
+    group too, on request: how a pod admin finds and takes over a group nobody
+    let them into; it is logged. Joining one already joined is nothing.
 
     Args:
         pod_id (UUID):
@@ -168,8 +171,9 @@ async def asyncio(
     """Join Channel
 
      Join a channel the reader may see: a public group, or -- holding
-    `contact.read` -- a contact's channel. Joining one already joined is
-    nothing.
+    `contact.read` -- a contact's channel. Holding `channel.manage`, a private
+    group too, on request: how a pod admin finds and takes over a group nobody
+    let them into; it is logged. Joining one already joined is nothing.
 
     Args:
         pod_id (UUID):

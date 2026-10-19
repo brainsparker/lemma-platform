@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal, TypedDict
+from functools import cached_property
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 from uuid import UUID
 
 from ..openapi_client.api.agent_surfaces import agent_notice_send
@@ -23,6 +24,7 @@ from ..openapi_client.api.channels import (
     channel_member_update,
     channel_message_answer,
     channel_message_delete,
+    channel_message_file,
     channel_message_list,
     channel_message_post,
     channel_message_thread,
@@ -57,6 +59,9 @@ from ..openapi_client.models.sender_kind import SenderKind
 from ..openapi_client.models.thread_response import ThreadResponse
 from ..openapi_client.types import UNSET
 from .base import BoundResource, as_uuid, compact
+
+if TYPE_CHECKING:
+    from .sources import ChannelSources
 
 Kind = Literal["MEMBER", "CONTACT", "AGENT"]
 Answers = Literal["MENTIONED", "EVERY_LINE"]
@@ -121,6 +126,14 @@ class PodChannels(BoundResource):
     the fields named; ``None`` clears one.
     """
 
+    @cached_property
+    def sources(self) -> "ChannelSources":
+        """A group channel's sources from the bot's side, and bringing the bot
+        into a group (a WhatsApp group, a Telegram link)."""
+        from .sources import ChannelSources
+
+        return ChannelSources(self._transport, org_id=self.org_id, pod_id=self.pod_id)
+
     # -- channels ------------------------------------------------------------------
 
     def list(
@@ -132,7 +145,9 @@ class PodChannels(BoundResource):
         assignee: str | UUID | None = None,
         unassigned: bool = False,
         status: Status | None = None,
+        needs_person: bool = False,
         joined: bool = False,
+        source_surface: str | None = None,
         limit: int = 50,
         cursor: str | None = None,
     ) -> ChannelListResponse:
@@ -140,8 +155,12 @@ class PodChannels(BoundResource):
         with what is new in it for them and its last line.
 
         ``assignee`` is ``"me"`` or a member's user id (contacts' channels
-        assigned to them); ``joined`` keeps only channels the caller is in.
-        Page by passing the last page's ``next_cursor`` as ``cursor``.
+        assigned to them); ``needs_person`` keeps contacts' channels waiting
+        on a person (open, unassigned, the agent off or asking for one);
+        ``joined`` keeps only channels the caller is in;
+        ``source_surface`` (a bot's surface name) keeps the groups that bot is
+        in, each with its ``source_settings``. Page by passing the last page's
+        ``next_cursor`` as ``cursor``.
         """
         return self._call(
             channel_list,
@@ -152,7 +171,9 @@ class PodChannels(BoundResource):
             assignee=str(assignee) if assignee else UNSET,
             unassigned=unassigned,
             status=ContactStatus(status) if status is not None else UNSET,
+            needs_person=needs_person,
             joined=joined,
+            source_surface=_unset(source_surface),
             cursor=_unset(cursor),
             limit=limit,
         )
@@ -162,7 +183,7 @@ class PodChannels(BoundResource):
         title: str,
         *,
         topic: str | None = None,
-        visibility: Literal["public", "private"] = "public",
+        visibility: Literal["PUBLIC", "PRIVATE"] = "PUBLIC",
         members: Sequence[str | UUID] | None = None,
         agents: Sequence[str | UUID | AgentSeat] | None = None,
         idempotency_key: str | None = None,
@@ -205,7 +226,7 @@ class PodChannels(BoundResource):
         *,
         title: str | None | _Keep = KEEP,
         topic: str | None | _Keep = KEEP,
-        visibility: Literal["public", "private"] | None | _Keep = KEEP,
+        visibility: Literal["PUBLIC", "PRIVATE"] | None | _Keep = KEEP,
         archived: bool | None | _Keep = KEEP,
         agents_answer: bool | None | _Keep = KEEP,
         hand_back_after_hours: int | None | _Keep = KEEP,
@@ -216,7 +237,8 @@ class PodChannels(BoundResource):
 
         A group: ``title``, ``topic``, ``visibility``, ``archived`` -- its
         owners' or an admin's. A contact's channel: ``agents_answer``,
-        ``hand_back_after_hours``, ``status``, ``assignee`` (a user id).
+        ``hand_back_after_hours``, ``status``, ``assignee`` (``"me"`` or a
+        user id).
         """
         body = _named(
             {
@@ -227,7 +249,9 @@ class PodChannels(BoundResource):
                 "agents_answer": agents_answer,
                 "hand_back_after_hours": hand_back_after_hours,
                 "assignee": (
-                    str(as_uuid(assignee))
+                    assignee
+                    if assignee == "me"
+                    else str(as_uuid(assignee))
                     if isinstance(assignee, (str, UUID))
                     else assignee
                 ),
@@ -412,6 +436,7 @@ class PodChannels(BoundResource):
         mentions: Sequence[Mapping[str, str]] | None = None,
         parts: Sequence[Mapping[str, Any]] | None = None,
         client_message_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> ChannelMessageResponse:
         """Write in a channel.
 
@@ -420,7 +445,8 @@ class PodChannels(BoundResource):
         note to members. ``mentions`` names people and agents
         (``{"kind", "id"}``); a named agent answers. ``parts`` are typed parts
         (``mention``, ``file``, ``link``) sent as they are. The same
-        ``client_message_id`` is the same line.
+        ``client_message_id``, or ``idempotency_key`` from the same caller, is
+        the same line.
         """
         all_parts: list[dict[str, Any]] = [
             {"type": "mention", "kind": mention["kind"], "id": mention["id"]}
@@ -441,21 +467,27 @@ class PodChannels(BoundResource):
                 "client_message_id": client_message_id,
             },
             body_model=ChannelPostRequest,
+            idempotency_key=_unset(idempotency_key),
         )
 
     def edit_message(
         self,
         channel_id: str | UUID,
         message_id: str | UUID,
-        text: str,
+        text: str | _Keep = KEEP,
         *,
-        parts: Sequence[Mapping[str, Any]] | None = None,
+        parts: Sequence[Mapping[str, Any]] | None | _Keep = KEEP,
     ) -> ChannelMessageResponse:
-        """Change what one of the caller's own lines says. ``parts`` replaces
-        its parts when given. A copy already sent outside stays as sent."""
-        body: dict[str, Any] = {"text": text}
-        if parts is not None:
-            body["parts"] = [dict(part) for part in parts]
+        """Change what one of the caller's own lines says. Only what is named
+        changes; ``parts=None`` clears its parts. A copy already sent outside
+        stays as sent."""
+        body: dict[str, Any] = {}
+        if not isinstance(text, _Keep):
+            body["text"] = text
+        if not isinstance(parts, _Keep):
+            body["parts"] = (
+                [dict(part) for part in parts] if parts is not None else None
+            )
         return self._call(
             channel_message_update,
             self._pod_uuid(),
@@ -502,6 +534,20 @@ class PodChannels(BoundResource):
             as_uuid(message_id),
         )
 
+    def file(
+        self, channel_id: str | UUID, message_id: str | UUID, file_id: str | UUID
+    ) -> bytes:
+        """A file a line shares (a ``file`` part's ``file_id``), read as the
+        line's writer reads it."""
+        result = self._call(
+            channel_message_file,
+            self._pod_uuid(),
+            as_uuid(channel_id),
+            as_uuid(message_id),
+            as_uuid(file_id),
+        )
+        return result.payload.getvalue()
+
     def retry_delivery(
         self,
         channel_id: str | UUID,
@@ -543,12 +589,17 @@ class PodChannels(BoundResource):
             limit=limit,
         )
 
-    def notify(self, to: str, text: str) -> NoticeResponse:
+    def notify(
+        self, to: str, text: str, *, idempotency_key: str | None = None
+    ) -> NoticeResponse:
         """Tell another member of the pod something: a line in their own
-        channel. ``to`` is a pod member id, user id or email address."""
+        channel. ``to`` is a pod member id, user id or email address. The same
+        ``idempotency_key`` from the same caller is the same notice."""
         return self._call(
             agent_notice_send,
             self._pod_uuid(),
-            body={"to": to, "text": text},
+            to,
+            body={"text": text},
             body_model=NoticeRequest,
+            idempotency_key=_unset(idempotency_key),
         )

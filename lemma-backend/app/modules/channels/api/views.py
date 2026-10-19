@@ -4,7 +4,7 @@ places, last lines, members. A page of any size is a fixed number of reads.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -17,6 +17,7 @@ from app.modules.channels.api.message_schemas import (
     message_agents,
     message_people,
     message_response,
+    wrote,
 )
 from app.modules.channels.api.schemas import (
     AgentNames,
@@ -31,7 +32,13 @@ from app.modules.channels.api.schemas import (
     ref,
     source_response,
 )
-from app.modules.channels.domain.entities import Channel, ChannelMessage, Principal
+from app.modules.channels.domain.entities import (
+    Channel,
+    ChannelMessage,
+    Delivery,
+    Principal,
+)
+from app.modules.channels.infrastructure.deliveries import DeliveryRepository
 from app.modules.channels.infrastructure.inbox import InboxReads
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.members import MemberRepository
@@ -76,17 +83,27 @@ def _preview(
 
 
 async def channel_rows(
-    uow: SqlAlchemyUnitOfWork, caller: Caller, channels: Sequence[Channel]
+    uow: SqlAlchemyUnitOfWork,
+    caller: Caller,
+    channels: Sequence[Channel],
+    *,
+    unseen: Collection[UUID] = (),
 ) -> list[ChannelResponse]:
     """Each channel with what is new in it for the caller, its places and its
-    last line -- in a few reads for the whole page."""
+    last line -- in a few reads for the whole page. ``unseen``: channels the
+    caller is shown without being able to read them (a pod admin's view of a
+    bot's private groups), listed without their last line."""
     if not channels:
         return []
     ids = [channel.id for channel in channels]
     unread = await InboxReads(uow.session).unread(caller.viewer, channels)
     sources = await SourceRepository(uow.session).of_channels(ids)
     latest = await LineRepository(uow.session).by_ids(
-        [channel.last_line_id for channel in channels if channel.last_line_id]
+        [
+            channel.last_line_id
+            for channel in channels
+            if channel.last_line_id and channel.id not in unseen
+        ]
     )
     names, agents = await _named(
         uow,
@@ -163,19 +180,38 @@ async def lines_response(
     channel: Channel,
     lines: Sequence[ChannelMessage],
 ) -> list[ChannelMessageResponse]:
-    """Lines of one channel, as the caller reads them."""
+    """Lines of one channel, as the caller reads them -- their own with where
+    each went outside Lemma."""
     names, agents = await _named(
         uow,
         caller.pod_id,
         people=[person for line in lines for person in message_people(line)],
         agents=[agent for line in lines for agent in message_agents(line)],
     )
+    sent = await deliveries_of(
+        uow, [line.id for line in lines if wrote(line, caller.user_id)]
+    )
     return [
         message_response(
-            line, channel, reader_id=caller.user_id, names=names, agents=agents
+            line,
+            channel,
+            reader_id=caller.user_id,
+            names=names,
+            agents=agents,
+            deliveries=sent.get(line.id, ()),
         )
         for line in lines
     ]
+
+
+async def deliveries_of(
+    uow: SqlAlchemyUnitOfWork, message_ids: Sequence[UUID]
+) -> dict[UUID, list[Delivery]]:
+    """The sends of these lines, by line: one read for a page."""
+    by_line: dict[UUID, list[Delivery]] = {}
+    for delivery in await DeliveryRepository(uow.session).of_messages(message_ids):
+        by_line.setdefault(delivery.message_id, []).append(delivery)
+    return by_line
 
 
 async def lines_across(

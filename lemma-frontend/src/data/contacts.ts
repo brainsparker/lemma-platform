@@ -86,7 +86,7 @@ export function readContact(wire: ContactResponse): Contact {
 }
 
 export function readContacts(wire: ContactListResponse): { items: Contact[]; next: string | null } {
-    return { items: (wire.items ?? []).map(readContact), next: wire.next_before ?? null };
+    return { items: (wire.items ?? []).map(readContact), next: wire.next_cursor ?? null };
 }
 
 /** The most pages one list follows: far past any space's contacts or tables,
@@ -177,6 +177,33 @@ export function answerChoices(space: string): { value: WidgetAnswer; label: stri
 }
 
 /** Why a follow-up was refused, from the code the API gave. */
+/** A line written to a contact first, and what became of its send. */
+export interface OutreachSent {
+    channelId: string;
+    lineId: string;
+    platform: string | null;
+    status: "PENDING" | "SENT" | "FAILED" | "SKIPPED" | "DEAD";
+    reason: string | null;
+}
+
+/** The handles a member can write to first: an address, a number on
+ *  WhatsApp, a Telegram account. A chat on the website or a colleague in
+ *  another company's Slack waits for them to write. */
+export function writableHandles(contact: Pick<Contact, "handles">): ContactHandle[] {
+    return contact.handles.filter((handle) => handle.kind === "EMAIL" || handle.kind === "PHONE" || handle.kind === "TELEGRAM");
+}
+
+/** What a member is told after writing to a contact first. */
+export function outreachSaid(sent: Pick<OutreachSent, "status" | "reason" | "platform">): string {
+    const where = sent.platform === "WHATSAPP" ? "WhatsApp" : sent.platform === "TELEGRAM" ? "Telegram" : "email";
+    switch (sent.status) {
+        case "SENT": return "Sent by " + where + ". It is in their channel.";
+        case "PENDING": return "In their channel, on its way by " + where + ".";
+        case "SKIPPED": return "In their channel, but not sent" + (sent.reason ? ": " + sent.reason.replace(/\.$/, "") : "") + ".";
+        default: return "In their channel, but it did not go" + (sent.reason ? ": " + sent.reason.replace(/\.$/, "") : "") + ". Retry it from there.";
+    }
+}
+
 export function followUpRefusal(code: string | undefined): string {
     switch (code) {
         case "unsubscribed": return "They asked not to be written to there.";

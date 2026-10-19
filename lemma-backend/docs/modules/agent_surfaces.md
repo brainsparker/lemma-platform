@@ -33,7 +33,6 @@ Resend address.
 | `surface_pending_onboarding` | Onboarding in flight for one binding — step, email challenge, offered pods, and the original inbound event held until there is a conversation to commit it to |
 | `surface_onboarding_input_tokens` | Hashed handles for a native input form — a Slack modal, a Teams card, a WhatsApp prompt — each minted against one pending row, step and challenge. A submission is accepted only while all three still match, so a form left open across a step stops working rather than answering the wrong question; the cleanup sweep deletes handles at expiry |
 | `surface_whatsapp_numbers` | The deployment's WhatsApp numbers, one row each and each independent: its own WABA, access token, verify token and Flow ids, every one falling back to settings when absent so a single-number deployment declares nothing. `role` separates the one `SHARED` line everybody rides from the `ALLOCATABLE` pool; `status` separates "stop handing this out" from "we no longer own it". Who holds a number is not stored here — it is `agent_surfaces.surface_identity_id`, so there is no second copy to disagree |
-| `notifications` | Retired: kept defined until a later migration drops it. What the pod tells a member is a line in their own channel (`services/direct_messages.py`), and each place it was sent is a `channel_message_deliveries` row |
 | `agent_surface_web_widgets` | A pod's chat on other people's web pages, each answering as one of its agents, and the door a form page adds rows through. `public_key` (unique, readable by anybody) names the widget; `signing_secret` (encrypted) signs host tokens on the customer's server; `allowed_origins`, `answer` (`off`/`known`/`anyone`) and `looked_after_by` as for a bot's contacts. See `services/web_chat.py`. A form is any page that adds a row to a table the pod opened to visitors (`datastore_public_rows`): `GET /public/web/{key}/table` says what to ask, `POST /public/web/{key}/rows` adds the row, and `/public/web/{key}/page?table=` is the form Lemma hosts, with the chat beside it. On a web visitor's run the agent's `fill_form` tool fills that form's fields; it never sends it. Answers reach the page live on `GET /public/web/{key}/stream`, one JSON object per line after an `open` handshake, at most two per session, translated by `agent/contracts/visitor_stream.py`: the answer's text as it is written, `typing`, the finished message and `done` -- never thinking, tool traffic or a private note's run |
 | `visitor_sessions` (contacts' table) | One visitor's hold on one widget, found by a secret stored only as its digest and traded at `POST /public/web/{key}/session` for a 15-minute `visitor-access` token sent as `Authorization: Bearer` (`api/public_dependencies.py`). `strength` is `ANONYMOUS`, `CODE` or `HOST`; anonymous sessions end 90 days after they began, a contact's 30 days after last use, and a `HOST` session never refreshes without a fresh host token. Reissuing a widget's secret revokes its host sessions; forgetting a contact revokes theirs. Cascades from its conversation. CORS for `/public/web/*` is answered from the widget's own origins, never with credentials (`api/public_cors.py`), and nothing there is served unless `PUBLIC_WEB_ENABLED` is on |
 | `agent_surface_web_codes` | One-time codes sent to email addresses web visitors typed, stored salted with their session, expiring in ten minutes after five guesses at most, each counted before it is compared. `events/visitor_retention.py` sweeps ended sessions and spent codes hourly; a visitor's conversation is a contact's, and is never swept |
@@ -79,7 +78,8 @@ impossible to leave stale.
 | `/surfaces/me` | List reachable user surfaces and choose a default |
 | `/surfaces/webhooks/{platform}`, `/surfaces/{surface_id}/webhook` | Platform-wide or direct webhook ingest/verification |
 | `/surfaces/teams/admin-consent/callback` | Teams tenant consent completion |
-| `/pods/{pod_id}/sources` | A group source's settings (who answers its outsiders, and whether), starting a WhatsApp group and minting a Telegram add-to-group link. The group itself is a channel (`/pods/{pod_id}/channels`) |
+| `/pods/{pod_id}/members/{member}/notices` | `POST {text}`: tell another member something, as a line in their own channel, pushed to them like any line of theirs (`services/direct_messages.py`). `member` is a pod member id, user id or email; takes `channel.write`; the same `Idempotency-Key` from the same caller is the same notice |
+| `/pods/{pod_id}/channels/{c}/sources/{s}`, `/channels/whatsapp-groups`, `/channels/telegram-links` | A group source's settings (who answers its outsiders, and whether), starting a WhatsApp group (`Idempotency-Key`, `services/group_start_keys.py`) and minting a Telegram add-to-group link -- under the channel the group is, but here, since they talk to the platforms. The bot's settings page lists its groups with `GET /channels?source_surface=`, through the lister `api/controllers/source_controller.py` registers (`channels.contracts.source_settings`) |
 
 ## Ingress and egress
 
@@ -241,7 +241,7 @@ is answered *for the pod*, in a group the pod has opened to them.
   it (Telegram's `my_chat_member`, handled on the lifecycle path). That member
   becomes the group's owner: the person who answers for its outsiders. Owners
   and the "answers people outside" switch are managed through
-  `PATCH /pods/{pod_id}/sources/{source_id}` (`api/group_access.py`): by the owner; by anybody who
+  `PATCH /pods/{pod_id}/channels/{channel_id}/sources/{source_id}` (`api/group_access.py`): by the owner; by anybody who
   may configure the bot when nobody in the pod answers for the group, which
   makes them its owner; or by an admin of the pod, whose change is a line in
   the owner's own channel. A member who has left the pod answers for nobody -- their
@@ -256,11 +256,11 @@ is answered *for the pod*, in a group the pod has opened to them.
   pod's GROUP channels, read like any channel (`/pods/{pod_id}/channels`):
   its timeline, who has spoken, what is new. What only the bot's side knows --
   whether its outsiders are answered and who answers for them -- is the
-  source's settings (`GET`/`PATCH /pods/{pod_id}/sources/{source_id}`,
+  source's settings (`GET`/`PATCH /pods/{pod_id}/channels/{c}/sources/{s}`,
   `services/source_settings.py`). Each of the bot's lines records whom it
   answered and whether that was from what is Public, and an answer made with
   one member's own access shows its words to that member alone.
-- **A Telegram group can be added from Lemma.** `POST /pods/{pod_id}/sources/telegram-links`
+- **A Telegram group can be added from Lemma.** `POST /pods/{pod_id}/channels/telegram-links`
   mints a one-use, hour-long code in Redis and returns
   `t.me/<bot>?startgroup=<code>` (`services/telegram_group_links.py`); Telegram
   asks the person which group, adds the bot, and the bot hears

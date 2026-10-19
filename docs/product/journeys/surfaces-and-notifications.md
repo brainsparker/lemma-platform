@@ -326,7 +326,7 @@ is answered *for the pod*.
   a shared bot.
 
 **Contracts:** `surface.webhook.handle_platform`, `channel.list`,
-`agent.source.update`
+`channel.source.update`
 
 ### PS-SURF-016 — The bot remembers what was said in a group
 **Status:** planned
@@ -419,7 +419,7 @@ by its link.
 
 - When a member asks the bot, in their own chat with it, to open a group, the
   system shall create the group and hand back the link people join by.
-- When a member who may configure the bot starts a group from the pod's groups
+- When a member who may configure the bot starts a group from the pod's channels
   in Lemma, the system shall do the same, show the group as waiting for
   WhatsApp until WhatsApp confirms it, and then show the link.
 - The system shall make that member the person who answers for the group's
@@ -434,7 +434,7 @@ by its link.
   approvals and links as words.
 
 **Contracts:** `surface.webhook.handle_platform`, `channel.list`,
-`agent.source.whatsapp_group.start`
+`channel.whatsapp_group.start`
 
 ---
 
@@ -532,12 +532,12 @@ by its link.
 **Status:** covered
 
 - When something in a pod needs a person's attention, the system shall put it in
-  their notifications for that pod.
-- The system shall show a person how many notifications they have not read,
-  without them opening the list.
-- The system shall group a thread of related notifications as one item, rather
-  than one item per message.
-- If someone who does not belong to the pod asks for its notifications, then the
+  their inbox for that pod.
+- The system shall show a person how much they have not read, without them
+  opening the list.
+- The system shall show what is new in one channel as one item, rather than one
+  item per line.
+- If someone who does not belong to the pod asks for its inbox, then the
   system shall refuse, as it refuses every other read in that pod.
 
 **Contracts:** `channel.inbox.get`, `channel.list`, `agent.notice.send`
@@ -555,13 +555,12 @@ by its link.
 
 **Contracts:** `channel.read`, `channel.list`, `channel.inbox.get`
 
-### PS-SURF-032 — A person can answer from the notification
+### PS-SURF-032 — A person can answer from their inbox
 **Status:** covered
 
-- Where a notification asks something, the system shall let a person answer it
+- Where a line asks a person something, the system shall let them answer it
   directly and shall carry the answer back to whatever is waiting.
-- When a person answers or acknowledges a notification, the system shall stop
-  asking.
+- When a person answers a question, the system shall stop asking.
 - If a person answers something that has already been answered or has expired,
   then the system shall say so rather than accepting an answer that goes
   nowhere.
@@ -574,11 +573,11 @@ by its link.
 > Proven at module level by `agent_surfaces/tests/e2e/test_member_reach_private_e2e.py`
 > and `agent_surfaces/tests/e2e/test_group_private_send_e2e.py`.
 
-- The system shall deliver a notification meant for one person only somewhere
-  private to them.
+- The system shall deliver a line meant for one person only somewhere private
+  to them.
 - Where the only place a person has spoken to the bot is a group, the system
-  shall reach them another way -- email, or their Lemma inbox -- rather than in
-  front of the group.
+  shall reach them another way -- email, or their own channel in Lemma --
+  rather than in front of the group.
 - When the agent sends the person it is working for something mid-task from a
   group chat, the system shall deliver it to that person's own chat with the bot
   in the same pod.
@@ -610,10 +609,16 @@ remember where the bot is, who is in there, or what is waiting on them.
 > A scenario needs the forged chats to create and speak in groups, which they
 > do not yet.
 
-- The system shall list, for every member of the pod, each group its bots are
-  in: the platform, the group's name, who answers for its people outside the
-  pod, how many people in and outside the pod have spoken there, when it was
-  last active, and how many questions are waiting on the member looking.
+- The system shall list each group its bots are in to every member of the pod
+  who may see it -- every member for a public group, its own people for a
+  private one: the platform, the group's name, who answers for its people
+  outside the pod, how many people in and outside the pod have spoken there,
+  when it was last active, and how many questions are waiting on the member
+  looking.
+- Where a bot is in a private group that a pod admin or editor is not in, the
+  system shall list it on that bot's settings for them, marked as not joined
+  and without anything said there, and shall let them join it on request,
+  recording that they did.
 - Where the pod keeps its own record of a group, the system shall show a member
   what was said there, marking who is in the pod, and for each of the bot's
   answers, whom it answered and whether it answered from what the pod made
@@ -631,8 +636,8 @@ remember where the bot is, who is in there, or what is waiting on them.
   the pod, change it or take it over, and shall tell that member when an admin
   does.
 
-**Contracts:** `channel.list`, `agent.source.get`, `channel.message.list`,
-`agent.source.update`
+**Contracts:** `channel.list`, `channel.source.get`, `channel.message.list`,
+`channel.source.update`
 
 ### PS-SURF-041 — A member steps in for somebody outside the pod the bot cannot help
 **Status:** planned
@@ -673,7 +678,7 @@ remember where the bot is, who is in there, or what is waiting on them.
 - The system shall not take the Telegram account that used a link for the
   member it was made for: a link is easily passed on.
 
-**Contracts:** `agent.source.telegram_link.create`, `surface.webhook.handle_platform`
+**Contracts:** `channel.telegram_link.create`, `surface.webhook.handle_platform`
 
 ### PS-SURF-043 — A Slack channel shared with another company answers that company for the pod
 **Status:** planned

@@ -6,7 +6,7 @@ import asyncio
 
 from app.core.authorization.authz_epoch import pod_authz_epoch
 from app.core.infrastructure.channels.channel_service import get_channel_service
-from app.modules.datastore.config_live import live_settings
+from app.core.live.config import live_settings
 from app.modules.datastore.services.live.access import TableLiveAccess
 from app.modules.datastore.services.live.feed import ChangeLogFeed
 from app.modules.datastore.services.live.registry import LiveHubRegistry

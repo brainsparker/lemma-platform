@@ -35,6 +35,10 @@ contacts, channels, icon, usage, workspace, web login, MCP access, decisions, an
 modules should communicate through explicit ports or domain events rather than
 depending on import order.
 
+The pod's live socket, `/pods/{pod_id}/live`, is core's transport that modules
+put topics and calls on (`LemmaModule.live`): [live.md](live.md) is its wire
+protocol and how a module adds a topic.
+
 ## Module catalog
 
 | Module | Primary responsibility | Durable tables owned |
@@ -55,7 +59,7 @@ depending on import order.
 | [workspace](workspace.md) | sandbox/session access and workspace tool runtime | `sandboxes`, `sandbox_instances`; live process/session state stays in the sandbox runtime and Redis |
 | [mcp_access](mcp_access.md) | Outside MCP clients: the OAuth authorization server, consent, and connected clients | `mcp_oauth_clients`, `mcp_oauth_grants`, `mcp_oauth_tokens`; pending authorizations and codes are short-lived Redis keys |
 | [contacts](contacts.md) | People a pod's bots answer who are not members, and the handles they are known by | `contacts`, `contact_identities` |
-| [channels](channels.md) | The places members, contacts and agents talk: one timeline per place, fed by outside sources | `channels`, `channel_sources`, `channel_messages`, `channel_participants` |
+| [channels](channels.md) | The places members, contacts and agents talk: one timeline per place, fed by outside sources | `external_accounts`, `channels`, `channel_members`, `channel_read_state`, `channel_sources`, `channel_messages`, `channel_mentions`, `channel_questions`, `channel_message_deliveries` |
 | [decisions](decisions.md) | Stateless closed-question decisions over pluggable providers | None; the per-organization rate window is a short-lived Redis counter |
 
 ## Tables owned by core

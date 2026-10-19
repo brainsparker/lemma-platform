@@ -147,8 +147,8 @@ async def _queued_for(delivery_id: UUID) -> int:
 
 
 async def _tell(client: AsyncClient, pod_id: str, to: str, **overrides) -> dict:
-    payload = {"to": to, "text": "What did you ship yesterday?"} | overrides
-    response = await client.post(f"/pods/{pod_id}/notices", json=payload)
+    payload = {"text": "What did you ship yesterday?"} | overrides
+    response = await client.post(f"/pods/{pod_id}/members/{to}/notices", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -301,7 +301,7 @@ async def test_nobody_outside_the_pod_is_ever_a_recipient(
     no wiring bug becomes "any user id can be messaged"."""
     pod_id = test_pod["id"]
     response = await authenticated_client.post(
-        f"/pods/{pod_id}/notices", json={"to": str(uuid4()), "text": "Nope."}
+        f"/pods/{pod_id}/members/{uuid4()}/notices", json={"text": "Nope."}
     )
     assert response.status_code == 404, response.text
 

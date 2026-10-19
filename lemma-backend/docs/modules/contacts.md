@@ -32,7 +32,7 @@ rows by the `ContactMerged` fact.
 | `contact_suppressions` | A handle nobody in the pod may write to -- it said STOP, used an unsubscribe link, or bounced -- keyed by the pod, the handle's kind and a hash of the normalised handle, with the `reason`. Kept apart from the contact so it survives the contact being forgotten |
 
 - `GET /pods/{pod_id}/contacts` and `GET /pods/{pod_id}/contacts/{id}`: takes
-  `conversation.read`. Pages with an opaque `before` / `next_before`
+  `conversation.read`. Pages with an opaque `cursor` / `next_cursor`
   (`created_at` and id).
 - `PATCH /pods/{pod_id}/contacts/{id}`: rename; takes `pod.update`.
 - `DELETE /pods/{pod_id}/contacts/{id}`: forget a contact; takes
@@ -61,8 +61,8 @@ rows by the `ContactMerged` fact.
   in (`services/outsiders.py`); a web visitor's first message or row
   (`services/web_chat.py`). Somebody writing privately to Lemma's shared bot is
   never one -- they may be signing up. Email that was not authenticated is
-  never answered; it is parked as a notification for the member who looks after
-  contacts.
+  never answered; it is parked as a line in the own channel of the member who
+  looks after contacts.
 - **What a contact's run may do.** `agent` does. A contact's conversation names
   them in its `contact_id` column, which only the server writes, and every run
   in it authorizes as that contact: Public reads, their own rows where they

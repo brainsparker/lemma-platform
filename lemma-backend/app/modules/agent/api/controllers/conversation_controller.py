@@ -158,6 +158,13 @@ async def list_conversations(
     parent_id: UUID | None = Query(default=None),
     archived: bool = Query(default=False),
     search: str | None = Query(default=None, min_length=1, max_length=200),
+    in_channel: bool | None = Query(
+        default=None,
+        description=(
+            "false: only conversations of no channel (the chats list); true: "
+            "only those in a channel. Omitted: both."
+        ),
+    ),
     page_token: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ConversationListResponse:
@@ -175,6 +182,7 @@ async def list_conversations(
         search=search,
         cursor=parse_conversation_page_token(page_token),
         limit=limit,
+        in_channel=in_channel,
     )
     return ConversationListResponse(
         items=[ConversationResponse.model_validate(item) for item in conversations],

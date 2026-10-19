@@ -56,8 +56,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.delete` | Delete Surface |
 | DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.delete` | Delete Widget |
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
-| GET | `/pods/{pod_id}/sources` | `agent.source.list` | List Sources |
-| GET | `/pods/{pod_id}/sources/{source_id}` | `agent.source.get` | Get Source |
+| GET | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | `channel.source.get` | Get Source |
 | GET | `/pods/{pod_id}/surface-setup/{platform}` | `agent.surface.setup_guide` | Get Surface Setup Guide |
 | GET | `/pods/{pod_id}/surfaces` | `agent.surface.list` | List Surfaces |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.get` | Get Surface |
@@ -76,13 +75,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.verify_whatsapp_number` | Verify a pooled WhatsApp number's own callback URL |
 | GET | `/surfaces/webhooks/{platform}` | `surface.webhook.verify` | Verify surface webhook using the platform callback URL |
 | GET | `/surfaces/{surface_id}/webhook` | `surface.webhook.verify_surface` | Verify surface webhook using a surface-level callback URL |
-| PATCH | `/pods/{pod_id}/sources/{source_id}` | `agent.source.update` | Update Source |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | `channel.source.update` | Update Source |
 | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.update` | Update Surface |
 | PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.update` | Update Widget |
+| POST | `/pods/{pod_id}/channels/telegram-links` | `channel.telegram_link.create` | Telegram Link |
+| POST | `/pods/{pod_id}/channels/whatsapp-groups` | `channel.whatsapp_group.start` | Start Whatsapp Group |
 | POST | `/pods/{pod_id}/contacts/{contact_id}/outreach` | `contact.outreach.send` | Send Outreach |
-| POST | `/pods/{pod_id}/notices` | `agent.notice.send` | Send Notice |
-| POST | `/pods/{pod_id}/sources/telegram-links` | `agent.source.telegram_link.create` | Telegram Link |
-| POST | `/pods/{pod_id}/sources/whatsapp-groups` | `agent.source.whatsapp_group.start` | Start Whatsapp Group |
+| POST | `/pods/{pod_id}/members/{member}/notices` | `agent.notice.send` | Send Notice |
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
@@ -130,6 +129,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/channels/{channel_id}` | `channel.get` | Get Channel |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.list` | List Messages |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries` | `channel.delivery.list` | List Deliveries |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}` | `channel.message.file` | Line File |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread` | `channel.message.thread` | List Thread |
 | GET | `/pods/{pod_id}/inbox` | `channel.inbox.get` | Get Inbox |
 | GET | `/pods/{pod_id}/search` | `channel.search` | Search |

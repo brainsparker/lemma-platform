@@ -1,5 +1,5 @@
 import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChannelsResponse, SurfaceUpdateRequest, ContactExportResponse } from "lemma-sdk";
-import type { Contact, ContactReach, ContactsCap, NewWebWidget, WebWidget, WidgetAnswer, WidgetDraft } from "./contacts";
+import type { Contact, ContactReach, ContactsCap, NewWebWidget, OutreachSent, WebWidget, WidgetAnswer, WidgetDraft } from "./contacts";
 import type { Audience, TableOpening } from "./public-rows";
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
@@ -540,9 +540,11 @@ export interface PodSource {
     forgetContact(podId: string, contactId: string): Promise<void>;
     /** What the space holds about a contact, as the API gives it, to hand over. */
     exportContact(podId: string, contactId: string): Promise<ContactExportResponse>;
-    /** Write to a contact in their channel; it is carried to the place they
-     *  last wrote from. Throws with a `code` when they have no channel yet. */
-    followUpContact(podId: string, contactId: string, message: string): Promise<{ channelId: string; platform: string | null }>;
+    /** Write to a contact first, on one of their handles: email any time,
+     *  WhatsApp within a day of their last message there. The line goes in
+     *  their channel, at that handle's place, and is sent from there. The
+     *  same `clientMessageId` is the same line. */
+    followUpContact(podId: string, contactId: string, message: string, handle: { kind: string; value: string }, clientMessageId: string): Promise<OutreachSent>;
     listWidgets(podId: string): Promise<WebWidget[]>;
     createWidget(podId: string, draft: WidgetDraft): Promise<NewWebWidget>;
     updateWidget(podId: string, widgetId: string, change: { answer?: WidgetAnswer; origins?: string[] }): Promise<WebWidget>;

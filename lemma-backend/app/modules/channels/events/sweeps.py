@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from opentelemetry import metrics
+
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.work import facts
@@ -22,6 +24,18 @@ from app.modules.channels.infrastructure.rows import now
 from app.modules.channels.services.questions import expire_overdue
 
 logger = get_logger(__name__)
+meter = metrics.get_meter(__name__)
+questions_expired = meter.create_counter(
+    "lemma.channels.questions_expired",
+    description="Questions the sweeper closed because their time ran out.",
+)
+deliveries_due_again = meter.create_counter(
+    "lemma.channels.deliveries_due_again",
+    description=(
+        "Deliveries the sweeper announced again: a failure's backoff passed, "
+        "or the sender that claimed one died."
+    ),
+)
 
 QUESTIONS_EXPIRE = "channels.questions_expire"
 DELIVERIES_DUE = "channels.deliveries_due"
@@ -36,7 +50,12 @@ async def questions_expire() -> None:
         expired = await expire_overdue(uow, limit=_BATCH)
         await uow.commit()
     if expired:
-        logger.info("channels.questions.expired.observed", count=expired)
+        questions_expired.add(expired)
+        logger.info(
+            "channels.questions.expired.observed",
+            count=expired,
+            backlog=expired >= _BATCH,
+        )
 
 
 @periodic_job(DELIVERIES_DUE, every=timedelta(minutes=1))
@@ -53,4 +72,9 @@ async def deliveries_due() -> None:
                 )
         await uow.commit()
     if due:
-        logger.info("channels.deliveries.due_again.observed", count=len(due))
+        deliveries_due_again.add(len(due))
+        logger.info(
+            "channels.deliveries.due_again.observed",
+            count=len(due),
+            backlog=len(due) >= _BATCH,
+        )

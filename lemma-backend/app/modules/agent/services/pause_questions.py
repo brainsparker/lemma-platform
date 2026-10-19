@@ -45,6 +45,8 @@ from app.modules.agent.infrastructure.repositories.conversation_repository impor
 from app.modules.agent.services.channel_answers import line_answered_by
 from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.channels.contracts import (
+    ChannelKind,
+    channel_by_id,
     NewLine,
     NewQuestion,
     Principal,
@@ -279,7 +281,13 @@ async def _where_to_ask(
     line = await line_by_id(uow, answered) if answered else None
     if line is None or line.channel_id != channel_id:
         return channel_id, None
-    return channel_id, line.thread_root_id or line.id
+    if line.thread_root_id is not None:
+        return channel_id, line.thread_root_id
+    # A member's own channel reads as a chat: the question follows the line.
+    channel = await channel_by_id(uow, channel_id)
+    if channel is not None and channel.kind is ChannelKind.DIRECT:
+        return channel_id, None
+    return channel_id, line.id
 
 
 async def _close_stale(

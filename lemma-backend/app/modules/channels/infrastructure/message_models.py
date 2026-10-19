@@ -81,6 +81,7 @@ class ChannelMessageModel(UUIDAuditBase):
             postgresql_where=text("thread_root_id IS NOT NULL"),
         ),
         Index("ix_channel_messages_conversation", "conversation_id", "seq"),
+        Index("ix_channel_messages_rev", "channel_id", "rev"),
         Index("ix_channel_messages_search", "search", postgresql_using="gin"),
         Index(
             "ix_channel_messages_sender_user",
@@ -187,6 +188,11 @@ class ChannelMessageModel(UUIDAuditBase):
     )
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    #: The channel change (``channels.last_rev``) that last moved this line:
+    #: what a live subscriber resuming from an earlier one is sent again.
+    rev: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
     )
 
 

@@ -14,6 +14,7 @@ a note to the member alone (``members_only``): in their channel, never pushed.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -75,12 +76,21 @@ class DirectMessages:
             line=NewLine(
                 sender=sender,
                 text=message.text,
-                client_message_id=f"dm:{message.key}" if message.key else None,
+                client_message_id=_line_name(message.key),
             ),
         )
         if line is None:
             raise AgentSurfaceValidationError("There is nothing to send.")
         return line
+
+
+def _line_name(key: str | None) -> str | None:
+    """The line's ``client_message_id`` for a send's key, inside its 64."""
+    if key is None:
+        return None
+    if len(key) > 61:
+        key = hashlib.sha256(key.encode()).hexdigest()[:48]
+    return f"dm:{key}"
 
 
 async def tell_member(

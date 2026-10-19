@@ -337,6 +337,7 @@ _NAME_TO_MODULE = {
     'InstallationChoiceSchema': 'installation_choice_schema',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
+    'LineDelivery': 'line_delivery',
     'LinePreview': 'line_preview',
     'LinkPart': 'link_part',
     'ListeningResponse': 'listening_response',
@@ -532,7 +533,7 @@ _NAME_TO_MODULE = {
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
     'SignedUrlSummary': 'signed_url_summary',
     'SourceKind': 'source_kind',
-    'SourceListResponse': 'source_list_response',
+    'SourceSettingsDetailResponse': 'source_settings_detail_response',
     'SourceSettingsResponse': 'source_settings_response',
     'SourceSummary': 'source_summary',
     'SourceUpdateRequest': 'source_update_request',
@@ -1021,6 +1022,7 @@ if TYPE_CHECKING:
     from .installation_choice_schema import InstallationChoiceSchema
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
+    from .line_delivery import LineDelivery
     from .line_preview import LinePreview
     from .link_part import LinkPart
     from .listening_response import ListeningResponse
@@ -1216,7 +1218,7 @@ if TYPE_CHECKING:
     from .signed_url_revoke_response import SignedUrlRevokeResponse
     from .signed_url_summary import SignedUrlSummary
     from .source_kind import SourceKind
-    from .source_list_response import SourceListResponse
+    from .source_settings_detail_response import SourceSettingsDetailResponse
     from .source_settings_response import SourceSettingsResponse
     from .source_summary import SourceSummary
     from .source_update_request import SourceUpdateRequest
@@ -1718,6 +1720,7 @@ __all__ = [
     'InstallationChoiceSchema',
     'InstalledAppSummary',
     'JsonObject',
+    'LineDelivery',
     'LinePreview',
     'LinkPart',
     'ListeningResponse',
@@ -1913,7 +1916,7 @@ __all__ = [
     'SignedUrlRevokeResponse',
     'SignedUrlSummary',
     'SourceKind',
-    'SourceListResponse',
+    'SourceSettingsDetailResponse',
     'SourceSettingsResponse',
     'SourceSummary',
     'SourceUpdateRequest',

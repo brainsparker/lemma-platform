@@ -21,12 +21,13 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import effective_agent_id
+from app.core.authorization.delegation import effective_agent_id, is_pod_default_agent
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.core.text.thinking_tags import strip_context_echo, strip_thinking_tokens
 from app.modules.agent.contracts import channel_conversations
 from app.modules.agent.contracts.run_replies import (
     answer_line_client_id,
@@ -37,8 +38,10 @@ from app.modules.agent.infrastructure.models.conversation import (
     ConversationModel,
     MessageModel,
 )
+from app.modules.agent.services.live_conversation import CONVERSATION_STREAM
 from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.channels.contracts import (
+    ChannelKind,
     Channel,
     ChannelMessage,
     NewLine,
@@ -48,6 +51,7 @@ from app.modules.channels.contracts import (
     channel_by_id,
     post,
 )
+from app.modules.channels.contracts.live import announce_answering
 from app.modules.channels.contracts.lines import (
     claim_line,
     line_by_id,
@@ -157,7 +161,7 @@ async def _answer_as(
         background = await member_background(
             uow, line=line, for_user_id=user_id, limit=IN_APP_CONTEXT_LINES
         )
-        await service.add_user_message_and_start_run(
+        started = await service.add_user_message_and_start_run(
             conversation_id=conversation_id,
             user_id=user_id,
             content=line.text,
@@ -168,6 +172,17 @@ async def _answer_as(
             client_message_id=turn_client_id(line.id),
         )
         await uow.commit()
+        announce_answering(
+            pod_id=pod_id,
+            channel_id=channel.id,
+            message_id=line.id,
+            agent_id=agent_id,
+            for_user_id=user_id,
+            state="started",
+            conversation_id=conversation_id,
+            agent_run_id=started.agent_run_id,
+            stream=(CONVERSATION_STREAM, str(conversation_id)),
+        )
         return conversation_id
     except DomainError as refused:
         logger.warning(
@@ -275,24 +290,59 @@ async def line_answered_by(
 
 
 async def post_run_answer(
-    uow: SqlAlchemyUnitOfWork, *, run_id: UUID, conversation_id: UUID
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    run_id: UUID,
+    conversation_id: UUID,
+    answered: bool = True,
 ) -> ChannelMessage | None:
     """A finished run's answer, as the agent's line in the thread of the line
-    in Lemma it answers. Nothing for a run answering anything else."""
+    in Lemma it answers. Nothing for a run answering anything else.
+
+    ``answered``: the run ended with an answer, rather than failing, stopping
+    or pausing; either way the line's readers hear it is no longer being
+    answered, once this commits.
+    """
     line_id = await line_answered_by(uow, conversation_id)
     if line_id is None:
+        return None
+    line = await line_by_id(uow, line_id)
+    conversation = await uow.session.get(ConversationModel, conversation_id)
+    if line is None or conversation is None:
+        return None
+    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
+    if conversation.user_id is not None:
+        announce_answering(
+            pod_id=conversation.pod_id,
+            channel_id=line.channel_id,
+            message_id=line.id,
+            agent_id=agent_id,
+            for_user_id=conversation.user_id,
+            state="finished",
+            after_commit_of=uow.session,
+        )
+    if not answered or line.is_deleted:
         return None
     material = await run_reply_material(uow, run_id)
     if material is None or material.private or not material.answer:
         return None
-    line = await line_by_id(uow, line_id)
-    conversation = await uow.session.get(ConversationModel, conversation_id)
-    if line is None or conversation is None or line.is_deleted:
+    # The same boundary as a platform's answer: no reasoning, and none of the
+    # platform's own context blocks a model repeated back.
+    text = strip_context_echo(strip_thinking_tokens(material.answer))
+    if not text:
         return None
-    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
-    agent_name = await uow.session.scalar(
-        select(AgentModel.name).where(AgentModel.id == agent_id)
+    agent_name = (
+        None  # the pod's own assistant is named by the channel, as the pod
+        if is_pod_default_agent(agent_id, pod_id=line.pod_id)
+        else await uow.session.scalar(
+            select(AgentModel.name).where(AgentModel.id == agent_id)
+        )
     )
+    # A member's own channel reads as a chat: the answer follows the line it
+    # answers. Elsewhere it is a reply in the line's thread.
+    channel = await channel_by_id(uow, line.channel_id)
+    direct = channel is not None and channel.kind is ChannelKind.DIRECT
+    in_thread = line.thread_root_id or (None if direct else line.id)
     return await post(
         uow,
         channel_id=line.channel_id,
@@ -302,11 +352,11 @@ async def post_run_answer(
                 on_behalf_of=Principal.member(conversation.user_id),
                 display_name=agent_name,
             ),
-            text=material.answer,
+            text=text,
             client_message_id=answer_client_id(run_id),
             conversation_id=conversation_id,
             agent_run_id=run_id,
-            thread_root_id=line.thread_root_id or line.id,
+            thread_root_id=in_thread,
             reply_to_id=line.id,
         ),
     )

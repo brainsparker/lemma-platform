@@ -114,7 +114,7 @@ async def _a_channel(db_session, pod_id) -> UUID:
     """A channel the places can belong to. Which kind does not matter here:
     neither read is keyed on it."""
     channel = ChannelModel(
-        id=uuid7(), pod_id=UUID(str(pod_id)), kind="GROUP", visibility="private"
+        id=uuid7(), pod_id=UUID(str(pod_id)), kind="GROUP", visibility="PRIVATE"
     )
     db_session.add(channel)
     await db_session.commit()

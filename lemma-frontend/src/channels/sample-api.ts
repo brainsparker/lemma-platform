@@ -1,4 +1,5 @@
 import {
+    SAMPLE_INBOX,
     SAMPLE_CHANNEL_LINES,
     SAMPLE_CHANNEL_THREADS,
     SAMPLE_CHANNELS,
@@ -6,6 +7,8 @@ import {
 } from "@/data/fixtures";
 import type { ChannelApi } from "./api";
 import { readChannelDetail, readChannelPage, readLine, readLinePage, type Line } from "./model";
+import { readSearchPage } from "./search-model";
+import { readInbox } from "./waiting";
 import { readSourceSettings } from "./sources";
 
 /** The sample's channels, answering the same calls the API does from the
@@ -93,6 +96,10 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             settle();
             const wanted = channels.filter((channel) => (channel.archived === true) === (options.archived === true)
                 && (!options.kind || channel.kind === options.kind)
+                && (!options.unassigned || !channel.assignee)
+                && (!options.assignee || (channel.assignee as Wire | null)?.id === ME.id)
+                && (!options.status || (channel.status ?? "open") === options.status)
+                && (!options.needsPerson || (channel.kind === "CONTACT" && !channel.assignee && (channel.status ?? "open") === "open" && (Boolean(channel.attention) || channel.agents_answer === false)))
                 && (!options.contactId || options.contactId.endsWith(String((channel.person as Wire | null)?.id ?? "\u0000"))));
             const sorted = [...wanted].sort((a, b) => String(b.last_line_at ?? b.created_at).localeCompare(String(a.last_line_at ?? a.created_at)));
             return readChannelPage({ items: sorted.map(listed), next_cursor: null });
@@ -122,6 +129,10 @@ export function sampleChannelApi(_podId: string): ChannelApi {
                 source_id: body.membersOnly ? null : body.sourceId ?? (channel.source_places as Wire[] | undefined)?.[0]?.id ?? null,
                 thread_root_id: body.threadRootId ?? null,
             };
+            /* The sample carries nothing outside: a line said to a place
+               reads as sent, which is what a working bot would show. */
+            const place = (channel.source_places as Wire[] | undefined)?.find((one) => one.id === line.source_id);
+            if (place) line.delivered = [{ id: id("delivery"), source_id: place.id, platform: place.platform, status: "SENT" }];
             if (body.threadRootId) threads.set(body.threadRootId, [...(threads.get(body.threadRootId) ?? []), line]);
             else lines.set(channelId, [...(lines.get(channelId) ?? []), line]);
             save(channelId, { last_line_at: line.created_at, last_seq: line.seq });
@@ -154,11 +165,12 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             const made: Wire = {
                 id: id("sample-channel"), kind: "GROUP", title: body.title, topic: body.topic, person: null,
                 sources: [], source_places: [],
-                visibility: "public",
+                visibility: "PUBLIC",
                 members: [{ person: ME, role: "owner" }, ...body.members.map((member) => ({ person: { kind: "MEMBER", id: member, name: null }, role: "member" }))],
                 me: { joined: true, notify: "ALL", read_seq: 0, role: "owner", can_manage: true }, unread: { lines: 0, mentions: 0, waiting: 0, read_seq: 0 },
-                created_at: now(), last_line_at: now(), last_seq: 0,
+                created_at: now(), last_line_at: now(), last_seq: 0, joined: true,
             };
+            made.visibility = body.visibility;
             channels = [made, ...channels];
             lines.set(String(made.id), []);
             return readChannelDetail(made)!;
@@ -169,15 +181,53 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             if (body.title !== undefined) change.title = body.title;
             if (body.topic !== undefined) change.topic = body.topic;
             if (body.archived !== undefined) change.archived = body.archived;
+            if (body.visibility !== undefined) change.visibility = body.visibility;
+            if (body.agentsAnswer !== undefined) change.agents_answer = body.agentsAnswer;
+            if (body.handBackAfterHours !== undefined) change.hand_back_after_hours = body.handBackAfterHours;
+            if (body.status !== undefined) change.status = body.status;
+            if (body.assignee !== undefined) change.assignee = body.assignee === null ? null : body.assignee === "me" || body.assignee === ME.id ? ME : { kind: "MEMBER", id: body.assignee, name: null };
             return readChannelDetail(listed(save(channelId, change)))!;
         },
+        async destroy(channelId) {
+            await wait(250);
+            channelOf(channelId);
+            channels = channels.filter((channel) => channel.id !== channelId);
+        },
         async addMembers() { throw sampleOnly(); },
+        async updateMember() { throw sampleOnly(); },
         async removeMember() { throw sampleOnly(); },
-        async leave() { throw sampleOnly(); },
-        async setNotify(channelId, notify) {
+        async join(channelId) {
             await wait(200);
             const channel = channelOf(channelId);
-            return readChannelDetail(listed(save(channelId, { me: { ...(channel.me as Wire), notify } })))!;
+            return readChannelDetail(listed(save(channelId, { joined: true, me: { ...(channel.me as Wire), joined: true } })))!;
+        },
+        async leave() { throw sampleOnly(); },
+        async setMine(channelId, change) {
+            await wait(200);
+            const channel = channelOf(channelId);
+            const me: Wire = { ...(channel.me as Wire) };
+            if (change.notify !== undefined) me.notify = change.notify;
+            if (change.notifyVia !== undefined) me.notify_via = change.notifyVia;
+            if (change.mutedUntil !== undefined) me.muted_until = change.mutedUntil;
+            return readChannelDetail(listed(save(channelId, { me })))!;
+        },
+        async retryDelivery() { throw sampleOnly(); },
+        async attach() { throw sampleOnly(); },
+        async file() { throw sampleOnly(); },
+        async inbox() {
+            await wait(120);
+            return readInbox(SAMPLE_INBOX);
+        },
+        async search(q) {
+            await wait(200);
+            const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+            const items = [...lines.entries()].flatMap(([channelId, list]) => {
+                const channel = channels.find((one) => one.id === channelId);
+                if (!channel) return [];
+                return list.filter((line) => typeof line.text === "string" && words.every((word) => (line.text as string).toLowerCase().includes(word)))
+                    .map((line) => ({ channel: { id: channelId, kind: channel.kind, title: channel.title, person: channel.person }, message: line }));
+            });
+            return readSearchPage({ items: items.reverse(), next_cursor: null });
         },
         async setAgentAnswers(channelId, on) {
             await wait(250);
@@ -191,21 +241,21 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             settle();
             return [...settings.values()].flatMap((row) => {
                 const read = row.surface_name === surfaceName ? readSourceSettings(row) : null;
-                return read ? [read] : [];
+                return read ? [{ ...read, joined: true }] : [];
             });
         },
-        async source(sourceId) {
+        async source(_channelId, sourceId) {
             await wait(120);
             settle();
             const row = readSourceSettings(settings.get(sourceId));
             if (!row) throw missing("group");
             return row;
         },
-        async updateSource(sourceId, change) {
+        async updateSource(_channelId, sourceId, change) {
             await wait(300);
             const was = settings.get(sourceId);
             if (!was) throw missing("group");
-            const owner = change.take_over || (change.answers_outsiders && !was.owner) ? ME : was.owner;
+            const owner = change.owner === "me" || (change.answers_outsiders && !was.owner) ? ME : was.owner;
             const answers = typeof change.answers_outsiders === "boolean" ? change.answers_outsiders : was.answers_outsiders === true;
             const saved = { ...was, owner, answers_outsiders: answers, welcomes_outsiders: answers && Boolean(owner) && was.bot_answers_outsiders !== false };
             settings.set(sourceId, saved);
@@ -220,7 +270,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
                 id: channelId, kind: "GROUP", title, topic: null, person: null,
                 sources: [{ platform: "WHATSAPP", title }],
                 source_places: [{ id: sourceId, platform: "WHATSAPP", kind: "SHARED", title, surface_id: "s-whatsapp", pending: true, last_inbound_at: null }],
-                visibility: "private", members: [{ person: ME, role: "owner" }],
+                visibility: "PRIVATE", members: [{ person: ME, role: "owner" }],
                 me: { joined: true, notify: "ALL", read_seq: 0, role: "owner", can_manage: true },
                 unread: { lines: 0, mentions: 0, waiting: 0, read_seq: 0 }, created_at: now(), last_line_at: now(), last_seq: 0,
             }, ...channels];
@@ -244,7 +294,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
                     id: channelId, kind: "GROUP", title: "Supplier chat", topic: null, person: null,
                     sources: [{ platform: "TELEGRAM", title: "Supplier chat" }],
                     source_places: [{ id: id("src-tg"), platform: "TELEGRAM", kind: "SHARED", title: "Supplier chat", surface_id: "s-telegram", pending: false, last_inbound_at: now() }],
-                    visibility: "private", members: [{ person: ME, role: "owner" }],
+                    visibility: "PRIVATE", members: [{ person: ME, role: "owner" }],
                     me: { joined: true, notify: "ALL", read_seq: 0, role: "owner", can_manage: true },
                     unread: { lines: 1, mentions: 0, waiting: 0, read_seq: 0 }, created_at: now(), last_line_at: now(), last_seq: 1,
                 }, ...channels];

@@ -16,8 +16,8 @@ test("an @ opens the menu at the start or after a space, never inside an address
     assert.equal(mentionAt("plain words", 5), null);
 });
 
-test("offers anyone a word of whose name starts with what was typed, agents first", () => {
-    const people = [priya, pat, tomas, lem];
+test("offers anyone a word of whose name starts with what was typed, in the order given", () => {
+    const people = [lem, priya, pat, tomas];
     assert.deepEqual(matchMentionable(people, "p").map((who) => who.id), ["user-priya", "user-pat"]);
     assert.deepEqual(matchMentionable(people, "riv").map((who) => who.id), ["contact-tomas"]);
     assert.deepEqual(matchMentionable(people, "").map((who) => who.id), ["agent-lem", "user-priya", "user-pat", "contact-tomas"]);

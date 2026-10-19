@@ -1,7 +1,7 @@
 """Choosing where to reach a person, and what that choice is allowed to assume.
 
-Split out of :mod:`notification_service` because it is the part with real rules
-in it and no side effects — which makes it the part worth testing directly.
+Kept apart from the sending because it is the part with real rules in it and
+no side effects — which makes it the part worth testing directly.
 
 The choice belongs to the **sending agent**, not the recipient. That is the
 identity argument: a pod connects its own Telegram bot or Slack app, and a

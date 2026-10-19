@@ -37,11 +37,13 @@ person said it.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID
 
+from opentelemetry import metrics
 from redis.asyncio import Redis
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -114,6 +116,16 @@ from app.modules.contacts.contracts.outreach import (
 )
 
 logger = get_logger(__name__)
+meter = metrics.get_meter(__name__)
+deliveries_done = meter.create_counter(
+    "lemma.channels.deliveries",
+    description="Channel deliveries tried, by platform, target and result.",
+)
+delivery_seconds = meter.create_histogram(
+    "lemma.channels.delivery_seconds",
+    unit="s",
+    description="One channel delivery: policy, the platform's send, its answer.",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +195,7 @@ class ChannelDeliveries:
         work = await self._claim(delivery_id)
         if work is None:
             return
+        started = time.monotonic()
         try:
             async with asyncio.timeout(self.send_timeout):
                 outcome = await self._outcome(work)
@@ -196,6 +209,13 @@ class ChannelDeliveries:
                 f"No answer from the platform within {self.send_timeout:g} s. "
                 "It will be tried again."
             )
+        attributes = {
+            "platform": outcome.platform or "NONE",
+            "result": outcome.result.value,
+            "target": "place" if work.delivery.source_id else "member",
+        }
+        deliveries_done.add(1, attributes)
+        delivery_seconds.record(time.monotonic() - started, attributes)
         await self._record(work.delivery, outcome)
 
     async def _outcome(self, work: _Work) -> Outcome:

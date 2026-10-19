@@ -38,6 +38,12 @@ export function platformName(platform: string): string {
 
 /** What the bot keeps about one group source: who answers its people from
  *  outside the space, from what, and whether the reader may change that. */
+/** A change to a group source: absent is unchanged; `owner: "me"` takes it on. */
+export interface SourceChange {
+    answers_outsiders?: boolean;
+    owner?: "me";
+}
+
 export interface SourceSettings {
     id: string;
     channelId: string;
@@ -189,8 +195,8 @@ export function offersTakeOn(state: Answering, canManage: boolean): boolean {
 
 /** What "Take it on" asks for. Where the group is switched off it is switched
  *  on too: the button promises that its people are answered. */
-export function takeOn(source: Pick<SourceSettings, "answersOutsiders">): { take_over: true; answers_outsiders?: true } {
-    return source.answersOutsiders ? { take_over: true } : { take_over: true, answers_outsiders: true };
+export function takeOn(source: Pick<SourceSettings, "answersOutsiders">): SourceChange {
+    return source.answersOutsiders ? { owner: "me" } : { owner: "me", answers_outsiders: true };
 }
 
 /** What a reader who may not change a source is told in place of the

@@ -92,12 +92,10 @@ in the asking conversation on its own, and the agent reads what everyone said wi
 deliberate — an agent that asked four people would otherwise replay the whole
 conversation four times to learn "three still pending" three times over.)
 
-Snoozing while you wait is *handled* rather than forbidden — an arriving answer
-resolves the pause and wakes the run early with `woke_because='ANSWERED'`
-instead of leaving it asleep. Ending the turn is still the better default,
-because every wake replays the whole conversation and a turn that simply ended
-does not. Reach for `snooze` when you have something else to wait for as well,
-not merely to sit on a question. Compare:
+An agent already in a `wait_for` for something else is not left asleep: an arriving
+answer resolves the pause and wakes the run early with `woke_because='ANSWERED'`.
+Ending the turn is still the default, because every wake replays the whole
+conversation and a turn that simply ended does not. Compare:
 
 | | Who it reaches | Pauses the run | Where the answer lands |
 | --- | --- | --- | --- |

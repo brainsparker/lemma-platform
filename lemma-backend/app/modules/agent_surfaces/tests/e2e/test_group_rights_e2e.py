@@ -3,7 +3,7 @@
 A group is a GROUP channel every member may read; what the bot told one member
 with that member's own access stays that member's -- the others see that it
 was answered, and for whom, not what was said. Its settings are its source's
-(``/pods/{pod}/sources``). A group's people outside the pod are
+(``/pods/{pod}/channels/{c}/sources/{s}``). A group's people outside the pod are
 answered for by one member: only they, or an admin of the pod, may switch that
 off or take it over, and an admin who does tells them. A member who has left
 the pod answers for nobody. And the bot's own switch closes every group at once.
@@ -88,7 +88,7 @@ async def _pod_with_a_group(scenario, message_store) -> tuple[dict, dict, dict]:
         scenario.owner_client, scenario.pod_id, config={"type": "WHATSAPP"}
     )
     started = await scenario.owner_client.post(
-        f"/pods/{scenario.pod_id}/sources/whatsapp-groups",
+        f"/pods/{scenario.pod_id}/channels/whatsapp-groups",
         json={"surface_name": surface["name"], "title": "Acme order 1182"},
     )
     assert started.status_code == 201, started.text
@@ -178,14 +178,16 @@ async def test_only_the_owner_or_an_admin_changes_a_group_and_the_owner_is_told(
 ):
     _wire_whatsapp(monkeypatch, fake_whatsapp)
     _surface, group, editor = await _pod_with_a_group(scenario, message_store)
-    path = f"/pods/{scenario.pod_id}/sources/{group['id']}"
+    path = (
+        f"/pods/{scenario.pod_id}/channels/{group['channel_id']}/sources/{group['id']}"
+    )
 
     # An editor may configure the bot, but this group is the owner's.
     shown = await scenario.async_client.get(path, headers=auth_headers(editor))
     assert shown.status_code == 200, shown.text
     assert shown.json()["can_manage"] is False
     refused = await scenario.async_client.patch(
-        path, json={"take_over": True}, headers=auth_headers(editor)
+        path, json={"owner": "me"}, headers=auth_headers(editor)
     )
     assert refused.status_code == 403, refused.text
 
@@ -194,7 +196,7 @@ async def test_only_the_owner_or_an_admin_changes_a_group_and_the_owner_is_told(
         UUID(group["id"]), UUID(editor["id"])
     )
     await db_session.commit()
-    taken = await scenario.owner_client.patch(path, json={"take_over": True})
+    taken = await scenario.owner_client.patch(path, json={"owner": "me"})
     assert taken.status_code == 200, taken.text
     assert taken.json()["owner"]["id"] == scenario.owner_user["id"]
 
@@ -219,7 +221,8 @@ async def test_a_group_whose_owner_left_the_pod_is_anybodys_to_take_on(
     await db_session.commit()
 
     response = await scenario.async_client.get(
-        f"/pods/{scenario.pod_id}/sources/{group['id']}", headers=auth_headers(editor)
+        f"/pods/{scenario.pod_id}/channels/{group['channel_id']}/sources/{group['id']}",
+        headers=auth_headers(editor),
     )
 
     body = response.json()
@@ -243,7 +246,7 @@ async def test_the_bots_own_switch_closes_every_group_to_people_outside(
 
     body = (
         await scenario.owner_client.get(
-            f"/pods/{scenario.pod_id}/sources/{group['id']}"
+            f"/pods/{scenario.pod_id}/channels/{group['channel_id']}/sources/{group['id']}"
         )
     ).json()
     assert body["bot_answers_outsiders"] is False

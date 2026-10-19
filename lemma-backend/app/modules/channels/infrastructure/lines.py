@@ -32,6 +32,7 @@ from app.modules.channels.infrastructure.models import (
     ChannelQuestionModel,
     ChannelSourceModel,
 )
+from app.modules.channels.infrastructure.revisions import next_rev
 from app.modules.channels.infrastructure.rows import MAX_LINES, message_entity, now
 
 
@@ -105,10 +106,12 @@ class LineRepository:
         if earlier is not None:
             return earlier, False
         seq = head.last_seq + 1
+        rev = await next_rev(self.session, channel_id)
         row = ChannelMessageModel(
             channel_id=channel_id,
             pod_id=head.pod_id,
             seq=seq,
+            rev=rev or 0,
             body=line.text,
             parts=dump_parts(list(line.parts)),
             source_id=line.source_id,
@@ -129,6 +132,18 @@ class LineRepository:
         if line.thread_root_id is None:
             head.last_line_id = row.id
             head.last_line_at = func.greatest(head.last_line_at, row.created_at)
+        else:
+            # The root's reply count moved: its watchers are sent it again,
+            # under the same change as the reply.
+            await self.session.execute(
+                update(ChannelMessageModel)
+                .where(
+                    ChannelMessageModel.id == line.thread_root_id,
+                    ChannelMessageModel.channel_id == channel_id,
+                )
+                .values(rev=rev or 0)
+                .execution_options(synchronize_session=False)
+            )
         if line.source_id is not None and line.sender.kind is not SenderKind.AGENT:
             await self.session.execute(
                 update(ChannelSourceModel)
@@ -169,6 +184,7 @@ class LineRepository:
     ) -> ChannelMessage:
         """A platform message heard twice: the second hearing may know more --
         the conversation answering it, what answers it in place, who said it."""
+        shown_before = (row.conversation_id, row.sender_name, row.sender_kind)
         if row.conversation_id is None and line.conversation_id is not None:
             row.conversation_id = line.conversation_id
         if row.reply_ref is None and line.reply_ref is not None:
@@ -179,6 +195,11 @@ class LineRepository:
             values["sender_name"] = row.sender_name or values["sender_name"]
             for key, value in values.items():
                 setattr(row, key, value)
+        if (row.conversation_id, row.sender_name, row.sender_kind) != shown_before:
+            # Who said it, or who answers it, is what its readers see: they
+            # are sent it again. The channel's number is taken before the line
+            # is written, the order ``revisions`` keeps.
+            row.rev = await next_rev(self.session, row.channel_id) or row.rev
         await self.session.flush()
         return message_entity(row)
 
@@ -186,7 +207,11 @@ class LineRepository:
         self, message_id: UUID, *, text: str, parts: Sequence[Part] | None = None
     ) -> ChannelMessage | None:
         """Change what a line says, unless it was deleted meanwhile."""
-        values: dict[str, object] = {"body": text, "edited_at": now()}
+        values: dict[str, object] = {
+            "body": text,
+            "edited_at": now(),
+            "rev": await self._next_rev_of(message_id),
+        }
         if parts is not None:
             values["parts"] = dump_parts(list(parts))
         row = await self.session.scalar(
@@ -208,20 +233,48 @@ class LineRepository:
                 ChannelMessageModel.id == message_id,
                 ChannelMessageModel.deleted_at.is_(None),
             )
-            .values(body="", parts=[], reply_ref=None, deleted_at=now())
+            .values(
+                body="",
+                parts=[],
+                reply_ref=None,
+                deleted_at=now(),
+                rev=await self._next_rev_of(message_id),
+            )
             .returning(ChannelMessageModel)
         )
         return message_entity(row) if row is not None else None
 
+    async def _next_rev_of(self, message_id: UUID) -> int:
+        """The next change number of the line's channel, taken before the line
+        is touched (``revisions``)."""
+        channel_id = await self.session.scalar(
+            select(ChannelMessageModel.channel_id).where(
+                ChannelMessageModel.id == message_id
+            )
+        )
+        if channel_id is None:
+            return 0
+        return await next_rev(self.session, channel_id) or 0
+
     async def claim(self, message_id: UUID, *, conversation_id: UUID) -> None:
-        """The conversation answering a line, once one is: the first claims it."""
+        """The conversation answering a line, once one is: the first claims it.
+        Its readers are sent the line again, naming it."""
+        unclaimed = await self.session.scalar(
+            select(ChannelMessageModel.channel_id).where(
+                ChannelMessageModel.id == message_id,
+                ChannelMessageModel.conversation_id.is_(None),
+            )
+        )
+        if unclaimed is None:
+            return
+        rev = await next_rev(self.session, unclaimed)
         await self.session.execute(
             update(ChannelMessageModel)
             .where(
                 ChannelMessageModel.id == message_id,
                 ChannelMessageModel.conversation_id.is_(None),
             )
-            .values(conversation_id=conversation_id)
+            .values(conversation_id=conversation_id, rev=rev or 0)
         )
 
     # -- reading -------------------------------------------------------------------
@@ -290,6 +343,23 @@ class LineRepository:
             statement.order_by(message.seq).limit(max(1, min(limit, MAX_LINES)))
         )
         return [message_entity(row[0], question=row[1]) for row in rows]
+
+    async def changed_since(
+        self, channel_id: UUID, *, after_rev: int, limit: int
+    ) -> list[ChannelMessage]:
+        """Lines of the channel changed after its change ``after_rev``, in the
+        order they changed -- thread replies too. What a live subscriber
+        resuming from there is sent."""
+        message = ChannelMessageModel
+        rows = list(
+            await self.session.execute(
+                _with_question()
+                .where(message.channel_id == channel_id, message.rev > after_rev)
+                .order_by(message.rev)
+                .limit(max(1, min(limit, MAX_LINES)))
+            )
+        )
+        return await self._with_replies(rows)
 
     async def _with_replies(
         self,

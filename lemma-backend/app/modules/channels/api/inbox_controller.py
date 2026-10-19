@@ -43,7 +43,7 @@ INBOX_ITEMS = 50
     "/inbox",
     operation_id="channel.inbox.get",
     response_model=InboxResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def get_inbox(pod_id: UUID, uow: UoWDep, caller: CallerDep) -> InboxResponse:
     """What is new for the reader across the pod: the badges, the questions
@@ -86,7 +86,7 @@ async def get_inbox(pod_id: UUID, uow: UoWDep, caller: CallerDep) -> InboxRespon
     "/search",
     operation_id="channel.search",
     response_model=SearchResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def search(
     pod_id: UUID,

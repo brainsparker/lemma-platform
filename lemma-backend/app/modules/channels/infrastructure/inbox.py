@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import BigInteger, Uuid, and_, column, func, select, true, values
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.access import Viewer
@@ -41,6 +41,8 @@ class Unread:
     waiting: int = 0
     #: How far they have read.
     read_seq: int = 0
+    #: Whether they are in it.
+    joined: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,29 +100,42 @@ class InboxReads:
                 mentions=mentions.get(channel.id, 0),
                 waiting=waiting.get(channel.id, 0),
                 read_seq=upto,
+                joined=channel.id in joined,
             )
         return found
 
     async def _mentions_by_channel(
         self, viewer: Viewer, ids: list[UUID], read: dict[UUID, int]
     ) -> dict[UUID, int]:
+        """Each channel's mentions past what the member has read, stopping at
+        ``UNREAD_CAP``: one range of ``ix_channel_mentions_user`` per channel,
+        so what is read is what is unread -- never every time they were named
+        there. (A cap across the page instead, by ``seq``, both read the
+        history and lost the counts of channels numbered lower.)"""
         mention = ChannelMentionModel
-        rows = await self.session.execute(
-            select(mention.channel_id, mention.seq)
+        page = values(
+            column("channel_id", Uuid), column("read_seq", BigInteger), name="page"
+        ).data([(channel_id, read.get(channel_id, 0)) for channel_id in ids])
+        unread = (
+            select(mention.id)
             .join(ChannelMessageModel, ChannelMessageModel.id == mention.message_id)
             .where(
                 mention.user_id == viewer.user_id,
-                mention.channel_id.in_(ids),
+                mention.pod_id == viewer.pod_id,
+                mention.channel_id == page.c.channel_id,
+                mention.seq > page.c.read_seq,
                 ChannelMessageModel.deleted_at.is_(None),
             )
-            .order_by(mention.seq.desc())
-            .limit(UNREAD_CAP * 10)
+            .limit(UNREAD_CAP)
+            .lateral("unread")
         )
-        counts: dict[UUID, int] = {}
-        for channel_id, seq in rows:
-            if seq > int(read.get(channel_id, 0)):
-                counts[channel_id] = min(UNREAD_CAP, counts.get(channel_id, 0) + 1)
-        return counts
+        rows = await self.session.execute(
+            select(page.c.channel_id, func.count(unread.c.id))
+            .select_from(page)
+            .join(unread, true())
+            .group_by(page.c.channel_id)
+        )
+        return {row[0]: int(row[1]) for row in rows}
 
     async def _waiting_by_channel(
         self, viewer: Viewer, ids: list[UUID]

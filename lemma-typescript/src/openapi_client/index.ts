@@ -258,6 +258,7 @@ export type { InstallRequestInitiateSchema } from './models/InstallRequestInitia
 export type { InstallRequestResponseSchema } from './models/InstallRequestResponseSchema.js';
 export type { JsonObject } from './models/JsonObject.js';
 export type { JsonValue } from './models/JsonValue.js';
+export type { LineDelivery } from './models/LineDelivery.js';
 export type { LinePreview } from './models/LinePreview.js';
 export type { LinkPart } from './models/LinkPart.js';
 export { ListeningResponse } from './models/ListeningResponse.js';
@@ -421,7 +422,7 @@ export type { SignedUrlRevokeResponse } from './models/SignedUrlRevokeResponse.j
 export type { SignedUrlSummary } from './models/SignedUrlSummary.js';
 export type { SignInOutcomeResponse } from './models/SignInOutcomeResponse.js';
 export { SourceKind } from './models/SourceKind.js';
-export type { SourceListResponse } from './models/SourceListResponse.js';
+export type { SourceSettingsDetailResponse } from './models/SourceSettingsDetailResponse.js';
 export type { SourceSettingsResponse } from './models/SourceSettingsResponse.js';
 export type { SourceSummary } from './models/SourceSummary.js';
 export type { SourceUpdateRequest } from './models/SourceUpdateRequest.js';
@@ -565,6 +566,7 @@ export { AgentToolsService } from './services/AgentToolsService.js';
 export { AppsService } from './services/AppsService.js';
 export { AuthService } from './services/AuthService.js';
 export { ChannelsService } from './services/ChannelsService.js';
+export { ChannelSourcesService } from './services/ChannelSourcesService.js';
 export { ConnectorsService } from './services/ConnectorsService.js';
 export { ContactOutreachService } from './services/ContactOutreachService.js';
 export { ContactsService } from './services/ContactsService.js';

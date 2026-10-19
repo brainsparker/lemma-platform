@@ -2656,7 +2656,7 @@ export const fixtureSource: PodSource = {
     },
     async followUpContact() {
         await wait(500);
-        return { channelId: "sample-contact", platform: "RESEND" };
+        return { channelId: "sample-contact", lineId: "sample-outreach", platform: "RESEND", status: "PENDING" as const, reason: null };
     },
     async listWidgets(podId: string) {
         await wait(120);
@@ -3308,6 +3308,18 @@ export const fixtureSource: PodSource = {
  */
 export const SAMPLE_INBOX = {
     totals: { channels: 2, mentions: 1, waiting: 3 },
+    mentions: [
+        {
+            channel: { id: "sample-launch", kind: "GROUP", title: "launch" },
+            message: {
+                id: "l-1",
+                seq: 1,
+                sender: { kind: "MEMBER", id: "priya-user", name: "Priya" },
+                text: "Kicking off the beta plan here. @Lem can you list what is still open?",
+                created_at: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+            },
+        },
+    ],
     waiting: [
         {
             channel: { id: "sample-direct", kind: "DIRECT", title: null },
@@ -3375,7 +3387,7 @@ export const SAMPLE_CHANNELS: Record<string, unknown>[] = [
         id: "sample-direct", kind: "DIRECT", title: null, topic: null, person: ME_REF,
         sources: [{ platform: "WHATSAPP", title: null }],
         source_places: [{ id: "src-dm-whatsapp", platform: "WHATSAPP", kind: "PRIVATE", title: null, surface_id: "s-whatsapp", pending: false, last_inbound_at: ago(DAYS) }],
-        visibility: "private",
+        visibility: "PRIVATE",
         members: [{ person: ME_REF, role: "owner" }, { person: LEM_REF, role: "member", answers: "EVERY_LINE" }],
         me: { joined: true, notify: "ALL", read_seq: 3, role: "owner", can_manage: false },
         unread: { lines: 2, mentions: 0, waiting: 2, read_seq: 3 },
@@ -3388,7 +3400,7 @@ export const SAMPLE_CHANNELS: Record<string, unknown>[] = [
             { id: "src-slack-launch", platform: "SLACK", kind: "SHARED", title: "#launch", surface_id: "s-slack", pending: false, last_inbound_at: ago(2 * HOURS) },
             { id: "src-tg-launch", platform: "TELEGRAM", kind: "SHARED", title: "Launch crew", surface_id: "s-telegram", pending: false, last_inbound_at: ago(DAYS) },
         ],
-        visibility: "public",
+        visibility: "PUBLIC",
         members: [
             { person: ME_REF, role: "owner" },
             { person: PRIYA_REF, role: "member" },
@@ -3404,7 +3416,7 @@ export const SAMPLE_CHANNELS: Record<string, unknown>[] = [
         id: "sample-partners", kind: "GROUP", title: "Acme × Northwind", topic: null, person: null,
         sources: [{ platform: "WHATSAPP", title: "Acme × Northwind" }],
         source_places: [{ id: "src-wa-partners", platform: "WHATSAPP", kind: "SHARED", title: "Acme × Northwind", surface_id: "s-whatsapp", pending: false, last_inbound_at: ago(3 * DAYS) }],
-        visibility: "private",
+        visibility: "PRIVATE",
         members: [{ person: ME_REF, role: "owner" }, { person: PRIYA_REF, role: "member" }, { person: LEM_REF, role: "member", answers: "MENTIONED" }],
         me: { joined: true, notify: "MENTIONS", read_seq: 3, role: "owner", can_manage: true },
         unread: { lines: 0, mentions: 0, waiting: 0, read_seq: 3 },
@@ -3414,7 +3426,7 @@ export const SAMPLE_CHANNELS: Record<string, unknown>[] = [
         id: "sample-contact", kind: "CONTACT", title: null, topic: null, person: RUIZ_REF,
         sources: [{ platform: "RESEND", title: "Refund for order 4471" }],
         source_places: [{ id: "src-mail-ruiz", platform: "RESEND", kind: "PRIVATE", title: "Refund for order 4471", surface_id: "s3", pending: false, last_inbound_at: ago(25 * MINUTES) }],
-        visibility: "private",
+        visibility: "PRIVATE",
         members: [{ person: RUIZ_REF, role: "guest" }, { person: ME_REF, role: "member" }],
         me: { joined: true, notify: "ALL", read_seq: 1, role: "member", can_manage: false },
         agents_answer: true, hand_back_after_hours: 12, assignee: null, status: "open",

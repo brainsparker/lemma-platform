@@ -18,7 +18,7 @@ not have arrived.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.entities import Delivery, DeliveryStatus
 from app.modules.channels.infrastructure.models import ChannelMessageDeliveryModel
+from app.modules.channels.infrastructure.revisions import touch_line, touch_lines
 from app.modules.channels.infrastructure.rows import MAX_LINES, delivery_entity, now
 
 #: Tries before a delivery is given up on.
@@ -140,7 +141,10 @@ class DeliveryRepository:
             )
             .returning(d)
         )
-        return delivery_entity(row) if row is not None else None
+        if row is None:
+            return None
+        await self._shown_again([(row.message_id, row.source_id)])
+        return delivery_entity(row)
 
     async def noted(self, delivery_id: UUID, *, external_message_id: str) -> None:
         """The platform's id for a send about to finish a message already
@@ -156,7 +160,7 @@ class DeliveryRepository:
         self, delivery_id: UUID, *, platform: str, external_message_id: str | None
     ) -> None:
         d = ChannelMessageDeliveryModel
-        await self.session.execute(
+        changed = await self.session.execute(
             update(d)
             .where(d.id == delivery_id)
             .values(
@@ -171,13 +175,15 @@ class DeliveryRepository:
                 next_attempt_at=None,
                 updated_at=now(),
             )
+            .returning(d.message_id, d.source_id)
         )
+        await self._shown_again(changed)
 
     async def skipped(
         self, delivery_id: UUID, *, reason: str, platform: str | None
     ) -> None:
         d = ChannelMessageDeliveryModel
-        await self.session.execute(
+        changed = await self.session.execute(
             update(d)
             .where(d.id == delivery_id)
             .values(
@@ -188,7 +194,9 @@ class DeliveryRepository:
                 next_attempt_at=None,
                 updated_at=now(),
             )
+            .returning(d.message_id, d.source_id)
         )
+        await self._shown_again(changed)
 
     async def failed(
         self, delivery: Delivery, *, reason: str, platform: str | None
@@ -210,6 +218,7 @@ class DeliveryRepository:
             .returning(d)
         )
         assert row is not None
+        await self._shown_again([(row.message_id, row.source_id)])
         return delivery_entity(row)
 
     async def dead(
@@ -218,7 +227,7 @@ class DeliveryRepository:
         """Given up now, not after backoff: trying again repeats what the
         person already has (half a long message), or meets the same refusal."""
         d = ChannelMessageDeliveryModel
-        await self.session.execute(
+        changed = await self.session.execute(
             update(d)
             .where(d.id == delivery_id)
             .values(
@@ -229,7 +238,9 @@ class DeliveryRepository:
                 next_attempt_at=None,
                 updated_at=now(),
             )
+            .returning(d.message_id, d.source_id)
         )
+        await self._shown_again(changed)
 
     async def retry(self, delivery_id: UUID) -> Delivery | None:
         """A member asked to try a failed or given-up delivery again, now."""
@@ -249,7 +260,10 @@ class DeliveryRepository:
             )
             .returning(d)
         )
-        return delivery_entity(row) if row is not None else None
+        if row is None:
+            return None
+        await self._shown_again([(row.message_id, row.source_id)])
+        return delivery_entity(row)
 
     async def undelivered(
         self, *, platform: str, external_message_id: str, reason: str
@@ -258,7 +272,7 @@ class DeliveryRepository:
         never arrived: given up, since sending it again would meet the same
         refusal. How many deliveries that was (none for an id not ours)."""
         d = ChannelMessageDeliveryModel
-        rows = await self.session.scalars(
+        rows = await self.session.execute(
             update(d)
             .where(
                 d.platform == platform,
@@ -272,9 +286,11 @@ class DeliveryRepository:
                 next_attempt_at=None,
                 updated_at=now(),
             )
-            .returning(d.id)
+            .returning(d.message_id, d.source_id)
         )
-        return len(list(rows))
+        changed = list(rows)
+        await self._shown_again(changed)
+        return len(changed)
 
     async def by_external(
         self, *, platform: str, external_message_id: str
@@ -291,6 +307,18 @@ class DeliveryRepository:
             .limit(1)
         )
         return delivery_entity(row) if row is not None else None
+
+    async def _shown_again(self, changed: Iterable[tuple[UUID, UUID | None]]) -> None:
+        """A send to a place moved: the line's writer sees where it went on
+        the line (``ChannelMessageResponse.delivered``), so it is sent to its
+        watchers again. A push to a member is not shown on the line."""
+        lines = {
+            message_id for message_id, source_id in changed if source_id is not None
+        }
+        if len(lines) == 1:
+            await touch_line(self.session, next(iter(lines)))
+        else:
+            await touch_lines(self.session, lines)
 
     async def of_messages(self, message_ids: Sequence[UUID]) -> list[Delivery]:
         if not message_ids:

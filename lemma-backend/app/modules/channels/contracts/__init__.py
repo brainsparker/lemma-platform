@@ -36,6 +36,7 @@ from app.modules.channels.domain.entities import (
     SourceKind,
     Visibility,
 )
+from app.modules.channels.domain.idempotency import keyed_client_id
 from app.modules.channels.domain.parts import (
     MAX_PARTS,
     FilePart,
@@ -122,6 +123,7 @@ __all__ = [
     "contact_channel",
     "direct_channel",
     "join",
+    "keyed_client_id",
     "may_read",
     "may_see",
     "member_of",

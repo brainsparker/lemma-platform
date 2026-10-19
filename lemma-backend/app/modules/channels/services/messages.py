@@ -104,6 +104,11 @@ class MemberLines:
         )
         if message is None:
             raise LineRefused("Say something first", status_code=422)
+        if message.sender.kind is not SenderKind.MEMBER or (
+            message.sender.user_id != user_id
+        ):
+            # Somebody else's line under the same name: never theirs to replay.
+            raise LineRefused("That client_message_id names somebody else's line")
         return message
 
     async def _thread_root(
@@ -176,11 +181,12 @@ class MemberLines:
         message_id: UUID,
         *,
         user_id: UUID,
-        text: str,
+        text: str | None,
         parts: Sequence[Part] | None = None,
     ) -> ChannelMessage:
+        """``None`` keeps the text, or the parts."""
         line = await self._own(channel, message_id, user_id=user_id)
-        body = text.strip()
+        body = (line.text if text is None else text).strip()
         if not body:
             raise LineRefused("Say something, or delete it", status_code=422)
         if parts is not None:

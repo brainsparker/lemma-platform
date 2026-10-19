@@ -298,7 +298,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-023` A person reachable from several pods is reached by the right one | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
 | `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_what_names_a_person_arrives_in_their_inbox`, `test_a_line_for_one_person_is_in_their_own_channel`, `test_an_outsider_sees_no_inbox`, `test_removal_closes_the_inbox_it_left_behind` |
 | `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_what_is_new`, `test_read_state_is_personal` |
-| `PS-SURF-032` A person can answer from the notification | `covered` | `test_a_question_is_answered_from_the_inbox`, `test_an_answered_question_refuses_a_second_answer` |
+| `PS-SURF-032` A person can answer from their inbox | `covered` | `test_a_question_is_answered_from_the_inbox`, `test_an_answered_question_refuses_a_second_answer` |
 | `PS-SURF-033` What is meant for one person is not said in a group | `planned` | — |
 | `PS-SURF-040` A pod sees every group its bots are in | `planned` | — |
 | `PS-SURF-041` A member steps in for somebody outside the pod the bot cannot help | `planned` | — |

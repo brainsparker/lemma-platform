@@ -31,6 +31,7 @@ from app.modules.channels.infrastructure.models import (
     ChannelModel,
     ChannelQuestionModel,
 )
+from app.modules.channels.infrastructure.revisions import touch_lines
 from app.modules.channels.infrastructure.rows import MAX_LINES, now, question_entity
 
 #: How long one caller may hold a question while its asker takes the answer.
@@ -103,6 +104,7 @@ class QuestionRepository:
         """Take the question to answer it; ``None`` if somebody else has it or
         it is closed."""
         q = ChannelQuestionModel
+        await touch_lines(self.session, [message_id])
         row = await self.session.scalar(
             update(q)
             .where(
@@ -123,6 +125,7 @@ class QuestionRepository:
     async def release(self, message_id: UUID) -> None:
         """The asker refused the answer: the question is open again."""
         q = ChannelQuestionModel
+        await touch_lines(self.session, [message_id])
         await self.session.execute(
             update(q)
             .where(q.message_id == message_id, q.state == QuestionState.ANSWERING.value)
@@ -140,6 +143,7 @@ class QuestionRepository:
         """Close a question with what took effect; nothing if already closed.
         Returns it closed now, or ``None``."""
         q = ChannelQuestionModel
+        await touch_lines(self.session, [message_id])
         row = await self.session.scalar(
             update(q)
             .where(
@@ -175,13 +179,18 @@ class QuestionRepository:
     async def cancel_under(self, *, pod_id: UUID, prefix: str) -> list[Question]:
         """Cancel every open question whose ref starts with ``prefix``."""
         q = ChannelQuestionModel
+        still_open = and_(
+            q.pod_id == pod_id,
+            q.ref.like(_escape_like(prefix) + "%", escape="\\"),
+            q.state.in_([QuestionState.OPEN.value, QuestionState.ANSWERING.value]),
+        )
+        await touch_lines(
+            self.session,
+            list(await self.session.scalars(select(q.message_id).where(still_open))),
+        )
         rows = await self.session.scalars(
             update(q)
-            .where(
-                q.pod_id == pod_id,
-                q.ref.like(_escape_like(prefix) + "%", escape="\\"),
-                q.state.in_([QuestionState.OPEN.value, QuestionState.ANSWERING.value]),
-            )
+            .where(still_open)
             .values(
                 state=QuestionState.CANCELLED.value, answered_at=now(), claimed_at=None
             )
@@ -192,17 +201,24 @@ class QuestionRepository:
     async def expire_due(self, *, at: datetime, limit: int) -> list[Question]:
         """Close the questions whose time is up, oldest first."""
         q = ChannelQuestionModel
-        due = (
-            select(q.message_id)
-            .where(q.state == QuestionState.OPEN.value, q.expires_at <= at)
-            .order_by(q.expires_at)
-            .limit(limit)
-            .with_for_update(skip_locked=True)
-            .scalar_subquery()
+        still_due = and_(q.state == QuestionState.OPEN.value, q.expires_at <= at)
+        due = list(
+            await self.session.scalars(
+                select(q.message_id)
+                .where(still_due)
+                .order_by(q.expires_at)
+                .limit(limit)
+            )
         )
+        if not due:
+            return []
+        # The channels first, then the questions -- the order an answer takes
+        # them in -- and the expiry re-checked in the update, so a question
+        # answered meanwhile stays answered.
+        await touch_lines(self.session, due)
         rows = await self.session.scalars(
             update(q)
-            .where(q.message_id.in_(due))
+            .where(q.message_id.in_(due), still_due)
             .values(state=QuestionState.EXPIRED.value, answered_at=at)
             .returning(q)
         )

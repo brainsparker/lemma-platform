@@ -13,6 +13,7 @@ import type { SenderKind } from "../openapi_client/models/SenderKind.js";
 import type { Visibility } from "../openapi_client/models/Visibility.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 import { ChannelsService } from "../openapi_client/services/ChannelsService.js";
+import { ChannelSourcesNamespace } from "./channel-sources.js";
 
 /** An agent seated in a group: by id (answers when named), or with when it answers. */
 export type ChannelAgentSeat = string | { id: string; answers?: AgentAnswers | `${AgentAnswers}` };
@@ -40,13 +41,21 @@ function seats(agents: ChannelAgentSeat[] | undefined): AgentSeat[] {
  * present; `null` clears one.
  */
 export class ChannelsNamespace {
-  constructor(private readonly client: GeneratedClientAdapter) {}
+  /** A group channel's sources from the bot's side, and bringing the bot into
+   *  a group (a WhatsApp group, a Telegram link). */
+  readonly sources: ChannelSourcesNamespace;
+
+  constructor(private readonly client: GeneratedClientAdapter) {
+    this.sources = new ChannelSourcesNamespace(client);
+  }
 
   // -- channels ---------------------------------------------------------------
 
   /** The channels the caller may see, most recently active first, each with
    *  what is new in it for them and its last line. `assignee` is `me` or a
-   *  member's user id. Pass `next_cursor` back as `cursor` for the next page. */
+   *  member's user id; `sourceSurface` (a bot's surface name) keeps the groups
+   *  that bot is in, each with its `source_settings`. Pass `next_cursor` back
+   *  as `cursor` for the next page. */
   list(
     podId: string,
     options: {
@@ -57,8 +66,12 @@ export class ChannelsNamespace {
       assignee?: string;
       unassigned?: boolean;
       status?: ContactStatus | `${ContactStatus}`;
+      /** Only contacts' channels waiting on a person: open, unassigned, and
+       *  the agent off or asking for one. */
+      needsPerson?: boolean;
       /** Only channels the caller is in. */
       joined?: boolean;
+      sourceSurface?: string;
       cursor?: string;
       limit?: number;
     } = {},
@@ -72,7 +85,9 @@ export class ChannelsNamespace {
         options.assignee,
         options.unassigned ?? false,
         options.status as ContactStatus | undefined,
+        options.needsPerson ?? false,
         options.joined ?? false,
+        options.sourceSurface,
         options.cursor,
         options.limit ?? 50,
       ),
@@ -122,7 +137,7 @@ export class ChannelsNamespace {
 
   /** Change exactly the fields present; `null` clears. A group: `title`,
    *  `topic`, `visibility`, `archived`. A contact's channel: `agents_answer`,
-   *  `hand_back_after_hours`, `status`, `assignee`. */
+   *  `hand_back_after_hours`, `status`, `assignee` (`me` or a user id). */
   update(podId: string, channelId: string, body: ChannelUpdateRequest) {
     return this.client.request(() => ChannelsService.channelUpdate(podId, channelId, body));
   }
@@ -259,11 +274,19 @@ export class ChannelsNamespace {
    *  `members_only` makes it a note to members. Who it names is read from its
    *  mention parts; a named agent answers. The same `client_message_id` is the
    *  same line. */
-  post(podId: string, channelId: string, body: ChannelPostRequest) {
-    return this.client.request(() => ChannelsService.channelMessagePost(podId, channelId, body));
+  post(
+    podId: string,
+    channelId: string,
+    body: ChannelPostRequest,
+    options: { idempotencyKey?: string } = {},
+  ) {
+    return this.client.request(() =>
+      ChannelsService.channelMessagePost(podId, channelId, body, options.idempotencyKey),
+    );
   }
 
-  /** Change what one of the caller's own lines says. */
+  /** Change what one of the caller's own lines says: absent is unchanged,
+   *  `parts: null` clears them. */
   edit(podId: string, channelId: string, messageId: string, body: ChannelEditRequest | string) {
     const edit = typeof body === "string" ? { text: body } : body;
     return this.client.request(() =>
@@ -290,6 +313,14 @@ export class ChannelsNamespace {
   deliveries(podId: string, channelId: string, messageId: string) {
     return this.client.request(() =>
       ChannelsService.channelDeliveryList(podId, channelId, messageId),
+    );
+  }
+
+  /** A file a line shares (a `file` part's `file_id`), read as the line's
+   *  writer reads it. */
+  file(podId: string, channelId: string, messageId: string, fileId: string) {
+    return this.client.request(() =>
+      ChannelsService.channelMessageFile(podId, channelId, messageId, fileId),
     );
   }
 
@@ -328,7 +359,14 @@ export class ChannelsNamespace {
 
   /** Tell another member of the pod something: a line in their own channel.
    *  `to` is a pod member id, user id or email address. */
-  notify(podId: string, body: { to: string; text: string }) {
-    return this.client.request(() => AgentSurfacesService.agentNoticeSend(podId, body));
+  notify(podId: string, body: { to: string; text: string }, options: { idempotencyKey?: string } = {}) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentNoticeSend(
+        podId,
+        body.to,
+        { text: body.text },
+        options.idempotencyKey,
+      ),
+    );
   }
 }

@@ -43,7 +43,7 @@ const listed = readChannelPage({
         {
             id: "c-launch", kind: "GROUP", title: "launch", topic: "Beta", sources: [{ platform: "SLACK", title: "#launch" }, { platform: "TELEGRAM", title: "Crew" }, { platform: "SLACK", title: "#other" }],
             last_line: { sender: priya, text: "Thursday\nworks", created_at: "2026-10-18T10:00:00Z" },
-            unread: { lines: 150, mentions: 1 }, created_at: "2026-10-01T09:00:00Z", last_line_at: "2026-10-18T10:00:00Z", visibility: "private",
+            unread: { lines: 150, mentions: 1 }, created_at: "2026-10-01T09:00:00Z", last_line_at: "2026-10-18T10:00:00Z", visibility: "PRIVATE",
         },
         {
             id: "c-contact", kind: "CONTACT", person: tomas, attention: { since: "2026-10-18T10:00:00Z", reason: "Refund" }, created_at: "2026-10-10T09:00:00Z",
@@ -63,8 +63,8 @@ test("reads a page of channels, keeping its cursor and dropping a row without an
     assert.equal(direct.lastSeq, 9);
     assert.deepEqual(contact.attention, { since: "2026-10-18T10:00:00Z", reason: "Refund" });
     assert.equal(launch.archived, false);
-    assert.equal(launch.visibility, "private");
-    assert.equal(direct.visibility, "public");
+    assert.equal(launch.visibility, "PRIVATE");
+    assert.equal(direct.visibility, "PUBLIC");
     assert.equal(launch.lastMessageAt, "2026-10-18T10:00:00Z");
 });
 
@@ -137,9 +137,9 @@ test("reads a channel's places, members and the reader's own membership", () => 
     // A role this build does not know reads as what the person is: a contact
     // is a guest, anybody else a member. Only an agent answers.
     assert.deepEqual(detail.members.map((one) => [one.role, one.answers]), [["owner", null], ["member", null], ["guest", null], ["member", "EVERY_LINE"]]);
-    assert.deepEqual(detail.me, { joined: true, notify: "MENTIONS", readSeq: 4, role: "owner", canManage: true });
+    assert.deepEqual(detail.me, { joined: true, notify: "MENTIONS", notifyVia: null, mutedUntil: null, readSeq: 4, role: "owner", canManage: true });
     // Somebody not in it has not joined, and hears of everything by default.
-    assert.deepEqual(readChannelDetail({ id: "c", kind: "GROUP", created_at: "" })!.me, { joined: false, notify: "ALL", readSeq: 0, role: null, canManage: false });
+    assert.deepEqual(readChannelDetail({ id: "c", kind: "GROUP", created_at: "" })!.me, { joined: false, notify: "ALL", notifyVia: null, mutedUntil: null, readSeq: 0, role: null, canManage: false });
 });
 
 test("says where a line was said: its place and platform, or nothing for Lemma", () => {

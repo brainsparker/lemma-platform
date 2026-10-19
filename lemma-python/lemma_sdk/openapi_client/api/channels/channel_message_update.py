@@ -79,13 +79,16 @@ def sync_detailed(
 ) -> Response[ChannelMessageResponse | ErrorResponse]:
     """Edit Message
 
-     Change what one's own line says. A copy already sent outside stays as sent.
+     Change what one's own line says: absent is unchanged, `null` parts
+    clears them. A copy already sent outside stays as sent.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
-        body (ChannelEditRequest):
+        body (ChannelEditRequest): Absent is unchanged; ``null`` clears the parts. The text cannot
+            be
+            cleared: delete the line instead.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -119,13 +122,16 @@ def sync(
 ) -> ChannelMessageResponse | ErrorResponse | None:
     """Edit Message
 
-     Change what one's own line says. A copy already sent outside stays as sent.
+     Change what one's own line says: absent is unchanged, `null` parts
+    clears them. A copy already sent outside stays as sent.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
-        body (ChannelEditRequest):
+        body (ChannelEditRequest): Absent is unchanged; ``null`` clears the parts. The text cannot
+            be
+            cleared: delete the line instead.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -154,13 +160,16 @@ async def asyncio_detailed(
 ) -> Response[ChannelMessageResponse | ErrorResponse]:
     """Edit Message
 
-     Change what one's own line says. A copy already sent outside stays as sent.
+     Change what one's own line says: absent is unchanged, `null` parts
+    clears them. A copy already sent outside stays as sent.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
-        body (ChannelEditRequest):
+        body (ChannelEditRequest): Absent is unchanged; ``null`` clears the parts. The text cannot
+            be
+            cleared: delete the line instead.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -192,13 +201,16 @@ async def asyncio(
 ) -> ChannelMessageResponse | ErrorResponse | None:
     """Edit Message
 
-     Change what one's own line says. A copy already sent outside stays as sent.
+     Change what one's own line says: absent is unchanged, `null` parts
+    clears them. A copy already sent outside stays as sent.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
-        body (ChannelEditRequest):
+        body (ChannelEditRequest): Absent is unchanged; ``null`` clears the parts. The text cannot
+            be
+            cleared: delete the line instead.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

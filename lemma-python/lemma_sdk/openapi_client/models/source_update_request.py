@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import (
+    Any,
+    Literal,
+    TypeVar,
+    cast,
+)
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -13,14 +18,15 @@ T = TypeVar("T", bound="SourceUpdateRequest")
 
 @_attrs_define
 class SourceUpdateRequest:
-    """
+    """Absent is unchanged; neither field can be cleared.
+
     Attributes:
         answers_outsiders (bool | None | Unset): Answer people outside the pod here, or stop.
-        take_over (bool | Unset): Answer for its outsiders yourself from now on. Default: False.
+        owner (Literal['me'] | None | Unset): `me`: answer for its outsiders yourself from now on.
     """
 
     answers_outsiders: bool | None | Unset = UNSET
-    take_over: bool | Unset = False
+    owner: Literal["me"] | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -30,15 +36,19 @@ class SourceUpdateRequest:
         else:
             answers_outsiders = self.answers_outsiders
 
-        take_over = self.take_over
+        owner: Literal["me"] | None | Unset
+        if isinstance(self.owner, Unset):
+            owner = UNSET
+        else:
+            owner = self.owner
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if answers_outsiders is not UNSET:
             field_dict["answers_outsiders"] = answers_outsiders
-        if take_over is not UNSET:
-            field_dict["take_over"] = take_over
+        if owner is not UNSET:
+            field_dict["owner"] = owner
 
         return field_dict
 
@@ -55,11 +65,24 @@ class SourceUpdateRequest:
 
         answers_outsiders = _parse_answers_outsiders(d.pop("answers_outsiders", UNSET))
 
-        take_over = d.pop("take_over", UNSET)
+        def _parse_owner(data: object) -> Literal["me"] | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            owner_type_0 = cast(Literal["me"], data)
+            if owner_type_0 != "me":
+                raise ValueError(
+                    f"owner_type_0 must match const 'me', got '{owner_type_0}'"
+                )
+            return owner_type_0
+            return cast(Literal["me"] | None | Unset, data)
+
+        owner = _parse_owner(d.pop("owner", UNSET))
 
         source_update_request = cls(
             answers_outsiders=answers_outsiders,
-            take_over=take_over,
+            owner=owner,
         )
 
         source_update_request.additional_properties = d

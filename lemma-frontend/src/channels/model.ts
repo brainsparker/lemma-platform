@@ -14,7 +14,7 @@ import type { PersonRef, WaitingQuestion } from "./waiting";
 
 export type ChannelKind = "DIRECT" | "CONTACT" | "GROUP";
 export type NotifyLevel = "ALL" | "MENTIONS" | "NONE";
-export type Visibility = "public" | "private";
+export type Visibility = "PUBLIC" | "PRIVATE";
 export type ContactStatus = "open" | "waiting_on_contact" | "closed";
 export type MemberRole = "owner" | "member" | "guest";
 export type AgentAnswers = "MENTIONED" | "EVERY_LINE";
@@ -54,6 +54,9 @@ export interface Channel {
     /** It asks for a person, and why. */
     attention: { since: string; reason: string | null } | null;
     archived: boolean;
+    /** Whether the reader is in it. An admin is listed a bot's private
+     *  groups they are not in, to join on request. */
+    joined: boolean;
     lastLine: { sender: PersonRef; text: string; createdAt: string } | null;
     lastMessageAt: string | null;
     /** The newest line's place in the channel; lines are numbered from 1. */
@@ -84,7 +87,17 @@ export interface Member {
 export interface ChannelDetail extends Channel {
     places: SourcePlace[];
     members: Member[];
-    me: { joined: boolean; notify: NotifyLevel; readSeq: number; role: MemberRole | null; canManage: boolean };
+    me: {
+        joined: boolean;
+        notify: NotifyLevel;
+        /** Where they hear of it outside the app; null is the pod's rule. */
+        notifyVia: string[] | null;
+        /** Muted until then, when it is still to come. */
+        mutedUntil: string | null;
+        readSeq: number;
+        role: MemberRole | null;
+        canManage: boolean;
+    };
 }
 
 export interface Interaction {
@@ -98,6 +111,16 @@ export interface Interaction {
     answeredBy: PersonRef | null;
     answeredAt: string | null;
 }
+
+/** What a line carries beside its text: somebody it names, a pod file it
+ *  shares, a link. Platform markup was turned into these when it came in. */
+export type Part =
+    | { type: "mention"; kind: "MEMBER" | "CONTACT" | "AGENT"; id: string; name: string | null }
+    /** `fileId` is the server's once the line is stored: readers fetch the
+     *  file through the line (`…/messages/{m}/files/{fileId}`), never by
+     *  its path, which is the writer's. */
+    | { type: "file"; path: string; name: string; mimeType: string | null; size: number | null; fileId: string | null }
+    | { type: "link"; url: string; label: string | null };
 
 export interface Line {
     id: string;
@@ -118,6 +141,36 @@ export interface Line {
     threadRootId: string | null;
     replyCount: number;
     interaction: Interaction | null;
+    parts: Part[];
+    /** The composer's name for it, when it was written in Lemma. */
+    clientMessageId: string | null;
+    /** Where the reader's own line went outside, one per place; null on
+     *  anybody else's line, and on one that went nowhere outside. */
+    delivered: LineDelivery[] | null;
+}
+
+export type LineDeliveryStatus = "PENDING" | "SENT" | "FAILED" | "SKIPPED" | "DEAD";
+
+/** One send of the reader's own line to a place outside Lemma. */
+export interface LineDelivery {
+    id: string;
+    sourceId: string | null;
+    platform: string | null;
+    status: LineDeliveryStatus;
+    reason: string | null;
+}
+
+const DELIVERY_STATUSES: readonly LineDeliveryStatus[] = ["PENDING", "SENT", "FAILED", "SKIPPED", "DEAD"];
+
+function readDelivered(raw: unknown): LineDelivery[] | null {
+    if (!Array.isArray(raw)) return null;
+    const out = raw.flatMap((entry): LineDelivery[] => {
+        const row = record(entry);
+        const id = words(row.id);
+        if (!id || !DELIVERY_STATUSES.includes(row.status as LineDeliveryStatus)) return [];
+        return [{ id, sourceId: words(row.source_id), platform: words(row.platform), status: row.status as LineDeliveryStatus, reason: words(row.reason) }];
+    });
+    return out.length ? out : null;
 }
 
 /** One page of a list, and what to ask for the page after it: an opaque
@@ -187,7 +240,7 @@ export function readChannel(raw: unknown): Channel | null {
         title: words(row.title),
         topic: words(row.topic),
         person: readPerson(row.person),
-        visibility: row.visibility === "private" ? "private" : "public",
+        visibility: row.visibility === "PRIVATE" ? "PRIVATE" : "PUBLIC",
         sources: rows(row.sources).flatMap((entry) => {
             const source = record(entry);
             const platform = words(source.platform);
@@ -199,6 +252,7 @@ export function readChannel(raw: unknown): Channel | null {
         status: STATUSES.includes(row.status as ContactStatus) ? (row.status as ContactStatus) : null,
         attention: attention ? { since: String(attention.since ?? ""), reason: words(attention.reason) } : null,
         archived: row.archived === true,
+        joined: row.joined === true || record(row.me).joined === true,
         lastLine: last ? {
             sender: readPerson(last.sender) ?? SOMEBODY,
             text: typeof last.text === "string" ? last.text : "",
@@ -250,6 +304,8 @@ export function readChannelDetail(raw: unknown): ChannelDetail | null {
         me: {
             joined: me.joined === true,
             notify: level(me.notify),
+            notifyVia: Array.isArray(me.notify_via) ? me.notify_via.filter((one): one is string => typeof one === "string") : null,
+            mutedUntil: words(me.muted_until),
             readSeq: count(me.read_seq),
             role: role(me.role),
             canManage: me.can_manage === true,
@@ -297,7 +353,37 @@ export function readLine(raw: unknown): Line | null {
         threadRootId: words(row.thread_root_id),
         replyCount: count(row.reply_count),
         interaction: readQuestion(row.question),
+        parts: deleted || withheld ? [] : readParts(row.parts),
+        clientMessageId: words(row.client_message_id),
+        delivered: deleted ? null : readDelivered(row.delivered),
     };
+}
+
+/** A line's parts, keeping only the ones this build can draw: a part of a
+ *  kind it does not know, or without what it needs, is left out. */
+export function readParts(raw: unknown): Part[] {
+    return rows(raw).flatMap((entry): Part[] => {
+        const part = record(entry);
+        if (part.type === "mention") {
+            const id = words(part.id);
+            const kind = part.kind === "CONTACT" || part.kind === "AGENT" ? part.kind : part.kind === "MEMBER" ? "MEMBER" : null;
+            return id && kind ? [{ type: "mention", kind, id, name: words(part.name) }] : [];
+        }
+        if (part.type === "file") {
+            const path = words(part.path);
+            if (!path) return [];
+            return [{
+                type: "file", path, name: words(part.name) ?? path.split("/").filter(Boolean).at(-1) ?? path,
+                mimeType: words(part.mime_type), size: typeof part.size === "number" && part.size >= 0 ? part.size : null,
+                fileId: words(part.file_id),
+            }];
+        }
+        if (part.type === "link") {
+            const url = words(part.url);
+            return url && /^https?:\/\//i.test(url) ? [{ type: "link", url, label: words(part.label) }] : [];
+        }
+        return [];
+    });
 }
 
 /** A page of a timeline, or a thread's replies. The page before it is asked

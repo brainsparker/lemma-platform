@@ -180,7 +180,7 @@ async def test_a_member_who_cannot_see_the_channel_is_named_but_not_told(
     await _hear(db_session, "slack", payload)
 
     channel = await _the_group_channel(authenticated_client, pod_id, platform="SLACK")
-    assert channel["visibility"] == "private"
+    assert channel["visibility"] == "PRIVATE"
     [line] = await _timeline(authenticated_client, pod_id, channel["id"])
     assert line["text"] == "@Surface Test User not for everyone"
     assert [part["id"] for part in line["parts"]] == [priya["id"]]

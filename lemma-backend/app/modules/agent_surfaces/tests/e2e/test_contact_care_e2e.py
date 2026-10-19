@@ -337,23 +337,24 @@ async def test_contacts_made_at_one_moment_page_without_one_lost(
     await db_session.commit()
 
     seen: list[str] = []
-    before: str | None = None
+    cursor: str | None = None
     for _ in range(5):
         params: dict[str, str | int] = {"limit": 1}
-        if before:
-            params["before"] = before
+        if cursor:
+            params["cursor"] = cursor
         page = await authenticated_client.get(f"/pods/{pod_id}/contacts", params=params)
         assert page.status_code == 200, page.text
         seen += [item["id"] for item in page.json()["items"]]
-        before = page.json().get("next_before")
-        if not before:
+        cursor = page.json().get("next_cursor")
+        if not cursor:
             break
 
     assert len(seen) == 3 and len(set(seen)) == 3
-    refused = await authenticated_client.get(
-        f"/pods/{pod_id}/contacts", params={"before": "yesterday"}
-    )
-    assert refused.status_code == 400
+    for not_ours in ("yesterday", "bm90IGEgY3Vyc29y"):
+        refused = await authenticated_client.get(
+            f"/pods/{pod_id}/contacts", params={"cursor": not_ours}
+        )
+        assert refused.status_code == 400, not_ours
 
 
 # ------------------------------------------------------------ exporting

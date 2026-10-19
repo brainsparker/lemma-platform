@@ -140,6 +140,9 @@ class ConversationResponse(BaseModel):
     instructions: str | None = None
     agent_runtime: AgentRuntimeConfig | None = None
     parent_id: UUID | None = None
+    #: The channel it is held in, if any: a channel's conversations are
+    #: reached through the channel.
+    channel_id: UUID | None = None
     type: ConversationType = ConversationType.CHAT
     status: ConversationStatus | None = None
     output: JsonValue | None = None

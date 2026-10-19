@@ -3417,7 +3417,7 @@
           },
           "visibility": {
             "$ref": "#/components/schemas/Visibility",
-            "default": "public"
+            "default": "PUBLIC"
           }
         },
         "required": [
@@ -3489,6 +3489,12 @@
             "title": "Id",
             "type": "string"
           },
+          "joined": {
+            "default": false,
+            "description": "Whether the reader is in it. A pod admin listing a bot's groups (`source_surface`) is shown its private ones too, not joined and without their last line, until they join.",
+            "title": "Joined",
+            "type": "boolean"
+          },
           "kind": {
             "$ref": "#/components/schemas/ChannelKind"
           },
@@ -3539,6 +3545,17 @@
             },
             "title": "Source Places",
             "type": "array"
+          },
+          "source_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceSettingsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Listed by `source_surface`: that bot's settings for its place here -- who answers its people outside the pod, and whether they are."
           },
           "sources": {
             "description": "The outside places feeding it.",
@@ -3599,6 +3616,7 @@
         "type": "object"
       },
       "ChannelEditRequest": {
+        "description": "Absent is unchanged; ``null`` clears the parts. The text cannot be\ncleared: delete the line instead.",
         "properties": {
           "parts": {
             "anyOf": [
@@ -3631,19 +3649,23 @@
                 "type": "null"
               }
             ],
-            "description": "Absent keeps the parts.",
+            "description": "Absent keeps the parts; `null` or `[]` clears them.",
             "title": "Parts"
           },
           "text": {
-            "maxLength": 20000,
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
           }
         },
-        "required": [
-          "text"
-        ],
         "title": "ChannelEditRequest",
         "type": "object"
       },
@@ -3763,6 +3785,21 @@
             "default": false,
             "title": "Deleted",
             "type": "boolean"
+          },
+          "delivered": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LineDelivery"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on the reader's own line: each place outside Lemma it went to, and what became of it. Pushes to members are not listed here (`…/deliveries` has every send).",
+            "title": "Delivered"
           },
           "edited_at": {
             "anyOf": [
@@ -4171,6 +4208,12 @@
             "title": "Id",
             "type": "string"
           },
+          "joined": {
+            "default": false,
+            "description": "Whether the reader is in it. A pod admin listing a bot's groups (`source_surface`) is shown its private ones too, not joined and without their last line, until they join.",
+            "title": "Joined",
+            "type": "boolean"
+          },
           "kind": {
             "$ref": "#/components/schemas/ChannelKind"
           },
@@ -4204,6 +4247,17 @@
               }
             ],
             "description": "Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP."
+          },
+          "source_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceSettingsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Listed by `source_surface`: that bot's settings for its place here -- who answers its people outside the pod, and whether they are."
           },
           "sources": {
             "description": "The outside places feeding it.",
@@ -4367,10 +4421,14 @@
                 "type": "string"
               },
               {
+                "const": "me",
+                "type": "string"
+              },
+              {
                 "type": "null"
               }
             ],
-            "description": "A member's user id; `null` unassigns.",
+            "description": "`me`, or a member's user id; `null` unassigns.",
             "title": "Assignee"
           },
           "hand_back_after_hours": {
@@ -5328,7 +5386,7 @@
             "title": "Items",
             "type": "array"
           },
-          "next_before": {
+          "next_cursor": {
             "anyOf": [
               {
                 "type": "string"
@@ -5337,8 +5395,8 @@
                 "type": "null"
               }
             ],
-            "description": "Pass as `before` for the next page; absent on the last.",
-            "title": "Next Before"
+            "description": "Pass as `cursor` for the next page; absent on the last.",
+            "title": "Next Cursor"
           }
         },
         "required": [
@@ -5598,6 +5656,18 @@
                 "type": "null"
               }
             ]
+          },
+          "channel_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Id"
           },
           "created_at": {
             "format": "date-time",
@@ -8787,8 +8857,20 @@
         "type": "object"
       },
       "FilePart": {
-        "description": "A file of the pod's the line shares; a reader needs access to it.",
+        "description": "A file of the pod's the line shares.\n\nWhoever writes the line must be able to read the file; it is then read\nthrough the line (``GET …/messages/{m}/files/{file_id}``), by whoever may\nsee the line, as its writer reads it -- never through the file's own\nfolder, which a private channel's readers need not share.",
         "properties": {
+          "file_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Id"
+          },
           "mime_type": {
             "anyOf": [
               {
@@ -11800,6 +11882,61 @@
         "type": "object"
       },
       "JsonValue": {},
+      "LineDelivery": {
+        "description": "Where a line went outside Lemma, as its writer is shown on it.",
+        "properties": {
+          "id": {
+            "description": "The delivery; retry it by this id.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it was skipped, failed or given up.",
+            "title": "Reason"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "LineDelivery",
+        "type": "object"
+      },
       "LinePreview": {
         "properties": {
           "created_at": {
@@ -12796,17 +12933,9 @@
             "minLength": 1,
             "title": "Text",
             "type": "string"
-          },
-          "to": {
-            "description": "The member to tell: a pod member id, user id, or email address.",
-            "maxLength": 320,
-            "minLength": 1,
-            "title": "To",
-            "type": "string"
           }
         },
         "required": [
-          "to",
           "text"
         ],
         "title": "NoticeRequest",
@@ -14041,7 +14170,7 @@
           "client_message_id": {
             "anyOf": [
               {
-                "maxLength": 128,
+                "maxLength": 64,
                 "minLength": 1,
                 "type": "string"
               },
@@ -17716,23 +17845,7 @@
         "title": "SourceKind",
         "type": "string"
       },
-      "SourceListResponse": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/SourceSettingsResponse"
-            },
-            "title": "Items",
-            "type": "array"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "title": "SourceListResponse",
-        "type": "object"
-      },
-      "SourceSettingsResponse": {
+      "SourceSettingsDetailResponse": {
         "properties": {
           "answers_outsiders": {
             "description": "This group's own switch for people outside the pod.",
@@ -17846,6 +17959,112 @@
           "welcomes_outsiders",
           "updated_at"
         ],
+        "title": "SourceSettingsDetailResponse",
+        "type": "object"
+      },
+      "SourceSettingsResponse": {
+        "properties": {
+          "answers_outsiders": {
+            "description": "This group's own switch for people outside the pod.",
+            "title": "Answers Outsiders",
+            "type": "boolean"
+          },
+          "bot_answers_outsiders": {
+            "default": true,
+            "description": "The bot's own switch, over every group it is in. Off, nobody outside the pod is answered in any of them.",
+            "title": "Bot Answers Outsiders",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "default": false,
+            "description": "The reader may switch outsiders here or take it over: they answer for it, nobody in the pod does, or they are an admin of the pod.",
+            "title": "Can Manage",
+            "type": "boolean"
+          },
+          "channel_id": {
+            "format": "uuid",
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "id": {
+            "description": "The source's id, as the channel lists it.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "invite_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Link"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The member who answers for its outsiders."
+          },
+          "pending": {
+            "default": false,
+            "description": "Asked of the platform and not yet confirmed (WhatsApp).",
+            "title": "Pending",
+            "type": "boolean"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "shared_externally": {
+            "default": false,
+            "description": "A Slack channel shared with another company.",
+            "title": "Shared Externally",
+            "type": "boolean"
+          },
+          "surface_name": {
+            "title": "Surface Name",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "welcomes_outsiders": {
+            "description": "People outside the pod are answered here today: the group's switch is on, a member of the pod answers for them, and the bot's own switch is on.",
+            "title": "Welcomes Outsiders",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "channel_id",
+          "surface_name",
+          "platform",
+          "answers_outsiders",
+          "welcomes_outsiders",
+          "updated_at"
+        ],
         "title": "SourceSettingsResponse",
         "type": "object"
       },
@@ -17874,6 +18093,7 @@
         "type": "object"
       },
       "SourceUpdateRequest": {
+        "description": "Absent is unchanged; neither field can be cleared.",
         "properties": {
           "answers_outsiders": {
             "anyOf": [
@@ -17887,11 +18107,18 @@
             "description": "Answer people outside the pod here, or stop.",
             "title": "Answers Outsiders"
           },
-          "take_over": {
-            "default": false,
-            "description": "Answer for its outsiders yourself from now on.",
-            "title": "Take Over",
-            "type": "boolean"
+          "owner": {
+            "anyOf": [
+              {
+                "const": "me",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`me`: answer for its outsiders yourself from now on.",
+            "title": "Owner"
           }
         },
         "title": "SourceUpdateRequest",
@@ -21750,8 +21977,8 @@
       },
       "Visibility": {
         "enum": [
-          "public",
-          "private"
+          "PUBLIC",
+          "PRIVATE"
         ],
         "title": "Visibility",
         "type": "string"
@@ -30876,6 +31103,18 @@
             }
           },
           {
+            "description": "Only contacts' channels waiting on a person: open, unassigned, and the agent off or asking for one.",
+            "in": "query",
+            "name": "needs_person",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Only contacts' channels waiting on a person: open, unassigned, and the agent off or asking for one.",
+              "title": "Needs Person",
+              "type": "boolean"
+            }
+          },
+          {
             "description": "Only channels the reader is in.",
             "in": "query",
             "name": "joined",
@@ -30885,6 +31124,26 @@
               "description": "Only channels the reader is in.",
               "title": "Joined",
               "type": "boolean"
+            }
+          },
+          {
+            "description": "A bot's surface name: only the groups it is in, each with its `source_settings`. Takes reading the bot.",
+            "in": "query",
+            "name": "source_surface",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A bot's surface name: only the groups it is in, each with its `source_settings`. Takes reading the bot.",
+              "title": "Source Surface"
             }
           },
           {
@@ -31132,6 +31391,172 @@
           "resource": "channel.me",
           "result": "entity",
           "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/telegram-links": {
+      "post": {
+        "description": "A one-use link that adds the pod's Telegram bot to a group the caller picks.\n\nThe group becomes a GROUP channel, the caller's to answer for. Which\nTelegram account is theirs is still their profile's to say: a link is\neasily passed on, so the one that used it is never taken for them. The link\nworks for an hour.",
+        "operationId": "channel.telegram_link.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramLinkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Telegram Link",
+        "tags": [
+          "Channel Sources"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.telegram_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.telegram_link",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/whatsapp-groups": {
+      "post": {
+        "description": "Start a WhatsApp group with the pod's bot in it, answered for by the caller.\n\nIt is a new GROUP channel's source: the channel is made with it, and its\nid is `channel_id`. WhatsApp confirms the group moments later: it comes\nback ``pending``, and its invite link appears once confirmed. Telegram and\nSlack cannot create groups for a bot; add the bot to one of theirs instead.\nThe same `Idempotency-Key` from the same member answers with the group it\nstarted, for a day.",
+        "operationId": "channel.whatsapp_group.start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WhatsAppGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A start with that Idempotency-Key is still running."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The member has started as many groups as a day allows."
+          }
+        },
+        "summary": "Start Whatsapp Group",
+        "tags": [
+          "Channel Sources"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.whatsapp_group"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.whatsapp_group",
+          "result": "entity",
+          "verb": "start"
         }
       }
     },
@@ -31526,7 +31951,7 @@
         }
       },
       "post": {
-        "description": "Join a channel the reader may see: a public group, or -- holding\n`contact.read` -- a contact's channel. Joining one already joined is\nnothing.",
+        "description": "Join a channel the reader may see: a public group, or -- holding\n`contact.read` -- a contact's channel. Holding `channel.manage`, a private\ngroup too, on request: how a pod admin finds and takes over a group nobody\nlet them into; it is logged. Joining one already joined is nothing.",
         "operationId": "channel.member.join",
         "parameters": [
           {
@@ -31590,7 +32015,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}": {
       "delete": {
-        "description": "Take somebody out of a group -- its owners' or an admin's -- or leave a\nchannel oneself.",
+        "description": "Take somebody out of a group -- its owners' or an editor's -- or leave a\nchannel oneself.",
         "operationId": "channel.member.remove",
         "parameters": [
           {
@@ -32017,7 +32442,7 @@
         }
       },
       "patch": {
-        "description": "Change what one's own line says. A copy already sent outside stays as sent.",
+        "description": "Change what one's own line says: absent is unchanged, `null` parts\nclears them. A copy already sent outside stays as sent.",
         "operationId": "channel.message.update",
         "parameters": [
           {
@@ -32338,6 +32763,88 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}": {
+      "get": {
+        "description": "A file a line shares, for a reader of the line: read as its writer\nreads it. Gone with the line, or once its writer can no longer read it.",
+        "operationId": "channel.message.file",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "File Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The file's bytes"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Line File",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "channel.message",
+          "result": "entity",
+          "verb": "file"
+        }
+      }
+    },
     "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread": {
       "get": {
         "description": "A thread: its first line, and its replies oldest first after `after_seq`.",
@@ -32512,9 +33019,162 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/{channel_id}/sources/{source_id}": {
+      "get": {
+        "description": "A group source's settings: who answers its outsiders, and from what.",
+        "operationId": "channel.source.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceSettingsDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Source",
+        "tags": [
+          "Channel Sources"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "channel.source",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "patch": {
+        "description": "Switch outsiders on or off in one group, or take it over (`owner: \"me\"`).\nAbsent is unchanged; neither can be cleared.\n\nThe member who answers for the group may; so may anybody who configures the\nbot when nobody in the pod answers for it, and an admin of the pod, whose\nchange the member is told about.",
+        "operationId": "channel.source.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Source",
+        "tags": [
+          "Channel Sources"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.source"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.source",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
     "/pods/{pod_id}/contacts": {
       "get": {
-        "description": "The pod's contacts, newest first.",
+        "description": "The pod's contacts, newest first. Follow `next_cursor` until it is\nabsent.",
         "operationId": "contact.list",
         "parameters": [
           {
@@ -32541,19 +33201,19 @@
           },
           {
             "in": "query",
-            "name": "before",
+            "name": "cursor",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 100,
+                  "maxLength": 200,
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "title": "Before"
+              "title": "Cursor"
             }
           }
         ],
@@ -32858,7 +33518,7 @@
     },
     "/pods/{pod_id}/contacts/{contact_id}/outreach": {
       "post": {
-        "description": "Write to a contact first, on one of their handles: email any time,\nWhatsApp within 24 hours of their last message there. The line goes in\ntheir channel, at that handle's place -- opened if new -- and is sent from\nthere.",
+        "description": "Write to a contact first, on one of their handles: email any time,\nWhatsApp within 24 hours of their last message there. The line goes in\ntheir channel, at that handle's place -- opened if new -- and is sent from\nthere. The same `client_message_id`, or `Idempotency-Key`, from the same\nmember is the same line: a retry sends nothing new.",
         "operationId": "contact.outreach.send",
         "parameters": [
           {
@@ -32879,6 +33539,24 @@
               "format": "uuid",
               "title": "Contact Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
             }
           }
         ],
@@ -33057,6 +33735,24 @@
                 }
               ],
               "title": "Search"
+            }
+          },
+          {
+            "description": "false: only conversations of no channel (the chats list); true: only those in a channel. Omitted: both.",
+            "in": "query",
+            "name": "in_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "false: only conversations of no channel (the chats list); true: only those in a channel. Omitted: both.",
+              "title": "In Channel"
             }
           },
           {
@@ -38766,6 +39462,101 @@
         }
       }
     },
+    "/pods/{pod_id}/members/{member}/notices": {
+      "post": {
+        "description": "Tell another member of the pod something, in their own channel. The\nsame `Idempotency-Key` from the same member is the same notice.",
+        "operationId": "agent.notice.send",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The member to tell: a pod member id, user id, or email address.",
+            "in": "path",
+            "name": "member",
+            "required": true,
+            "schema": {
+              "description": "The member to tell: a pod member id, user id, or email address.",
+              "maxLength": 320,
+              "minLength": 1,
+              "title": "Member",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoticeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoticeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Notice",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.notice"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.notice",
+          "result": "entity",
+          "verb": "send"
+        }
+      }
+    },
     "/pods/{pod_id}/members/{pod_member_id}": {
       "delete": {
         "description": "Remove a member from a pod",
@@ -38953,70 +39744,6 @@
           "resource": "pod.member",
           "result": "entity",
           "verb": "update_roles"
-        }
-      }
-    },
-    "/pods/{pod_id}/notices": {
-      "post": {
-        "description": "Tell another member of the pod something, in their own channel.",
-        "operationId": "agent.notice.send",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NoticeRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NoticeResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Send Notice",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.notice"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.notice",
-          "result": "entity",
-          "verb": "send"
         }
       }
     },
@@ -40836,330 +41563,6 @@
         }
       }
     },
-    "/pods/{pod_id}/sources": {
-      "get": {
-        "description": "Every group one bot is in, with each one's settings, newest first.",
-        "operationId": "agent.source.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The bot's surface name.",
-            "in": "query",
-            "name": "surface_name",
-            "required": true,
-            "schema": {
-              "description": "The bot's surface name.",
-              "minLength": 1,
-              "title": "Surface Name",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SourceListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Sources",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.source",
-          "result": "collection",
-          "verb": "list"
-        }
-      }
-    },
-    "/pods/{pod_id}/sources/telegram-links": {
-      "post": {
-        "description": "A one-use link that adds the pod's Telegram bot to a group the caller picks.\n\nThe group becomes a GROUP channel, the caller's to answer for. Which\nTelegram account is theirs is still their profile's to say: a link is\neasily passed on, so the one that used it is never taken for them. The link\nworks for an hour.",
-        "operationId": "agent.source.telegram_link.create",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TelegramLinkRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TelegramLinkResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Telegram Link",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.source.telegram_link"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.source.telegram_link",
-          "result": "entity",
-          "verb": "create"
-        }
-      }
-    },
-    "/pods/{pod_id}/sources/whatsapp-groups": {
-      "post": {
-        "description": "Start a WhatsApp group with the pod's bot in it, answered for by the caller.\n\nIt is a new GROUP channel's source. WhatsApp confirms the group moments\nlater: it comes back ``pending``, and its invite link appears once\nconfirmed. Telegram and Slack cannot create groups for a bot; add the bot\nto one of theirs instead.",
-        "operationId": "agent.source.whatsapp_group.start",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WhatsAppGroupRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SourceSettingsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Start Whatsapp Group",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.source.whatsapp_group"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.source.whatsapp_group",
-          "result": "entity",
-          "verb": "start"
-        }
-      }
-    },
-    "/pods/{pod_id}/sources/{source_id}": {
-      "get": {
-        "description": "A group source's settings: who answers its outsiders, and from what.",
-        "operationId": "agent.source.get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "source_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Source Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SourceSettingsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Source",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.source",
-          "result": "entity",
-          "verb": "get"
-        }
-      },
-      "patch": {
-        "description": "Switch outsiders on or off in one group, or take it over.\n\nThe member who answers for the group may; so may anybody who configures the\nbot when nobody in the pod answers for it, and an admin of the pod, whose\nchange the member is told about.",
-        "operationId": "agent.source.update",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "source_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Source Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SourceUpdateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SourceSettingsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Update Source",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.source"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.source",
-          "result": "entity",
-          "verb": "update"
-        }
-      }
-    },
     "/pods/{pod_id}/surface-setup/{platform}": {
       "get": {
         "description": "The static pre-creation checklist for a platform (env/OAuth\nprerequisites) — works before any surface of this platform exists.",
@@ -41636,7 +42039,7 @@
     },
     "/pods/{pod_id}/surfaces/{surface_name}/send": {
       "post": {
-        "description": "Proactively send a message to a pod member on this surface.\n\nPowers notifications from functions/workflows. Reuses the member's existing\nthread (bots can't cold-DM), and a 404 carries the reason it could not be\nreached, in the vocabulary the notification API uses.",
+        "description": "Proactively send a message to a pod member on this surface.\n\nFor functions and workflows that message a member on one platform. Reuses\nthe member's existing thread (bots can't cold-DM), and a 404 carries the\nreason they could not be reached.",
         "operationId": "agent.surface.send",
         "parameters": [
           {

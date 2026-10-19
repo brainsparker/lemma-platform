@@ -1,13 +1,15 @@
-"""What the sources API reads and writes: a group source's settings.
+"""What a group source's routes read and write: its settings.
 
 A group's timeline, people and unread lines are its channel's
 (``/pods/{pod_id}/channels``); this is only what the bot's side of it keeps.
+The settings' shape is ``channels``' (``contracts.source_settings``), since the
+channel list shows it too.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import UUID
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,58 +19,13 @@ from app.modules.agent_surfaces.platforms.whatsapp.client import (
 )
 from app.modules.agent_surfaces.services.source_settings import SourceState
 from app.modules.channels.contracts.people import PersonRef, SenderKind
+from app.modules.channels.contracts.source_settings import SourceSettingsResponse
 
 
-class SourceSettingsResponse(BaseModel):
-    id: UUID = Field(description="The source's id, as the channel lists it.")
-    channel_id: UUID
-    surface_name: str
-    platform: str
-    title: str | None = None
-    invite_link: str | None = None
-    pending: bool = Field(
-        default=False,
-        description="Asked of the platform and not yet confirmed (WhatsApp).",
-    )
-    shared_externally: bool = Field(
-        default=False,
-        description="A Slack channel shared with another company.",
-    )
-    owner: PersonRef | None = Field(
-        default=None, description="The member who answers for its outsiders."
-    )
-    answers_outsiders: bool = Field(
-        description="This group's own switch for people outside the pod."
-    )
-    welcomes_outsiders: bool = Field(
-        description=(
-            "People outside the pod are answered here today: the group's switch "
-            "is on, a member of the pod answers for them, and the bot's own "
-            "switch is on."
-        )
-    )
-    bot_answers_outsiders: bool = Field(
-        default=True,
-        description=(
-            "The bot's own switch, over every group it is in. Off, nobody outside "
-            "the pod is answered in any of them."
-        ),
-    )
-    can_manage: bool = Field(
-        default=False,
-        description=(
-            "The reader may switch outsiders here or take it over: they answer "
-            "for it, nobody in the pod does, or they are an admin of the pod."
-        ),
-    )
+class SourceSettingsDetailResponse(SourceSettingsResponse):
     public: public_api.GroupPublicResponse | None = Field(
         default=None, description="What people outside the pod can be answered from."
     )
-    updated_at: datetime
-
-
-class SourceListResponse(BaseModel):
-    items: list[SourceSettingsResponse]
 
 
 class WhatsAppGroupRequest(BaseModel):
@@ -78,13 +35,15 @@ class WhatsAppGroupRequest(BaseModel):
 
 
 class SourceUpdateRequest(BaseModel):
+    """Absent is unchanged; neither field can be cleared."""
+
     answers_outsiders: bool | None = Field(
         default=None,
         description="Answer people outside the pod here, or stop.",
     )
-    take_over: bool = Field(
-        default=False,
-        description="Answer for its outsiders yourself from now on.",
+    owner: Literal["me"] | None = Field(
+        default=None,
+        description="`me`: answer for its outsiders yourself from now on.",
     )
 
 
@@ -98,10 +57,7 @@ class TelegramLinkResponse(BaseModel):
 
 
 def settings_response(
-    state: SourceState,
-    *,
-    can_manage: bool,
-    public: public_api.GroupPublicResponse | None = None,
+    state: SourceState, *, can_manage: bool
 ) -> SourceSettingsResponse:
     group = state.group
     # A member who has left the pod answers for nobody, and reads as nobody.
@@ -124,6 +80,16 @@ def settings_response(
         welcomes_outsiders=state.answers_outsiders_now,
         bot_answers_outsiders=state.bot_answers_outsiders,
         can_manage=can_manage,
-        public=public,
         updated_at=group.updated_at,
+    )
+
+
+def detail_response(
+    state: SourceState,
+    *,
+    can_manage: bool,
+    public: public_api.GroupPublicResponse | None,
+) -> SourceSettingsDetailResponse:
+    return SourceSettingsDetailResponse(
+        **settings_response(state, can_manage=can_manage).model_dump(), public=public
     )

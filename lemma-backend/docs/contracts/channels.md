@@ -27,6 +27,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `channel.member.update` | PATCH | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | Update Member |
 | `channel.message.answer` | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer` | Answer Question |
 | `channel.message.delete` | DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | Delete Message |
+| `channel.message.file` | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}` | Line File |
 | `channel.message.list` | GET | `/pods/{pod_id}/channels/{channel_id}/messages` | List Messages |
 | `channel.message.post` | POST | `/pods/{pod_id}/channels/{channel_id}/messages` | Post Message |
 | `channel.message.thread` | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread` | List Thread |

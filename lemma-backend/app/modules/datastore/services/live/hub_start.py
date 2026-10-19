@@ -16,12 +16,13 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.request_context import create_background_task
-from app.modules.datastore.domain.live import LiveCursorExpired, LiveHubUnavailable
+from app.core.live.protocol import LiveUnavailable
+from app.modules.datastore.domain.live import LiveCursorExpired
 
 #: How long a socket waits for its pod's hub to read its starting position.
 START_TIMEOUT = 10.0
 #: Start failures a socket reports as themselves; anything else is
-#: ``LiveHubUnavailable``.
+#: ``LiveUnavailable``.
 _EXPECTED = (SQLAlchemyError, OSError, LiveCursorExpired)
 
 
@@ -46,7 +47,7 @@ class StartAttempt:
         self.settle(
             exc
             if isinstance(exc, _EXPECTED)
-            else LiveHubUnavailable("the pod's live feed did not start")
+            else LiveUnavailable("the pod's live feed did not start")
         )
 
 
@@ -70,9 +71,7 @@ class HubStart:
         try:
             await asyncio.wait_for(attempt.done.wait(), timeout=START_TIMEOUT)
         except TimeoutError as exc:
-            raise LiveHubUnavailable(
-                "the pod's live feed took too long to start"
-            ) from exc
+            raise LiveUnavailable("the pod's live feed took too long to start") from exc
         if attempt.error is not None:
             raise attempt.error
 
@@ -81,5 +80,5 @@ class HubStart:
         cancelled before its first step -- is failed here, so its waiters hear
         now rather than at the timeout."""
         task, self.task = self.task, None
-        self._attempt.settle(LiveHubUnavailable("the pod's live feed was stopped"))
+        self._attempt.settle(LiveUnavailable("the pod's live feed was stopped"))
         return task

@@ -39,7 +39,9 @@ export class ChannelsService {
      * @param assignee `me`, or a member's user id: contacts' channels assigned to them.
      * @param unassigned
      * @param status
+     * @param needsPerson Only contacts' channels waiting on a person: open, unassigned, and the agent off or asking for one.
      * @param joined Only channels the reader is in.
+     * @param sourceSurface A bot's surface name: only the groups it is in, each with its `source_settings`. Takes reading the bot.
      * @param cursor
      * @param limit
      * @returns ChannelListResponse Successful Response
@@ -53,7 +55,9 @@ export class ChannelsService {
         assignee?: (string | null),
         unassigned: boolean = false,
         status?: (ContactStatus | null),
+        needsPerson: boolean = false,
         joined: boolean = false,
+        sourceSurface?: (string | null),
         cursor?: (string | null),
         limit: number = 50,
     ): CancelablePromise<ChannelListResponse> {
@@ -70,7 +74,9 @@ export class ChannelsService {
                 'assignee': assignee,
                 'unassigned': unassigned,
                 'status': status,
+                'needs_person': needsPerson,
                 'joined': joined,
+                'source_surface': sourceSurface,
                 'cursor': cursor,
                 'limit': limit,
             },
@@ -322,8 +328,9 @@ export class ChannelsService {
     /**
      * Join Channel
      * Join a channel the reader may see: a public group, or -- holding
-     * `contact.read` -- a contact's channel. Joining one already joined is
-     * nothing.
+     * `contact.read` -- a contact's channel. Holding `channel.manage`, a private
+     * group too, on request: how a pod admin finds and takes over a group nobody
+     * let them into; it is logged. Joining one already joined is nothing.
      * @param podId
      * @param channelId
      * @returns ChannelDetailResponse Successful Response
@@ -347,7 +354,7 @@ export class ChannelsService {
     }
     /**
      * Remove Member
-     * Take somebody out of a group -- its owners' or an admin's -- or leave a
+     * Take somebody out of a group -- its owners' or an editor's -- or leave a
      * channel oneself.
      * @param podId
      * @param channelId
@@ -511,7 +518,8 @@ export class ChannelsService {
     }
     /**
      * Edit Message
-     * Change what one's own line says. A copy already sent outside stays as sent.
+     * Change what one's own line says: absent is unchanged, `null` parts
+     * clears them. A copy already sent outside stays as sent.
      * @param podId
      * @param channelId
      * @param messageId
@@ -628,6 +636,37 @@ export class ChannelsService {
                 'channel_id': channelId,
                 'message_id': messageId,
                 'delivery_id': deliveryId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Line File
+     * A file a line shares, for a reader of the line: read as its writer
+     * reads it. Gone with the line, or once its writer can no longer read it.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param fileId
+     * @returns binary The file's bytes
+     * @throws ApiError
+     */
+    public static channelMessageFile(
+        podId: string,
+        channelId: string,
+        messageId: string,
+        fileId: string,
+    ): CancelablePromise<Blob> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'message_id': messageId,
+                'file_id': fileId,
             },
             errors: {
                 422: `Validation Error`,

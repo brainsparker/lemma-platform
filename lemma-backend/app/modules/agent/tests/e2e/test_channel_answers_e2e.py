@@ -191,7 +191,10 @@ async def test_the_pods_agent_answers_a_line_once_however_often_it_is_retried(
     assert answer.sender_kind == SenderKind.AGENT.value
     assert answer.on_behalf_user_id == owner
     assert answer.conversation_id == conversation_id
-    assert answer.thread_root_id == said.id
+    # A member's own channel reads as a chat: the answer follows the line it
+    # answers rather than opening a thread under it.
+    assert answer.thread_root_id is None
+    assert answer.reply_to_id == said.id
     assert answer.channel_id == said.channel_id
 
 

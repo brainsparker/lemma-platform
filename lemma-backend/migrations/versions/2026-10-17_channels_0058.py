@@ -18,7 +18,8 @@ person has one conversation per agent there.
 `agent_surface_conversation_links`, `agent_surface_groups`,
 `agent_surface_group_messages` and `notifications` go, and queued
 `notification.expire` work with them: channels replace them. Groups, web chat
-and channels were unreleased, so nothing is carried over.
+and channels were unreleased, so nothing is carried over. Every member already
+in a pod is given their own DIRECT channel, as joining one does from now on.
 
 Revision ID: 0058_channels
 Revises: 0057_contacts_for_everyone
@@ -73,16 +74,18 @@ CREATE TABLE channels (
 	last_seq BIGINT DEFAULT 0 NOT NULL,
 	last_line_id UUID,
 	last_line_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	last_rev BIGINT DEFAULT 0 NOT NULL,
+	changed_rev BIGINT DEFAULT 0 NOT NULL,
 	id UUID NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	PRIMARY KEY (id),
 	CONSTRAINT ck_channels_kind CHECK (kind IN ('DIRECT', 'CONTACT', 'GROUP')),
-	CONSTRAINT ck_channels_visibility CHECK (visibility IN ('public', 'private')),
+	CONSTRAINT ck_channels_visibility CHECK (visibility IN ('PUBLIC', 'PRIVATE')),
 	CONSTRAINT ck_channels_status CHECK (status IN ('open', 'waiting_on_contact', 'closed')),
 	CONSTRAINT ck_channels_hand_back_after_hours CHECK (hand_back_after_hours BETWEEN 1 AND 720),
 	CONSTRAINT ck_channels_kind_names_its_person CHECK ((kind = 'DIRECT') = (member_user_id IS NOT NULL) AND (kind = 'CONTACT') = (contact_id IS NOT NULL)),
-	CONSTRAINT ck_channels_only_a_group_is_public CHECK (kind = 'GROUP' OR visibility = 'private'),
+	CONSTRAINT ck_channels_only_a_group_is_public CHECK (kind = 'GROUP' OR visibility = 'PRIVATE'),
 	CONSTRAINT uq_channels_id_pod UNIQUE (id, pod_id),
 	FOREIGN KEY(pod_id) REFERENCES pods (id) ON DELETE CASCADE,
 	FOREIGN KEY(member_user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -196,6 +199,7 @@ CREATE TABLE channel_messages (
 	thread_root_id UUID,
 	edited_at TIMESTAMP WITH TIME ZONE,
 	deleted_at TIMESTAMP WITH TIME ZONE,
+	rev BIGINT DEFAULT 0 NOT NULL,
 	id UUID NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -221,6 +225,7 @@ CREATE INDEX ix_channel_messages_conversation ON channel_messages (conversation_
 CREATE INDEX ix_channel_messages_on_behalf_contact ON channel_messages (on_behalf_contact_id) WHERE on_behalf_contact_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_on_behalf_user ON channel_messages (on_behalf_user_id) WHERE on_behalf_user_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_reply_to ON channel_messages (reply_to_id) WHERE reply_to_id IS NOT NULL;
+CREATE INDEX ix_channel_messages_rev ON channel_messages (channel_id, rev);
 CREATE INDEX ix_channel_messages_run ON channel_messages (agent_run_id) WHERE agent_run_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_search ON channel_messages USING gin (search);
 CREATE INDEX ix_channel_messages_sender_agent ON channel_messages (sender_agent_id) WHERE sender_agent_id IS NOT NULL;
@@ -477,6 +482,34 @@ CREATE INDEX ix_agent_surface_group_message_recent
 """
 
 
+#: Every member of every pod gets their own channel, with them in it as its
+#: owner, as joining a pod makes it from now on (``channels.member_joined``):
+#: so ``GET /channels/me`` and the notices that land there work for everyone
+#: from the first request after the deploy. Nothing has been said in them, so
+#: no read state is needed: a member with none has read up to line 0. Set-based
+#: -- one statement per table, whatever the number of pods -- and idempotent.
+_DIRECT_CHANNELS = """
+INSERT INTO channels (id, pod_id, kind, visibility, member_user_id,
+                      created_at, updated_at, last_line_at)
+SELECT gen_random_uuid(), member.pod_id, 'DIRECT', 'PRIVATE', member.user_id,
+       now(), now(), now()
+FROM (
+    SELECT DISTINCT pm.pod_id, om.user_id
+    FROM pod_members pm
+    JOIN organization_members om ON om.id = pm.organization_member_id
+    WHERE om.user_id IS NOT NULL
+) AS member
+ON CONFLICT DO NOTHING;
+INSERT INTO channel_members (id, channel_id, pod_id, user_id, role, notify,
+                             created_at, updated_at)
+SELECT gen_random_uuid(), c.id, c.pod_id, c.member_user_id, 'owner', 'ALL',
+       now(), now()
+FROM channels c
+WHERE c.kind = 'DIRECT'
+ON CONFLICT DO NOTHING
+"""
+
+
 def upgrade() -> None:
     op.drop_table("agent_surface_group_messages")
     op.drop_table("agent_surface_groups")
@@ -484,6 +517,7 @@ def upgrade() -> None:
     op.execute("DELETE FROM work_items WHERE kind = 'notification.expire'")
     op.drop_table("notifications")
     _run(_NEW_TABLES)
+    _run(_DIRECT_CHANNELS)
     op.add_column(
         "agent_conversations",
         sa.Column(

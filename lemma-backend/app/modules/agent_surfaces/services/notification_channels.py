@@ -1,10 +1,9 @@
 """Working out how this agent can reach this person, and minting one if it cannot.
 
-Split from ``notification_service`` because the two answer different questions.
-That service owns what a notification *means* — the row, the lifecycle, whether
-it was answered. This owns the routing: which of the agent's surfaces can carry
-a message to one recipient, in what order, and why the answer is sometimes
-nothing.
+What a push *means* -- the line, its delivery row, whether it was answered --
+is the channels module's. This owns the routing: which of the agent's surfaces
+can carry a message to one recipient, in what order, and why the answer is
+sometimes nothing.
 
 The rule is agent-scoped: candidates are the surfaces the *sending* agent speaks
 through, so a recipient hears from the bot they already know that agent as. See
@@ -114,8 +113,8 @@ class NotificationChannelResolver:
         active = [surface for surface in all_surfaces if surface.is_active]
         # Normalised here, once, rather than at each caller. `actor_agent_id`
         # arrives in three spellings for the same agent: the assistant's row id,
-        # `None` from a caller that has no agent at all (a workflow form, the
-        # notifications API) and used to mean "the pod's own surfaces", and the
+        # `None` from a caller that has no agent at all (a workflow form, a
+        # member's notice) and used to mean "the pod's own surfaces", and the
         # delegation sentinel from a token minted before the row existed.
         #
         # Getting this wrong is not a lookup miss: `surfaces_for_agent` would
@@ -297,8 +296,8 @@ class NotificationChannelResolver:
         inbound routes on the address, so a pod that had not yet sent anything
         matched no surface and mail to the obvious guess started nothing.
 
-        A failure here is never fatal. The notification row exists and the inbox
-        has it, so this degrades to an explanation rather than an exception —
+        A failure here is never fatal. The line is already in the member's
+        channel, so this degrades to an explanation rather than an exception —
         but the explanation says *which* thing went wrong, because "the pod has
         no active surface" on a deployment whose real problem was an unset mail
         domain sent us looking in the wrong place.

@@ -64,7 +64,7 @@ class ChannelModel(UUIDAuditBase):
             "kind IN ('DIRECT', 'CONTACT', 'GROUP')", name="ck_channels_kind"
         ),
         CheckConstraint(
-            "visibility IN ('public', 'private')", name="ck_channels_visibility"
+            "visibility IN ('PUBLIC', 'PRIVATE')", name="ck_channels_visibility"
         ),
         CheckConstraint(
             "status IN ('open', 'waiting_on_contact', 'closed')",
@@ -80,7 +80,7 @@ class ChannelModel(UUIDAuditBase):
             name="ck_channels_kind_names_its_person",
         ),
         CheckConstraint(
-            "kind = 'GROUP' OR visibility = 'private'",
+            "kind = 'GROUP' OR visibility = 'PRIVATE'",
             name="ck_channels_only_a_group_is_public",
         ),
         UniqueConstraint("id", "pod_id", name="uq_channels_id_pod"),
@@ -177,6 +177,17 @@ class ChannelModel(UUIDAuditBase):
     last_line_id: Mapped[UUID | None] = mapped_column(nullable=True)
     last_line_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    #: The channel's change counter, for its live subscribers: every change
+    #: they are shown -- a line added, edited, deleted or its question moved,
+    #: the channel's own fields, its members -- takes the next number under
+    #: this row's lock, so a subscriber resumes from the last it saw.
+    last_rev: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    #: The change that last moved the channel's own fields or members.
+    changed_rev: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
     )
 
 

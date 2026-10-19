@@ -28,6 +28,12 @@
  * it sends `resync` instead: the subscription's `onResync` is called and the
  * caller refetches its view.
  *
+ * A subscription the server could not start just now arrives as an `error`
+ * frame with code `unavailable`. That one subscription is re-sent from its
+ * cursor after its own full-jitter backoff (reset by `subscribed`); the socket
+ * stays up and the watch only reports `reconnecting` meanwhile. Every other
+ * `error` code ends the subscription through `onError`.
+ *
  * A rejected session arrives as close code 4401 (the server accepts first, so
  * the code survives — a pre-accept close would reach a browser as 1006). The
  * connection refreshes the session once and reconnects; a second 4401 before
@@ -140,6 +146,8 @@ const WS_UNAUTHENTICATED = 4401;
 /** Close codes no retry can fix: the caller lacks access, or the pod is gone. */
 const WS_FORBIDDEN = 4403;
 const WS_NOT_FOUND = 4404;
+/** Error code for "could not decide just now; retry later" — not terminal. */
+const ERROR_UNAVAILABLE = "unavailable";
 
 function reconnectDelayMs(attempt: number): number {
     const ceiling = Math.min(
@@ -178,6 +186,9 @@ class Subscription {
     status: ChangeStreamStatus | null = null;
     stopped = false;
     cursor: string | undefined;
+    /** Consecutive `unavailable` refusals since the last `subscribed`. */
+    retryAttempt = 0;
+    retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(
         readonly id: string,
@@ -190,6 +201,11 @@ class Subscription {
         if (this.status === next) return;
         this.status = next;
         this.options.onStatus?.(next);
+    }
+
+    cancelRetry(): void {
+        if (this.retryTimer != null) clearTimeout(this.retryTimer);
+        this.retryTimer = null;
     }
 
     subscribeFrame(): string {
@@ -251,6 +267,7 @@ export class LiveConnection {
     }
 
     remove(subscription: Subscription): void {
+        subscription.cancelRetry();
         if (!this.subscriptions.delete(subscription.id)) return;
         if (this.ready)
             this.send(
@@ -336,8 +353,10 @@ export class LiveConnection {
             this.ready = true;
             this.attempt = 0;
             this.authRefreshed = false;
-            for (const sub of this.subscriptions.values())
+            for (const sub of this.subscriptions.values()) {
+                sub.cancelRetry(); // re-sent now; a pending retry would duplicate it
                 this.send(sub.subscribeFrame());
+            }
             this.startPing();
             return;
         }
@@ -350,6 +369,7 @@ export class LiveConnection {
         switch (frame.type) {
             case "subscribed":
                 sub.cursor = cursor ?? sub.cursor;
+                sub.retryAttempt = 0;
                 sub.setStatus("open");
                 if (sub.cursor) sub.options.onReady?.({ since: sub.cursor });
                 return;
@@ -373,6 +393,10 @@ export class LiveConnection {
                 });
                 return;
             case "error":
+                if (frame.code === ERROR_UNAVAILABLE) {
+                    this.retrySubscribe(sub);
+                    return;
+                }
                 this.end(
                     sub,
                     `subscription refused (${String(frame.code)}): ${String(frame.message ?? "")}`,
@@ -406,7 +430,35 @@ export class LiveConnection {
         };
     }
 
+    /**
+     * Re-send one subscription the server could not start just now, after its
+     * own backoff, on the same socket. A reconnect in the meantime cancels the
+     * timer: `ready` re-sends every subscription anyway.
+     */
+    private retrySubscribe(sub: Subscription): void {
+        sub.cancelRetry();
+        const max = sub.options.maxRetries;
+        if (max != null && sub.retryAttempt >= max) {
+            this.end(sub, "max retry attempts reached (unavailable)");
+            return;
+        }
+        sub.setStatus("reconnecting");
+        const delay = reconnectDelayMs(sub.retryAttempt);
+        sub.retryAttempt += 1;
+        sub.retryTimer = setTimeout(() => {
+            sub.retryTimer = null;
+            if (
+                this.closed ||
+                !this.ready ||
+                this.subscriptions.get(sub.id) !== sub
+            )
+                return;
+            this.send(sub.subscribeFrame());
+        }, delay);
+    }
+
     private end(sub: Subscription, message: string): void {
+        sub.cancelRetry();
         this.subscriptions.delete(sub.id);
         sub.stopped = true;
         sub.setStatus("closed");
@@ -416,6 +468,7 @@ export class LiveConnection {
 
     private failAll(error: Error): void {
         for (const sub of [...this.subscriptions.values()]) {
+            sub.cancelRetry();
             this.subscriptions.delete(sub.id);
             sub.stopped = true;
             sub.setStatus("closed");
@@ -428,6 +481,7 @@ export class LiveConnection {
         this.socket = null;
         this.ready = false;
         this.stopPing();
+        for (const sub of this.subscriptions.values()) sub.cancelRetry();
         if (this.closed) return;
         if (this.subscriptions.size === 0) {
             this.dispose();
@@ -515,6 +569,7 @@ export class LiveConnection {
         if (this.closed) return;
         this.closed = true;
         this.stopPing();
+        for (const sub of this.subscriptions.values()) sub.cancelRetry();
         if (this.reconnectTimer != null) clearTimeout(this.reconnectTimer);
         if (this.idleTimer != null) clearTimeout(this.idleTimer);
         this.reconnectTimer = null;

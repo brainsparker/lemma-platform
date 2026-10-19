@@ -22,9 +22,9 @@ import pytest_asyncio
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
-from app.modules.datastore.config_live import live_settings
+from app.core.live.config import live_settings
+from app.core.live.connection import LiveConnection
 from app.modules.datastore.domain.live import SubscribeRequest
-from app.modules.datastore.services.live.connection import LiveConnection
 from app.modules.datastore.services.live.registry import LiveHubRegistry
 from app.modules.datastore.services.live.access import TableLiveAccess
 from app.modules.datastore.services.live.feed import ChangeLogFeed
@@ -601,14 +601,9 @@ async def test_two_hubs_on_one_pod_both_deliver(
         queue_bytes=1 << 20,
     )
     hub = await other_process.hub(UUID(live_pod.pod_id))
-    hub.attach(connection)
     sender = asyncio.create_task(connection.run_sender())
     try:
-        await hub.subscribe(
-            connection,
-            SubscribeRequest(op="subscribe", id="t", table="tickets"),
-            max_subscriptions=5,
-        )
+        await hub.subscribe(connection, SubscribeRequest(id="t", table="tickets"))
         assert (await asyncio.wait_for(received.get(), 10))["type"] == "subscribed"
         record = await live_pod.create_record("tickets", {"body": "both"})
         theirs = await asyncio.wait_for(received.get(), 15)
@@ -617,7 +612,6 @@ async def test_two_hubs_on_one_pod_both_deliver(
         assert [c["record_id"] for c in ours["changes"]] == [record["id"]]
     finally:
         connection.close()
-        hub.detach(connection)
         sender.cancel()
         await other_process.close()
 

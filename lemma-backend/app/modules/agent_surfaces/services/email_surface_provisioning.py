@@ -133,7 +133,6 @@ async def _insert_on_first_free_address(
     and a unique violation aborts a Postgres transaction outright — so without
     one, the second attempt raises PendingRollbackError, the commit fails, and
     *creating an agent* returns 500 because two of them wanted the same address.
-    Same reasoning, and the same shape, as `notification_repository.create`.
     """
     domain = surface_settings.resend_inbound_domain or ""
     addresses = candidate_addresses(

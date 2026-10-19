@@ -47,22 +47,24 @@ from app.modules.agent.infrastructure.models.conversation import MessageModel
 from app.modules.agent.infrastructure.repositories.conversation_repository import (
     ConversationRepository,
 )
-from app.modules.agent.services.channel_answers import line_answered_by
 from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.channels.contracts import (
+    Asker,
     ChannelKind,
     ChannelMessage,
-    channel_by_id,
     NewLine,
     NewQuestion,
     Principal,
+    QuestionAsker,
     QuestionKind,
     QuestionState,
     Sender,
+    channel_by_id,
     direct_channel,
     post,
 )
 from app.modules.channels.contracts import questions as channel_questions
+from app.modules.channels.contracts.answers import line_answered_in
 from app.modules.channels.contracts.lines import line_by_id
 from app.modules.channels.contracts.questions import AnswerRefused, Answering
 
@@ -79,10 +81,6 @@ MAX_PAUSES = 20
 
 def tool_ref(conversation_id: UUID, tool_call_id: str) -> str:
     return f"{TOOL_REF}:{conversation_id}:{tool_call_id}"
-
-
-def tool_prefix(conversation_id: UUID) -> str:
-    return f"{TOOL_REF}:{conversation_id}:"
 
 
 def parse_tool_ref(ref: str) -> tuple[UUID, str] | None:
@@ -231,8 +229,8 @@ async def sync_pause_questions(
             await _ask(uow, conversation, pause, ref)
     stale = [
         question
-        for question in await channel_questions.questions_under(
-            uow, pod_id=pod_id, prefix=tool_prefix(conversation_id), open_only=True
+        for question in await channel_questions.questions_asked_by(
+            uow, QuestionAsker.TOOL, conversation_id=conversation_id, open_only=True
         )
         if question.ref not in waiting
     ]
@@ -241,7 +239,9 @@ async def sync_pause_questions(
 
 async def _ask(uow: SqlAlchemyUnitOfWork, conversation, pause: Pause, ref: str) -> None:
     member = Principal.member(conversation.user_id)
-    channel_id, thread_root = await _where_to_ask(uow, conversation)
+    channel_id, thread_root = await _where_to_ask(
+        uow, conversation, run_id=pause.agent_run_id
+    )
     agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
     text, question = shown(pause)
     if narration := await _narration(uow, conversation.id, pause):
@@ -269,6 +269,7 @@ async def _ask(uow: SqlAlchemyUnitOfWork, conversation, pause: Pause, ref: str) 
         question=NewQuestion(
             kind=QuestionKind.APPROVAL if approval else QuestionKind.ASK,
             ref=ref,
+            asker=Asker.tool(conversation.id, pause.tool_call_id),
             question={"conversation_id": str(conversation.id), **question},
             awaits=member,
             expires_at=datetime.now(UTC)
@@ -307,10 +308,10 @@ async def _narration(
 
 
 async def _where_to_ask(
-    uow: SqlAlchemyUnitOfWork, conversation
+    uow: SqlAlchemyUnitOfWork, conversation, *, run_id: UUID | None = None
 ) -> tuple[UUID, UUID | None]:
-    """The conversation's channel -- in the thread of the line it answers --
-    or the member's own."""
+    """The conversation's channel -- in the thread of the line ``run_id``
+    answers, else the line it took up last -- or the member's own."""
     channel_id = await channel_conversations.channel_of_conversation(
         uow, conversation.id
     )
@@ -319,7 +320,7 @@ async def _where_to_ask(
             uow, pod_id=conversation.pod_id, user_id=conversation.user_id
         )
         return direct.id, None
-    answered = await line_answered_by(uow, conversation.id)
+    answered = await line_answered_in(uow, conversation.id, run_id=run_id)
     line = await line_by_id(uow, answered) if answered else None
     if line is None or line.channel_id != channel_id:
         return channel_id, None
@@ -463,7 +464,7 @@ def _decision(
     )
 
 
-@channel_questions.answers_for(TOOL_REF)
+@channel_questions.answers_for(QuestionAsker.TOOL)
 async def answer_tool(answering: Answering) -> Mapping[str, object] | None:
     """A question an agent paused on, answered on its line: the paused run
     takes it as if it had been answered in the conversation. Returns what took
@@ -517,7 +518,6 @@ __all__ = [
     "shown",
     "sync_pause_questions",
     "tell_where_asked",
-    "tool_prefix",
     "tool_ref",
     "undecided_pauses",
 ]

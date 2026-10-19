@@ -6,10 +6,11 @@ has in a channel, and where a conversation's answer goes. A double that
 answered each with a fresh object would certify code that can never find
 anything it made; this one keys what it keeps as the unique indexes do:
 
-* an **account** by its pod, platform and ``account_key``
-  (``UNIQUE(pod_id, platform, account_key)``), made the first time any of its
-  places is heard, and reached through whichever surface reported it last --
-  so a reinstalled bot takes over the places it had;
+* an **account** by its pod, platform, workspace and bot
+  (``uq_external_accounts_key``), made the first time any of its places is
+  heard, reached through whichever surface reported it last -- so a
+  reinstalled bot takes over the places it had -- and given its bot in place
+  when the surface that reached it with none learns it;
 * a **source** by its account and the place on it
   (``account_id, coalesce(external_channel_id), coalesce(external_user_id)``),
   never by the surface: a source's ``surface_id`` is its account's, as the
@@ -35,6 +36,7 @@ from uuid import UUID, uuid4
 
 from app.core.authorization.delegation import effective_agent_id
 from app.modules.channels.contracts import (
+    AccountKey,
     ContactsHome,
     GroupHome,
     Home,
@@ -47,8 +49,8 @@ from app.modules.channels.contracts.places import ReplyAddress
 
 #: A source's unique key: its account, and the place on it.
 type _PlaceKey = tuple[UUID, str, str]
-#: An account's unique key: its pod, platform and the platform's name for it.
-type _AccountKey = tuple[UUID, str, str]
+#: An account's unique key: its pod, platform, workspace and bot.
+type _AccountKey = tuple[UUID, str, str, str | None]
 type _SeatKey = tuple[UUID, UUID, UUID]
 
 
@@ -86,19 +88,20 @@ class InMemoryChannelSeats:
 
     # -- what a test says ------------------------------------------------------
 
-    def add(self, source: Source, *, account_key: str | None = None) -> Source:
+    def add(self, source: Source, *, account: AccountKey | None = None) -> Source:
         """A place the pod already knows, in the account ``source.account_id``,
         reached through ``source.surface_id``.
 
-        With ``account_key`` (``account_key_for(surface)``) the account is the
+        With ``account`` (``account_of(surface)``) the account is the
         pod's account of that name, so ``source_for`` finds the place again;
         without, the account is reachable only by its id -- which is all a
         lookup by surface needs.
         """
         account_id = source.account_id
-        if account_key is not None:
+        if account is not None:
             account_id = self.accounts.setdefault(
-                (source.pod_id, source.platform, account_key), source.account_id
+                (source.pod_id, source.platform, account.workspace, account.bot),
+                source.account_id,
             )
         self.account_surfaces[account_id] = source.surface_id
         return self._put(source.model_copy(update={"account_id": account_id}))
@@ -234,7 +237,7 @@ class InMemoryChannelSeats:
         found = [
             source
             for source in self.sources.values()
-            if source.kind is SourceKind.PRIVATE
+            if source.kind is SourceKind.PERSON
             and source.platform == platform
             and source.external_user_id == external_user_id
             and (pod_id is None or source.pod_id == pod_id)
@@ -313,9 +316,17 @@ class InMemoryChannelSeats:
     def _account_for(self, pod_id: UUID, place: Place) -> UUID:
         """As ``AccountRepository.account_for``: made the first time, with the
         surface that reported it; taken over by whichever surface reports it
-        next."""
-        key = (pod_id, place.platform, place.account_key)
+        next; given its bot by the surface that reached it with none."""
+        key = (pod_id, place.platform, place.account.workspace, place.account.bot)
         account_id = self.accounts.get(key)
+        if account_id is None and place.account.bot is not None:
+            botless = (pod_id, place.platform, place.account.workspace, None)
+            found = self.accounts.get(botless)
+            if (
+                found is not None
+                and self.account_surfaces.get(found) == place.surface_id
+            ):
+                account_id = self.accounts[key] = self.accounts.pop(botless)
         if account_id is None:
             account_id = self.accounts[key] = uuid4()
             self.account_surfaces[account_id] = place.surface_id

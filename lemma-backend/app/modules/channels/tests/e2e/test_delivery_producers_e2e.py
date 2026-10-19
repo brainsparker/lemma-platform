@@ -43,18 +43,26 @@ from app.modules.channels.contracts import (
 )
 from app.modules.channels.contracts import questions as channel_questions
 from app.modules.channels.contracts.deliveries import deliveries_of
+from app.modules.channels.tests.e2e.push_support import run_pushes
 from app.modules.channels.infrastructure.models import ChannelMessageModel
 from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.workflow.infrastructure.form_questions import FormQuestions
 
-pytestmark = [pytest.mark.e2e]
+from app.modules.workflow.infrastructure.models import (
+    WorkflowModel,
+    WorkflowRunModel,
+)
+
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 
 # ------------------------------------------------------------------- harness
 
 
 async def _rows(message_id: UUID) -> list[Delivery]:
+    """A line's sends, once its pushes are worked out (after its commit)."""
+    await run_pushes()
     async with create_uow_from_session_maker(async_session_maker) as uow:
         return await deliveries_of(uow, [message_id])
 
@@ -171,12 +179,20 @@ async def test_a_workflow_form_plans_a_push_to_whom_it_is_assigned(scenario):
     await scenario.create_org_with_pod(name_prefix="Form push")
     colleague, membership_id = await _colleague(scenario, "form-assignee")
     pod_id, wait_id = UUID(scenario.pod_id), uuid4()
+    owner = UUID(scenario.owner_user["id"])
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
+        # The run that asks: a question names it, so it must exist.
+        flow = WorkflowModel(pod_id=pod_id, user_id=owner, name="Expenses")
+        uow.session.add(flow)
+        await uow.session.flush()
+        run = WorkflowRunModel(flow_id=flow.id, pod_id=pod_id, user_id=owner)
+        uow.session.add(run)
+        await uow.session.flush()
         await FormQuestions(uow).ask_form(
             pod_id=pod_id,
-            run_id=uuid4(),
-            flow_id=uuid4(),
+            run_id=run.id,
+            flow_id=flow.id,
             node_id="approve",
             wait_id=wait_id,
             assigned_pod_member_id=membership_id,

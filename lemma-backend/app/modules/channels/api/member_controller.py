@@ -46,6 +46,7 @@ from app.modules.channels.domain.entities import (
     ChannelKind,
     MemberRole,
     Principal,
+    SeatedBy,
     SenderKind,
 )
 from app.modules.channels.infrastructure.members import MAX_MEMBERS, MemberRepository
@@ -146,7 +147,7 @@ async def join_channel(
     if channel.kind is ChannelKind.DIRECT:
         raise conflict("A member's own channel is theirs alone")
     await MemberRepository(uow.session).add_person(
-        channel, Principal.member(caller.user_id), added_by_user_id=caller.user_id
+        channel, Principal.member(caller.user_id), seated_by=SeatedBy.JOINED
     )
     await uow.commit()
     if by_right:

@@ -19,7 +19,7 @@ from pydantic import JsonValue
 from app.core.live.signals import Signal
 from app.core.live.topics import LiveRegistry
 from app.modules.channels.services.live.events import answering_event
-from app.modules.channels.services.live.relay import AnswerRelays, Answering, Deliver
+from app.modules.channels.services.live.relay import Answering, AnswerRelays, Deliver
 
 #: An answer's identity: its channel, the line it answers and the agent.
 type AnswerId = tuple[UUID, UUID, UUID]

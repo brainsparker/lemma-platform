@@ -33,6 +33,7 @@ from app.modules.channels.contracts import (
     ChannelMessage,
     Principal,
     Question,
+    QuestionAsker,
     QuestionKind,
     QuestionState,
     Sender,
@@ -70,6 +71,11 @@ def _question(
             channel_id=channel_id,
             pod_id=pod_id,
             ref=ref or f"msg:{uuid4()}:{uuid4().hex}",
+            asker=(
+                QuestionAsker.TOOL
+                if (ref or "").startswith("tool:")
+                else QuestionAsker.MESSAGE
+            ),
             kind=kind,
             state=QuestionState.OPEN,
             question=question or {},

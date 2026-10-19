@@ -31,7 +31,7 @@ from app.modules.agent_surfaces.domain.ports import (
 )
 from app.modules.agent_surfaces.services.cold_email_thread import cold_thread_seed_id
 from app.modules.agent_surfaces.services.group_names import sender_name_for
-from app.modules.agent_surfaces.domain.external_accounts import account_key_for
+from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.services.channel_places import ChannelSeats
 from app.modules.agent_surfaces.services.notification_delivery import (
     DeliveryChannel,
@@ -203,8 +203,8 @@ class NotificationEgress:
             place=Place(
                 surface_id=surface.id,
                 platform=surface.surface_type.value,
-                account_key=account_key_for(surface),
-                kind=SourceKind.PRIVATE,
+                account=account_of(surface),
+                kind=SourceKind.PERSON,
                 # Keyed by the person, as their reply is heard: one place per
                 # correspondent on the inbox, the thread kept on each line.
                 external_channel_id=None,

@@ -44,7 +44,12 @@ from app.modules.channels.infrastructure.models import (
     ChannelModel,
     ChannelQuestionModel,
 )
-from app.modules.channels.tests.e2e.channel_pod import Pod, contact_place, group
+from app.modules.channels.tests.e2e.channel_pod import (
+    Pod,
+    an_asker,
+    contact_place,
+    group,
+)
 from app.modules.pod.contracts.members import pod_member_holds
 
 pytestmark = pytest.mark.e2e
@@ -200,6 +205,7 @@ async def test_withheld_from_and_shown_in_full_to_agree_for_every_line(
             question=NewQuestion(
                 kind=QuestionKind.ASK,
                 ref=f"msg:{uuid4()}",
+                asker=await an_asker(pod_id, owner),
                 question={"prompt": "Which?"},
                 awaits=Principal.member(UUID(pod.user["id"])),
             ),

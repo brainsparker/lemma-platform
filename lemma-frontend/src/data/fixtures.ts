@@ -3397,8 +3397,8 @@ export const SAMPLE_CHANNELS: Record<string, unknown>[] = [
         id: "sample-launch", kind: "GROUP", title: "launch", topic: "Beta launch, week of the 20th", person: null,
         sources: [{ platform: "SLACK", title: "#launch" }, { platform: "TELEGRAM", title: "Launch crew" }],
         source_places: [
-            { id: "src-slack-launch", platform: "SLACK", kind: "SHARED", title: "#launch", surface_id: "s-slack", pending: false, last_inbound_at: ago(2 * HOURS) },
-            { id: "src-tg-launch", platform: "TELEGRAM", kind: "SHARED", title: "Launch crew", surface_id: "s-telegram", pending: false, last_inbound_at: ago(DAYS) },
+            { id: "src-slack-launch", platform: "SLACK", kind: "CHAT", title: "#launch", surface_id: "s-slack", pending: false, last_inbound_at: ago(2 * HOURS) },
+            { id: "src-tg-launch", platform: "TELEGRAM", kind: "CHAT", title: "Launch crew", surface_id: "s-telegram", pending: false, last_inbound_at: ago(DAYS) },
         ],
         visibility: "PUBLIC",
         members: [
@@ -3415,7 +3415,7 @@ export const SAMPLE_CHANNELS: Record<string, unknown>[] = [
     {
         id: "sample-partners", kind: "GROUP", title: "Acme × Northwind", topic: null, person: null,
         sources: [{ platform: "WHATSAPP", title: "Acme × Northwind" }],
-        source_places: [{ id: "src-wa-partners", platform: "WHATSAPP", kind: "SHARED", title: "Acme × Northwind", surface_id: "s-whatsapp", pending: false, last_inbound_at: ago(3 * DAYS) }],
+        source_places: [{ id: "src-wa-partners", platform: "WHATSAPP", kind: "CHAT", title: "Acme × Northwind", surface_id: "s-whatsapp", pending: false, last_inbound_at: ago(3 * DAYS) }],
         visibility: "PRIVATE",
         members: [{ person: ME_REF, role: "owner" }, { person: PRIYA_REF, role: "member" }, { person: LEM_REF, role: "member", answers: "MENTIONED" }],
         me: { joined: true, notify: "MENTIONS", read_seq: 3, role: "owner", can_manage: true },

@@ -145,7 +145,7 @@ async def test_a_group_chat_becomes_a_group_channel_once():
     assert (first, again) == (True, False)
     [source] = seats.made
     assert source.platform == "TEAMS"
-    assert source.kind is SourceKind.SHARED
+    assert source.kind is SourceKind.CHAT
     assert source.title == "Group chat"
     # A group chat is its members' alone.
     assert source.is_private is True

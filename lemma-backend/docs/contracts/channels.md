@@ -10,6 +10,7 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
+| `channel.case.list` | GET | `/pods/{pod_id}/channels/{channel_id}/cases` | List Cases |
 | `channel.create` | POST | `/pods/{pod_id}/channels` | Create Channel |
 | `channel.delete` | DELETE | `/pods/{pod_id}/channels/{channel_id}` | Delete Channel |
 | `channel.delivery.list` | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries` | List Deliveries |

@@ -34,7 +34,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.external_accounts import account_key_for
+from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (  # noqa: E501
     SurfaceRepository,
 )
@@ -198,8 +198,8 @@ class ContactOutreach:
             place=Place(
                 surface_id=mailbox.id,
                 platform=mailbox.surface_type.value,
-                account_key=account_key_for(mailbox),
-                kind=SourceKind.PRIVATE,
+                account=account_of(mailbox),
+                kind=SourceKind.PERSON,
                 # Keyed as their reply is heard: by their address.
                 external_channel_id=None,
                 external_user_id=handle.value,

@@ -178,7 +178,7 @@ async def resolve_interaction_delivery(
     )
     person = (
         source.external_user_id
-        if source.kind is SourceKind.PRIVATE
+        if source.kind is SourceKind.PERSON
         else (heard_from if isinstance(heard_from, str) else None)
     )
     return await _resolve_thread_delivery(

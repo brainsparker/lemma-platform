@@ -25,7 +25,7 @@ export type ChannelDetailResponse = {
      */
     assignee?: (PersonRef | null);
     /**
-     * The channel asks for a person, and why.
+     * A contact's channel: its current case asks for a person, and why. Never set on another kind of channel.
      */
     attention?: (AttentionResponse | null);
     created_at: string;

@@ -3,20 +3,30 @@
 Channels plans a delivery for every send outside Lemma and announces it
 (``ChannelDeliveryDue``). The sender claims it, sends, and records the outcome
 here -- with the platform's id for what it sent, which is how a platform's
-later status report finds it. A claimed delivery is never sent twice: one
-whose sender died mid-send is settled by ``delivery_interrupted``, not resent.
+later status report finds it, and a ``DeliveryReasonCode`` beside the
+sentence a member reads for anything not sent. A claimed delivery is never
+sent twice: one whose sender died mid-send is settled by
+``delivery_interrupted``, not resent.
+
+A push to a member stands for every line of one channel they heard since
+their last push from it (``Delivery.from_seq`` .. ``seq``, ``lines`` of
+them); ``Delivery.urgent`` when one names or asks them. One the hourly budget
+holds is ``delivery_folded``: its lines go with the member's next push from
+that channel.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import timedelta
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import facts
 from app.modules.channels.contracts.facts import ChannelDeliveryDue
-from app.modules.channels.domain.entities import Delivery
+from app.modules.channels.domain.entities import Delivery, DeliveryReasonCode
 from app.modules.channels.infrastructure.deliveries import DeliveryRepository
+from app.modules.channels.services.pushes import fold_back
 
 __all__ = [
     "announce_next_for_target",
@@ -26,18 +36,16 @@ __all__ = [
     "delivery_by_id",
     "delivery_dead",
     "delivery_failed",
+    "delivery_folded",
     "delivery_interrupted",
     "delivery_noted",
-    "delivery_reasoned",
     "delivery_sent",
     "delivery_skipped",
     "delivery_undelivered",
     "delivery_unnoted",
     "due_deliveries",
     "due_fact",
-    "held_pushes",
     "lapsed_delivery",
-    "push_is_urgent",
     "reclaim_delivery",
     "retry_delivery",
 ]
@@ -80,8 +88,8 @@ async def delivery_interrupted(
 ) -> Delivery | None:
     """Settle a claim whose sender died before recording what happened, without
     sending it again: ``SENT`` when its platform id was noted before the call
-    (``delivery_noted``), else ``DEAD`` saying it may not have arrived.
-    ``None`` when it is no such claim."""
+    (``delivery_noted``), else ``DEAD`` (``INTERRUPTED``). ``None`` when it is
+    no such claim."""
     return await DeliveryRepository(uow.session).interrupted(delivery_id)
 
 
@@ -108,9 +116,13 @@ async def delivery_sent(
     *,
     platform: str,
     external_message_id: str | None,
+    provider_status: str | None = None,
 ) -> None:
     await DeliveryRepository(uow.session).sent(
-        delivery_id, platform=platform, external_message_id=external_message_id
+        delivery_id,
+        platform=platform,
+        external_message_id=external_message_id,
+        provider_status=provider_status,
     )
 
 
@@ -118,27 +130,57 @@ async def delivery_skipped(
     uow: SqlAlchemyUnitOfWork,
     delivery_id: UUID,
     *,
+    code: DeliveryReasonCode,
     reason: str,
     platform: str | None = None,
+    provider_status: str | None = None,
 ) -> None:
-    """Not sent, on purpose: the reason a member reads."""
+    """Not sent, on purpose: why, and the reason a member reads."""
     await DeliveryRepository(uow.session).skipped(
-        delivery_id, reason=reason, platform=platform
+        delivery_id,
+        code=code,
+        reason=reason,
+        platform=platform,
+        provider_status=provider_status,
     )
+
+
+async def delivery_folded(
+    uow: SqlAlchemyUnitOfWork,
+    delivery: Delivery,
+    *,
+    reason: str,
+    hold_for: timedelta,
+) -> None:
+    """A push the member's hourly budget held: ``SKIPPED`` (``FOLDED``), and
+    its lines go with their next push from the channel -- no sooner than
+    ``hold_for``, unless a line naming or asking them comes first."""
+    settled = await DeliveryRepository(uow.session).skipped(
+        delivery.id, code=DeliveryReasonCode.FOLDED, reason=reason, platform=None
+    )
+    if settled is not None:
+        await fold_back(uow, settled, hold_for=hold_for)
 
 
 async def delivery_failed(
     uow: SqlAlchemyUnitOfWork,
     delivery: Delivery,
     *,
+    code: DeliveryReasonCode,
     reason: str,
     platform: str | None = None,
     retry_after: float | None = None,
+    provider_status: str | None = None,
 ) -> Delivery:
     """It did not go: due again after backoff -- no sooner than the platform's
     ``retry_after`` (seconds) -- or given up after the last try."""
     return await DeliveryRepository(uow.session).failed(
-        delivery, reason=reason, platform=platform, retry_after=retry_after
+        delivery,
+        code=code,
+        reason=reason,
+        platform=platform,
+        retry_after=retry_after,
+        provider_status=provider_status,
     )
 
 
@@ -146,13 +188,19 @@ async def delivery_dead(
     uow: SqlAlchemyUnitOfWork,
     delivery_id: UUID,
     *,
+    code: DeliveryReasonCode,
     reason: str,
     platform: str | None = None,
+    provider_status: str | None = None,
 ) -> None:
     """Given up at once: a retry would repeat what already arrived (part of a
     long message) or meet the same refusal."""
     await DeliveryRepository(uow.session).dead(
-        delivery_id, reason=reason, platform=platform
+        delivery_id,
+        code=code,
+        reason=reason,
+        platform=platform,
+        provider_status=provider_status,
     )
 
 
@@ -166,8 +214,9 @@ async def delivery_undelivered(
     uow: SqlAlchemyUnitOfWork, delivery_id: UUID, *, reason: str
 ) -> bool:
     """A send the platform took and later reported never arrived: ``DEAD``
-    with ``reason`` -- that delivery only, found by ``delivery_by_external``,
-    and even while its sender is still recording it. Whether it changed."""
+    (``UNDELIVERED``) with ``reason`` -- that delivery only, found by
+    ``delivery_by_external``, and even while its sender is still recording
+    it. Whether it changed."""
     return await DeliveryRepository(uow.session).undelivered(delivery_id, reason=reason)
 
 
@@ -183,34 +232,6 @@ async def delivery_by_external(
     return await DeliveryRepository(uow.session).by_external(
         platform=platform, external_message_id=external_message_id, pod_id=pod_id
     )
-
-
-async def push_is_urgent(uow: SqlAlchemyUnitOfWork, delivery: Delivery) -> bool:
-    """Whether a push is one the member must not miss: its line names them,
-    or asks a question waiting on them. Not held to the hourly push budget,
-    and may go by email from any channel."""
-    return await DeliveryRepository(uow.session).urgent(delivery)
-
-
-async def held_pushes(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    recipient_user_id: UUID,
-    channel_id: UUID,
-    reason: str,
-) -> list[Delivery]:
-    """A member's pushes of one channel's lines skipped with ``reason`` --
-    held for a digest -- oldest first, and locked for the digest taking them."""
-    return await DeliveryRepository(uow.session).held(
-        recipient_user_id=recipient_user_id, channel_id=channel_id, reason=reason
-    )
-
-
-async def delivery_reasoned(
-    uow: SqlAlchemyUnitOfWork, delivery_ids: Sequence[UUID], *, reason: str
-) -> None:
-    """A new reason on deliveries that keep their status."""
-    await DeliveryRepository(uow.session).reasoned(delivery_ids, reason=reason)
 
 
 async def announce_next_for_target(

@@ -45,7 +45,6 @@ from app.modules.channels.api.message_schemas import (
 )
 from app.modules.channels.api.views import lines_response
 from app.modules.channels.contracts.facts import ChannelDeliveryDue
-from app.modules.channels.domain.idempotency import keyed_client_id
 from app.modules.channels.domain.entities import (
     Channel,
     ChannelKind,
@@ -53,6 +52,7 @@ from app.modules.channels.domain.entities import (
     Principal,
     SenderKind,
 )
+from app.modules.channels.domain.idempotency import keyed_client_id
 from app.modules.channels.infrastructure.deliveries import DeliveryRepository
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.names import Names

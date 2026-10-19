@@ -96,7 +96,7 @@ def test_a_private_chat_is_keyed_by_the_person_not_the_number_it_came_to():
     on_another = _place(whatsapp, _said(SurfacePlatform.WHATSAPP, chat="pn-2"), "DM")
 
     assert on_one_number == on_another
-    assert on_one_number.kind is SourceKind.PRIVATE
+    assert on_one_number.kind is SourceKind.PERSON
     assert (on_one_number.external_channel_id, on_one_number.external_user_id) == (
         None,
         PERSON,
@@ -111,7 +111,7 @@ def test_a_group_is_keyed_by_the_chat_and_named_for_it():
 
     place = _place(telegram, parsed, "CHANNEL")
 
-    assert place.kind is SourceKind.SHARED
+    assert place.kind is SourceKind.CHAT
     assert (place.external_channel_id, place.external_user_id) == ("-100", None)
     assert place.title == "Launch crew"
 
@@ -127,9 +127,9 @@ def test_an_email_is_the_correspondents_until_somebody_else_is_copied():
     assert is_shared(_route("EMAIL"), copied)
     private, shared = _place(mail, alone, "EMAIL"), _place(mail, copied, "EMAIL")
     # One place per correspondent on the inbox, whatever thread they write in.
-    assert private.kind is SourceKind.PRIVATE
+    assert private.kind is SourceKind.PERSON
     assert (private.external_channel_id, private.external_user_id) == (None, PERSON)
-    assert shared.kind is SourceKind.SHARED
+    assert shared.kind is SourceKind.CHAT
     assert (shared.external_channel_id, shared.external_user_id) == (
         "<root@mail>",
         None,

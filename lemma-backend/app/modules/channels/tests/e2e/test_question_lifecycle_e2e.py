@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
@@ -27,9 +27,11 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.channels.contracts import (
+    Asker,
     NewLine,
     NewQuestion,
     Principal,
+    QuestionAsker,
     QuestionKind,
     QuestionState,
     Sender,
@@ -39,18 +41,17 @@ from app.modules.channels.contracts import (
 from app.modules.channels.contracts import questions as channel_questions
 from app.modules.channels.contracts.questions import (
     AnswerHandler,
-    AnswerRefused,
     Answering,
-    answers_for,
+    AnswerRefused,
 )
+from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.channels.events.member_left_work import register_member_left_work
 from app.modules.channels.events.sweeps import questions_expire
-from app.modules.channels.infrastructure.models import (
-    ChannelMessageModel,
-    ChannelQuestionModel,
-)
+from app.modules.channels.infrastructure.change_models import ChannelChangeModel
+from app.modules.channels.infrastructure.models import ChannelQuestionModel
 from app.modules.channels.infrastructure.questions import CLAIM_TIMEOUT
-from app.modules.channels.tests.e2e.channel_pod import Pod
+from app.modules.channels.services import questions as question_service
+from app.modules.channels.tests.e2e.channel_pod import Pod, an_asker
 from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
 from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
     build_delegation_claims,
@@ -59,15 +60,18 @@ from app.modules.pod.contracts.lifecycle import PodMemberRemoved
 
 pytestmark = [pytest.mark.e2e]
 
-#: A ref prefix only these tests ask under; what answering one does is the
-#: test's (``_asker``).
-ASKER = "e2elife"
+#: What answering these tests' questions -- asked as ``MESSAGE`` -- does is
+#: the test's (``asker``).
 _ASKERS: list[AnswerHandler] = []
 
 
-@answers_for(ASKER)
 async def _answered(answering: Answering) -> Mapping[str, object] | None:
     return await _ASKERS[-1](answering) if _ASKERS else None
+
+
+@pytest.fixture(autouse=True)
+def _message_answers(monkeypatch):
+    monkeypatch.setitem(question_service._HANDLERS, QuestionAsker.MESSAGE, _answered)
 
 
 @pytest.fixture
@@ -92,10 +96,13 @@ async def _ask(
     awaits: dict | None = None,
     kind: QuestionKind = QuestionKind.ASK,
     ref: str | None = None,
+    asked_by: Asker | None = None,
     expires_at: datetime | None = None,
 ) -> UUID:
-    """A question in the awaited member's own channel; the line's id."""
+    """A question in the awaited member's own channel, asked by ``asked_by``
+    (a fresh conversation's message by default); the line's id."""
     person = UUID((awaits or pod.owner)["id"])
+    asked_by = asked_by or await an_asker(UUID(pod.id), UUID(pod.owner["id"]))
     uow = SqlAlchemyUnitOfWork(db_session)
     channel = await direct_channel(uow, pod_id=UUID(pod.id), user_id=person)
     line = await post(
@@ -107,7 +114,8 @@ async def _ask(
         ),
         question=NewQuestion(
             kind=kind,
-            ref=ref or f"{ASKER}:{uuid4()}",
+            ref=ref or f"e2elife:{uuid4()}",
+            asker=asked_by,
             question={"prompt": "Which day?"},
             awaits=Principal.member(person),
             expires_at=expires_at,
@@ -210,7 +218,9 @@ async def test_the_sweeper_puts_back_a_lapsed_claim_or_expires_it(
     await _claimed(being_answered, ago=timedelta(seconds=1))
     async with async_session_maker() as session:
         rev_before = await session.scalar(
-            select(ChannelMessageModel.rev).where(ChannelMessageModel.id == reopened)
+            select(func.max(ChannelChangeModel.rev)).where(
+                ChannelChangeModel.message_id == reopened
+            )
         )
 
     await questions_expire()
@@ -221,7 +231,9 @@ async def test_the_sweeper_puts_back_a_lapsed_claim_or_expires_it(
     assert await _state(being_answered) is QuestionState.ANSWERING
     async with async_session_maker() as session:
         rev_after = await session.scalar(
-            select(ChannelMessageModel.rev).where(ChannelMessageModel.id == reopened)
+            select(func.max(ChannelChangeModel.rev)).where(
+                ChannelChangeModel.message_id == reopened
+            )
         )
     assert rev_after is not None and rev_before is not None
     assert rev_after > rev_before, "its watchers were not told it waits again"
@@ -255,7 +267,14 @@ async def test_two_answers_at_once_take_effect_once(
 async def test_an_agent_answers_neither_an_approval_nor_another_conversations_pause(
     pod: Pod, db_session: AsyncSession
 ):
-    paused = await _ask(db_session, pod, ref=f"tool:{uuid4()}:call-1")
+    conversation = (await an_asker(UUID(pod.id), UUID(pod.owner["id"]))).conversation_id
+    assert conversation is not None
+    paused = await _ask(
+        db_session,
+        pod,
+        ref=f"tool:{conversation}:call-1",
+        asked_by=Asker.tool(conversation, "call-1"),
+    )
     approval = await _ask(db_session, pod, kind=QuestionKind.APPROVAL)
     for asked, given in ((paused, {"text": "yes"}), (approval, {"decision": "DENY"})):
         with pytest.raises(AnswerRefused) as refused:
@@ -309,7 +328,9 @@ async def test_a_member_leaving_cancels_what_waits_on_them_where_it_is_watched(
     asked = await _ask(db_session, pod, awaits=pod.editor)
     async with async_session_maker() as session:
         rev_before = await session.scalar(
-            select(ChannelMessageModel.rev).where(ChannelMessageModel.id == asked)
+            select(func.max(ChannelChangeModel.rev)).where(
+                ChannelChangeModel.message_id == asked
+            )
         )
     uow = SqlAlchemyUnitOfWork(db_session)
     await facts.emit(
@@ -325,7 +346,57 @@ async def test_a_member_leaving_cancels_what_waits_on_them_where_it_is_watched(
     assert await _state(asked) is QuestionState.CANCELLED
     async with async_session_maker() as session:
         rev_after = await session.scalar(
-            select(ChannelMessageModel.rev).where(ChannelMessageModel.id == asked)
+            select(func.max(ChannelChangeModel.rev)).where(
+                ChannelChangeModel.message_id == asked
+            )
         )
     assert rev_before is not None and rev_after is not None
     assert rev_after > rev_before
+
+
+async def test_a_question_whose_asking_conversation_is_deleted_is_cancelled(
+    pod: Pod, db_session: AsyncSession
+):
+    """Nobody is left to take its answer: the sweeper cancels it, and
+    announces the close, rather than leave it waiting on its person."""
+    asked_by = await an_asker(UUID(pod.id), UUID(pod.owner["id"]))
+    orphaned = await _ask(db_session, pod, asked_by=asked_by)
+    kept = await _ask(db_session, pod)
+    async with async_session_maker() as session:
+        await session.execute(
+            delete(ConversationModel).where(
+                ConversationModel.id == asked_by.conversation_id
+            )
+        )
+        await session.commit()
+
+    await questions_expire()
+
+    assert await _state(orphaned) is QuestionState.CANCELLED
+    assert await _state(kept) is QuestionState.OPEN
+
+
+async def test_an_asker_withdraws_only_what_it_asked(
+    pod: Pod, db_session: AsyncSession
+):
+    """Cancelled by the asking conversation's id, not by matching refs: a ref
+    that merely starts the same way is somebody else's question."""
+    mine = await an_asker(UUID(pod.id), UUID(pod.owner["id"]))
+    theirs = await an_asker(UUID(pod.id), UUID(pod.owner["id"]))
+    assert mine.conversation_id is not None
+    asked = await _ask(
+        db_session, pod, ref=f"msg:{mine.conversation_id}:1", asked_by=mine
+    )
+    lookalike = await _ask(
+        db_session, pod, ref=f"msg:{mine.conversation_id}:2", asked_by=theirs
+    )
+
+    async with _uows()() as uow:
+        cancelled = await channel_questions.cancel_asked_by(
+            uow, QuestionAsker.MESSAGE, conversation_id=mine.conversation_id
+        )
+        await uow.commit()
+
+    assert [question.message_id for question in cancelled] == [asked]
+    assert await _state(asked) is QuestionState.CANCELLED
+    assert await _state(lookalike) is QuestionState.OPEN

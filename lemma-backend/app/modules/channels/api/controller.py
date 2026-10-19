@@ -60,8 +60,10 @@ from app.modules.channels.domain.entities import (
     ChannelKind,
     ContactStatus,
     Principal,
+    SeatedBy,
     Visibility,
 )
+from app.modules.channels.infrastructure.cases import CaseRepository
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.names import Names
 from app.modules.channels.infrastructure.repository import ChannelRepository
@@ -309,7 +311,10 @@ async def seat_people(
         if await pod_member_id(uow, channel.pod_id, user_id) is None:
             raise unprocessable("Only members of the pod can be added")
         await members.add_person(
-            channel, Principal.member(user_id), added_by_user_id=added_by
+            channel,
+            Principal.member(user_id),
+            seated_by=SeatedBy.ADDED,
+            added_by_user_id=added_by,
         )
 
 
@@ -491,14 +496,11 @@ async def _change_contact(
     body: ChannelUpdateRequest,
     named: set[str],
 ) -> None:
-    repository = ChannelRepository(uow.session)
+    cases = CaseRepository(uow.session)
     values: dict[str, object] = {}
     for field in ("agents_answer", "hand_back_after_hours"):
         if field in named:
             values[field] = getattr(body, field)
-    if "status" in named:
-        assert body.status is not None
-        values["status"] = body.status.value
     handing_back = "agents_answer" in named and body.agents_answer
     if handing_back and body.assignee is not None:
         raise unprocessable("Switching the agent on hands the contact back to it")
@@ -508,10 +510,13 @@ async def _change_contact(
             uow, channel.pod_id, assignee, Permissions.CONTACT_READ
         ):
             raise unprocessable("Only a member who may see contacts can be assigned")
-        await repository.assign(channel.id, assignee)
+        await cases.assign(channel.id, assignee, by=caller.user_id)
     elif handing_back or "assignee" in named:
-        await repository.assign(channel.id, None)
-    await repository.change(channel.id, values)
+        await cases.assign(channel.id, None, by=caller.user_id)
+    if "status" in named:
+        assert body.status is not None
+        await cases.set_status(channel.id, body.status, by=caller.user_id)
+    await ChannelRepository(uow.session).change(channel.id, values)
 
 
 @router.delete(

@@ -382,6 +382,24 @@ export class ChannelsNamespace {
     );
   }
 
+  /** A contact's channel's cases, the most recently opened first, each with
+   *  what happened in it: who answered and when, reopens, how it ended. Page
+   *  with `next_cursor`. */
+  cases(
+    podId: string,
+    channelId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ) {
+    return this.client.request(() =>
+      ChannelsService.channelCaseList(
+        podId,
+        channelId,
+        options.cursor,
+        options.limit ?? 20,
+      ),
+    );
+  }
+
   /** Who is in a channel -- members, contacts and agents -- in the order they
    *  joined. Page with `next_cursor`. */
   members(

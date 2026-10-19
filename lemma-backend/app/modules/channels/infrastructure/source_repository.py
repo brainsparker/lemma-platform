@@ -53,6 +53,28 @@ def _scope(
     raise ValueError("A place is looked up on some surfaces, or one platform")
 
 
+def place_lookup(
+    *,
+    account_id: UUID,
+    external_channel_id: str | None,
+    external_user_id: str | None,
+) -> Select[tuple[ChannelSourceModel, UUID | None]]:
+    """One place of an account, by ``uq_channel_sources_place``: what every
+    inbound message reads first."""
+    source = ChannelSourceModel
+    return _with_surface().where(
+        source.account_id == account_id,
+        func.coalesce(source.external_channel_id, "") == (external_channel_id or ""),
+        func.coalesce(source.external_user_id, "") == (external_user_id or ""),
+        # The index's own predicate: the planner uses a partial index only for
+        # a query that implies it, and the coalesces above do not.
+        or_(
+            source.external_channel_id.is_not(None),
+            source.external_user_id.is_not(None),
+        ),
+    )
+
+
 def _sources(
     rows: Iterable[Row[tuple[ChannelSourceModel, UUID | None]]],
 ) -> list[Source]:
@@ -78,15 +100,12 @@ class SourceRepository:
         external_channel_id: str | None,
         external_user_id: str | None,
     ) -> Source | None:
-        source = ChannelSourceModel
         found = (
             await self.session.execute(
-                _with_surface().where(
-                    source.account_id == account_id,
-                    func.coalesce(source.external_channel_id, "")
-                    == (external_channel_id or ""),
-                    func.coalesce(source.external_user_id, "")
-                    == (external_user_id or ""),
+                place_lookup(
+                    account_id=account_id,
+                    external_channel_id=external_channel_id,
+                    external_user_id=external_user_id,
                 )
             )
         ).first()
@@ -137,6 +156,14 @@ class SourceRepository:
             .limit(MAX_PLACES)
         )
         return _sources(rows)
+
+    async def any_private(self, channel_id: UUID) -> bool:
+        """Whether any of a channel's places is kept to its members."""
+        source = ChannelSourceModel
+        private = select(source.id).where(
+            source.channel_id == channel_id, source.is_private.is_(True)
+        )
+        return await self.session.scalar(private.limit(1)) is not None
 
     async def in_channel(
         self, channel_id: UUID, source_ids: Collection[UUID]
@@ -211,7 +238,7 @@ class SourceRepository:
         statement = _with_surface().where(
             source.platform == platform,
             source.external_user_id == external_user_id,
-            source.kind == SourceKind.PRIVATE.value,
+            source.kind == SourceKind.PERSON.value,
         )
         if pod_id is not None:
             statement = statement.where(source.pod_id == pod_id)
@@ -244,7 +271,7 @@ class SourceRepository:
             .where(
                 source.platform == platform,
                 source.pod_id == pod_id,
-                source.kind == SourceKind.PRIVATE.value,
+                source.kind == SourceKind.PERSON.value,
                 source.external_user_id.in_(sorted(external_user_ids)),
                 source.account_id.in_(accounts_of_surfaces([surface_id])),
             )
@@ -264,7 +291,7 @@ class SourceRepository:
         when named."""
         source = ChannelSourceModel
         statement = _with_surface().where(
-            source.pod_id == pod_id, source.kind == SourceKind.SHARED.value
+            source.pod_id == pod_id, source.kind == SourceKind.CHAT.value
         )
         if surface_id is not None:
             statement = statement.where(ExternalAccountModel.surface_id == surface_id)
@@ -317,7 +344,7 @@ class SourceRepository:
                     ExternalAccountModel.surface_id == surface_id,
                     source.owner_user_id == owner_user_id,
                     source.title == title,
-                    source.kind == SourceKind.SHARED.value,
+                    source.kind == SourceKind.CHAT.value,
                 )
                 .order_by(source.created_at.desc())
                 .limit(1)
@@ -442,7 +469,7 @@ class SourceRepository:
             pod_id=channel.pod_id,
             account_id=account_id,
             platform=platform,
-            kind=SourceKind.SHARED.value,
+            kind=SourceKind.CHAT.value,
             is_private=True,
             title=title,
             owner_user_id=owner_user_id,

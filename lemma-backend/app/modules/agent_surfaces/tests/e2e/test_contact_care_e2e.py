@@ -83,7 +83,8 @@ from app.modules.contacts.infrastructure.models import (
     ContactModel,
 )
 from app.modules.datastore.contracts import contact_rows
-from app.modules.channels.infrastructure.models import ChannelModel
+from app.modules.channels.contracts import NewLine, Sender, contact_channel, post
+from app.modules.channels.infrastructure.models import ChannelCaseModel, ChannelModel
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.contacts_cap import contacts_cap_reached
 from app.modules.usage.contracts.metering import check_run_budget
@@ -664,8 +665,8 @@ async def test_a_member_who_writes_holds_the_contact_until_they_go_quiet(
     assert window.json()["assignee"]["id"] == fixed_test_user["id"]
     # The member last wrote two hours ago: past the window.
     await db_session.execute(
-        update(ChannelModel)
-        .where(ChannelModel.id == channel_id)
+        update(ChannelCaseModel)
+        .where(ChannelCaseModel.channel_id == channel_id)
         .values(assignee_last_line_at=datetime.now(timezone.utc) - timedelta(hours=2))
     )
     await db_session.commit()
@@ -945,21 +946,26 @@ async def test_a_follow_up_the_platform_refused_is_never_shown_as_said(
         answer="anyone",
     )
     context = await _dana_writes(db_session, address, "not-sent-1")
+    assert context.audience.contact_id is not None
+    member = UUID(fixed_test_user["id"])
     uow = SqlAlchemyUnitOfWork(db_session)
-    await contact_conversations.append_follow_up(
-        uow,
-        conversation_id=context.conversation_id,
-        message="This one never left.",
-        sent_by_user_id=UUID(fixed_test_user["id"]),
-        delivered=False,
+    channel = await contact_channel(
+        uow, pod_id=UUID(pod_id), contact_id=context.audience.contact_id
     )
-    await contact_conversations.append_follow_up(
-        uow,
-        conversation_id=context.conversation_id,
-        message="This one did.",
-        sent_by_user_id=UUID(fixed_test_user["id"]),
-        delivered=True,
-    )
+    for said, delivered in (("This one never left.", False), ("This one did.", True)):
+        line = await post(
+            uow,
+            channel_id=channel.id,
+            line=NewLine(sender=Sender.member(member), text=said),
+        )
+        assert line is not None
+        await contact_conversations.append_follow_up(
+            uow,
+            conversation_id=context.conversation_id,
+            line_id=line.id,
+            sent_by_user_id=member,
+            delivered=delivered,
+        )
     await db_session.commit()
 
     shown = await contact_conversations.visible_messages(

@@ -38,7 +38,8 @@ class ChannelResponse:
         agents_answer (bool | None | Unset): A contact's channel: whether its agents answer the contact.
         archived (bool | Unset):  Default: False.
         assignee (None | PersonRef | Unset): A contact's channel: who answers them by hand.
-        attention (AttentionResponse | None | Unset): The channel asks for a person, and why.
+        attention (AttentionResponse | None | Unset): A contact's channel: its current case asks for a person, and why.
+            Never set on another kind of channel.
         hand_back_after_hours (int | None | Unset): A contact's channel: how long the assignee holds the contact after
             their last line before the agent answers again.
         joined (bool | Unset): Whether the reader is in it. A pod admin listing a bot's groups (`source_surface`) is

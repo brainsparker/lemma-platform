@@ -82,7 +82,10 @@ export type { BulkCreateRecordsRequest } from './models/BulkCreateRecordsRequest
 export type { BulkDeleteRecordsRequest } from './models/BulkDeleteRecordsRequest.js';
 export type { BulkUpdateRecordsRequest } from './models/BulkUpdateRecordsRequest.js';
 export { BundleSourceKind } from './models/BundleSourceKind.js';
+export type { CaseEventResponse } from './models/CaseEventResponse.js';
+export type { CaseResponse } from './models/CaseResponse.js';
 export type { ChannelAnswerRequest } from './models/ChannelAnswerRequest.js';
+export type { ChannelCasesResponse } from './models/ChannelCasesResponse.js';
 export type { ChannelCreateRequest } from './models/ChannelCreateRequest.js';
 export type { ChannelDetailResponse } from './models/ChannelDetailResponse.js';
 export type { ChannelEditRequest } from './models/ChannelEditRequest.js';

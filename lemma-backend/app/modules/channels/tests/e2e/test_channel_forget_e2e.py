@@ -33,7 +33,7 @@ from app.modules.channels.infrastructure.models import (
     ChannelQuestionModel,
 )
 from app.modules.channels.infrastructure.repository import ChannelRepository
-from app.modules.channels.tests.e2e.channel_pod import contact_place
+from app.modules.channels.tests.e2e.channel_pod import an_asker, contact_place
 from app.modules.contacts.services.forget import forget_contact
 
 pytestmark = pytest.mark.e2e
@@ -69,6 +69,7 @@ async def test_forgetting_a_contact_who_started_a_group_thread_keeps_the_replies
         question=NewQuestion(
             kind=QuestionKind.ASK,
             ref="e2e:forget-thread",
+            asker=await an_asker(pod_id, owner),
             question={"prompt": "Can you check the warehouse?"},
             awaits=Principal.member(peer),
         ),

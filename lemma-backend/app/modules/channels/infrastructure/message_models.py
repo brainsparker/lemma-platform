@@ -20,7 +20,6 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
-    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -29,7 +28,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.infrastructure.db.base import Base, UUIDAuditBase
+from app.core.infrastructure.db.base import UUIDAuditBase
 
 
 class ChannelMessageModel(UUIDAuditBase):
@@ -65,6 +64,50 @@ class ChannelMessageModel(UUIDAuditBase):
             ondelete="CASCADE",
         ),
         UniqueConstraint("channel_id", "seq", name="uq_channel_messages_seq"),
+        # What a line's rows -- its question, thread, answers, deliveries --
+        # hang from: the line *and its channel*, so the database refuses one
+        # in another channel, and a fold moving the line carries them.
+        UniqueConstraint("id", "channel_id", name="uq_channel_messages_id_channel"),
+        # The same with the line's number, for its mentions: an unread mention
+        # is one past the reader's ``last_read_seq``, counted from the
+        # mention's own index without visiting the line. The number is the
+        # line's, cascaded, never a copy anybody keeps.
+        UniqueConstraint(
+            "id", "channel_id", "seq", name="uq_channel_messages_id_channel_seq"
+        ),
+        # Threads, replies and places of the line's own channel only
+        # (``posting.LineMisplaced``). SET NULL of just the reference: the
+        # line keeps its channel.
+        ForeignKeyConstraint(
+            ["thread_root_id", "channel_id"],
+            ["channel_messages.id", "channel_messages.channel_id"],
+            name="fk_channel_messages_thread_root",
+            ondelete="SET NULL (thread_root_id)",
+        ),
+        ForeignKeyConstraint(
+            ["reply_to_id", "channel_id"],
+            ["channel_messages.id", "channel_messages.channel_id"],
+            name="fk_channel_messages_reply_to",
+            ondelete="SET NULL (reply_to_id)",
+        ),
+        # Deferrable: a fold moves a channel's places and its lines in two
+        # statements, and checks them at its commit.
+        ForeignKeyConstraint(
+            ["source_id", "channel_id"],
+            ["channel_sources.id", "channel_sources.channel_id"],
+            name="fk_channel_messages_source",
+            ondelete="SET NULL (source_id)",
+            deferrable=True,
+            initially="IMMEDIATE",
+        ),
+        ForeignKeyConstraint(
+            ["target_source_id", "channel_id"],
+            ["channel_sources.id", "channel_sources.channel_id"],
+            name="fk_channel_messages_target_source",
+            ondelete="SET NULL (target_source_id)",
+            deferrable=True,
+            initially="IMMEDIATE",
+        ),
         Index(
             "uq_channel_messages_client",
             "channel_id",
@@ -72,10 +115,12 @@ class ChannelMessageModel(UUIDAuditBase):
             unique=True,
             postgresql_where=text("client_message_id IS NOT NULL"),
         ),
+        # A platform's message id, hashed to a uuid: an id of any length in
+        # sixteen bytes (``external_key``).
         Index(
             "uq_channel_messages_external",
             "source_id",
-            text("md5(external_message_id)"),
+            text("(md5(external_message_id)::uuid)"),
             unique=True,
             postgresql_where=text("external_message_id IS NOT NULL"),
         ),
@@ -85,10 +130,25 @@ class ChannelMessageModel(UUIDAuditBase):
             "seq",
             postgresql_where=text("thread_root_id IS NOT NULL"),
         ),
-        Index("ix_channel_messages_conversation", "conversation_id", "seq"),
-        Index("ix_channel_messages_rev", "channel_id", "rev"),
-        # Searched within a pod: ``pod_id`` in the same GIN (``btree_gin``).
-        Index("ix_channel_messages_search", "pod_id", "search", postgresql_using="gin"),
+        Index(
+            "ix_channel_messages_conversation",
+            "conversation_id",
+            "seq",
+            postgresql_where=text("conversation_id IS NOT NULL"),
+        ),
+        # Search's windows, newest first (``line_search``): a pod's lines by
+        # when they were said.
+        Index("ix_channel_messages_pod_time", "pod_id", "created_at"),
+        # Searched within a pod, or one of its channels: both beside the words
+        # in the same GIN (``btree_gin``), so a channel's matches are found
+        # without reading the pod's.
+        Index(
+            "ix_channel_messages_search",
+            "pod_id",
+            "channel_id",
+            "search",
+            postgresql_using="gin",
+        ),
         Index(
             "ix_channel_messages_sender_user",
             "sender_user_id",
@@ -140,21 +200,16 @@ class ChannelMessageModel(UUIDAuditBase):
     )
 
     channel_id: Mapped[UUID] = mapped_column(nullable=False)
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
-    )
+    #: The channel's pod; a pod's delete reaches the line through its channel.
+    pod_id: Mapped[UUID] = mapped_column(nullable=False)
     #: The line's place in its channel's timeline, gapless from 1.
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     #: What a client named the line it wrote, so a retry is the same line.
     client_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: Where it was heard: the place a person said it, on a platform.
-    source_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("channel_sources.id", ondelete="SET NULL"), nullable=True
-    )
+    source_id: Mapped[UUID | None] = mapped_column(nullable=True)
     #: Where a line written in Lemma was carried: the place it went to.
-    target_source_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("channel_sources.id", ondelete="SET NULL"), nullable=True
-    )
+    target_source_id: Mapped[UUID | None] = mapped_column(nullable=True)
     sender_kind: Mapped[str] = mapped_column(String(10), nullable=False)
     sender_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -198,23 +253,14 @@ class ChannelMessageModel(UUIDAuditBase):
     external_thread_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: What answers a platform line in place: the adapter's own shape.
     reply_ref: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
-    reply_to_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("channel_messages.id", ondelete="SET NULL"), nullable=True
-    )
+    reply_to_id: Mapped[UUID | None] = mapped_column(nullable=True)
     #: The line a thread hangs from, on every reply in it.
-    thread_root_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("channel_messages.id", ondelete="SET NULL"), nullable=True
-    )
+    thread_root_id: Mapped[UUID | None] = mapped_column(nullable=True)
     edited_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
-    )
-    #: The channel change (``channels.last_rev``) that last moved this line:
-    #: what a live subscriber resuming from an earlier one is sent again.
-    rev: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, default=0, server_default=text("0")
     )
 
 
@@ -226,6 +272,19 @@ class ChannelMentionModel(UUIDAuditBase):
         CheckConstraint(
             "num_nonnulls(user_id, contact_id, agent_id) = 1",
             name="ck_channel_mentions_one_named",
+        ),
+        # The line's channel and number, cascaded: a fold moving and
+        # renumbering the line moves the mention, and a line's delete takes it.
+        ForeignKeyConstraint(
+            ["message_id", "channel_id", "seq"],
+            [
+                "channel_messages.id",
+                "channel_messages.channel_id",
+                "channel_messages.seq",
+            ],
+            name="fk_channel_mentions_line",
+            ondelete="CASCADE",
+            onupdate="CASCADE",
         ),
         Index(
             "uq_channel_mentions_named",
@@ -253,17 +312,12 @@ class ChannelMentionModel(UUIDAuditBase):
         ),
     )
 
-    message_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channel_messages.id", ondelete="CASCADE"), nullable=False
-    )
-    channel_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
-    )
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
-    )
-    #: The line's ``seq``: a mention is unread while it is past the member's
-    #: ``last_read_seq``.
+    message_id: Mapped[UUID] = mapped_column(nullable=False)
+    channel_id: Mapped[UUID] = mapped_column(nullable=False)
+    #: The line's pod, for a member's mentions across it; never changes.
+    pod_id: Mapped[UUID] = mapped_column(nullable=False)
+    #: The line's ``seq``, held to it by ``fk_channel_mentions_line``: a
+    #: mention is unread while it is past the member's ``last_read_seq``.
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=True
@@ -273,197 +327,4 @@ class ChannelMentionModel(UUIDAuditBase):
     )
     agent_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("agents.id", ondelete="CASCADE"), nullable=True
-    )
-
-
-class ChannelQuestionModel(Base):
-    """A question a line puts to one person, and what became of it."""
-
-    __tablename__ = "channel_questions"
-    __table_args__ = (
-        CheckConstraint(
-            "kind IN ('ASK', 'APPROVAL', 'FORM')", name="ck_channel_questions_kind"
-        ),
-        CheckConstraint(
-            "state IN ('OPEN', 'ANSWERING', 'ANSWERED', 'CANCELLED', 'EXPIRED')",
-            name="ck_channel_questions_state",
-        ),
-        CheckConstraint(
-            "num_nonnulls(awaits_user_id, awaits_contact_id) = 1",
-            name="ck_channel_questions_awaits_one",
-        ),
-        UniqueConstraint("pod_id", "ref", name="uq_channel_questions_ref"),
-        Index(
-            "ix_channel_questions_ref_prefix",
-            "pod_id",
-            text("ref text_pattern_ops"),
-        ),
-        Index(
-            "ix_channel_questions_waiting_member",
-            "awaits_user_id",
-            "pod_id",
-            postgresql_where=text(
-                "state IN ('OPEN', 'ANSWERING') AND awaits_user_id IS NOT NULL"
-            ),
-        ),
-        Index(
-            "ix_channel_questions_waiting_contact",
-            "awaits_contact_id",
-            postgresql_where=text(
-                "state IN ('OPEN', 'ANSWERING') AND awaits_contact_id IS NOT NULL"
-            ),
-        ),
-        Index(
-            "ix_channel_questions_expiry",
-            "expires_at",
-            postgresql_where=text(
-                "state IN ('OPEN', 'ANSWERING') AND expires_at IS NOT NULL"
-            ),
-        ),
-        # A claim the sweeper may have to put back: few, and short-lived.
-        Index(
-            "ix_channel_questions_claimed",
-            "claimed_at",
-            postgresql_where=text("state = 'ANSWERING'"),
-        ),
-        Index(
-            "ix_channel_questions_batch",
-            "pod_id",
-            "batch_id",
-            postgresql_where=text("batch_id IS NOT NULL"),
-        ),
-        Index("ix_channel_questions_channel", "channel_id"),
-    )
-
-    message_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channel_messages.id", ondelete="CASCADE"), primary_key=True
-    )
-    channel_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
-    )
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
-    )
-    #: What asked it: ``{asker}:{…}`` -- ``tool:{conversation}:{call}``,
-    #: ``wf:{run}:{node}``, ``msg:{conversation}:{key}``. Unique per pod.
-    ref: Mapped[str] = mapped_column(Text, nullable=False)
-    #: Questions sent together; the asker is woken when the last one closes.
-    batch_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    kind: Mapped[str] = mapped_column(String(10), nullable=False)
-    state: Mapped[str] = mapped_column(
-        String(10), nullable=False, default="OPEN", server_default=text("'OPEN'")
-    )
-    #: The question as asked: choices, a form's schema, an approval's tool.
-    question: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
-    awaits_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
-    )
-    awaits_contact_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
-    )
-    #: The answer that took effect -- the asker's, not the request's.
-    answer: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
-    answered_by_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    answered_by_contact_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
-    )
-    answered_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    #: Set while an answer is being taken; a claim older than a minute is
-    #: abandoned and may be taken again.
-    claimed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("now()")
-    )
-
-
-class ChannelMessageDeliveryModel(UUIDAuditBase):
-    """One send of a line outside Lemma: to a place, or to a member's reach.
-
-    The only record of whether it went: unique per line and target, so a
-    retried job finds the row and never sends twice.
-    """
-
-    __tablename__ = "channel_message_deliveries"
-    __table_args__ = (
-        CheckConstraint(
-            "num_nonnulls(source_id, recipient_user_id) = 1",
-            name="ck_channel_message_deliveries_one_target",
-        ),
-        CheckConstraint(
-            "status IN ('PENDING', 'SENT', 'FAILED', 'SKIPPED', 'DEAD')",
-            name="ck_channel_message_deliveries_status",
-        ),
-        Index(
-            "uq_channel_message_deliveries_target",
-            "message_id",
-            text("coalesce(source_id, recipient_user_id)"),
-            unique=True,
-        ),
-        Index(
-            "ix_channel_message_deliveries_due",
-            "next_attempt_at",
-            postgresql_where=text("status IN ('PENDING', 'FAILED')"),
-        ),
-        Index(
-            "ix_channel_message_deliveries_external",
-            "platform",
-            text("md5(external_message_id)"),
-            postgresql_where=text("external_message_id IS NOT NULL"),
-        ),
-        Index(
-            "ix_channel_message_deliveries_source",
-            "source_id",
-            postgresql_where=text("source_id IS NOT NULL"),
-        ),
-        Index(
-            "ix_channel_message_deliveries_recipient",
-            "recipient_user_id",
-            postgresql_where=text("recipient_user_id IS NOT NULL"),
-        ),
-    )
-
-    message_id: Mapped[UUID] = mapped_column(
-        ForeignKey("channel_messages.id", ondelete="CASCADE"), nullable=False
-    )
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
-    )
-    #: A place the line goes to (a contact's chat, a group) ...
-    source_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("channel_sources.id", ondelete="CASCADE"), nullable=True
-    )
-    #: ... or a member it is pushed to, wherever they are reached.
-    recipient_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
-    )
-    #: The platform it went out on; set when sent.
-    platform: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    status: Mapped[str] = mapped_column(
-        String(10), nullable=False, default="PENDING", server_default=text("'PENDING'")
-    )
-    #: Why it was skipped or failed, in words a member reads.
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    external_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    attempts: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default=text("0")
-    )
-    next_attempt_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    #: Set while a sender holds it, cleared with the outcome: a claim that
-    #: lapsed with this still set is a send nobody finished.
-    claimed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    sent_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
     )

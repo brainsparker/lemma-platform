@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
@@ -26,8 +26,8 @@ from app.modules.channels.services.live.hub import ChannelsHub
 from app.modules.channels.services.live.instruments import backoff
 from app.modules.channels.services.live.relay import (
     SNAPSHOT_CHARS,
-    AnswerRelays,
     Answering,
+    AnswerRelays,
 )
 
 pytestmark = pytest.mark.unit

@@ -40,12 +40,7 @@ from app.core.infrastructure.work import (
     registry as default_registry,
 )
 from app.modules.agent.contracts.run_facts import AgentRunFinished
-from app.modules.agent.domain.asked_questions import (
-    MESSAGE_REF,
-    asking_conversation,
-    batch_of_run,
-    run_of_batch,
-)
+from app.modules.agent.domain.asked_questions import batch_of_run, run_of_batch
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.events.turn_payloads import RepliesArrived
@@ -61,6 +56,7 @@ from app.modules.agent.services.pause_questions import sync_pause_questions
 from app.modules.channels.contracts.facts import ChannelQuestionClosed
 from app.modules.channels.contracts.questions import (
     Answering,
+    QuestionAsker,
     answers_for,
     batch_progress,
 )
@@ -92,6 +88,8 @@ class QuestionClosedPayload(BaseModel):
     message_id: UUID
     ref: str
     batch_id: str | None = None
+    asker: QuestionAsker
+    asker_conversation_id: UUID | None = None
 
 
 def concerns_a_person(fact: AgentRunFinished | PauseQuestionsPayload) -> bool:
@@ -107,10 +105,14 @@ def may_have_asked_people(fact: AgentRunFinished) -> bool:
 
 
 def closes_an_asked_batch(fact: ChannelQuestionClosed) -> bool:
-    return fact.batch_id is not None and asking_conversation(fact.ref) is not None
+    return (
+        fact.batch_id is not None
+        and fact.asker is QuestionAsker.MESSAGE
+        and fact.asker_conversation_id is not None
+    )
 
 
-@answers_for(MESSAGE_REF)
+@answers_for(QuestionAsker.MESSAGE)
 async def answer_message(answering: Answering) -> None:
     """A question one conversation put to a member, answered: taken as given.
     Nothing waits on it but the batch, which its close settles (below)."""
@@ -129,8 +131,10 @@ async def after_run(ctx: FastContext, payload: PauseQuestionsPayload) -> None:
 
 
 async def settle_batch(ctx: FastContext, payload: QuestionClosedPayload) -> None:
-    conversation_id = asking_conversation(payload.ref)
-    if conversation_id is None or payload.batch_id is None:
+    conversation_id = payload.asker_conversation_id
+    if payload.asker is not QuestionAsker.MESSAGE or conversation_id is None:
+        return
+    if payload.batch_id is None:
         return
     run_id = run_of_batch(payload.batch_id)
     if run_id is not None and not await _run_finished(ctx, run_id):

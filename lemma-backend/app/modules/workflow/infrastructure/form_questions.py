@@ -23,9 +23,11 @@ from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.channels.contracts import (
+    Asker,
     NewLine,
     NewQuestion,
     Principal,
+    QuestionAsker,
     QuestionKind,
     QuestionState,
     Sender,
@@ -44,10 +46,6 @@ FORM_REF = "wf"
 
 def form_ref(run_id: UUID, node_id: str, wait_id: UUID) -> str:
     return f"{FORM_REF}:{run_id}:{node_id}:{wait_id}"
-
-
-def run_prefix(run_id: UUID) -> str:
-    return f"{FORM_REF}:{run_id}:"
 
 
 def form_wait_id(ref: str) -> UUID | None:
@@ -126,6 +124,7 @@ class FormQuestions:
             question=NewQuestion(
                 kind=QuestionKind.FORM,
                 ref=ref,
+                asker=Asker.workflow(run_id, f"{node_id}:{wait_id}"),
                 question={
                     "tool": "workflow_form",
                     "prompt": title,
@@ -162,12 +161,12 @@ class FormQuestions:
         )
 
     async def run_ended(self, *, pod_id: UUID, run_id: UUID) -> None:
-        await channel_questions.cancel_under(
-            self._uow, pod_id=pod_id, prefix=run_prefix(run_id)
+        await channel_questions.cancel_asked_by(
+            self._uow, QuestionAsker.WORKFLOW, workflow_run_id=run_id
         )
 
 
-@channel_questions.answers_for(FORM_REF)
+@channel_questions.answers_for(QuestionAsker.WORKFLOW)
 async def answer_form(answering: Answering) -> Mapping[str, object] | None:
     """A form answered on its line: submitted through the engine, which checks
     it is theirs, validates it, and closes the question with what it took."""
@@ -207,5 +206,4 @@ __all__ = [
     "describe_fields",
     "form_ref",
     "form_wait_id",
-    "run_prefix",
 ]

@@ -16,12 +16,14 @@ from app.core.infrastructure.work import (
     WorkMode,
     WorkRegistry,
     facts,
+)
+from app.core.infrastructure.work import (
     registry as default_registry,
 )
 from app.modules.channels.domain.entities import ChannelKind
+from app.modules.channels.infrastructure.cases import CaseRepository
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.models import ChannelModel
-from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.rows import now
 from app.modules.channels.services.questions import cancel_waiting_on
 from app.modules.pod.contracts.lifecycle import PodMemberRemoved
@@ -31,11 +33,11 @@ CHANNELS_MEMBER_LEFT = "channels.member_left"
 
 async def member_left(ctx: FastContext, payload: PodMemberRemoved) -> None:
     session = ctx.uow.session
-    channels = ChannelRepository(session)
-    for channel in await channels.of_member_left(
+    cases = CaseRepository(session)
+    for channel_id in await cases.assigned_to(
         pod_id=payload.pod_id, user_id=payload.user_id
     ):
-        await channels.assign(channel.id, None)
+        await cases.assign(channel_id, None)
     # Through the question service: each line is touched, so its watchers see
     # it close, and each close is announced to whatever asked it.
     await cancel_waiting_on(ctx.uow, pod_id=payload.pod_id, user_id=payload.user_id)

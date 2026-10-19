@@ -50,7 +50,7 @@ from app.core.infrastructure.work import (
     registry as default_registry,
 )
 from app.core.log.log import get_logger
-from app.modules.channels.contracts import QuestionState
+from app.modules.channels.contracts import QuestionAsker, QuestionState
 from app.modules.channels.contracts.facts import ChannelQuestionClosed
 from app.modules.function.contracts.run_facts import FunctionRunFinished
 from app.modules.schedule.contracts.dispatch import (
@@ -243,7 +243,11 @@ class FormExpired(BaseModel):
 
 
 def expires_a_form(fact: ChannelQuestionClosed) -> bool:
-    return fact.state is QuestionState.EXPIRED and form_wait_id(fact.ref) is not None
+    return (
+        fact.state is QuestionState.EXPIRED
+        and fact.asker is QuestionAsker.WORKFLOW
+        and form_wait_id(fact.ref) is not None
+    )
 
 
 async def expire_form(ctx: FastContext, payload: FormExpired) -> None:

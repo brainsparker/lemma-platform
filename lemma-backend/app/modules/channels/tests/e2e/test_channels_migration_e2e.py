@@ -37,6 +37,8 @@ _OLD = (
 _NEW = (
     "external_accounts",
     "channels",
+    "channel_cases",
+    "channel_case_events",
     "channel_members",
     "channel_read_state",
     "channel_sources",
@@ -44,6 +46,11 @@ _NEW = (
     "channel_mentions",
     "channel_questions",
     "channel_message_deliveries",
+    "channel_line_answers",
+    "channel_delivery_attempts",
+    "channel_push_pending",
+    "channel_changes",
+    "channel_threads",
 )
 
 
@@ -142,6 +149,20 @@ def test_channels_replace_links_and_groups_and_roll_back_cleanly() -> None:
                 ).fetchall()
             return {row[0] for row in rows}
 
+        def constraints() -> set[str]:
+            with psycopg.connect(plain_url) as connection:
+                rows = connection.execute(
+                    "SELECT conname FROM pg_constraint"
+                ).fetchall()
+            return {row[0] for row in rows}
+
+        def storage(table: str) -> set[str]:
+            with psycopg.connect(plain_url) as connection:
+                row = connection.execute(
+                    "SELECT reloptions FROM pg_class WHERE relname = %s", [table]
+                ).fetchone()
+            return set(row[0] or []) if row else set()
+
         def index(name: str) -> str | None:
             with psycopg.connect(plain_url) as connection:
                 row = connection.execute(
@@ -170,18 +191,27 @@ def test_channels_replace_links_and_groups_and_roll_back_cleanly() -> None:
             "answers_outsiders",
             "request_id",
         } <= columns("channel_sources")
-        # Who may see a channel is its own column; a contact's inbox is
-        # columns, not settings; the timeline's head is a number.
+        # Who may see a channel is its own column; a contact's is answered in
+        # cases, not settings; the timeline's head is a number.
         assert {
             "visibility",
             "agents_answer",
             "hand_back_after_hours",
-            "assignee_user_id",
-            "status",
+            "current_case_id",
             "last_seq",
             "last_line_id",
             "last_line_at",
         } <= columns("channels")
+        assert not {"status", "assignee_user_id", "attention_at"} & columns("channels")
+        assert {
+            "status",
+            "assignee_user_id",
+            "attention_at",
+            "acknowledged_at",
+            "first_response_at",
+            "closed_at",
+        } <= columns("channel_cases")
+        assert index("uq_channel_cases_open") is not None
         assert {
             "seq",
             "client_message_id",
@@ -199,11 +229,64 @@ def test_channels_replace_links_and_groups_and_roll_back_cleanly() -> None:
             "channel_questions"
         )
         assert index("uq_channel_messages_client") is not None
+        # What a live subscriber resumes from is the change log, not a number
+        # on every line; nothing indexes what a post moves on its channel.
+        assert "rev" not in columns("channel_messages")
+        assert index("ix_channel_messages_rev") is None
+        assert index("ix_channels_pod_updated") is None
+        assert index("ix_channel_changes_pod_at") is not None
+        assert {"last_spoke_at", "last_name"} <= columns("channel_members")
+        assert storage("channels") == {"fillfactor=80"}
+        assert storage("channel_messages") == {
+            "autovacuum_vacuum_scale_factor=0.02",
+            "autovacuum_vacuum_insert_scale_factor=0.02",
+        }
+        # Who is seated why; read state is the pod's; a question names its
+        # asker by type and id, and its ref is one unique key, no prefix index.
+        assert "seated_by" in columns("channel_members")
+        assert {"pod_id", "created_at"} <= columns("channel_read_state")
+        assert {
+            "asker",
+            "asker_conversation_id",
+            "asker_workflow_run_id",
+            "asker_key",
+            "awaits_policy",
+        } <= columns("channel_questions")
+        assert index("ix_channel_questions_ref_prefix") is None
+        assert index("ix_channel_members_channel") is not None
+        external = index("uq_channel_messages_external")
+        assert external is not None and "::uuid" in external, external
+        assert {
+            "uq_channel_messages_id_channel",
+            "uq_channel_messages_id_channel_seq",
+            "fk_channel_messages_thread_root",
+            "fk_channel_messages_source",
+            "fk_channel_mentions_line",
+            "fk_channel_questions_line",
+        } <= constraints()
         assert index("ix_channel_mentions_user") is not None
         assert "channel_id" in columns("agent_conversations")
+        # Who answers a line, held to the line; a conversation's channel is
+        # one of its own pod's.
+        assert {
+            "fk_channel_line_answers_line",
+            "fk_agent_conversations_channel",
+        } <= constraints()
         one_each = index("uq_agent_conversations_channel_person")
         assert one_each is not None and "UNIQUE" in one_each, one_each
         assert index("uq_channel_sources_place") is not None
+        # An account is a workspace and, once known, its bot; a place's
+        # group settings are a chat's alone.
+        assert {"workspace_key", "bot_key"} <= columns("external_accounts")
+        assert "account_key" not in columns("external_accounts")
+        assert {
+            "uq_external_accounts_key",
+            "uq_channel_sources_id_channel",
+            "ck_channel_sources_kind",
+            "ck_channel_sources_settings_on_a_chat",
+        } <= constraints()
+        assert index("ix_channel_sources_account") is not None
+        assert "WHERE" in (index("ix_channel_sources_shared") or "")
 
         migrate("downgrade", BEFORE)
         assert present(*_OLD) == set(_OLD)

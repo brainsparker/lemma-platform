@@ -14,7 +14,7 @@ key it, and says which channel a place heard for the first time belongs to:
   other people copied in, the thread is a group of its own.
 
 Every place is in an **account** -- a Slack workspace, a Teams tenant, a bot,
-an inbox, a WhatsApp number (``account_key_for``) -- so a reinstalled bot
+an inbox, a WhatsApp number (``account_of``) -- so a reinstalled bot
 keeps its places. A group is private in Lemma when the platform keeps it to
 its members (``is_private``).
 """
@@ -34,7 +34,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
-from app.modules.agent_surfaces.domain.external_accounts import account_key_for
+from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.domain.place_privacy import is_private_place
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
@@ -273,7 +273,7 @@ def place_of(
 ) -> Place:
     """The place this message was said in, as a channel source names it."""
     platform = surface.surface_type.value
-    account = account_key_for(surface)
+    account = account_of(surface)
     if is_shared(route, parsed):
         where = (
             parsed.external_thread_id
@@ -283,8 +283,8 @@ def place_of(
         return Place(
             surface_id=surface.id,
             platform=platform,
-            account_key=account,
-            kind=SourceKind.SHARED,
+            account=account,
+            kind=SourceKind.CHAT,
             external_channel_id=where,
             external_user_id=None,
             title=_title(surface, parsed),
@@ -293,8 +293,8 @@ def place_of(
     return Place(
         surface_id=surface.id,
         platform=platform,
-        account_key=account,
-        kind=SourceKind.PRIVATE,
+        account=account,
+        kind=SourceKind.PERSON,
         external_channel_id=None,
         external_user_id=external_user_id,
     )
@@ -302,7 +302,7 @@ def place_of(
 
 def home_of(place: Place, *, user_id: UUID, contact_id: UUID | None) -> Home:
     """The channel a place heard for the first time belongs to."""
-    if place.kind is SourceKind.SHARED:
+    if place.kind is SourceKind.CHAT:
         return GroupHome(title=place.title)
     if contact_id is not None:
         return ContactsHome(contact_id=contact_id)

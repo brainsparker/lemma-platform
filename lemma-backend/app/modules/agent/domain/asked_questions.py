@@ -20,23 +20,6 @@ def message_ref(conversation_id: UUID | None, key: str) -> str:
     return f"{MESSAGE_REF}:{conversation_id or '-'}:{key}"
 
 
-def asked_by_prefix(conversation_id: UUID) -> str:
-    """Every question this conversation asked."""
-    return f"{MESSAGE_REF}:{conversation_id}:"
-
-
-def asking_conversation(ref: str) -> UUID | None:
-    """The conversation that asked, from a message question's ref."""
-    kind, _, rest = ref.partition(":")
-    conversation, _, key = rest.partition(":")
-    if kind != MESSAGE_REF or conversation in ("", "-") or not key:
-        return None
-    try:
-        return UUID(conversation)
-    except ValueError:
-        return None
-
-
 #: The longest client id a channel line takes.
 MAX_CLIENT_ID = 64
 
@@ -68,8 +51,6 @@ def run_of_batch(batch_id: str) -> UUID | None:
 
 __all__ = [
     "MESSAGE_REF",
-    "asked_by_prefix",
-    "asking_conversation",
     "batch_of",
     "batch_of_run",
     "line_client_id",

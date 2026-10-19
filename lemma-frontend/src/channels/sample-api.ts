@@ -269,7 +269,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             channels = [{
                 id: channelId, kind: "GROUP", title, topic: null, person: null,
                 sources: [{ platform: "WHATSAPP", title }],
-                source_places: [{ id: sourceId, platform: "WHATSAPP", kind: "SHARED", title, surface_id: "s-whatsapp", pending: true, last_inbound_at: null }],
+                source_places: [{ id: sourceId, platform: "WHATSAPP", kind: "CHAT", title, surface_id: "s-whatsapp", pending: true, last_inbound_at: null }],
                 visibility: "PRIVATE", members: [{ person: ME, role: "owner" }],
                 me: { joined: true, notify: "ALL", read_seq: 0, role: "owner", can_manage: true },
                 unread: { lines: 0, mentions: 0, waiting: 0, read_seq: 0 }, created_at: now(), last_line_at: now(), last_seq: 0,
@@ -293,7 +293,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
                 channels = [{
                     id: channelId, kind: "GROUP", title: "Supplier chat", topic: null, person: null,
                     sources: [{ platform: "TELEGRAM", title: "Supplier chat" }],
-                    source_places: [{ id: id("src-tg"), platform: "TELEGRAM", kind: "SHARED", title: "Supplier chat", surface_id: "s-telegram", pending: false, last_inbound_at: now() }],
+                    source_places: [{ id: id("src-tg"), platform: "TELEGRAM", kind: "CHAT", title: "Supplier chat", surface_id: "s-telegram", pending: false, last_inbound_at: now() }],
                     visibility: "PRIVATE", members: [{ person: ME, role: "owner" }],
                     me: { joined: true, notify: "ALL", read_seq: 0, role: "owner", can_manage: true },
                     unread: { lines: 1, mentions: 0, waiting: 0, read_seq: 0 }, created_at: now(), last_line_at: now(), last_seq: 1,

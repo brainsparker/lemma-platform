@@ -46,6 +46,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, SurfaceEnvelope
 from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.line_changes import ParsedLineChange
 from app.modules.agent_surfaces.domain.place_privacy import PlaceFacts
 from app.modules.agent_surfaces.domain.surface_config import ReengageTemplate
 from app.modules.agent_surfaces.domain.models import (
@@ -96,6 +97,10 @@ class InboundParser(Protocol):
         self, payload: dict[str, object]
     ) -> list[ParsedGroupUpdate]:
         """What happened to groups themselves; empty on a bot that creates none."""
+        ...
+
+    def parse_line_changes(self, payload: dict[str, object]) -> list[ParsedLineChange]:
+        """Messages heard that the platform says were edited or deleted."""
         ...
 
     def mention_is_provisional(self, event: ParsedInboundSurfaceEvent) -> bool:

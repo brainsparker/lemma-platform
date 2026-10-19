@@ -19,7 +19,6 @@ from app.modules.channels.domain.entities import (
     ChannelKind,
     Principal,
     Source,
-    Visibility,
 )
 from app.modules.channels.infrastructure.accounts import AccountRepository
 from app.modules.channels.infrastructure.members import MemberRepository
@@ -29,7 +28,11 @@ from app.modules.channels.infrastructure.source_repository import (
     GROUP_SETTINGS,
     SourceRepository,
 )
-from app.modules.channels.services.places import ChannelPlaces, Place
+from app.modules.channels.services.places import (
+    ChannelPlaces,
+    Place,
+    recompute_visibility,
+)
 
 __all__ = [
     "GROUP_SETTINGS",
@@ -75,7 +78,7 @@ async def find_place(
     account = await AccountRepository(uow.session).account_for(
         pod_id=pod_id,
         platform=place.platform,
-        account_key=place.account_key,
+        key=place.account,
         surface_id=place.surface_id,
     )
     return await SourceRepository(uow.session).find(
@@ -320,13 +323,12 @@ async def _mirrored_group(uow: SqlAlchemyUnitOfWork, source_id: UUID) -> Channel
 async def place_became_private(uow: SqlAlchemyUnitOfWork, source_id: UUID) -> bool:
     """The platform now keeps this place to its members: so is its channel,
     to the people in it. True if anything changed. One way only."""
-    if not await SourceRepository(uow.session).became_private(source_id):
+    sources = SourceRepository(uow.session)
+    if not await sources.became_private(source_id):
         return False
-    channel = await _mirrored_group(uow, source_id)
-    if channel is not None and channel.visibility is Visibility.PUBLIC:
-        await ChannelRepository(uow.session).change(
-            channel.id, {"visibility": Visibility.PRIVATE.value}
-        )
+    source = await sources.get(source_id)
+    if source is not None:
+        await recompute_visibility(uow.session, source.channel_id)
     return True
 
 

@@ -3,8 +3,8 @@
 Everything that names the merged contact names the survivor afterwards --
 what they said, the questions put to them, the lines that mention them, their
 seat -- and their channel's sources, lines, questions, mentions, seats and
-conversations move into the survivor's, numbered on after the survivor's own
-lines. The merged channel is gone. Runs through the ``ContactMerged`` handler,
+conversations move into the survivor's, both channels' lines numbered again
+together in the order they were said, with what each member had read kept. The merged channel is gone. Runs through the ``ContactMerged`` handler,
 as the worker does.
 """
 
@@ -25,6 +25,7 @@ from app.core.infrastructure.work import FastContext
 from app.modules.agent.contracts.contact_conversations import repoint_merged_contact
 from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.channels.contracts import (
+    AccountKey,
     ContactsHome,
     NewLine,
     NewQuestion,
@@ -49,6 +50,8 @@ from app.modules.channels.infrastructure.models import (
 from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
 from app.modules.contacts.contracts.facts import ContactMerged
 
+from app.modules.channels.tests.e2e.channel_pod import an_asker
+
 pytestmark = pytest.mark.e2e
 
 
@@ -68,8 +71,8 @@ async def _contact(uow: SqlAlchemyUnitOfWork, pod_id: UUID, number: str) -> Sour
         place=Place(
             surface_id=None,
             platform="TELEGRAM",
-            account_key="bot-1",
-            kind=SourceKind.PRIVATE,
+            account=AccountKey(workspace="bot-1"),
+            kind=SourceKind.PERSON,
             external_channel_id=None,
             external_user_id=number,
         ),
@@ -142,6 +145,7 @@ async def test_a_merged_contacts_channel_and_everything_naming_them_move_over(
         question=NewQuestion(
             kind=QuestionKind.ASK,
             ref="e2e:fold",
+            asker=await an_asker(pod_id, owner),
             question={"prompt": "Which order?"},
             awaits=Principal.contact(merged),
         ),
@@ -224,17 +228,21 @@ async def test_a_fold_keeps_the_merged_channels_people_conversations_and_state(
         )
     await db_session.execute(
         text(
-            "UPDATE channels SET status = 'closed', agents_answer = true,"
-            " assignee_user_id = NULL WHERE id = :kept"
+            "UPDATE channel_cases SET status = 'closed', closed_at = now(),"
+            " assignee_user_id = NULL WHERE channel_id = :kept"
         ),
         {"kept": kept.channel_id},
     )
     await db_session.execute(
         text(
-            "UPDATE channels SET status = 'open', agents_answer = false,"
-            " assignee_user_id = :owner, assigned_at = now() WHERE id = :folded"
+            "UPDATE channel_cases SET status = 'open',"
+            " assignee_user_id = :owner, assigned_at = now() WHERE channel_id = :folded"
         ),
         {"owner": owner, "folded": folded.channel_id},
+    )
+    await db_session.execute(
+        text("UPDATE channels SET agents_answer = false WHERE id = :folded"),
+        {"folded": folded.channel_id},
     )
     watcher = await scenario.create_user("fold-watcher")
     await scenario.add_user_to_pod(user=watcher, role="POD_EDITOR")
@@ -245,6 +253,7 @@ async def test_a_fold_keeps_the_merged_channels_people_conversations_and_state(
             pod_id=pod_id,
             user_id=watcher_id,
             role="member",
+            seated_by="ADDED",
         )
     )
     conversation = ConversationModel(
@@ -264,8 +273,10 @@ async def test_a_fold_keeps_the_merged_channels_people_conversations_and_state(
 
     db_session.expire_all()
     head = await db_session.get(ChannelModel, kept.channel_id)
-    assert head is not None
-    assert (head.status, head.agents_answer, head.assignee_user_id) == (
+    assert head is not None and head.current_case is not None
+    # The survivor's own case was closed: the merged one's, open, goes on.
+    case = head.current_case
+    assert (case.status, head.agents_answer, case.assignee_user_id) == (
         "open",
         False,
         owner,
@@ -342,10 +353,11 @@ async def test_a_chained_merge_folds_into_whoever_survives_now(
         )
     ).all()
     assert contacts_channels == [third]
+    # In the order they were said, whichever fold ran first.
     assert await _timeline(db_session, c.channel_id) == [
-        (1, "hello from 5553003"),
+        (1, "hello from 5553001"),
         (2, "hello from 5553002"),
-        (3, "hello from 5553001"),
+        (3, "hello from 5553003"),
     ]
     speakers = set(
         (
@@ -403,3 +415,70 @@ async def test_a_line_written_while_the_fold_runs_is_moved_not_lost(scenario):
         # The head counts it too, so the next line is 4, not a duplicate 3.
         head = await uow.session.get(ChannelModel, kept.channel_id)
         assert head is not None and head.last_seq == 3
+
+
+async def test_a_fold_numbers_both_timelines_by_when_said_and_keeps_what_was_read(
+    scenario, db_session: AsyncSession
+):
+    """Lines of the two channels interleave in the order they were said, a
+    mention keeps its line's new number, and a member who had read both up
+    to some line has read the merged one up to just before the first line
+    they had not -- not every moved line unread again."""
+    await scenario.create_org_with_pod(name_prefix="Channel fold order")
+    pod_id = UUID(scenario.pod_id)
+    owner = UUID(scenario.owner_user["id"])
+    uow = SqlAlchemyUnitOfWork(db_session)
+    kept = await _contact(uow, pod_id, "5555001")
+    folded = await _contact(uow, pod_id, "5555002")
+    survivor = await _contact_of(db_session, kept)
+    merged = await _contact_of(db_session, folded)
+    named = await post(
+        uow,
+        channel_id=kept.channel_id,
+        line=NewLine(sender=Sender.member(owner), text="kept, later"),
+        mentions=[Principal.contact(survivor)],
+    )
+    await post(
+        uow,
+        channel_id=folded.channel_id,
+        line=NewLine(sender=Sender.member(owner), text="folded, later"),
+    )
+    assert named is not None
+    # The owner read the kept channel to its end (2), the folded one only
+    # its first line (1 of 2).
+    await db_session.execute(
+        text(
+            "UPDATE channel_read_state SET last_read_seq = CASE channel_id"
+            " WHEN :kept THEN 2 ELSE 1 END WHERE user_id = :owner"
+        ),
+        {"kept": kept.channel_id, "owner": owner},
+    )
+    await _merge(db_session, merged=merged, into=survivor)
+    await db_session.commit()
+
+    await _fold(uow, pod_id, merged=merged, survivor=survivor)
+    await db_session.commit()
+
+    db_session.expire_all()
+    assert await _timeline(db_session, kept.channel_id) == [
+        (1, "hello from 5555001"),
+        (2, "hello from 5555002"),
+        (3, "kept, later"),
+        (4, "folded, later"),
+    ]
+    mention = await db_session.scalar(
+        select(ChannelMentionModel).where(ChannelMentionModel.message_id == named.id)
+    )
+    assert mention is not None and (mention.channel_id, mention.seq) == (
+        kept.channel_id,
+        3,
+    )
+    read = await db_session.scalar(
+        text(
+            "SELECT last_read_seq FROM channel_read_state"
+            " WHERE user_id = :owner AND channel_id = :kept"
+        ),
+        {"owner": owner, "kept": kept.channel_id},
+    )
+    # Read through "kept, later" (3); "folded, later" (4) is the first unread.
+    assert read == 3

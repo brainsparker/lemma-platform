@@ -1,37 +1,29 @@
 """Every question a line can ask has something that takes its answer.
 
-A question's ref names its asker by prefix (``tool:``, ``wf:``, ``msg:``), and
-answering looks the asker up by that prefix (``answers_for``). A prefix nobody
-registered is a question whose answer is recorded and acted on by nothing --
-the paused run never resumes, the workflow never moves. So: every module that
-asks a question (``NewQuestion``) is listed here with the ref it asks under,
-and each of those refs finds its asker once the worker's modules are loaded.
-A new asker fails the first test until it is added below, and the second
-until it registers.
+A question names its asker by type (``QuestionAsker``: ``TOOL``,
+``WORKFLOW``, ``MESSAGE``), and answering looks the asker up by it
+(``answers_for``). A type nobody registered is a question whose answer is
+recorded and acted on by nothing -- the paused run never resumes, the
+workflow never moves. So: every module that asks a question
+(``NewQuestion``) is listed here with the asker it asks as, and each finds its
+answerer once the worker's modules are loaded. A new asker fails the first
+test until it is added below, and the second until it registers.
 """
 
 from __future__ import annotations
 
 import ast
-from collections.abc import Callable
 from pathlib import Path
-from uuid import uuid4
 
-from app.modules.agent.domain.asked_questions import message_ref
-from app.modules.agent.services.pause_questions import tool_ref
-from app.modules.workflow.infrastructure.form_questions import form_ref
+from app.modules.channels.domain.entities import QuestionAsker
 
 APP = Path(__file__).resolve().parents[4]
 
-#: Each module that asks, and a ref of the kind it asks under.
-ASKERS: dict[str, Callable[[], str]] = {
-    "modules/agent/services/pause_questions.py": lambda: tool_ref(uuid4(), "call"),
-    "modules/agent/tools/messaging/pydantic_adapter.py": lambda: message_ref(
-        uuid4(), "call"
-    ),
-    "modules/workflow/infrastructure/form_questions.py": lambda: form_ref(
-        uuid4(), "node", uuid4()
-    ),
+#: Each module that asks, and what it asks as.
+ASKERS: dict[str, QuestionAsker] = {
+    "modules/agent/services/pause_questions.py": QuestionAsker.TOOL,
+    "modules/agent/tools/messaging/pydantic_adapter.py": QuestionAsker.MESSAGE,
+    "modules/workflow/infrastructure/form_questions.py": QuestionAsker.WORKFLOW,
 }
 
 
@@ -54,15 +46,13 @@ def test_every_module_that_asks_a_question_is_listed() -> None:
     assert asking == set(ASKERS)
 
 
-def test_every_ref_asked_under_has_a_registered_asker() -> None:
-    from app.modules.channels.services.questions import answerer, registered_askers
+def test_every_asker_has_a_registered_answerer() -> None:
+    from app.modules.channels.services.questions import registered_askers
     from app.worker import register_worker_modules
 
     register_worker_modules()
 
-    for module, ref_of in ASKERS.items():
-        ref = ref_of()
-        assert answerer(ref) is not None, f"{module} asks {ref!r}: nothing answers it"
-    assert {ref_of().partition(":")[0] for ref_of in ASKERS.values()} <= (
-        registered_askers()
-    )
+    registered = registered_askers()
+    for module, kind in ASKERS.items():
+        assert kind in registered, f"{module} asks as {kind}: nothing answers it"
+    assert set(ASKERS.values()) == set(QuestionAsker)

@@ -34,21 +34,20 @@ from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.infrastructure.repositories.conversation_repository import (
     ConversationRepository,
 )
-from app.modules.agent.services.pause_questions import parse_tool_ref
 from app.modules.agent.services.service_factories import build_conversation_service
 
 logger = get_logger(__name__)
 
 
 async def expire_pause(
-    uow_factory: UnitOfWorkFactory, *, pod_id: UUID, ref: str
+    uow_factory: UnitOfWorkFactory,
+    *,
+    pod_id: UUID,
+    conversation_id: UUID,
+    tool_call_id: str,
 ) -> bool:
-    """Resolve the pause a question named ``ref`` showed as nobody answering it.
-    False when there is nothing to resolve."""
-    parsed = parse_tool_ref(ref)
-    if parsed is None:
-        return False
-    conversation_id, tool_call_id = parsed
+    """Resolve the pause on ``tool_call_id`` in the conversation as nobody
+    answering it. False when there is nothing to resolve."""
     async with uow_factory() as uow:
         conversation = await ConversationRepository(uow).get_conversation(
             conversation_id, include_runs=False

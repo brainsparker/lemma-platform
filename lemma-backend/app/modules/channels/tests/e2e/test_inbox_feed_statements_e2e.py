@@ -96,8 +96,9 @@ async def _groups(db_session, pod: Pod, readers: Sequence[UUID]) -> list[UUID]:
     await db_session.execute(
         text("""
         INSERT INTO channel_members
-          (id, channel_id, pod_id, user_id, role, notify, created_at, updated_at)
-        SELECT gen_random_uuid(), c, :pod, u, 'member', 'ALL', now(), now()
+          (id, channel_id, pod_id, user_id, role, notify, seated_by,
+           created_at, updated_at)
+        SELECT gen_random_uuid(), c, :pod, u, 'member', 'ALL', 'JOINED', now(), now()
         FROM unnest(CAST(:ids AS uuid[])) c, unnest(CAST(:readers AS uuid[])) u
         """),
         {"pod": pod_id, "ids": ids, "readers": list(readers)},
@@ -116,13 +117,18 @@ async def _say_in(db_session, channel_ids: Sequence[UUID], *, writer: UUID) -> N
           SET last_seq = last_seq + 1, last_rev = last_rev + 1, last_line_at = now()
           WHERE id = ANY(CAST(:ids AS uuid[]))
           RETURNING id, pod_id, last_seq, last_rev
+        ), line AS (
+          INSERT INTO channel_messages
+            (id, channel_id, pod_id, seq, sender_kind, sender_user_id, body,
+             created_at, updated_at)
+          SELECT gen_random_uuid(), id, pod_id, last_seq, 'MEMBER', :writer,
+                 'news ' || last_seq, now(), now()
+          FROM moved
+          RETURNING id, channel_id, pod_id
         )
-        INSERT INTO channel_messages
-          (id, channel_id, pod_id, seq, sender_kind, sender_user_id, body, rev,
-           created_at, updated_at)
-        SELECT gen_random_uuid(), id, pod_id, last_seq, 'MEMBER', :writer,
-               'news ' || last_seq, last_rev, now(), now()
-        FROM moved
+        INSERT INTO channel_changes (channel_id, rev, message_id, pod_id)
+        SELECT line.channel_id, moved.last_rev, line.id, line.pod_id
+        FROM line JOIN moved ON moved.id = line.channel_id
         """),
         {"ids": list(channel_ids), "writer": writer},
     )

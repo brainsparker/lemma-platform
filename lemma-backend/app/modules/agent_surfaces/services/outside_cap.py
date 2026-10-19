@@ -21,7 +21,7 @@ A member can also answer a contact by hand, whatever the cap
 (``contact_hold``): while the contact's channel has its agents off, or a member
 has stepped in there, no run starts for them either -- and they are not told
 "a person will reply" here, since one is, or has chosen to. With the agents
-off the pod's own acknowledgement may be said instead, once per open period
+off the pod's own acknowledgement may be said instead, once per wait
 (``contact_acknowledgement``).
 
 Used by every place a run for somebody outside the pod starts: the chat and

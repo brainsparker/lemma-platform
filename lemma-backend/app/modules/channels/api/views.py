@@ -25,13 +25,15 @@ from app.modules.channels.api.schemas import (
     ChannelMemberResponse,
     ChannelResponse,
     LinePreview,
-    Names as NameMap,
     channel_people,
     channel_response,
     member_response,
     my_membership,
     ref,
     source_response,
+)
+from app.modules.channels.api.schemas import (
+    Names as NameMap,
 )
 from app.modules.channels.domain.entities import (
     Channel,

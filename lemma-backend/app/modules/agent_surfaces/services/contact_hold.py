@@ -1,11 +1,12 @@
 """Whether a member, not an agent, answers a contact now.
 
-Two ways, both on the contact's channel (``channels``):
+Two ways, both on the contact's channel (``channels``) and its current case:
 
 * **The channel's agents are off** (``agents_answer``). An operator answering
   leads by hand turns them off; nothing answers the contact but a member
   until somebody turns them back on.
-* **A member stepped in** by writing to the contact: they are its assignee.
+* **A member stepped in** by writing to the contact: they are its case's
+  assignee.
   Their agent stays quiet while the member is in the conversation. An
   assignee who has not written in ``hand_back_after_hours`` -- counted from
   being assigned, until they first write -- has let go: the

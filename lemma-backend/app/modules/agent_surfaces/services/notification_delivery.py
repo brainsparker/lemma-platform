@@ -84,7 +84,7 @@ class Delivered:
     #: Nothing took it because a platform failed, not because nothing could:
     #: worth trying again.
     retryable: bool = False
-    #: Held back by the hourly budget, for a digest (``push_digests``).
+    #: Held back by the hourly budget: its lines go with the next push.
     held: bool = False
 
     @property

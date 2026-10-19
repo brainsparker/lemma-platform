@@ -62,7 +62,7 @@
   {
     "tool_name": "ask_a_person",
     "toolset": "MESSAGING",
-    "description": "Call a person from the pod into this conversation.\n\nFor when the person you are answering needs something only a member can\ngive. Their channel is flagged as waiting on a person, and the member who\nlooks after them is told; they will step in and reply here themselves.\nTell the person someone will get back to them -- do not promise when.",
+    "description": "Call a person from the pod into this conversation.\n\nFor when the person you are answering needs something only a member can\ngive. The member who looks after them is told, and -- when you are\nanswering them in their own channel -- it is flagged as waiting on a\nperson; the member will step in and reply here themselves.\nTell the person someone will get back to them -- do not promise when.",
     "input_schema": {
       "properties": {
         "reason": {

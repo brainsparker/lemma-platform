@@ -25,6 +25,8 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent_surfaces.domain.place_privacy import PlaceFacts
 from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.line_changes import ParsedLineChange
+from app.modules.agent_surfaces.platforms.slack.line_changes import slack_line_changes
 from app.modules.agent_surfaces.platforms.slack.group_updates import (
     slack_group_updates,
 )
@@ -199,6 +201,9 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         self, payload: dict[str, object]
     ) -> list[ParsedGroupUpdate]:
         return slack_group_updates(payload)
+
+    def parse_line_changes(self, payload: dict[str, object]) -> list[ParsedLineChange]:
+        return slack_line_changes(payload, self.parser)
 
     async def parse_inbound_lifecycle(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None

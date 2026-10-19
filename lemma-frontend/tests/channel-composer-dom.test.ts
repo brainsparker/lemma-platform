@@ -80,8 +80,8 @@ const channel = {
     id: "c1", kind: "GROUP", title: "launch", topic: null, person: null, visibility: "PUBLIC", sources: [], assignee: null,
     agentsAnswer: true, handBackAfterHours: 12, status: null, attention: null, archived: false, joined: true, lastLine: null,
     lastMessageAt: null, lastSeq: 8, createdAt: "", unread: { lines: 0, mentions: 0, waiting: 0, readSeq: 8 },
-    places: [{ id: "s-slack", platform: "SLACK", kind: "SHARED", title: "#launch", surfaceId: null, pending: false, lastInboundAt: null },
-        { id: "s-wa", platform: "WHATSAPP", kind: "SHARED", title: null, surfaceId: null, pending: false, lastInboundAt: null }],
+    places: [{ id: "s-slack", platform: "SLACK", kind: "CHAT", title: "#launch", surfaceId: null, pending: false, lastInboundAt: null },
+        { id: "s-wa", platform: "WHATSAPP", kind: "CHAT", title: null, surfaceId: null, pending: false, lastInboundAt: null }],
     members: [], me: { joined: true, notify: "ALL", notifyVia: null, mutedUntil: null, readSeq: 8, role: "owner", canManage: true },
 };
 

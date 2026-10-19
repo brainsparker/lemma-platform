@@ -5,6 +5,13 @@ member's ``last_read_seq``. Only channels the member is in count lines --
 a public group they never joined does not -- and every count is filtered by
 what they may see, so a channel they cannot open never shows a badge.
 Counts stop at ``UNREAD_CAP``; the app shows "99+" past it.
+
+Unread mentions are counted from the member's own places in the pod -- the
+channels they sit in, and those they have a read number in (somebody named
+where they are not seated is given one: ``mentions.sync_mentions``) -- each
+read as one short range of ``ix_channel_mentions_user`` past their read
+number. What they have read is never visited, and a deleted line's mentions
+went with it, so no line is read to count them.
 """
 
 from __future__ import annotations
@@ -13,21 +20,33 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import BigInteger, Uuid, and_, column, func, select, true, values
+from sqlalchemy import (
+    BigInteger,
+    Subquery,
+    Uuid,
+    and_,
+    column,
+    func,
+    literal,
+    select,
+    true,
+    union,
+    values,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.modules.channels.domain.access import Viewer
 from app.modules.channels.domain.entities import Channel, NotifyLevel
 from app.modules.channels.infrastructure.access import visible_to
-from app.modules.channels.infrastructure.questions import still_waiting
 from app.modules.channels.infrastructure.models import (
     ChannelMemberModel,
     ChannelMentionModel,
-    ChannelMessageModel,
     ChannelModel,
     ChannelQuestionModel,
     ChannelReadStateModel,
 )
+from app.modules.channels.infrastructure.questions import still_waiting
 
 #: Where unread counting stops; the app shows "99+" past it.
 UNREAD_CAP = 100
@@ -119,13 +138,11 @@ class InboxReads:
         ).data([(channel_id, read.get(channel_id, 0)) for channel_id in ids])
         unread = (
             select(mention.id)
-            .join(ChannelMessageModel, ChannelMessageModel.id == mention.message_id)
             .where(
                 mention.user_id == viewer.user_id,
                 mention.pod_id == viewer.pod_id,
                 mention.channel_id == page.c.channel_id,
                 mention.seq > page.c.read_seq,
-                ChannelMessageModel.deleted_at.is_(None),
             )
             .limit(UNREAD_CAP)
             .lateral("unread")
@@ -146,6 +163,7 @@ class InboxReads:
             select(q.channel_id, func.count())
             .where(
                 q.awaits_user_id == viewer.user_id,
+                q.pod_id == viewer.pod_id,
                 q.channel_id.in_(ids),
                 still_waiting(),
             )
@@ -177,25 +195,9 @@ class InboxReads:
                 channel.last_seq > func.coalesce(state.last_read_seq, 0),
             )
         )
-        mention = ChannelMentionModel
         unread_mentions = await self.session.scalar(
-            select(func.count())
-            .select_from(mention)
-            .join(channel, channel.id == mention.channel_id)
-            .join(ChannelMessageModel, ChannelMessageModel.id == mention.message_id)
-            .outerjoin(
-                state,
-                and_(
-                    state.channel_id == mention.channel_id,
-                    state.user_id == viewer.user_id,
-                ),
-            )
-            .where(
-                mention.user_id == viewer.user_id,
-                visible_to(viewer),
-                channel.archived_at.is_(None),
-                ChannelMessageModel.deleted_at.is_(None),
-                mention.seq > func.coalesce(state.last_read_seq, 0),
+            select(func.count()).select_from(
+                self._unread_mentions(viewer, limit=UNREAD_CAP)
             )
         )
         q = ChannelQuestionModel
@@ -205,6 +207,7 @@ class InboxReads:
             .join(channel, channel.id == q.channel_id)
             .where(
                 q.awaits_user_id == viewer.user_id,
+                q.pod_id == viewer.pod_id,
                 still_waiting(),
                 visible_to(viewer),
             )
@@ -219,27 +222,59 @@ class InboxReads:
         self, viewer: Viewer, *, limit: int
     ) -> list[tuple[UUID, UUID]]:
         """Unread mentions of the member, newest first: (channel, line)."""
-        mention = ChannelMentionModel
-        state = ChannelReadStateModel
+        size = max(1, min(limit, UNREAD_CAP))
+        newest = self._unread_mentions(viewer, limit=size, newest_first=True)
         rows = await self.session.execute(
-            select(mention.channel_id, mention.message_id)
-            .join(ChannelModel, ChannelModel.id == mention.channel_id)
-            .join(ChannelMessageModel, ChannelMessageModel.id == mention.message_id)
-            .outerjoin(
-                state,
-                and_(
-                    state.channel_id == mention.channel_id,
-                    state.user_id == viewer.user_id,
-                ),
-            )
-            .where(
-                mention.user_id == viewer.user_id,
-                visible_to(viewer),
-                ChannelModel.archived_at.is_(None),
-                ChannelMessageModel.deleted_at.is_(None),
-                mention.seq > func.coalesce(state.last_read_seq, 0),
-            )
-            .order_by(mention.created_at.desc())
-            .limit(max(1, min(limit, UNREAD_CAP)))
+            select(newest.c.channel_id, newest.c.message_id)
+            .order_by(newest.c.created_at.desc())
+            .limit(size)
         )
         return [(row[0], row[1]) for row in rows]
+
+    def _unread_mentions(
+        self, viewer: Viewer, *, limit: int, newest_first: bool = False
+    ) -> Subquery:
+        """Up to ``limit`` unread mentions of the member, per place: each of
+        their places, in a channel they may see and not archived, read as one
+        range of the mention index past their read number."""
+        mention = ChannelMentionModel
+        places = _places_of(viewer)
+        read = aliased(ChannelReadStateModel, name="read")
+        unread = select(
+            mention.channel_id, mention.message_id, mention.created_at
+        ).where(
+            mention.user_id == viewer.user_id,
+            mention.pod_id == viewer.pod_id,
+            mention.channel_id == places.c.id,
+            mention.seq > func.coalesce(read.last_read_seq, literal(0)),
+        )
+        if newest_first:
+            unread = unread.order_by(mention.seq.desc())
+        lateral = unread.limit(limit).lateral("unread")
+        return (
+            select(lateral.c.channel_id, lateral.c.message_id, lateral.c.created_at)
+            .select_from(places)
+            .join(ChannelModel, ChannelModel.id == places.c.id)
+            .outerjoin(
+                read,
+                and_(read.user_id == viewer.user_id, read.channel_id == places.c.id),
+            )
+            .join(lateral, true())
+            .where(visible_to(viewer), ChannelModel.archived_at.is_(None))
+            .limit(limit)
+            .subquery("unread_mentions")
+        )
+
+
+def _places_of(viewer: Viewer) -> Subquery:
+    """The channels of the pod the member has a place in: a seat, or a read
+    number."""
+    seat, state = ChannelMemberModel, ChannelReadStateModel
+    return union(
+        select(seat.channel_id.label("id")).where(
+            seat.user_id == viewer.user_id, seat.pod_id == viewer.pod_id
+        ),
+        select(state.channel_id.label("id")).where(
+            state.user_id == viewer.user_id, state.pod_id == viewer.pod_id
+        ),
+    ).subquery("places")

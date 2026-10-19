@@ -24,7 +24,7 @@ from app.modules.agent_surfaces.tests.e2e.surface_work_support import direct_lin
 from app.modules.agent_surfaces.tests.e2e.test_contact_care_e2e import (
     _contact_writes_on,
 )
-from app.modules.channels.infrastructure.models import ChannelModel
+from app.modules.channels.infrastructure.models import ChannelCaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -71,8 +71,8 @@ async def test_an_assigned_member_holds_the_contact_until_the_window_passes(
 
     # Assigned three hours ago, and silent since: past the window.
     await db_session.execute(
-        update(ChannelModel)
-        .where(ChannelModel.id == channel_id)
+        update(ChannelCaseModel)
+        .where(ChannelCaseModel.channel_id == channel_id)
         .values(assigned_at=datetime.now(timezone.utc) - timedelta(hours=3))
     )
     await db_session.commit()
@@ -109,8 +109,8 @@ async def test_two_messages_arriving_together_hand_back_once(
     )
     assert assigned.status_code == 200, assigned.text
     await db_session.execute(
-        update(ChannelModel)
-        .where(ChannelModel.id == channel_id)
+        update(ChannelCaseModel)
+        .where(ChannelCaseModel.channel_id == channel_id)
         .values(assigned_at=datetime.now(timezone.utc) - timedelta(hours=3))
     )
     await db_session.commit()

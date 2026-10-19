@@ -1,4 +1,11 @@
-"""Who is in a channel -- members, contacts, agents -- and how far members read."""
+"""Who is in a channel -- members, contacts, agents -- and how far members read.
+
+Every seat says why it was taken (``SeatedBy``), and a stronger reason
+replaces a weaker one when the person is seated again: the platform showing
+them there, then their speaking in Lemma, then anything the pod chose -- a
+member adding them, their joining, their making it. Only a seat the platform
+alone accounts for is the platform's to take back (``remove_platform_seat``).
+"""
 
 from __future__ import annotations
 
@@ -6,12 +13,22 @@ from collections.abc import Collection
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, func, literal, select, tuple_, update
+from sqlalchemy import (
+    ColumnElement,
+    case,
+    delete,
+    func,
+    literal,
+    literal_column,
+    select,
+    tuple_,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.live.signals import signal_after_commit
-
 from app.modules.channels.domain.entities import (
     AgentAnswers,
     Channel,
@@ -19,6 +36,7 @@ from app.modules.channels.domain.entities import (
     MemberRole,
     NotifyLevel,
     Principal,
+    SeatedBy,
 )
 from app.modules.channels.infrastructure.models import (
     ChannelMemberModel,
@@ -35,6 +53,24 @@ from app.modules.channels.infrastructure.rows import MAX_LINES, member_entity, n
 #: The most members one channel lists at once.
 MAX_MEMBERS = 500
 
+#: How much a reason to be seated says: a seat is re-seated only by a
+#: stronger one. Equal at the top -- each is the pod's own choice.
+_STRENGTH = {
+    SeatedBy.PLATFORM: 0,
+    SeatedBy.SPOKE: 1,
+    SeatedBy.ADDED: 2,
+    SeatedBy.JOINED: 2,
+    SeatedBy.CREATOR: 2,
+}
+
+
+def _strength(
+    column: ColumnElement[str] | InstrumentedAttribute[str],
+) -> ColumnElement[int]:
+    return case(
+        {reason.value: rank for reason, rank in _STRENGTH.items()}, value=column
+    )
+
 
 class MemberRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -45,29 +81,61 @@ class MemberRepository:
         channel: Channel,
         principal: Principal,
         *,
+        seated_by: SeatedBy,
         role: MemberRole | None = None,
         added_by_user_id: UUID | None = None,
-    ) -> None:
-        """Put a member or a contact in the channel; nothing if already in it."""
-        seated = await self.session.execute(
-            insert(ChannelMemberModel)
-            .values(
-                channel_id=channel.id,
-                pod_id=channel.pod_id,
-                user_id=principal.user_id,
-                contact_id=principal.contact_id,
-                role=(
-                    role
-                    or (MemberRole.GUEST if principal.is_contact else MemberRole.MEMBER)
-                ).value,
-                notify=NotifyLevel.default_in(channel.kind).value,
-                added_by_user_id=added_by_user_id,
+        spoke: tuple[datetime, str | None] | None = None,
+    ) -> bool:
+        """Put a member or a contact in the channel, for ``seated_by``. Already
+        in it, the seat keeps its role and takes the stronger reason; ``spoke``
+        (when, and the name they spoke under) is noted either way. ``True``
+        only for a seat made now."""
+        seat = ChannelMemberModel
+        values: dict[str, object] = {
+            "channel_id": channel.id,
+            "pod_id": channel.pod_id,
+            "user_id": principal.user_id,
+            "contact_id": principal.contact_id,
+            "role": (
+                role
+                or (MemberRole.GUEST if principal.is_contact else MemberRole.MEMBER)
+            ).value,
+            "notify": NotifyLevel.default_in(channel.kind).value,
+            "added_by_user_id": added_by_user_id,
+            "seated_by": seated_by.value,
+        }
+        if spoke is not None:
+            values["last_spoke_at"], values["last_name"] = spoke
+        statement = insert(seat).values(**values)
+        stronger = _strength(statement.excluded.seated_by) > _strength(seat.seated_by)
+        again: dict[str, object] = {
+            "seated_by": case(
+                (stronger, statement.excluded.seated_by), else_=seat.seated_by
+            ),
+            "added_by_user_id": case(
+                (stronger, statement.excluded.added_by_user_id),
+                else_=seat.added_by_user_id,
+            ),
+        }
+        if spoke is not None:
+            again["last_spoke_at"] = func.greatest(
+                seat.last_spoke_at, statement.excluded.last_spoke_at
             )
-            .on_conflict_do_nothing()
-            .returning(ChannelMemberModel.id)
+            again["last_name"] = func.coalesce(
+                statement.excluded.last_name, seat.last_name
+            )
+        column = seat.user_id if principal.user_id is not None else seat.contact_id
+        seated = await self.session.execute(
+            statement.on_conflict_do_update(
+                index_elements=[seat.channel_id, column],
+                index_where=column.is_not(None),
+                set_=again,
+            ).returning(literal_column("xmax = 0"))
         )
-        if seated.first() is not None:
+        made = bool(seated.scalar_one())
+        if made:
             await touch_channel(self.session, channel.id)
+        return made
 
     async def add_agent(
         self,
@@ -75,9 +143,12 @@ class MemberRepository:
         agent_id: UUID,
         *,
         answers: AgentAnswers,
+        seated_by: SeatedBy = SeatedBy.ADDED,
         added_by_user_id: UUID | None = None,
     ) -> None:
-        """Put an agent in the channel, or change when it answers there."""
+        """Put an agent in the channel, or change when it answers there.
+        Agents are only ever put in a channel by somebody (``ADDED``) or with
+        it (``CREATOR``)."""
         await touch_channel(self.session, channel.id)
         await self.session.execute(
             insert(ChannelMemberModel)
@@ -88,6 +159,7 @@ class MemberRepository:
                 role=MemberRole.MEMBER.value,
                 answers=answers.value,
                 added_by_user_id=added_by_user_id,
+                seated_by=seated_by.value,
             )
             .on_conflict_do_update(
                 index_elements=["channel_id", "agent_id"],
@@ -249,16 +321,32 @@ class MemberRepository:
         )
         return [member_entity(row) for row in rows]
 
-    async def people_to_tell(self, channel_id: UUID) -> list[Member]:
-        """The members of the pod in the channel who hear of its lines at all."""
-        rows = await self.session.scalars(
-            select(ChannelMemberModel)
-            .where(
-                ChannelMemberModel.channel_id == channel_id,
-                ChannelMemberModel.user_id.is_not(None),
-                ChannelMemberModel.notify != NotifyLevel.NONE.value,
+    async def people_to_tell(
+        self,
+        channel_id: UUID,
+        *,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int = MAX_MEMBERS,
+    ) -> list[Member]:
+        """One page of the members of the pod in the channel who hear of its
+        lines at all, in the order they joined, from ``after`` (a seat's
+        ``joined_at`` and ``seat_id``) -- along ``ix_channel_members_channel``."""
+        seat = ChannelMemberModel
+        statement = select(seat).where(
+            seat.channel_id == channel_id,
+            seat.user_id.is_not(None),
+            seat.notify != NotifyLevel.NONE.value,
+        )
+        if after is not None:
+            joined, seat_id = after
+            statement = statement.where(
+                tuple_(seat.created_at, seat.id)
+                > tuple_(literal(joined), literal(seat_id))
             )
-            .limit(MAX_MEMBERS)
+        rows = await self.session.scalars(
+            statement.order_by(seat.created_at, seat.id).limit(
+                max(1, min(limit, MAX_MEMBERS))
+            )
         )
         return [member_entity(row) for row in rows]
 
@@ -283,9 +371,15 @@ class MemberRepository:
         state = ChannelReadStateModel
         top = select(ChannelModel.last_seq).where(ChannelModel.id == channel_id)
         upto = func.least(seq, top.scalar_subquery())
+        pod = select(ChannelModel.pod_id).where(ChannelModel.id == channel_id)
         statement = (
             insert(state)
-            .values(channel_id=channel_id, user_id=user_id, last_read_seq=upto)
+            .values(
+                channel_id=channel_id,
+                pod_id=pod.scalar_subquery(),
+                user_id=user_id,
+                last_read_seq=upto,
+            )
             .on_conflict_do_update(
                 index_elements=["user_id", "channel_id"],
                 set_={
@@ -331,9 +425,10 @@ class MemberRepository:
         self, channel_id: UUID, principal: Principal
     ) -> bool:
         """Take out a person the platform says left the place this channel
-        mirrors -- when the platform is what put them here (nobody in Lemma
-        added them, ``added_by_user_id`` empty). Somebody a member added, or an
-        admin who joined on request, is the pod's choice and stays."""
+        mirrors -- when the platform alone is what put them here (a
+        ``PLATFORM`` seat). Somebody who spoke here in Lemma, a member added,
+        or who joined -- an admin on request -- is the pod's choice and stays,
+        whoever added them and whether or not that member is still here."""
         member = ChannelMemberModel
         who = (
             member.user_id == principal.user_id
@@ -344,7 +439,7 @@ class MemberRepository:
             select(member.id).where(
                 member.channel_id == channel_id,
                 who,
-                member.added_by_user_id.is_(None),
+                member.seated_by == SeatedBy.PLATFORM.value,
             )
         )
         if seated is None:

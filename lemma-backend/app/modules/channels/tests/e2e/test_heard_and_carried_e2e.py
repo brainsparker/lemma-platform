@@ -37,6 +37,7 @@ from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.lifecycle_helpers import runs
 from app.modules.channels.contracts import (
+    AccountKey,
     AgentAnswers,
     ContactsHome,
     GroupHome,
@@ -52,6 +53,7 @@ from app.modules.channels.contracts import (
 from app.modules.channels.contracts.deliveries import deliveries_of
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.models import (
+    ChannelLineAnswerModel,
     ChannelMessageModel,
     ChannelSourceModel,
 )
@@ -75,8 +77,8 @@ async def _mirrored_group(db_session: AsyncSession, pod: Pod) -> Source:
         place=Place(
             surface_id=None,
             platform="TELEGRAM",
-            account_key="bot-carried",
-            kind=SourceKind.SHARED,
+            account=AccountKey(workspace="bot-carried"),
+            kind=SourceKind.CHAT,
             external_channel_id="-200",
             external_user_id=None,
             title="Partners",
@@ -124,8 +126,8 @@ async def _whatsapp_contact(pod: Pod, *, heard_ago: timedelta) -> Source:
             place=Place(
                 surface_id=None,
                 platform="WHATSAPP",
-                account_key="number:+15550002222",
-                kind=SourceKind.PRIVATE,
+                account=AccountKey(workspace="number:+15550002222"),
+                kind=SourceKind.PERSON,
                 external_channel_id=None,
                 external_user_id=PHONE.lstrip("+"),
             ),
@@ -152,6 +154,16 @@ async def _line(message_id: str | UUID) -> ChannelMessageModel:
         row = await session.get(ChannelMessageModel, UUID(str(message_id)))
     assert row is not None
     return row
+
+
+async def _answering(message_id: str | UUID) -> UUID | None:
+    """The conversation an agent answers the line in, if one does."""
+    async with async_session_maker() as session:
+        return await session.scalar(
+            select(ChannelLineAnswerModel.conversation_id).where(
+                ChannelLineAnswerModel.message_id == UUID(str(message_id))
+            )
+        )
 
 
 async def _last_inbound(source_id: UUID) -> datetime | None:
@@ -254,7 +266,7 @@ async def test_an_agent_answer_to_a_carried_group_line_follows_it_to_the_place(
     assert said.status_code == 201, said.text
     await _drain(WorkClass.INTERACTIVE)
 
-    conversation_id = (await _line(said.json()["id"])).conversation_id
+    conversation_id = await _answering(said.json()["id"])
     assert conversation_id is not None, "no agent answers a line written in Lemma"
     [run] = await runs(conversation_id)
     async with create_uow_from_session_maker(async_session_maker) as uow:
@@ -310,4 +322,4 @@ async def test_an_agent_answering_every_line_answers_one_carried_to_a_group(
     assert said.status_code == 201, said.text
     await _drain(WorkClass.INTERACTIVE)
 
-    assert (await _line(said.json()["id"])).conversation_id is not None
+    assert await _answering(said.json()["id"]) is not None

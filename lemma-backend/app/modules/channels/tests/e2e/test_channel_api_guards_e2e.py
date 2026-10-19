@@ -141,22 +141,40 @@ async def test_a_line_hangs_only_from_threads_and_places_of_its_own_channel(
     elsewhere = await say(pod, there["id"], "a thread over there")
     contacts_place, _ = await contact_place(db_session, pod)
 
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        owner = Sender.member(UUID(pod.owner["id"]))
-        with pytest.raises(LineMisplaced):
-            await post(
-                uow,
-                channel_id=UUID(here["id"]),
-                line=NewLine(
-                    sender=owner,
-                    text="replying across channels",
-                    thread_root_id=UUID(elsewhere["id"]),
-                ),
-            )
-        with pytest.raises(LineMisplaced):
-            await post(
-                uow,
-                channel_id=UUID(here["id"]),
-                line=NewLine(sender=owner, text="to somebody else's contact"),
-                deliver_to=[contacts_place.id],
-            )
+    owner = Sender.member(UUID(pod.owner["id"]))
+    # Each refused in a transaction of its own: the database refuses a thread
+    # or a place of another channel (the lines' composite foreign keys), and
+    # the transaction it refused is over.
+    misplaced = [
+        (
+            NewLine(
+                sender=owner,
+                text="replying across channels",
+                thread_root_id=UUID(elsewhere["id"]),
+            ),
+            (),
+        ),
+        (
+            NewLine(
+                sender=owner,
+                text="answering in reply to a line over there",
+                reply_to_id=UUID(elsewhere["id"]),
+            ),
+            (),
+        ),
+        (
+            NewLine(sender=owner, text="heard elsewhere", source_id=contacts_place.id),
+            (),
+        ),
+        (NewLine(sender=owner, text="to somebody else's contact"), [contacts_place.id]),
+    ]
+    for line, deliver_to in misplaced:
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            with pytest.raises(LineMisplaced):
+                await post(
+                    uow,
+                    channel_id=UUID(here["id"]),
+                    line=line,
+                    deliver_to=deliver_to,
+                )
+            await uow.rollback()

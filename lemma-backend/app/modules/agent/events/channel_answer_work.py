@@ -119,6 +119,7 @@ async def post_reply(ctx: FastContext, payload: ChannelReplyPayload) -> None:
         run_id=payload.run_id,
         conversation_id=payload.conversation_id,
         answered=ended_with_an_answer(payload.status, payload.conversation_status),
+        paused=payload.conversation_status == "WAITING",
     )
 
 

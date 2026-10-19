@@ -69,7 +69,7 @@ export interface Channel {
 export interface SourcePlace {
     id: string;
     platform: string;
-    kind: "PRIVATE" | "SHARED";
+    kind: "PERSON" | "CHAT";
     title: string | null;
     surfaceId: string | null;
     pending: boolean;
@@ -287,7 +287,7 @@ export function readChannelDetail(raw: unknown): ChannelDetail | null {
             return [{
                 id,
                 platform: (words(place.platform) ?? "").toUpperCase(),
-                kind: place.kind === "SHARED" ? "SHARED" as const : "PRIVATE" as const,
+                kind: place.kind === "CHAT" ? "CHAT" as const : "PERSON" as const,
                 title: words(place.title),
                 surfaceId: words(place.surface_id),
                 pending: place.pending === true,

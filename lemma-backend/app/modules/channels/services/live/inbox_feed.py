@@ -28,10 +28,10 @@ from collections.abc import Callable, Collection, Mapping
 from datetime import datetime
 from uuid import UUID
 
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.live.protocol import ResyncReason, UnsubscribedReason
 from sqlalchemy import select
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.live.protocol import ResyncReason, UnsubscribedReason
 from app.modules.channels.api.access import Caller
 from app.modules.channels.domain.access import may_see
 from app.modules.channels.domain.entities import Channel

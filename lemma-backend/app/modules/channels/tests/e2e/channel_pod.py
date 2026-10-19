@@ -7,13 +7,15 @@ manages channels), a user (writes in channels, sees no contacts) and a viewer
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.contracts import (
+    AccountKey,
+    Asker,
     ContactsHome,
     NewLine,
     Place,
@@ -103,8 +105,8 @@ async def contact_place(db_session: AsyncSession, pod: Pod) -> tuple[Source, UUI
         place=Place(
             surface_id=None,
             platform="TELEGRAM",
-            account_key="bot-1",
-            kind=SourceKind.PRIVATE,
+            account=AccountKey(workspace="bot-1"),
+            kind=SourceKind.PERSON,
             external_channel_id=None,
             external_user_id="5550001",
         ),
@@ -121,3 +123,19 @@ async def contact_place(db_session: AsyncSession, pod: Pod) -> tuple[Source, UUI
     )
     await db_session.commit()
     return source, contact.id
+
+
+async def an_asker(pod_id: UUID, user_id: UUID) -> Asker:
+    """What asks a test's question: a conversation of the pod's, made (and
+    committed) for it -- the asker a question names must exist, or the
+    sweeper cancels it as orphaned."""
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.modules.agent.infrastructure.models.conversation import (
+        ConversationModel,
+    )
+
+    async with async_session_maker() as session:
+        conversation = ConversationModel(user_id=user_id, pod_id=pod_id)
+        session.add(conversation)
+        await session.commit()
+        return Asker.message(conversation.id, uuid4().hex)

@@ -23,7 +23,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
     SurfaceConfig,
 )
-from app.modules.agent_surfaces.domain.external_accounts import account_key_for
+from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
@@ -413,7 +413,7 @@ async def test_prepare_webhook_places_the_message_and_opens_a_conversation_there
     # A channel the bot was mentioned in is a shared place, and the
     # conversation is opened in that place's channel.
     [source] = service.seats.sources.values()
-    assert source.kind is SourceKind.SHARED
+    assert source.kind is SourceKind.CHAT
     assert source.external_channel_id == "19:channel"
     assert context.source_id == source.id
     assert create_kwargs["channel_id"] == source.channel_id
@@ -427,8 +427,8 @@ async def _seated(service, surface, *, user_id, conversation_id, agent_id) -> So
         place=Place(
             surface_id=surface.id,
             platform="SLACK",
-            account_key=account_key_for(surface),
-            kind=SourceKind.PRIVATE,
+            account=account_of(surface),
+            kind=SourceKind.PERSON,
             external_channel_id=None,
             external_user_id="U123",
         ),

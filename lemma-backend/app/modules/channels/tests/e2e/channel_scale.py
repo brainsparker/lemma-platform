@@ -213,7 +213,7 @@ async def _seed_platform(session: AsyncSession) -> None:
     await session.execute(
         text(f"""
         INSERT INTO channel_messages
-          (id, channel_id, pod_id, seq, sender_kind, sender_user_id, body, rev,
+          (id, channel_id, pod_id, seq, sender_kind, sender_user_id, body,
            created_at, updated_at)
         SELECT md5(c.id::text || ':' || s)::uuid, c.id, c.pod_id, s, 'MEMBER',
                md5('platform:user:' || c.p || ':' || s % {_OTHER_SEATS})::uuid,
@@ -221,26 +221,28 @@ async def _seed_platform(session: AsyncSession) -> None:
                  || (ARRAY['alpha','{COMMON_WORD}','charlie','delta',
                            'echo','foxtrot','golf','hotel'])[1 + s % 8]
                  || CASE WHEN s % 50 = 7 THEN ' {RARE_WORD}' ELSE '' END,
-               s, c.last_line_at - ({_OTHER_LINES} - s) * interval '1 second',
+               c.last_line_at - ({_OTHER_LINES} - s) * interval '1 second',
                c.last_line_at - ({_OTHER_LINES} - s) * interval '1 second'
         FROM platform_channels c, generate_series(1, {_OTHER_LINES}) s
         """)
     )
+    await _seed_changes(session, "platform_channels")
     await session.execute(
         text(f"""
         INSERT INTO channel_members
-          (id, channel_id, pod_id, user_id, role, notify, created_at, updated_at)
+          (id, channel_id, pod_id, user_id, role, notify, seated_by,
+           created_at, updated_at)
         SELECT gen_random_uuid(), c.id, c.pod_id,
                md5('platform:user:' || c.p || ':' || k)::uuid, 'member', 'ALL',
-               now(), now()
+               'ADDED', now(), now()
         FROM platform_channels c, generate_series(0, {_OTHER_SEATS} - 1) k
         """)
     )
     await session.execute(
         text(f"""
         INSERT INTO channel_read_state
-          (user_id, channel_id, last_read_seq, updated_at)
-        SELECT md5('platform:user:' || c.p || ':' || k)::uuid, c.id,
+          (user_id, channel_id, pod_id, last_read_seq, updated_at)
+        SELECT md5('platform:user:' || c.p || ':' || k)::uuid, c.id, c.pod_id,
                {_OTHER_LINES} - k, now()
         FROM platform_channels c, generate_series(0, {_OTHER_SEATS} - 1) k
         """)
@@ -258,9 +260,10 @@ async def _seed_platform(session: AsyncSession) -> None:
     await session.execute(
         text("""
         INSERT INTO channel_questions
-          (message_id, channel_id, pod_id, ref, kind, state, question,
-           awaits_user_id, created_at)
-        SELECT m.id, m.channel_id, m.pod_id, 'msg:' || m.id, 'ASK',
+          (message_id, channel_id, pod_id, ref, asker, asker_key, kind, state,
+           question, awaits_user_id, created_at)
+        SELECT m.id, m.channel_id, m.pod_id, 'msg:' || m.id, 'MESSAGE',
+               m.id::text, 'ASK',
                CASE WHEN m.seq = 30 THEN 'OPEN' ELSE 'ANSWERED' END,
                '{"text": "Ship it?"}'::jsonb, m.sender_user_id, m.created_at
         FROM channel_messages m JOIN platform_channels c ON c.id = m.channel_id
@@ -289,7 +292,7 @@ async def _seed_lines(session: AsyncSession, params: dict[str, object]) -> None:
         text(f"""
         INSERT INTO channel_messages
           (id, channel_id, pod_id, seq, sender_kind, sender_user_id,
-           sender_contact_id, body, thread_root_id, rev, created_at, updated_at)
+           sender_contact_id, body, thread_root_id, created_at, updated_at)
         SELECT md5(c.id::text || ':' || s)::uuid, c.id, :pod, s,
                CASE WHEN c.contact_id IS NOT NULL AND s % 2 = 1
                     THEN 'CONTACT' ELSE 'MEMBER' END,
@@ -304,12 +307,33 @@ async def _seed_lines(session: AsyncSession, params: dict[str, object]) -> None:
                       THEN md5(c.id::text || ':' || 1)::uuid
                     WHEN c.n = 1 AND s % 20 = 1 AND s > 1
                       THEN md5(c.id::text || ':' || (s - 1))::uuid END,
-               s,
                c.last_line_at - (c.lines - s) * interval '1 second',
                c.last_line_at - (c.lines - s) * interval '1 second'
         FROM seed_channels c, generate_series(1, c.lines) s
         """),
         params,
+    )
+    await _seed_changes(session, "seed_channels")
+
+
+async def _seed_changes(session: AsyncSession, seeded: str) -> None:
+    """Each seeded line as its channel's change of the same number (the
+    channel's ``last_rev`` is its line count), and its thread's count."""
+    await session.execute(
+        text(f"""
+        INSERT INTO channel_changes (channel_id, rev, message_id, pod_id, at)
+        SELECT m.channel_id, m.seq, m.id, m.pod_id, m.created_at
+        FROM channel_messages m JOIN {seeded} c ON c.id = m.channel_id
+        """)
+    )
+    await session.execute(
+        text(f"""
+        INSERT INTO channel_threads (root_id, channel_id, reply_count, last_reply_at)
+        SELECT m.thread_root_id, m.channel_id, count(*), max(m.created_at)
+        FROM channel_messages m JOIN {seeded} c ON c.id = m.channel_id
+        WHERE m.thread_root_id IS NOT NULL
+        GROUP BY m.thread_root_id, m.channel_id
+        """)
     )
 
 
@@ -323,18 +347,19 @@ async def _seed_seats(
         text("""
         INSERT INTO channel_members
           (id, channel_id, pod_id, user_id, contact_id, role, notify,
-           created_at, updated_at)
+           seated_by, created_at, updated_at)
         SELECT gen_random_uuid(), id, CAST(:pod AS uuid), CAST(:member AS uuid),
                CAST(NULL AS uuid), 'member',
-               CASE WHEN n % 10 = 0 THEN 'NONE' ELSE 'ALL' END, now(), now()
+               CASE WHEN n % 10 = 0 THEN 'NONE' ELSE 'ALL' END, 'JOINED',
+               now(), now()
         FROM seed_channels WHERE joined
         UNION ALL
         SELECT gen_random_uuid(), id, CAST(:pod AS uuid), CAST(:writer AS uuid),
-               NULL, 'owner', 'ALL', now(), now()
+               NULL, 'owner', 'ALL', 'CREATOR', now(), now()
         FROM seed_channels WHERE kind = 'GROUP'
         UNION ALL
         SELECT gen_random_uuid(), id, CAST(:pod AS uuid), NULL, contact_id,
-               'guest', 'ALL', now(), now()
+               'guest', 'ALL', 'CREATOR', now(), now()
         FROM seed_channels WHERE contact_id IS NOT NULL
         """),
         params,
@@ -343,9 +368,10 @@ async def _seed_seats(
         await session.execute(
             text("""
             INSERT INTO channel_members
-              (id, channel_id, pod_id, user_id, role, notify, created_at, updated_at)
+              (id, channel_id, pod_id, user_id, role, notify, seated_by,
+               created_at, updated_at)
             SELECT gen_random_uuid(), id, CAST(:pod AS uuid), CAST(:other AS uuid),
-                   'member', 'ALL', now(), now()
+                   'member', 'ALL', 'ADDED', now(), now()
             FROM seed_channels WHERE kind = 'GROUP' AND n % 2 = 0
             """),
             {**params, "other": other},
@@ -365,8 +391,9 @@ async def _seed_attention(session: AsyncSession, params: dict[str, object]) -> N
     """
     await session.execute(
         text("""
-        INSERT INTO channel_read_state (user_id, channel_id, last_read_seq, updated_at)
-        SELECT :member, id,
+        INSERT INTO channel_read_state
+          (user_id, channel_id, pod_id, last_read_seq, updated_at)
+        SELECT :member, id, :pod,
                CASE WHEN n = 1 THEN lines - 100 ELSE lines - n % 6 END, now()
         FROM seed_channels WHERE joined AND n % 11 <> 0
         """),
@@ -389,9 +416,10 @@ async def _seed_attention(session: AsyncSession, params: dict[str, object]) -> N
     await session.execute(
         text("""
         INSERT INTO channel_questions
-          (message_id, channel_id, pod_id, ref, kind, state, question,
-           awaits_user_id, created_at)
-        SELECT m.id, m.channel_id, m.pod_id, 'msg:' || m.id, 'ASK',
+          (message_id, channel_id, pod_id, ref, asker, asker_key, kind, state,
+           question, awaits_user_id, created_at)
+        SELECT m.id, m.channel_id, m.pod_id, 'msg:' || m.id, 'MESSAGE',
+               m.id::text, 'ASK',
                CASE WHEN m.seq IN (18, 9990) THEN 'OPEN' ELSE 'ANSWERED' END,
                '{"text": "Ship it?", "choices": ["yes", "no"]}'::jsonb,
                CASE WHEN c.joined THEN CAST(:member AS uuid)
@@ -413,7 +441,7 @@ async def _direct_of(session: AsyncSession, *, pod_id: UUID, member_id: UUID) ->
         INSERT INTO channels
           (id, pod_id, kind, visibility, member_user_id, created_at, updated_at)
         VALUES (gen_random_uuid(), :pod, 'DIRECT', 'PRIVATE', :member, now(), now())
-        ON CONFLICT (pod_id, member_user_id) WHERE kind = 'DIRECT' DO NOTHING
+        ON CONFLICT (member_user_id, pod_id) DO NOTHING
         """),
         {"pod": pod_id, "member": member_id},
     )
@@ -428,9 +456,10 @@ async def _direct_of(session: AsyncSession, *, pod_id: UUID, member_id: UUID) ->
     await session.execute(
         text("""
         INSERT INTO channel_members
-          (id, channel_id, pod_id, user_id, role, notify, created_at, updated_at)
+          (id, channel_id, pod_id, user_id, role, notify, seated_by,
+           created_at, updated_at)
         VALUES (gen_random_uuid(), :channel, :pod, :member, 'owner', 'ALL',
-                now(), now())
+                'CREATOR', now(), now())
         ON CONFLICT (channel_id, user_id) WHERE user_id IS NOT NULL DO NOTHING
         """),
         {"pod": pod_id, "member": member_id, "channel": direct},

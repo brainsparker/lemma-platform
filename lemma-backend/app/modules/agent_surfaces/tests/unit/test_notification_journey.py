@@ -386,7 +386,7 @@ class World:
                 account_id=uuid4(),
                 surface_id=self.surface.id,
                 platform=self.surface.surface_type.value,
-                kind=SourceKind.PRIVATE,
+                kind=SourceKind.PERSON,
                 external_user_id=_CHAT,
                 last_inbound_at=moment,
                 updated_at=moment,
@@ -637,7 +637,7 @@ async def test_an_email_reply_to_an_agents_mailbox_stays_with_the_message(
     asked = await world.ask()
 
     assert asked.delivered.platform == "RESEND"
-    assert world.place().kind is SourceKind.PRIVATE
+    assert world.place().kind is SourceKind.PERSON
     assert world.place().channel_id == asked.line.channel_id
     bound, created_title = await world.reply("yes")
 

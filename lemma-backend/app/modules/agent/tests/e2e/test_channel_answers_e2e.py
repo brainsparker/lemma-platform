@@ -78,6 +78,7 @@ from app.modules.channels.contracts.lines import line_by_id
 from app.modules.channels.contracts.questions import AnswerRefused
 from app.modules.channels.events.sweeps import questions_expire
 from app.modules.channels.infrastructure.models import (
+    ChannelLineAnswerModel,
     ChannelMessageDeliveryModel,
     ChannelMessageModel,
     ChannelQuestionModel,
@@ -117,8 +118,8 @@ async def _drain(*classes: WorkClass) -> int:
 async def _answering_conversation(line_id: UUID) -> UUID:
     async with async_session_maker() as session:
         conversation_id = await session.scalar(
-            select(ChannelMessageModel.conversation_id).where(
-                ChannelMessageModel.id == line_id
+            select(ChannelLineAnswerModel.conversation_id).where(
+                ChannelLineAnswerModel.message_id == line_id
             )
         )
     assert conversation_id is not None, "no turn answers the line"

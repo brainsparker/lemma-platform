@@ -19,6 +19,8 @@ from app.core.infrastructure.work import (
     WorkMode,
     WorkRegistry,
     facts,
+)
+from app.core.infrastructure.work import (
     registry as default_registry,
 )
 from app.modules.agent.contracts.contact_conversations import (

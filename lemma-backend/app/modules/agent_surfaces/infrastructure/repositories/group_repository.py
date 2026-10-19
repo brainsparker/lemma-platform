@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
-from app.modules.agent_surfaces.domain.external_accounts import account_key_for
+from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.channels.contracts import (
     GroupHome,
@@ -60,8 +60,8 @@ def _place(
     return Place(
         surface_id=surface.id,
         platform=surface.surface_type.value,
-        account_key=account_key_for(surface),
-        kind=SourceKind.SHARED,
+        account=account_of(surface),
+        kind=SourceKind.CHAT,
         external_channel_id=chat,
         external_user_id=None,
         title=title,
@@ -86,7 +86,7 @@ class SurfaceGroupRepository:
 
     async def get_by_id(self, group_id: UUID) -> SurfaceGroup | None:
         source = await source_by_id(self.uow, group_id)
-        if source is None or source.kind is not SourceKind.SHARED:
+        if source is None or source.kind is not SourceKind.CHAT:
             return None
         return SurfaceGroup.of(source) if source.surface_id else None
 

@@ -27,9 +27,16 @@ from app.modules.channels.contracts import (
     Sender,
     post,
 )
+from app.modules.channels.contracts import DeliveryReasonCode
 from app.modules.channels.contracts.deliveries import delivery_skipped
 from app.modules.channels.contracts.live import announce_answering
-from app.modules.channels.tests.e2e.channel_pod import Pod, contact_place, group, say
+from app.modules.channels.tests.e2e.channel_pod import (
+    Pod,
+    an_asker,
+    contact_place,
+    group,
+    say,
+)
 from app.modules.test_support.e2e.live_socket import live_socket
 from app.modules.test_support.e2e.runtime import backend_server as _backend_server
 
@@ -310,6 +317,7 @@ async def test_a_send_that_moves_reaches_its_writer_on_the_line(
         await delivery_skipped(
             SqlAlchemyUnitOfWork(db_session),
             UUID(went["id"]),
+            code=DeliveryReasonCode.OUTSIDE_WINDOW,
             reason="Outside the window",
         )
         await db_session.commit()
@@ -373,6 +381,7 @@ async def test_a_question_waits_in_the_inbox_and_closes_on_the_timeline(
             question=NewQuestion(
                 kind=QuestionKind.APPROVAL,
                 ref=f"e2e:{uuid4()}",
+                asker=await an_asker(UUID(pod.id), owner),
                 question={"prompt": "May I?"},
                 awaits=Principal.member(owner),
             ),

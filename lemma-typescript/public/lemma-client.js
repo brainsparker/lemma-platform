@@ -16554,6 +16554,35 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Cases
+     * A contact's channel's cases, the most recently opened first, each with
+     * what happened in it: time to first response, reopens and time to close
+     * are read from here. Only a contact's channel has cases.
+     * @param podId
+     * @param channelId
+     * @param cursor
+     * @param limit
+     * @returns ChannelCasesResponse Successful Response
+     * @throws ApiError
+     */
+    static channelCaseList(podId, channelId, cursor, limit = 20) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/cases",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        query: {
+          "cursor": cursor,
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Members
      * Who is in a channel -- members, contacts and agents -- in the order
      * they joined, a page at a time.
@@ -17503,6 +17532,22 @@ var LemmaClient = (() => {
             (_c = options.archived) != null ? _c : false,
             options.cursor,
             (_d = options.limit) != null ? _d : 30
+          );
+        }
+      );
+    }
+    /** A contact's channel's cases, the most recently opened first, each with
+     *  what happened in it: who answered and when, reopens, how it ended. Page
+     *  with `next_cursor`. */
+    cases(podId, channelId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelCaseList(
+            podId,
+            channelId,
+            options.cursor,
+            (_a = options.limit) != null ? _a : 20
           );
         }
       );

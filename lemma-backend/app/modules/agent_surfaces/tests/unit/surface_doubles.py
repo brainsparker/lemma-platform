@@ -339,7 +339,7 @@ class AnsweredAt:
             account_id=uuid4(),
             surface_id=self.surface_id,
             platform=self.platform,
-            kind=SourceKind.SHARED if self.is_group else SourceKind.PRIVATE,
+            kind=SourceKind.CHAT if self.is_group else SourceKind.PERSON,
             external_channel_id=(
                 self.external_channel_id
                 if self.is_group

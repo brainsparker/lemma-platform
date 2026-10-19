@@ -3,7 +3,9 @@
 A delivery row is made once per line and target (a place, or a member pushed
 to) before anything is sent. A worker claims a due row, sends, and records
 the outcome on the same row -- so a retried job finds ``SENT`` and stops,
-and a failure is retried with backoff until it is ``DEAD``.
+and a failure is retried with backoff until it is ``DEAD``. Each claim opens
+a row in ``channel_delivery_attempts`` and the outcome closes it, so the tries
+that led to the outcome stay visible.
 
 A claim is held for ``CLAIM_LEASE`` and stamps ``claimed_at``; every outcome
 clears it. A claim that lapsed with ``claimed_at`` still set is a send nobody
@@ -12,14 +14,16 @@ happened, perhaps after the platform took it. It is never sent again blind:
 when the platform's id for it was noted before the call (a live stream the
 answer closes) it is ``SENT``, since the message is there; where the
 platform dedupes a resend by the delivery's key the sender takes it again
-(``reclaim``); otherwise it is ``DEAD`` with a reason saying it may or may not
-have arrived, and a member can retry it. Saying something twice is worse than
-saying, visibly, that it may not have arrived.
+(``reclaim``); otherwise it is ``DEAD`` (``INTERRUPTED``), and a member can
+retry it. Saying something twice is worse than saying, visibly, that it may
+not have arrived.
 
 Every time here is the database's, as a row is planned by: a sender whose
 clock runs behind must not find a row it just planned not yet due. A row
 waits while an earlier line's row to the same target has yet to go
-(``_behind_an_older_one``), so a place reads a channel in order.
+(``_behind_an_older_one``), so a place reads a channel in order. Why a row is
+not ``SENT`` is ``reason_code``, which code reads; ``reason`` is the sentence
+a member does.
 """
 
 from __future__ import annotations
@@ -28,17 +32,34 @@ from collections.abc import Iterable, Sequence
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, case, exists, func, or_, select, update
-from sqlalchemy.orm import aliased
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    case,
+    cast,
+    exists,
+    func,
+    literal_column,
+    or_,
+    select,
+    update,
+)
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute, aliased
 
-from app.modules.channels.domain.entities import Delivery, DeliveryStatus
-from app.modules.channels.infrastructure.models import (
-    ChannelMentionModel,
+from app.modules.channels.domain.entities import (
+    Delivery,
+    DeliveryReasonCode,
+    DeliveryStatus,
+)
+from app.modules.channels.infrastructure.delivery_models import (
     ChannelMessageDeliveryModel,
-    ChannelMessageModel,
-    ChannelQuestionModel,
+)
+from app.modules.channels.infrastructure.delivery_attempts import (
+    try_ended,
+    try_started,
 )
 from app.modules.channels.infrastructure.revisions import touch_line, touch_lines
 from app.modules.channels.infrastructure.rows import MAX_LINES, delivery_entity
@@ -57,7 +78,26 @@ INTERRUPTED = (
     "not sent again in case it did."
 )
 
-_DUE = (DeliveryStatus.PENDING.value, DeliveryStatus.FAILED.value)
+_D = ChannelMessageDeliveryModel
+
+
+def is_due(status: InstrumentedAttribute[str]) -> ColumnElement[bool]:
+    """``status IN ('PENDING', 'FAILED')``, spelled as literals: the predicate
+    of the partial due indexes, which a bound parameter could not be proved
+    to imply in a generic plan."""
+    return status.in_(
+        [
+            literal_column(f"'{DeliveryStatus.PENDING.value}'"),
+            literal_column(f"'{DeliveryStatus.FAILED.value}'"),
+        ]
+    )
+
+
+def external_key(
+    value: InstrumentedAttribute[str | None] | str,
+) -> ColumnElement[UUID]:
+    """A platform message id as it is indexed: its md5, as a uuid."""
+    return cast(func.md5(value), PG_UUID(as_uuid=True))
 
 
 def _settleable() -> ColumnElement[bool]:
@@ -65,10 +105,12 @@ def _settleable() -> ColumnElement[bool]:
     or one settled as interrupted while it was -- the sender's own outcome
     is better than that guess. A platform's report (``undelivered``) and
     every other outcome stand."""
-    d = ChannelMessageDeliveryModel
     return or_(
-        d.status.in_(_DUE),
-        and_(d.status == DeliveryStatus.DEAD.value, d.reason == INTERRUPTED),
+        is_due(_D.status),
+        and_(
+            _D.status == DeliveryStatus.DEAD.value,
+            _D.reason_code == DeliveryReasonCode.INTERRUPTED.value,
+        ),
     )
 
 
@@ -89,27 +131,25 @@ def _behind_an_older_one() -> ColumnElement[bool]:
     the same channel, to the same target, is pending, being sent, or failed
     and waiting out its backoff (a ``Retry-After`` holds back everything
     behind it). Lines of other channels are not held: a member's pushes from
-    one conversation do not wait on another's.
+    one conversation do not wait on another's. One probe of the target's due
+    index (``ix_cmd_due_source`` / ``ix_cmd_due_recipient``), never a walk of
+    the channel's history.
     """
-    d = ChannelMessageDeliveryModel
     older = aliased(ChannelMessageDeliveryModel)
-    line, older_line = aliased(ChannelMessageModel), aliased(ChannelMessageModel)
-    same_target = or_(
-        and_(d.source_id.is_not(None), older.source_id == d.source_id),
-        and_(
-            d.recipient_user_id.is_not(None),
-            older.recipient_user_id == d.recipient_user_id,
-        ),
+    earlier = (
+        is_due(older.status),
+        older.channel_id == _D.channel_id,
+        older.seq < _D.seq,
     )
-    return exists().where(
-        older.id != d.id,
-        older.pod_id == d.pod_id,
-        older.status.in_(_DUE),
-        same_target,
-        line.id == d.message_id,
-        older_line.id == older.message_id,
-        older_line.channel_id == line.channel_id,
-        older_line.seq < line.seq,
+    return or_(
+        and_(
+            _D.source_id.is_not(None),
+            exists().where(older.source_id == _D.source_id, *earlier),
+        ),
+        and_(
+            _D.recipient_user_id.is_not(None),
+            exists().where(older.recipient_user_id == _D.recipient_user_id, *earlier),
+        ),
     )
 
 
@@ -121,16 +161,19 @@ class DeliveryRepository:
         self,
         *,
         message_id: UUID,
+        channel_id: UUID,
+        seq: int,
         pod_id: UUID,
         source_id: UUID | None = None,
         recipient_user_id: UUID | None = None,
     ) -> Delivery:
         """The line's delivery to this target, made once; a second plan finds it."""
-        d = ChannelMessageDeliveryModel
         await self.session.execute(
-            insert(d)
+            insert(_D)
             .values(
                 message_id=message_id,
+                channel_id=channel_id,
+                seq=seq,
                 pod_id=pod_id,
                 source_id=source_id,
                 recipient_user_id=recipient_user_id,
@@ -139,10 +182,10 @@ class DeliveryRepository:
             )
             .on_conflict_do_nothing()
         )
-        target = d.source_id if source_id is not None else d.recipient_user_id
+        target = _D.source_id if source_id is not None else _D.recipient_user_id
         row = await self.session.scalar(
-            select(d).where(
-                d.message_id == message_id, target == (source_id or recipient_user_id)
+            select(_D).where(
+                _D.message_id == message_id, target == (source_id or recipient_user_id)
             )
         )
         assert row is not None
@@ -158,35 +201,36 @@ class DeliveryRepository:
         that lapsed (``interrupted``). By the database's clock, as it was
         planned by, so a sender's clock running behind cannot leave a row
         just planned not yet due."""
-        d = ChannelMessageDeliveryModel
         row = await self.session.scalar(
-            update(d)
+            update(_D)
             .where(
-                d.id == delivery_id,
-                d.status.in_(_DUE),
-                d.next_attempt_at <= func.now(),
-                d.claimed_at.is_(None),
+                _D.id == delivery_id,
+                is_due(_D.status),
+                _D.next_attempt_at <= func.now(),
+                _D.claimed_at.is_(None),
                 ~_behind_an_older_one(),
             )
             .values(
-                attempts=d.attempts + 1,
+                attempts=_D.attempts + 1,
                 claimed_at=func.now(),
                 next_attempt_at=func.now() + CLAIM_LEASE,
                 updated_at=func.now(),
             )
-            .returning(d)
+            .returning(_D)
         )
-        return delivery_entity(row) if row is not None else None
+        if row is None:
+            return None
+        await try_started(self.session, row.id)
+        return delivery_entity(row)
 
     async def lapsed(self, delivery_id: UUID) -> Delivery | None:
         """The delivery, when it is a claim whose lease ran out unfinished."""
-        d = ChannelMessageDeliveryModel
         row = await self.session.scalar(
-            select(d).where(
-                d.id == delivery_id,
-                d.status.in_(_DUE),
-                d.claimed_at.is_not(None),
-                d.next_attempt_at <= func.now(),
+            select(_D).where(
+                _D.id == delivery_id,
+                is_due(_D.status),
+                _D.claimed_at.is_not(None),
+                _D.next_attempt_at <= func.now(),
             )
         )
         return delivery_entity(row) if row is not None else None
@@ -195,44 +239,51 @@ class DeliveryRepository:
         """Take a lapsed claim to send it again: only for a send whose
         platform dedupes a resend by the delivery's key, so a send that did
         arrive is not repeated (``agent_surfaces.delivery_outcome``)."""
-        d = ChannelMessageDeliveryModel
         row = await self.session.scalar(
-            update(d)
+            update(_D)
             .where(
-                d.id == delivery_id,
-                d.status.in_(_DUE),
-                d.claimed_at.is_not(None),
-                d.next_attempt_at <= func.now(),
-                d.external_message_id.is_(None),
-                d.attempts < MAX_ATTEMPTS,
+                _D.id == delivery_id,
+                is_due(_D.status),
+                _D.claimed_at.is_not(None),
+                _D.next_attempt_at <= func.now(),
+                _D.external_message_id.is_(None),
+                _D.attempts < MAX_ATTEMPTS,
             )
             .values(
-                attempts=d.attempts + 1,
+                attempts=_D.attempts + 1,
                 claimed_at=func.now(),
                 next_attempt_at=func.now() + CLAIM_LEASE,
                 updated_at=func.now(),
             )
-            .returning(d)
+            .returning(_D)
         )
-        return delivery_entity(row) if row is not None else None
+        if row is None:
+            return None
+        await try_ended(
+            self.session, row.id, DeliveryStatus.FAILED, DeliveryReasonCode.INTERRUPTED
+        )
+        await try_started(self.session, row.id)
+        return delivery_entity(row)
 
     async def interrupted(self, delivery_id: UUID) -> Delivery | None:
         """Settle a claim that lapsed unfinished, without sending it again:
         ``SENT`` when its platform id was noted before the call, else ``DEAD``."""
-        d = ChannelMessageDeliveryModel
-        known = d.external_message_id.is_not(None)
+        known = _D.external_message_id.is_not(None)
         row = await self.session.scalar(
-            update(d)
+            update(_D)
             .where(
-                d.id == delivery_id,
-                d.status.in_(_DUE),
-                d.claimed_at.is_not(None),
-                d.next_attempt_at <= func.now(),
+                _D.id == delivery_id,
+                is_due(_D.status),
+                _D.claimed_at.is_not(None),
+                _D.next_attempt_at <= func.now(),
             )
             .values(
                 status=case(
                     (known, DeliveryStatus.SENT.value),
                     else_=DeliveryStatus.DEAD.value,
+                ),
+                reason_code=case(
+                    (known, None), else_=DeliveryReasonCode.INTERRUPTED.value
                 ),
                 reason=case((known, None), else_=INTERRUPTED),
                 sent_at=case((known, func.now()), else_=None),
@@ -240,147 +291,176 @@ class DeliveryRepository:
                 next_attempt_at=None,
                 updated_at=func.now(),
             )
-            .returning(d)
+            .returning(_D)
         )
         if row is None:
             return None
+        entity = delivery_entity(row)
+        await try_ended(self.session, row.id, entity.status, entity.reason_code)
         await self._shown_again([(row.message_id, row.source_id)])
-        return delivery_entity(row)
+        return entity
 
     async def noted(self, delivery_id: UUID, *, external_message_id: str) -> None:
         """The platform's id for a send, as soon as it is known: before the
         call that finishes a message already there (a claim lapsing after
         this is known to have arrived), or the moment the platform answers (a
         status report about it finds the row even before it is ``SENT``)."""
-        d = ChannelMessageDeliveryModel
         await self.session.execute(
-            update(d)
-            .where(d.id == delivery_id, d.claimed_at.is_not(None))
+            update(_D)
+            .where(_D.id == delivery_id, _D.claimed_at.is_not(None))
             .values(external_message_id=external_message_id, updated_at=func.now())
         )
 
     async def unnoted(self, delivery_id: UUID) -> None:
         """A noted id that no longer stands for anything there (a live
         stream taken down before the answer replaced it)."""
-        d = ChannelMessageDeliveryModel
         await self.session.execute(
-            update(d)
-            .where(d.id == delivery_id, d.claimed_at.is_not(None))
+            update(_D)
+            .where(_D.id == delivery_id, _D.claimed_at.is_not(None))
             .values(external_message_id=None, updated_at=func.now())
         )
 
-    async def sent(
-        self, delivery_id: UUID, *, platform: str, external_message_id: str | None
-    ) -> None:
-        d = ChannelMessageDeliveryModel
-        changed = await self.session.execute(
-            update(d)
-            .where(d.id == delivery_id, _settleable())
+    async def _settle(
+        self,
+        delivery_id: UUID,
+        status: DeliveryStatus,
+        *,
+        code: DeliveryReasonCode | None,
+        reason: str | None,
+        platform: str | None,
+        provider_status: str | None,
+        **values: object,
+    ) -> Delivery | None:
+        """Record an outcome, and end the try that led to it; the delivery as
+        it now stands, or ``None`` when something else settled it first."""
+        row = await self.session.scalar(
+            update(_D)
+            .where(_D.id == delivery_id, _settleable())
             .values(
-                status=DeliveryStatus.SENT.value,
+                status=status.value,
                 platform=platform,
-                external_message_id=func.coalesce(
-                    external_message_id, d.external_message_id
-                ),
-                reason=None,
-                sent_at=func.now(),
-                claimed_at=None,
-                next_attempt_at=None,
-                updated_at=func.now(),
-            )
-            .returning(d.message_id, d.source_id)
-        )
-        await self._shown_again(changed)
-
-    async def skipped(
-        self, delivery_id: UUID, *, reason: str, platform: str | None
-    ) -> None:
-        d = ChannelMessageDeliveryModel
-        changed = await self.session.execute(
-            update(d)
-            .where(d.id == delivery_id, _settleable())
-            .values(
-                status=DeliveryStatus.SKIPPED.value,
-                platform=platform,
+                reason_code=code.value if code is not None else None,
                 reason=reason,
                 claimed_at=None,
-                next_attempt_at=None,
                 updated_at=func.now(),
+                **values,
             )
-            .returning(d.message_id, d.source_id)
+            .returning(_D)
         )
-        await self._shown_again(changed)
+        if row is None:
+            return None
+        await try_ended(
+            self.session, delivery_id, status, code, provider_status=provider_status
+        )
+        await self._shown_again([(row.message_id, row.source_id)])
+        return delivery_entity(row)
+
+    async def sent(
+        self,
+        delivery_id: UUID,
+        *,
+        platform: str,
+        external_message_id: str | None,
+        provider_status: str | None = None,
+    ) -> None:
+        await self._settle(
+            delivery_id,
+            DeliveryStatus.SENT,
+            code=None,
+            reason=None,
+            platform=platform,
+            provider_status=provider_status,
+            external_message_id=func.coalesce(
+                external_message_id, _D.external_message_id
+            ),
+            sent_at=func.now(),
+            next_attempt_at=None,
+        )
+
+    async def skipped(
+        self,
+        delivery_id: UUID,
+        *,
+        code: DeliveryReasonCode,
+        reason: str,
+        platform: str | None,
+        provider_status: str | None = None,
+    ) -> Delivery | None:
+        """Not sent, on purpose."""
+        return await self._settle(
+            delivery_id,
+            DeliveryStatus.SKIPPED,
+            code=code,
+            reason=reason,
+            platform=platform,
+            provider_status=provider_status,
+            next_attempt_at=None,
+        )
 
     async def failed(
         self,
         delivery: Delivery,
         *,
+        code: DeliveryReasonCode,
         reason: str,
         platform: str | None,
         retry_after: float | None = None,
+        provider_status: str | None = None,
     ) -> Delivery:
         """It did not go: due again after backoff -- at least as long as the
         platform asked (``retry_after``, seconds) -- or DEAD after the last try."""
         dead = delivery.attempts >= MAX_ATTEMPTS
         wait = backoff(delivery.attempts, retry_after=retry_after)
-        d = ChannelMessageDeliveryModel
-        row = await self.session.scalar(
-            update(d)
-            .where(d.id == delivery.id, _settleable())
-            .values(
-                status=(DeliveryStatus.DEAD if dead else DeliveryStatus.FAILED).value,
-                platform=platform,
-                reason=reason,
-                claimed_at=None,
-                next_attempt_at=None if dead else func.now() + wait,
-                updated_at=func.now(),
-            )
-            .returning(d)
+        settled = await self._settle(
+            delivery.id,
+            DeliveryStatus.DEAD if dead else DeliveryStatus.FAILED,
+            code=code,
+            reason=reason,
+            platform=platform,
+            provider_status=provider_status,
+            next_attempt_at=None if dead else func.now() + wait,
         )
-        if row is None:
-            # A platform's report settled it meanwhile; that stands.
-            return await self.get(delivery.id) or delivery
-        await self._shown_again([(row.message_id, row.source_id)])
-        return delivery_entity(row)
+        # ``None``: a platform's report settled it meanwhile; that stands.
+        return settled or await self.get(delivery.id) or delivery
 
     async def dead(
-        self, delivery_id: UUID, *, reason: str, platform: str | None
+        self,
+        delivery_id: UUID,
+        *,
+        code: DeliveryReasonCode,
+        reason: str,
+        platform: str | None,
+        provider_status: str | None = None,
     ) -> None:
         """Given up now, not after backoff: trying again repeats what the
         person already has (half a long message), or meets the same refusal."""
-        d = ChannelMessageDeliveryModel
-        changed = await self.session.execute(
-            update(d)
-            .where(d.id == delivery_id, _settleable())
-            .values(
-                status=DeliveryStatus.DEAD.value,
-                platform=platform,
-                reason=reason,
-                claimed_at=None,
-                next_attempt_at=None,
-                updated_at=func.now(),
-            )
-            .returning(d.message_id, d.source_id)
+        await self._settle(
+            delivery_id,
+            DeliveryStatus.DEAD,
+            code=code,
+            reason=reason,
+            platform=platform,
+            provider_status=provider_status,
+            next_attempt_at=None,
         )
-        await self._shown_again(changed)
 
     async def retry(self, delivery_id: UUID) -> Delivery | None:
         """A member asked to try a failed or given-up delivery again, now."""
-        d = ChannelMessageDeliveryModel
         row = await self.session.scalar(
-            update(d)
+            update(_D)
             .where(
-                d.id == delivery_id,
-                d.status.in_([DeliveryStatus.FAILED.value, DeliveryStatus.DEAD.value]),
+                _D.id == delivery_id,
+                _D.status.in_([DeliveryStatus.FAILED.value, DeliveryStatus.DEAD.value]),
             )
             .values(
                 status=DeliveryStatus.PENDING.value,
+                reason_code=None,
                 attempts=0,
                 claimed_at=None,
                 next_attempt_at=func.now(),
                 updated_at=func.now(),
             )
-            .returning(d)
+            .returning(_D)
         )
         if row is None:
             return None
@@ -394,26 +474,26 @@ class DeliveryRepository:
         ``SENT`` yet or still being recorded -- a report can land before the
         sender's own outcome does, and the sender's ``sent`` then leaves it.
         Whether it changed anything."""
-        d = ChannelMessageDeliveryModel
         row = await self.session.execute(
-            update(d)
+            update(_D)
             .where(
-                d.id == delivery_id,
+                _D.id == delivery_id,
                 or_(
-                    d.status == DeliveryStatus.SENT.value,
-                    and_(d.status.in_(_DUE), d.claimed_at.is_not(None)),
+                    _D.status == DeliveryStatus.SENT.value,
+                    and_(is_due(_D.status), _D.claimed_at.is_not(None)),
                 ),
             )
             .values(
                 status=DeliveryStatus.DEAD.value,
+                reason_code=DeliveryReasonCode.UNDELIVERED.value,
                 reason=reason,
                 claimed_at=None,
                 next_attempt_at=None,
                 updated_at=func.now(),
             )
-            .returning(d.message_id, d.source_id)
+            .returning(_D.message_id, _D.source_id)
         )
-        changed = list(row)
+        changed = [(message_id, source_id) for message_id, source_id in row]
         await self._shown_again(changed)
         return bool(changed)
 
@@ -422,98 +502,53 @@ class DeliveryRepository:
     ) -> Delivery | None:
         """The delivery a platform's status report names: the newest with that
         id, in ``pod_id`` when the report says whose it is."""
-        d = ChannelMessageDeliveryModel
-        statement = select(d).where(
-            func.md5(d.external_message_id) == func.md5(external_message_id),
-            d.external_message_id == external_message_id,
+        statement = select(_D).where(
+            external_key(_D.external_message_id) == external_key(external_message_id),
+            _D.external_message_id == external_message_id,
             # A send still being recorded has its id noted and no platform yet.
-            or_(d.platform == platform, d.platform.is_(None)),
+            or_(_D.platform == platform, _D.platform.is_(None)),
         )
         if pod_id is not None:
-            statement = statement.where(d.pod_id == pod_id)
+            statement = statement.where(_D.pod_id == pod_id)
         row = await self.session.scalar(
-            statement.order_by(d.created_at.desc()).limit(1)
+            statement.order_by(_D.created_at.desc()).limit(1)
         )
         return delivery_entity(row) if row is not None else None
+
+    async def sent_as(self, source_id: UUID, external_message_id: str) -> UUID | None:
+        """The line written in Lemma that went to this place as that platform
+        message, if one did: what a reply there in its thread answers."""
+        return await self.session.scalar(
+            select(_D.message_id)
+            .where(
+                _D.source_id == source_id,
+                external_key(_D.external_message_id)
+                == external_key(external_message_id),
+                _D.external_message_id == external_message_id,
+            )
+            .limit(1)
+        )
 
     async def next_for_target(self, delivery: Delivery) -> UUID | None:
         """The oldest delivery to ``delivery``'s target that is due now and no
         longer waits behind another: what to announce once ``delivery`` is
         settled, so the place's next line goes without waiting for a sweep."""
-        d = ChannelMessageDeliveryModel
-        target = (
-            d.source_id == delivery.source_id
-            if delivery.source_id is not None
-            else d.recipient_user_id == delivery.recipient_user_id
-        )
+        if delivery.source_id is not None:
+            target, column = delivery.source_id, _D.source_id
+        else:
+            target, column = delivery.recipient_user_id, _D.recipient_user_id
         return await self.session.scalar(
-            select(d.id)
+            select(_D.id)
             .where(
-                target,
-                d.id != delivery.id,
-                d.status.in_(_DUE),
-                d.claimed_at.is_(None),
-                d.next_attempt_at <= func.now(),
+                column == target,
+                is_due(_D.status),
+                _D.id != delivery.id,
+                _D.claimed_at.is_(None),
+                _D.next_attempt_at <= func.now(),
                 ~_behind_an_older_one(),
             )
+            .order_by(_D.channel_id, _D.seq)
             .limit(1)
-        )
-
-    async def urgent(self, delivery: Delivery) -> bool:
-        """Whether a push is one the member must not miss: its line names
-        them, or asks a question waiting on them (or on anybody there)."""
-        recipient = delivery.recipient_user_id
-        if recipient is None:
-            return False
-        mention, question = ChannelMentionModel, ChannelQuestionModel
-        named = exists().where(
-            mention.message_id == delivery.message_id, mention.user_id == recipient
-        )
-        asked = exists().where(
-            question.message_id == delivery.message_id,
-            or_(
-                question.awaits_user_id == recipient,
-                and_(
-                    question.awaits_user_id.is_(None),
-                    question.awaits_contact_id.is_(None),
-                ),
-            ),
-        )
-        return bool(await self.session.scalar(select(or_(named, asked))))
-
-    async def held(
-        self, *, recipient_user_id: UUID, channel_id: UUID, reason: str
-    ) -> list[Delivery]:
-        """Pushes to a member, of one channel's lines, skipped with ``reason``
-        -- held for a digest -- oldest first, locked for the digest that
-        takes them."""
-        d = ChannelMessageDeliveryModel
-        m = ChannelMessageModel
-        rows = await self.session.scalars(
-            select(d)
-            .join(m, m.id == d.message_id)
-            .where(
-                d.recipient_user_id == recipient_user_id,
-                m.channel_id == channel_id,
-                d.status == DeliveryStatus.SKIPPED.value,
-                d.reason == reason,
-            )
-            .order_by(m.seq)
-            .limit(MAX_LINES)
-            .with_for_update(of=d, skip_locked=True)
-        )
-        return [delivery_entity(row) for row in rows]
-
-    async def reasoned(self, delivery_ids: Sequence[UUID], *, reason: str) -> None:
-        """Say why again, on deliveries that stay as they are (a held push
-        that a digest has now told the member of)."""
-        if not delivery_ids:
-            return
-        d = ChannelMessageDeliveryModel
-        await self.session.execute(
-            update(d)
-            .where(d.id.in_(list(delivery_ids)))
-            .values(reason=reason, updated_at=func.now())
         )
 
     async def _shown_again(self, changed: Iterable[tuple[UUID, UUID | None]]) -> None:
@@ -532,13 +567,9 @@ class DeliveryRepository:
         if not message_ids:
             return []
         rows = await self.session.scalars(
-            select(ChannelMessageDeliveryModel)
-            .where(
-                ChannelMessageDeliveryModel.message_id.in_(
-                    list(message_ids)[:MAX_LINES]
-                )
-            )
-            .order_by(ChannelMessageDeliveryModel.created_at)
+            select(_D)
+            .where(_D.message_id.in_(list(message_ids)[:MAX_LINES]))
+            .order_by(_D.created_at)
         )
         return [delivery_entity(row) for row in rows]
 
@@ -546,15 +577,14 @@ class DeliveryRepository:
         """Deliveries due now, oldest first: what the sweeper hands out. Not
         one waiting behind an older one to its target: that one goes first,
         and announces it (``next_for_target``)."""
-        d = ChannelMessageDeliveryModel
         rows = await self.session.scalars(
-            select(d.id)
+            select(_D.id)
             .where(
-                d.status.in_(_DUE),
-                d.next_attempt_at <= func.now(),
+                is_due(_D.status),
+                _D.next_attempt_at <= func.now(),
                 ~_behind_an_older_one(),
             )
-            .order_by(d.next_attempt_at)
+            .order_by(_D.next_attempt_at)
             .limit(max(1, min(limit, MAX_LINES)))
         )
         return list(rows)

@@ -10,9 +10,10 @@ names they need -- and projects each line once per kind of reader, so database
 work grows with watched channels and their changes, never with sockets.
 
 Nothing is lost to a missed signal. A channel's changes are numbered under its
-row lock (``infrastructure.revisions``) and the hub reads ``rev > its own``;
-an idle poll re-reads every watched head, the pod's channels changed since the
-last poll, and read positions moved since then. The hub's cursors move only
+row lock and logged (``infrastructure.revisions``), and the hub reads the log
+past its own ``rev``; an idle poll re-reads every watched head, the pod's
+channels with a change logged since the last poll, and read positions moved
+since then. The hub's cursors move only
 once every subscription was offered what lies before them (``timeline``).
 
 Access is decided once per subscription and again on the hub's
@@ -57,19 +58,18 @@ from app.core.request_context import create_background_task
 from app.modules.channels.api.access import Caller
 from app.modules.channels.domain.entities import Channel
 from app.modules.channels.infrastructure.repository import ChannelRepository
-from app.modules.channels.services.live.events import (
-    Head,
-    heads_of,
-    typing_event,
-)
-from app.modules.channels.services.live.inbox_feed import InboxFeed
-from app.modules.channels.services.live.readers import visible_channel
 from app.modules.channels.services.live.answers import (
     Answers,
     answering_for,
     answering_of,
     as_uuid,
 )
+from app.modules.channels.services.live.events import (
+    Head,
+    heads_of,
+    typing_event,
+)
+from app.modules.channels.services.live.inbox_feed import InboxFeed
 from app.modules.channels.services.live.instruments import (
     backoff,
     hub_drain_seconds,
@@ -77,13 +77,14 @@ from app.modules.channels.services.live.instruments import (
     hub_restarts,
     hub_resyncs,
 )
+from app.modules.channels.services.live.readers import visible_channel
 from app.modules.channels.services.live.subscriptions import ChannelSub, InboxSub
 from app.modules.channels.services.live.timeline import (
     gap_since,
     plan_changes,
     read_updates,
-    reads_moved,
     readers_now,
+    reads_moved,
 )
 
 logger = get_logger(__name__)
@@ -91,8 +92,9 @@ EpochReader = Callable[[UUID], Awaitable[str | None]]
 
 #: The signals the hub hears.
 SIGNAL_KINDS = ["channel", "read", "typing", "answering"]
-#: How far back a poll looks for channels that moved: ``updated_at`` is its
-#: transaction's start; the signal covers a transaction longer than this.
+#: How far back a poll looks for channels that moved: a change is stamped when
+#: it is written, which is before its transaction commits; the signal covers a
+#: transaction longer than this.
 _CHANNEL_OVERLAP = timedelta(seconds=30)
 
 

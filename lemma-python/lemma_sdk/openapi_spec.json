@@ -3362,6 +3362,167 @@
         "title": "BundleSourceKind",
         "type": "string"
       },
+      "CaseEventResponse": {
+        "properties": {
+          "actor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The member who made it, when one did."
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`opened`, `assigned`, `handed_back`, `attention`, `acknowledged`, `first_response`, `status`, `closed`, `reopened` or `merged`.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "value": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "description": "What it changed to: `status`, `user_id`, `reason`, `seq`, ...",
+            "title": "Value",
+            "type": "object"
+          }
+        },
+        "required": [
+          "at",
+          "kind"
+        ],
+        "title": "CaseEventResponse",
+        "type": "object"
+      },
+      "CaseResponse": {
+        "properties": {
+          "assigned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned At"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttentionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          },
+          "closed_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "events": {
+            "description": "Oldest first; the newest 200 of a long case.",
+            "items": {
+              "$ref": "#/components/schemas/CaseEventResponse"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "first_response_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The first member line to the contact in it.",
+            "title": "First Response At"
+          },
+          "first_response_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "opened_at": {
+            "format": "date-time",
+            "title": "Opened At",
+            "type": "string"
+          },
+          "opened_seq": {
+            "description": "The channel's newest line when it opened: the case is the lines after.",
+            "title": "Opened Seq",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ContactStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "opened_at",
+          "opened_seq"
+        ],
+        "title": "CaseResponse",
+        "type": "object"
+      },
       "ChannelAnswerRequest": {
         "properties": {
           "answer": {
@@ -3375,6 +3536,33 @@
           "answer"
         ],
         "title": "ChannelAnswerRequest",
+        "type": "object"
+      },
+      "ChannelCasesResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CaseResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ChannelCasesResponse",
         "type": "object"
       },
       "ChannelCreateRequest": {
@@ -3465,7 +3653,7 @@
                 "type": "null"
               }
             ],
-            "description": "The channel asks for a person, and why."
+            "description": "A contact's channel: its current case asks for a person, and why. Never set on another kind of channel."
           },
           "created_at": {
             "format": "date-time",
@@ -4212,7 +4400,7 @@
                 "type": "null"
               }
             ],
-            "description": "The channel asks for a person, and why."
+            "description": "A contact's channel: its current case asks for a person, and why. Never set on another kind of channel."
           },
           "created_at": {
             "format": "date-time",
@@ -17901,8 +18089,8 @@
       },
       "SourceKind": {
         "enum": [
-          "PRIVATE",
-          "SHARED"
+          "PERSON",
+          "CHAT"
         ],
         "title": "SourceKind",
         "type": "string"
@@ -31845,6 +32033,96 @@
           "resource": "channel",
           "result": "entity",
           "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/cases": {
+      "get": {
+        "description": "A contact's channel's cases, the most recently opened first, each with\nwhat happened in it: time to first response, reopens and time to close\nare read from here. Only a contact's channel has cases.",
+        "operationId": "channel.case.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelCasesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Cases",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "channel.case",
+          "result": "collection",
+          "verb": "list"
         }
       }
     },

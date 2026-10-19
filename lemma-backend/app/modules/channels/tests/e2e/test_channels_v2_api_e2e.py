@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.contracts import (
+    AccountKey,
+    DeliveryReasonCode,
     GroupHome,
     NewLine,
     NewQuestion,
@@ -29,10 +31,11 @@ from app.modules.channels.contracts import (
     source_for,
 )
 from app.modules.channels.infrastructure.deliveries import DeliveryRepository
+from app.modules.channels.tests.e2e.channel_pod import Pod, an_asker, contact_place
 from app.modules.channels.tests.e2e.channel_pod import (
-    Pod,
-    contact_place,
     group as _group,
+)
+from app.modules.channels.tests.e2e.channel_pod import (
     say as _say,
 )
 
@@ -48,8 +51,8 @@ async def _mirrored_group(db_session: AsyncSession, pod: Pod) -> Source:
         place=Place(
             surface_id=None,
             platform="TELEGRAM",
-            account_key="bot-1",
-            kind=SourceKind.SHARED,
+            account=AccountKey(workspace="bot-1"),
+            kind=SourceKind.CHAT,
             external_channel_id="-100",
             external_user_id=None,
             title="Launch crew",
@@ -333,7 +336,12 @@ async def test_a_reply_goes_where_its_thread_is(pod: Pod, db_session: AsyncSessi
     deliveries = DeliveryRepository(db_session)
     claimed = await deliveries.get(UUID(delivery["id"]))
     assert claimed is not None
-    await deliveries.failed(claimed, reason="timeout", platform="TELEGRAM")
+    await deliveries.failed(
+        claimed,
+        code=DeliveryReasonCode.TRANSIENT,
+        reason="timeout",
+        platform="TELEGRAM",
+    )
     await db_session.commit()
     assert (await pod.client(pod.user).post(retry)).status_code == 403
     retried = await pod.client().post(retry)
@@ -375,6 +383,7 @@ async def test_a_question_is_answered_by_its_person_and_an_approval_needs_a_deci
             question=NewQuestion(
                 kind=kind,
                 ref=f"e2e:{uuid4()}",
+                asker=await an_asker(UUID(pod.id), owner),
                 question={"prompt": "May I?"},
                 awaits=Principal.member(owner),
             ),

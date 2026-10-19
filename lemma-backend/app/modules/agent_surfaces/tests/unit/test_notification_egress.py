@@ -126,7 +126,7 @@ def _place_for(surface: AgentSurfaceEntity, person: str = "U123") -> Source:
         account_id=uuid4(),
         surface_id=surface.id,
         platform=surface.surface_type.value,
-        kind=SourceKind.PRIVATE,
+        kind=SourceKind.PERSON,
         external_user_id=person,
         last_inbound_at=datetime.now(timezone.utc),
         delivery_ref={"external_thread_id": "C1"},
@@ -315,7 +315,7 @@ async def test_a_cold_email_places_its_thread_where_the_reply_will_arrive():
     [place] = seats.sources.values()
     assert place.surface_id == surface.id
     assert place.platform == "RESEND"
-    assert place.kind is SourceKind.PRIVATE
+    assert place.kind is SourceKind.PERSON
     # Lowercased, because that is what the inbound parser records as the sender.
     assert place.external_user_id == "bob@example.com"
     # In the recipient's own channel, where their conversation with the agent is.

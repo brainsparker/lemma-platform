@@ -24,6 +24,7 @@ from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.models import ChannelReadStateModel
 from app.modules.channels.infrastructure.repository import ChannelRepository
+from app.modules.channels.infrastructure.revisions import kept_since
 from app.modules.channels.services.live.events import (
     Head,
     channel_updated,
@@ -111,6 +112,9 @@ async def gap_since(
         return []
     if since_rev == head.rev:
         return []
+    if not await kept_since(uow.session, channel.id, since_rev):
+        # Older than the change log keeps (``revisions.CHANGE_RETENTION``).
+        return ResyncReason.CURSOR_EXPIRED
     lines = await LineRepository(uow.session).changed_since(
         channel.id, after_rev=since_rev, limit=limit + 1
     )

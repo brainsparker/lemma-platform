@@ -31,8 +31,7 @@ from app.core.infrastructure.work import (
 )
 from app.modules.agent.events.work_kinds import AGENT_PAUSE_EXPIRED, pause_expired_key
 from app.modules.agent.services.pause_expiry import expire_pause
-from app.modules.agent.services.pause_questions import TOOL_REF
-from app.modules.channels.contracts import QuestionState
+from app.modules.channels.contracts import QuestionAsker, QuestionState
 from app.modules.channels.contracts.facts import ChannelQuestionClosed
 
 PAUSE_EXPIRED_RETRY = RetryPolicy(
@@ -50,22 +49,25 @@ class PauseExpiredPayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     pod_id: UUID
-    ref: str
+    asker_conversation_id: UUID | None = None
+    asker_key: str | None = None
 
 
 def expires_a_pause(fact: ChannelQuestionClosed) -> bool:
-    return (
-        fact.state is QuestionState.EXPIRED and fact.ref.partition(":")[0] == TOOL_REF
-    )
+    return fact.state is QuestionState.EXPIRED and fact.asker is QuestionAsker.TOOL
 
 
 async def pause_expired(ctx: JobContext, payload: PauseExpiredPayload) -> None:
     ctx.raise_if_stopping()
     try:
+        if payload.asker_conversation_id is None or payload.asker_key is None:
+            # The conversation is gone: nothing paused is left to resolve.
+            return
         await expire_pause(
             SessionUnitOfWorkFactory(async_session_maker),
             pod_id=payload.pod_id,
-            ref=payload.ref,
+            conversation_id=payload.asker_conversation_id,
+            tool_call_id=payload.asker_key,
         )
     except DomainError as refused:
         # Not something a retry changes: the conversation refused the

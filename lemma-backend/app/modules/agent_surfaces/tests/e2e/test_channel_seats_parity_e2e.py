@@ -4,7 +4,7 @@
 binder, routing and delivery unit tests. A double that keys places differently
 from the tables certifies exactly the half it gets wrong -- it once keyed a
 source by the *surface* that heard it, while channels key it by the
-*account* (``external_accounts``: pod, platform, ``account_key``), so a
+*account* (``external_accounts``: pod, platform, workspace and bot), so a
 reinstalled bot found its old places in the database and lost them in every
 unit test. Each scenario here runs against both, over the same pod and the
 same surfaces, and what each answers must be the same.
@@ -28,6 +28,7 @@ from app.modules.agent_surfaces.services.channel_places import (
 )
 from app.modules.agent_surfaces.tests.e2e.helpers import _create_agent
 from app.modules.channels.contracts import (
+    AccountKey,
     GroupHome,
     MembersHome,
     Place,
@@ -57,8 +58,8 @@ def _private(surface_id: UUID | None, team: str) -> Place:
     return Place(
         surface_id=surface_id,
         platform="SLACK",
-        account_key=f"team:{team}",
-        kind=SourceKind.PRIVATE,
+        account=AccountKey(workspace=f"team:{team}"),
+        kind=SourceKind.PERSON,
         external_channel_id=None,
         external_user_id=PERSON,
     )
@@ -68,8 +69,8 @@ def _shared(surface_id: UUID | None, team: str) -> Place:
     return Place(
         surface_id=surface_id,
         platform="SLACK",
-        account_key=f"team:{team}",
-        kind=SourceKind.SHARED,
+        account=AccountKey(workspace=f"team:{team}"),
+        kind=SourceKind.CHAT,
         external_channel_id=CHAT,
         external_user_id=None,
         title="launch",

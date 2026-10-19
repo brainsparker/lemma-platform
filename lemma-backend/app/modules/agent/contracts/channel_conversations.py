@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from uuid import UUID
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import Select, func, select, text, update
 
 from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -34,24 +34,36 @@ async def conversation_in_channel(
     them -- and otherwise the member ``user_id`` names. An archived
     conversation, or a sub-agent's, is never continued.
     """
+    return await uow.session.scalar(
+        conversation_in_channel_query(
+            channel_id=channel_id,
+            pod_id=pod_id,
+            agent_id=agent_id,
+            person_id=contact_id if contact_id is not None else user_id,
+        )
+    )
+
+
+def conversation_in_channel_query(
+    *, channel_id: UUID, pod_id: UUID, agent_id: UUID | None, person_id: UUID
+) -> Select[tuple[UUID]]:
+    """Spelled as ``uq_agent_conversations_channel_person`` spells its columns
+    and predicate, so that index answers it: ``coalesce`` for the agent and
+    the person, and ``NOT is_archived`` -- ``is_archived IS false`` is not
+    taken to imply the index's predicate. A contact's id never names a
+    member, so the person's id alone tells the two apart."""
     conversation = ConversationModel
     agent = effective_agent_id(agent_id, pod_id=pod_id)
-    person = (
-        conversation.contact_id == contact_id
-        if contact_id is not None
-        else (conversation.user_id == user_id) & conversation.contact_id.is_(None)
-    )
-    return await uow.session.scalar(
+    return (
         select(conversation.id)
         .where(
             conversation.channel_id == channel_id,
             conversation.pod_id == pod_id,
             func.coalesce(conversation.agent_id, conversation.pod_id) == agent,
-            person,
+            func.coalesce(conversation.contact_id, conversation.user_id) == person_id,
             conversation.parent_id.is_(None),
-            conversation.is_archived.is_(False),
+            ~conversation.is_archived,
         )
-        .order_by(conversation.last_activity_at.desc())
         .limit(1)
     )
 

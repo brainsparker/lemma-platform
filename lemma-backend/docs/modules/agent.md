@@ -95,6 +95,20 @@ skills. Agent and conversation instructions follow
 the static guidance; runtime context and the task list follow those to preserve
 the cached prefix. In-process capabilities and Agent Host use the same fragments.
 
+A message answering a line in a channel keeps which lines of the channel it
+was handed as background, never what they said, and a member's line written
+into a contact's conversation is a mark naming its line, never its words
+(`contact_conversations.append_follow_up`). Both are read from the channel's
+timeline as the run's history is put together
+(`services/channel_background.with_channel_background`, from
+`runtime_history.assemble_runtime_history` and for messages steered into a
+run), so an edit, a deletion or a forgotten contact reaches every later
+prompt; the visitor's page and an export read a follow-up the same way. Only
+the runs carried whole get their background -- an older run is reduced to its
+requests and answer -- so the read is bounded and moves in elision's blocks.
+A run answering a line in Lemma answers the lines whose words it read
+(`services/channel_answers`, recorded in `channel_line_answers`).
+
 Table summaries include primary keys, column types and write constraints,
 foreign keys, RLS, and visibility. Column descriptions are available through
 table inspection rather than repeated in every prompt. Omission counts mark

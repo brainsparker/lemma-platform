@@ -114,8 +114,12 @@ _NAME_TO_MODULE = {
     'BulkUpdateRecordsRequest': 'bulk_update_records_request',
     'BulkUpdateRecordsRequestRecordsItem': 'bulk_update_records_request_records_item',
     'BundleSourceKind': 'bundle_source_kind',
+    'CaseEventResponse': 'case_event_response',
+    'CaseEventResponseValue': 'case_event_response_value',
+    'CaseResponse': 'case_response',
     'ChannelAnswerRequest': 'channel_answer_request',
     'ChannelAnswerRequestAnswer': 'channel_answer_request_answer',
+    'ChannelCasesResponse': 'channel_cases_response',
     'ChannelCreateRequest': 'channel_create_request',
     'ChannelDetailResponse': 'channel_detail_response',
     'ChannelEditRequest': 'channel_edit_request',
@@ -801,8 +805,12 @@ if TYPE_CHECKING:
     from .bulk_update_records_request import BulkUpdateRecordsRequest
     from .bulk_update_records_request_records_item import BulkUpdateRecordsRequestRecordsItem
     from .bundle_source_kind import BundleSourceKind
+    from .case_event_response import CaseEventResponse
+    from .case_event_response_value import CaseEventResponseValue
+    from .case_response import CaseResponse
     from .channel_answer_request import ChannelAnswerRequest
     from .channel_answer_request_answer import ChannelAnswerRequestAnswer
+    from .channel_cases_response import ChannelCasesResponse
     from .channel_create_request import ChannelCreateRequest
     from .channel_detail_response import ChannelDetailResponse
     from .channel_edit_request import ChannelEditRequest
@@ -1501,8 +1509,12 @@ __all__ = [
     'BulkUpdateRecordsRequest',
     'BulkUpdateRecordsRequestRecordsItem',
     'BundleSourceKind',
+    'CaseEventResponse',
+    'CaseEventResponseValue',
+    'CaseResponse',
     'ChannelAnswerRequest',
     'ChannelAnswerRequestAnswer',
+    'ChannelCasesResponse',
     'ChannelCreateRequest',
     'ChannelDetailResponse',
     'ChannelEditRequest',

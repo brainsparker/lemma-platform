@@ -147,7 +147,11 @@ class ChannelResponse(BaseModel):
         default=None, description="A contact's channel: where it stands."
     )
     attention: AttentionResponse | None = Field(
-        default=None, description="The channel asks for a person, and why."
+        default=None,
+        description=(
+            "A contact's channel: its current case asks for a person, and why. "
+            "Never set on another kind of channel."
+        ),
     )
     sources: list[SourceSummary] = Field(
         default_factory=list, description="The outside places feeding it."
@@ -336,15 +340,14 @@ def _person(channel: Channel, names: Names) -> PersonRef | None:
 
 
 def _inbox_fields(channel: Channel, names: Names) -> dict[str, object]:
-    """A contact's inbox fields; and, on any channel, a call for a person --
-    a contact's run in a group asks for one there too."""
+    """A contact's inbox fields, read from its current case."""
+    if channel.kind is not ChannelKind.CONTACT:
+        return {}
     attention = (
         AttentionResponse(since=channel.attention_at, reason=channel.attention_reason)
         if channel.attention_at
         else None
     )
-    if channel.kind is not ChannelKind.CONTACT:
-        return {"attention": attention}
     return {
         "agents_answer": channel.agents_answer,
         "hand_back_after_hours": channel.hand_back_after_hours,

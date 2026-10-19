@@ -33,6 +33,7 @@ from app.modules.agent_surfaces.tests.e2e.test_email_contacts_e2e import (
     _email_bot,
 )
 from app.modules.channels.contracts import (
+    AccountKey,
     ContactsHome,
     Place,
     SourceKind,
@@ -93,8 +94,8 @@ async def _whatsapp_place(pod_id: str, contact_id: UUID, *, heard_ago: timedelta
             place=Place(
                 surface_id=None,
                 platform="WHATSAPP",
-                account_key="number:+15550001111",
-                kind=SourceKind.PRIVATE,
+                account=AccountKey(workspace="number:+15550001111"),
+                kind=SourceKind.PERSON,
                 external_channel_id=None,
                 # WhatsApp names them by their number without its ``+``.
                 external_user_id=PHONE.lstrip("+"),

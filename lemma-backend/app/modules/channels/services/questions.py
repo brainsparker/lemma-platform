@@ -1,8 +1,8 @@
 """Answering a question a line asks, and closing it however it ends.
 
 A question is asked by another module -- an agent's paused ``ask_user`` or
-``request_approval`` (``tool:``), a workflow's form (``wf:``), a question one
-member's agent put to another (``msg:``). Each registers what taking an
+``request_approval`` (``TOOL``), a workflow's form (``WORKFLOW``), a question
+one member's agent put to another (``MESSAGE``). Each registers what taking an
 answer does (``answers_for``); channels cannot import those modules.
 
 Answering, in order:
@@ -20,7 +20,8 @@ Answering, in order:
 
 A question answered somewhere else -- in the conversation, on a platform's
 button -- is closed here by the module that saw it (``close``). One whose time
-ran out is expired by a sweeper.
+ran out is expired by a sweeper; one whose asking conversation or run was
+deleted is cancelled by it.
 """
 
 from __future__ import annotations
@@ -36,15 +37,12 @@ from app.modules.channels.contracts.facts import ChannelQuestionClosed
 from app.modules.channels.domain.entities import (
     Principal,
     Question,
+    QuestionAsker,
     QuestionKind,
     QuestionState,
 )
 from app.modules.channels.infrastructure.questions import QuestionRepository
 from app.modules.channels.infrastructure.rows import now
-
-#: The asker of an agent's paused tool call, answered only in its conversation
-#: or by the person's own hand.
-TOOL_ASKER = "tool"
 
 #: The decisions an approval takes.
 APPROVAL_DECISIONS = frozenset({"APPROVE_ONCE", "APPROVE_FOR_SESSION", "DENY"})
@@ -76,10 +74,10 @@ class Answering:
 #: one given. Raises ``AnswerRefused`` to refuse it.
 AnswerHandler = Callable[[Answering], Awaitable[Mapping[str, object] | None]]
 
-_HANDLERS: dict[str, AnswerHandler] = {}  # memory: bounded one per asker, set at import
+_HANDLERS: dict[QuestionAsker, AnswerHandler] = {}  # memory: bounded per asker
 
 
-def answers_for(asker: str) -> Callable[[AnswerHandler], AnswerHandler]:
+def answers_for(asker: QuestionAsker) -> Callable[[AnswerHandler], AnswerHandler]:
     """Register what answering ``asker``'s questions does. Once per asker."""
 
     def register(handler: AnswerHandler) -> AnswerHandler:
@@ -92,11 +90,11 @@ def answers_for(asker: str) -> Callable[[AnswerHandler], AnswerHandler]:
     return register
 
 
-def answerer(ref: str) -> AnswerHandler | None:
-    return _HANDLERS.get(ref.partition(":")[0])
+def answerer(question: Question) -> AnswerHandler | None:
+    return _HANDLERS.get(question.asker)
 
 
-def registered_askers() -> frozenset[str]:
+def registered_askers() -> frozenset[QuestionAsker]:
     return frozenset(_HANDLERS)
 
 
@@ -113,7 +111,7 @@ def _checked(
         raise AnswerRefused(
             "This question is somebody else's to answer", status_code=403
         )
-    if through_agent and question.asker == TOOL_ASKER:
+    if through_agent and question.asker is QuestionAsker.TOOL:
         # A paused ``ask_user`` belongs to the conversation that asked it: an
         # agent answering it from another conversation would answer for the
         # person in a run they are not in.
@@ -159,7 +157,7 @@ async def answer(
         await uow.commit()
     if claimed is None:
         raise AnswerRefused("Somebody is answering this already")
-    handler = answerer(claimed.ref)
+    handler = answerer(claimed)
     effective: Mapping[str, object] | None = None
     if handler is not None:
         taken = False
@@ -229,16 +227,30 @@ async def close_ref(
     )
 
 
-async def cancel_under(
-    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, prefix: str
+async def cancel_asked_by(
+    uow: SqlAlchemyUnitOfWork,
+    asker: QuestionAsker,
+    *,
+    conversation_id: UUID | None = None,
+    workflow_run_id: UUID | None = None,
 ) -> list[Question]:
-    """Cancel every open question whose ref starts with ``prefix``."""
-    cancelled = await QuestionRepository(uow.session).cancel_under(
-        pod_id=pod_id, prefix=prefix
+    """Cancel every question still waiting that this conversation, or this
+    run, asked -- the asker withdrew it."""
+    cancelled = await QuestionRepository(uow.session).cancel_asked_by(
+        asker, conversation_id=conversation_id, workflow_run_id=workflow_run_id
     )
     for question in cancelled:
         await announce_closed(uow, question)
     return cancelled
+
+
+async def cancel_orphaned(uow: SqlAlchemyUnitOfWork, *, limit: int = 100) -> int:
+    """Cancel the questions whose asking conversation or run was deleted --
+    nothing is left to take an answer -- and announce each; how many."""
+    cancelled = await QuestionRepository(uow.session).cancel_orphaned(limit=limit)
+    for question in cancelled:
+        await announce_closed(uow, question)
+    return len(cancelled)
 
 
 async def cancel_waiting_on(
@@ -268,6 +280,7 @@ async def release_lapsed(uow: SqlAlchemyUnitOfWork, *, limit: int = 100) -> int:
 
 
 async def announce_closed(uow: SqlAlchemyUnitOfWork, question: Question) -> None:
+    asked = question.asked_by
     await facts.emit(
         uow,
         ChannelQuestionClosed(
@@ -278,5 +291,9 @@ async def announce_closed(uow: SqlAlchemyUnitOfWork, question: Question) -> None
             batch_id=question.batch_id,
             state=question.state,
             awaited_user_id=question.awaits.user_id,
+            asker=question.asker,
+            asker_conversation_id=asked.conversation_id if asked else None,
+            asker_workflow_run_id=asked.workflow_run_id if asked else None,
+            asker_key=asked.key if asked else None,
         ),
     )

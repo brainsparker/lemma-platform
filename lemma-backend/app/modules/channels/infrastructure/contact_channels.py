@@ -1,8 +1,9 @@
 """What a contact's merge or forgetting does to the channels.
 
-**A merge** folds the merged contact's channel into the survivor's: its lines
-are numbered on after the survivor's, and everything keyed by the channel or a
-line's number moves with them. Both channel rows are locked first, in id order
+**A merge** folds the merged contact's channel into the survivor's: both
+channels' lines are numbered again together, in the order they were said
+(``fold_lines``), and what hangs from a line follows it by its foreign keys;
+each member's read position is carried, so what they had read stays read. Both channel rows are locked first, in id order
 -- the order every writer that takes two channel locks takes them in -- so a
 line written to either while the fold runs either lands before it and is moved,
 or waits and finds its channel gone. The merged channel is dropped only after
@@ -20,18 +21,20 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import InstrumentedAttribute, aliased
 
+from app.core.infrastructure.db.base import Base
 from app.modules.channels.domain.entities import (
     ChannelKind,
-    ContactStatus,
+    DeliveryReasonCode,
     DeliveryStatus,
 )
+from app.modules.channels.infrastructure.cases import CaseRepository
 from app.modules.channels.infrastructure.models import (
     ChannelMemberModel,
     ChannelMentionModel,
@@ -42,13 +45,38 @@ from app.modules.channels.infrastructure.models import (
     ChannelSourceModel,
 )
 from app.modules.channels.infrastructure.repository import ChannelRepository
-from app.modules.channels.infrastructure.revisions import next_rev
+from app.modules.channels.infrastructure.fold_lines import (
+    carry_read_state,
+    defer_place_checks,
+    merge_lines,
+    renumber_deliveries,
+)
+from app.modules.channels.infrastructure.mentions import drop_mentions
+from app.modules.channels.infrastructure.revisions import log_lines, next_rev
 from app.modules.channels.infrastructure.rows import now
+
+#: Every column of the channels' tables that names a contact, and what a merge
+#: does to it: the merged contact's own channel folds into the survivor's
+#: (``channels.contact_id``); these are renamed in place; and these are
+#: renamed unless the survivor is named on the same row's key already (one
+#: mention per line and person, one seat per channel and person), when the
+#: merged contact's row goes. A new foreign key to ``contacts.id`` belongs in
+#: one of them (``contacts/tests/unit/test_merge_covers_every_contact_key``).
+RENAMED_ON_MERGE: tuple[InstrumentedAttribute[UUID | None], ...] = (
+    ChannelMessageModel.sender_contact_id,
+    ChannelMessageModel.on_behalf_contact_id,
+    ChannelQuestionModel.awaits_contact_id,
+    ChannelQuestionModel.answered_by_contact_id,
+)
+DEDUPED_ON_MERGE: tuple[
+    tuple[InstrumentedAttribute[UUID | None], InstrumentedAttribute[UUID]], ...
+] = (
+    (ChannelMentionModel.contact_id, ChannelMentionModel.message_id),
+    (ChannelMemberModel.contact_id, ChannelMemberModel.channel_id),
+)
 
 #: What a member reads on a send of a line whose writer was forgotten.
 FORGOTTEN = "The person who wrote this was forgotten, so it was not sent."
-
-_EARLIEST = datetime.min.replace(tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,10 +115,11 @@ class ContactChannels:
         await self._free_client_ids(merged.id, head.id)
         # The survivor's subscribers are sent the lines and fields it gained;
         # the merged channel's find it gone when it is dropped.
-        rev = await next_rev(self.session, head.id, channel_changed=True)
-        moved = await self._move_lines(merged.id, head.id, base, rev or 0)
-        await self._move_keyed_rows(merged.id, head.id)
+        await next_rev(self.session, head.id, channel_changed=True)
+        moved = await self._move_lines(pod_id, merged.id, head.id)
+        await self._move_places(merged.id, head.id)
         await self._move_seats(merged.id, head.id)
+        await CaseRepository(self.session).fold(merged, head)
         _settle(head, merged, survivor_had_lines=base > 0)
         head.last_seq = base + moved
         await self.session.flush()
@@ -156,42 +185,41 @@ class ContactChannels:
         )
 
     async def _move_lines(
-        self, merged_id: UUID, survivor_id: UUID, base: int, rev: int
+        self, pod_id: UUID, merged_id: UUID, survivor_id: UUID
     ) -> int:
+        """Both channels' lines, numbered together in the survivor; how many
+        came from the merged one. Read positions and deliveries' numbers are
+        carried first, from the numbers as they were."""
         line = ChannelMessageModel
-        renumbered = (
-            select(
-                line.id.label("id"),
-                (base + func.row_number().over(order_by=line.seq)).label("seq"),
+        incoming = int(
+            await self.session.scalar(
+                select(func.count()).where(line.channel_id == merged_id)
             )
-            .where(line.channel_id == merged_id)
-            .subquery()
+            or 0
         )
-        result = await self.session.execute(
-            update(line)
-            .where(line.id == renumbered.c.id)
-            .values(channel_id=survivor_id, seq=renumbered.c.seq, rev=rev)
-            .execution_options(synchronize_session=False)
+        await defer_place_checks(self.session)
+        await carry_read_state(
+            self.session, pod_id=pod_id, merged_id=merged_id, survivor_id=survivor_id
         )
-        return int(result.rowcount or 0)
+        await renumber_deliveries(
+            self.session, merged_id=merged_id, survivor_id=survivor_id
+        )
+        changed = await merge_lines(
+            self.session, merged_id=merged_id, survivor_id=survivor_id
+        )
+        await _log_changed(self.session, survivor_id, changed)
+        return incoming
 
-    async def _move_keyed_rows(self, merged_id: UUID, survivor_id: UUID) -> None:
-        """What is keyed by the channel follows its lines; a mention takes its
-        line's new number, which is what unread mentions are counted by."""
-        mention, line = ChannelMentionModel, ChannelMessageModel
+    async def _move_places(self, merged_id: UUID, survivor_id: UUID) -> None:
+        """The merged channel's places feed the survivor's. Its questions,
+        mentions and the rest follow their lines by their foreign keys."""
+        source = ChannelSourceModel
         await self.session.execute(
-            update(mention)
-            .where(mention.channel_id == merged_id, mention.message_id == line.id)
-            .values(channel_id=survivor_id, seq=line.seq)
+            update(source)
+            .where(source.channel_id == merged_id)
+            .values(channel_id=survivor_id)
             .execution_options(synchronize_session=False)
         )
-        for table in (ChannelSourceModel, ChannelQuestionModel):
-            await self.session.execute(
-                update(table)
-                .where(table.channel_id == merged_id)
-                .values(channel_id=survivor_id)
-                .execution_options(synchronize_session=False)
-            )
 
     async def _move_seats(self, merged_id: UUID, survivor_id: UUID) -> None:
         """Members and agents seated only in the merged channel keep a seat;
@@ -215,36 +243,25 @@ class ContactChannels:
     async def _rename_contact(self, *, merged_id: UUID, survivor_id: UUID) -> None:
         """Lines, questions, mentions and seats that name the merged contact
         name the survivor; where both are named, the survivor's stays."""
-        message = ChannelMessageModel
-        for column in (message.sender_contact_id, message.on_behalf_contact_id):
+        for column in RENAMED_ON_MERGE:
             await self.session.execute(
-                update(message)
+                update(_table_of(column))
                 .where(column == merged_id)
                 .values({column.key: survivor_id})
                 .execution_options(synchronize_session=False)
             )
-        question = ChannelQuestionModel
-        for column in (question.awaits_contact_id, question.answered_by_contact_id):
-            await self.session.execute(
-                update(question)
-                .where(column == merged_id)
-                .values({column.key: survivor_id})
-                .execution_options(synchronize_session=False)
-            )
-        for table, key in (
-            (ChannelMentionModel, ChannelMentionModel.message_id),
-            (ChannelMemberModel, ChannelMemberModel.channel_id),
-        ):
-            both = select(key).where(table.contact_id == survivor_id)
+        for column, key in DEDUPED_ON_MERGE:
+            table = _table_of(column)
+            both = select(key).where(column == survivor_id)
             await self.session.execute(
                 delete(table)
-                .where(table.contact_id == merged_id, key.in_(both))
+                .where(column == merged_id, key.in_(both))
                 .execution_options(synchronize_session=False)
             )
             await self.session.execute(
                 update(table)
-                .where(table.contact_id == merged_id)
-                .values(contact_id=survivor_id)
+                .where(column == merged_id)
+                .values({column.key: survivor_id})
                 .execution_options(synchronize_session=False)
             )
 
@@ -269,11 +286,10 @@ class ContactChannels:
             if channel_id in own:
                 await channels.delete(channel_id)
                 continue
-            rev = await next_rev(
-                self.session, channel_id, channel_changed=channel_id in seated
-            )
+            if channel_id in seated:
+                await next_rev(self.session, channel_id, channel_changed=True)
             if channel_id in spoken:
-                emptied += await self._empty_lines(channel_id, ids, rev or 0)
+                emptied += await self._empty_lines(channel_id, ids)
         await self.session.execute(
             delete(seat)
             .where(seat.pod_id == pod_id, seat.contact_id.in_(ids))
@@ -317,10 +333,19 @@ class ContactChannels:
             )
         )
 
-    async def _empty_lines(self, channel_id: UUID, ids: list[UUID], rev: int) -> int:
-        """Their lines keep their place, said by nobody; an agent's answer to
-        them keeps its words and names nobody it was for."""
+    async def _lock_one(self, channel_id: UUID) -> None:
+        await self.session.execute(
+            select(ChannelModel.id)
+            .where(ChannelModel.id == channel_id)
+            .with_for_update()
+        )
+
+    async def _empty_lines(self, channel_id: UUID, ids: list[UUID]) -> int:
+        """Their lines keep their place, said by nobody, naming nobody; an
+        agent's answer to them keeps its words and names nobody it was for.
+        The channel is locked first, the order a new line takes it in."""
         line = ChannelMessageModel
+        await self._lock_one(channel_id)
         said = await self.session.scalars(
             update(line)
             .where(line.channel_id == channel_id, line.sender_contact_id.in_(ids))
@@ -332,18 +357,20 @@ class ContactChannels:
                 sender_name=None,
                 external_message_id=None,
                 deleted_at=func.coalesce(line.deleted_at, now()),
-                rev=rev,
             )
             .returning(line.id)
             .execution_options(synchronize_session=False)
         )
         emptied = list(said)
-        await self.session.execute(
+        answered = await self.session.scalars(
             update(line)
             .where(line.channel_id == channel_id, line.on_behalf_contact_id.in_(ids))
-            .values(on_behalf_contact_id=None, rev=rev)
+            .values(on_behalf_contact_id=None)
+            .returning(line.id)
             .execution_options(synchronize_session=False)
         )
+        await drop_mentions(self.session, emptied)
+        await _log_changed(self.session, channel_id, set(emptied) | set(answered))
         if emptied:
             d = ChannelMessageDeliveryModel
             await self.session.execute(
@@ -357,6 +384,7 @@ class ContactChannels:
                 )
                 .values(
                     status=DeliveryStatus.SKIPPED.value,
+                    reason_code=DeliveryReasonCode.FORGOTTEN.value,
                     reason=FORGOTTEN,
                     next_attempt_at=None,
                     updated_at=now(),
@@ -366,25 +394,28 @@ class ContactChannels:
         return len(emptied)
 
 
+async def _log_changed(
+    session: AsyncSession, channel_id: UUID, message_ids: Collection[UUID]
+) -> None:
+    """A change of the channel for each of these lines, in timeline order."""
+    line = ChannelMessageModel
+    await log_lines(
+        session,
+        channel_id,
+        select(line.id).where(line.id.in_(sorted(message_ids))).order_by(line.seq),
+    )
+
+
+def _table_of(column: InstrumentedAttribute[UUID | None]) -> type[Base]:
+    return cast("type[Base]", column.class_)
+
+
 def _settle(
     head: ChannelModel, merged: ChannelModel, *, survivor_had_lines: bool
 ) -> None:
-    """The survivor's channel takes the merged one's state where it says more:
-    the more recent assignee, open if either is, agents answering only if both
-    let them, a call for a person if either made one, and the newer last line.
-    """
-    if merged.assignee_user_id is not None and (
-        head.assignee_user_id is None
-        or (merged.assigned_at or _EARLIEST) > (head.assigned_at or _EARLIEST)
-    ):
-        head.assignee_user_id = merged.assignee_user_id
-        head.assigned_at = merged.assigned_at
-        head.assignee_last_line_at = merged.assignee_last_line_at
-    head.status = _either(head.status, merged.status)
+    """The survivor's channel answers by agent only if both let it, and shows
+    the newer last line. Its cases are merged by ``CaseRepository.fold``."""
     head.agents_answer = head.agents_answer and merged.agents_answer
-    if head.attention_at is None and merged.attention_at is not None:
-        head.attention_at = merged.attention_at
-        head.attention_reason = merged.attention_reason
     if merged.last_line_id is not None and (
         not survivor_had_lines or merged.last_line_at > head.last_line_at
     ):
@@ -392,11 +423,10 @@ def _settle(
         head.last_line_at = merged.last_line_at
 
 
-def _either(first: str, second: str) -> str:
-    for status in (ContactStatus.OPEN, ContactStatus.WAITING_ON_CONTACT):
-        if status.value in (first, second):
-            return status.value
-    return ContactStatus.CLOSED.value
-
-
-__all__ = ["FORGOTTEN", "ContactChannels", "Fold"]
+__all__ = [
+    "DEDUPED_ON_MERGE",
+    "FORGOTTEN",
+    "RENAMED_ON_MERGE",
+    "ContactChannels",
+    "Fold",
+]

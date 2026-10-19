@@ -51,7 +51,7 @@ SEARCH_PAGE = 30
 
 #: A page of lines: one walk back along ``(channel_id, seq)`` from the newest
 #: or from ``before_seq``, a probe of each line's question by its key, and the
-#: page's reply counts from ``(thread_root_id, seq)``. A handful of index
+#: page's reply counts by root from ``channel_threads``. A handful of index
 #: ranges whatever the channel's length.
 PAGE_BUDGET_MS = 500
 #: A thread: its root by key, then one page of replies along
@@ -227,19 +227,16 @@ async def test_a_members_channel_list_reads_a_page_not_every_channel(
     later_page = await later()
     assert len(later_page["items"]) == PAGE
 
-    # Lines are read by key only: each channel's last line, and the line of
-    # each unread mention -- to leave out one since deleted. Channels are
-    # walked from the cursor until a page the member may see is found: past a
-    # private group they are not in for every few they are, never the pod.
-    for name, read, shown in (
-        ("the first page", first, page),
-        ("a later page", later, later_page),
-    ):
-        unread_mentions = sum(item["unread"]["mentions"] for item in shown["items"])
+    # Lines are read by key only: each channel's last line. Unread mentions
+    # are counted from the mention index alone -- a deleted line's went with
+    # it -- so no line is read to count them. Channels are walked from the
+    # cursor until a page the member may see is found: past a private group
+    # they are not in for every few they are, never the pod.
+    for name, read in (("the first page", first), ("a later page", later)):
         _assert_shape(
             name,
             await shape_of(db_manager.engine, read),
-            lines_ceiling=PAGE + unread_mentions,
+            lines_ceiling=PAGE,
             channels_ceiling=3 * PAGE,
         )
     await _within("channel list, first page", first, budget_ms=CHANNEL_LIST_BUDGET_MS)
@@ -257,9 +254,11 @@ async def test_a_members_inbox_counts_by_number_not_by_line(
     assert totals["waiting"] > 0, totals
     assert found["waiting"] and found["mentions"]
 
-    # Lines are read by key: the line of each unread mention as they are
-    # counted -- to leave out one since deleted -- and again for the newest of
-    # them listed, and the lines the two lists show.
+    # Lines are read by key, and only the ones the two lists show: mentions
+    # are counted and listed from the member's places and the mention index
+    # alone, each place one range past its read number.
+    shape = await shape_of(db_manager.engine, inbox)
+    _assert_shape("the inbox", shape, lines_ceiling=2 * INBOX_ITEMS)
     unread_mentions = await db_session.scalar(
         text("""
         SELECT count(*) FROM channel_mentions m
@@ -270,9 +269,8 @@ async def test_a_members_inbox_counts_by_number_not_by_line(
         """),
         {"member": scale.member_id, "pod": scale.pod_id},
     )
-    _assert_shape(
-        "the inbox",
-        await shape_of(db_manager.engine, inbox),
-        lines_ceiling=int(unread_mentions or 0) + 3 * INBOX_ITEMS,
-    )
+    # Never every mention the member was ever given: what is unread, at most.
+    assert shape.rows_read("channel_mentions") <= int(unread_mentions or 0) + (
+        2 * UNREAD_CAP
+    ), shape.describe(verbose=True)
     await _within("the inbox", inbox, budget_ms=INBOX_BUDGET_MS)

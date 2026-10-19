@@ -108,6 +108,9 @@ class SendOutcome:
     #: A call ended in a way that does not say whether the platform took it
     #: (a read timeout, a dropped connection after the request went out).
     ambiguous: bool = False
+    #: The HTTP status of the last failure the platform answered with, as a
+    #: delivery's try records it (``channel_delivery_attempts``).
+    provider_status: str | None = None
     #: The block this one is inside: what is noted here is noted there too.
     parent: SendOutcome | None = field(default=None, repr=False, compare=False)
 
@@ -174,6 +177,18 @@ def _note_gave_up(retry_after: float | None) -> None:
             outcome.retry_after = retry_after
 
 
+def _note_status(exc: BaseException) -> None:
+    status: int | None = None
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+    elif isinstance(exc, aiohttp.ClientResponseError):
+        status = exc.status
+    if status is None:
+        return
+    for outcome in _tracked():
+        outcome.provider_status = str(status)
+
+
 def _note_ended(exc: BaseException) -> None:
     if not may_have_arrived(exc):
         return
@@ -204,6 +219,7 @@ async def with_retry(
         try:
             return await send()
         except Exception as exc:  # noqa: BLE001 - re-raised after classification
+            _note_status(exc)
             if classify(exc) is DeliveryClassification.PERMANENT:
                 _note_ended(exc)
                 raise

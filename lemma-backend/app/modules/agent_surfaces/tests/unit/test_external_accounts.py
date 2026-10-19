@@ -1,8 +1,9 @@
-"""``account_key_for``: which account a surface's places belong to.
+"""``account_of``: which account a surface's places belong to.
 
 Two agents' Slack apps (or Teams bots) in one workspace are two accounts --
 one between them handed each app the other's places and token. The same app
-installed again is the same account, so its places keep their history.
+installed again is the same account, so its places keep their history; so is
+a WhatsApp number's surface made again.
 """
 
 from __future__ import annotations
@@ -15,8 +16,9 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.external_accounts import account_key_for
+from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.domain.surface_config import SurfaceConfig
+from app.modules.channels.contracts import AccountKey
 
 
 def _surface(platform: SurfacePlatform, *, bot: str | None) -> AgentSurfaceEntity:
@@ -40,7 +42,8 @@ def test_two_agents_apps_in_one_workspace_are_two_accounts(platform):
     reviewer = _surface(platform, bot="B-REVIEWER")
     support = _surface(platform, bot="B-SUPPORT")
 
-    assert account_key_for(reviewer) != account_key_for(support)
+    assert account_of(reviewer) != account_of(support)
+    assert account_of(reviewer).workspace == account_of(support).workspace
 
 
 @pytest.mark.parametrize("platform", [SurfacePlatform.SLACK, SurfacePlatform.TEAMS])
@@ -49,8 +52,17 @@ def test_the_same_app_installed_again_is_the_same_account(platform):
     reinstalled = _surface(platform, bot="B-REVIEWER")
 
     assert first.id != reinstalled.id
-    assert account_key_for(first) == account_key_for(reinstalled)
+    assert account_of(first) == account_of(reinstalled)
 
 
-def test_a_surface_that_never_recorded_its_bot_is_keyed_by_the_workspace():
-    assert account_key_for(_surface(SurfacePlatform.SLACK, bot=None)) == "team:T123"
+def test_a_surface_that_never_recorded_its_bot_names_only_its_workspace():
+    assert account_of(_surface(SurfacePlatform.SLACK, bot=None)) == AccountKey(
+        workspace="T123"
+    )
+
+
+def test_a_whatsapp_number_is_its_account_whichever_surface_reaches_it():
+    first = _surface(SurfacePlatform.WHATSAPP, bot="PHONE-ID-1")
+    again = _surface(SurfacePlatform.WHATSAPP, bot="PHONE-ID-1")
+
+    assert account_of(first) == account_of(again) == AccountKey(workspace="PHONE-ID-1")

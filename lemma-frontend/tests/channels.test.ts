@@ -117,9 +117,9 @@ test("says what is new, and the sidebar's badge puts questions first", () => {
 const detail = readChannelDetail({
     id: "c-launch", kind: "GROUP", title: "launch", created_at: "2026-10-01T09:00:00Z",
     source_places: [
-        { id: "s-slack", platform: "slack", kind: "SHARED", title: "#acme", surface_id: "surface-1" },
-        { id: "s-tg", platform: "TELEGRAM", kind: "SHARED", title: null },
-        { id: "s-wa", platform: "WHATSAPP", kind: "SHARED", title: "New", pending: true },
+        { id: "s-slack", platform: "slack", kind: "CHAT", title: "#acme", surface_id: "surface-1" },
+        { id: "s-tg", platform: "TELEGRAM", kind: "CHAT", title: null },
+        { id: "s-wa", platform: "WHATSAPP", kind: "CHAT", title: "New", pending: true },
         { platform: "WEB" },
     ],
     members: [

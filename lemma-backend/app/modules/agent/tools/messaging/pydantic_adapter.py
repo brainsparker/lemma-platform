@@ -33,7 +33,6 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.asked_questions import (
-    asked_by_prefix,
     batch_of,
     line_client_id,
     message_ref,
@@ -57,12 +56,14 @@ from app.modules.agent.tools.messaging.people import ask_a_person, list_pod_memb
 from app.modules.agent.tools.messaging.teammates import ask_teammate, list_teammates
 from app.modules.agent_surfaces.contracts import direct_messages
 from app.modules.channels.contracts import (
+    Asker,
     ChannelKind,
     ChannelMessage,
     NewLine,
     NewQuestion,
     Principal,
     Question,
+    QuestionAsker,
     QuestionKind,
     QuestionState,
     Sender,
@@ -215,16 +216,20 @@ async def _post_to_member(
             ),
         )
     key = _call_key(deps, ctx)
+    call = ctx.tool_call_id or uuid4().hex
     question = (
         NewQuestion(
             kind=QuestionKind.ASK,
-            ref=message_ref(deps.conversation_id, ctx.tool_call_id or uuid4().hex),
+            ref=message_ref(deps.conversation_id, call),
+            asker=Asker.message(deps.conversation_id, call),
             question={"tool": "message", "prompt": request.text},
             awaits=Principal.member(recipient),
             batch_id=batch_of(deps.agent_run_id),
             expires_at=datetime.now(UTC) + ASK_EXPIRES_AFTER,
         )
-        if request.wants_answer
+        # A question is its asking conversation's: with none, nothing would
+        # ever take the answer, so the line only tells them.
+        if request.wants_answer and deps.conversation_id is not None
         else None
     )
     async with _uow() as uow:
@@ -359,10 +364,10 @@ async def _asked_by_me(deps: BaseAgentContext, *, limit: int) -> ChannelReadResp
     if deps.conversation_id is None:
         return ChannelReadResponse(success=True, message="Nothing asked here.")
     async with _uow() as uow:
-        asked = await channel_questions.questions_under(
+        asked = await channel_questions.questions_asked_by(
             uow,
-            pod_id=deps.pod_id,
-            prefix=asked_by_prefix(deps.conversation_id),
+            QuestionAsker.MESSAGE,
+            conversation_id=deps.conversation_id,
             limit=limit,
         )
         lines = [

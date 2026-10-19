@@ -13,10 +13,6 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.asked_questions import (
-    asking_conversation,
-    message_ref,
-)
 from app.modules.agent.services.pause_questions import (
     PauseDecision,
     ask_response,
@@ -86,9 +82,6 @@ def test_refs_name_their_conversation():
 
     assert parse_tool_ref(tool_ref(conversation, "call-1")) == (conversation, "call-1")
     assert parse_tool_ref("wf:x:y") is None
-    assert asking_conversation(message_ref(conversation, "k")) == conversation
-    assert asking_conversation(message_ref(None, "k")) is None
-    assert asking_conversation("tool:" + str(conversation) + ":k") is None
 
 
 def test_a_client_id_always_fits_a_line_and_is_stable():

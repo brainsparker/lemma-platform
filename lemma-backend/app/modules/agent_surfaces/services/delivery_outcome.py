@@ -12,20 +12,24 @@ Four ends, one per status a delivery row can settle in after a try:
   (part of a long message, or a send that may have landed) or meet the same
   refusal.
 
-A send is retried only when a retry cannot be the duplicate the person sees.
-Saying something twice is worse than saying, visibly, that it may not have
-arrived -- except on a platform that dedupes a resend by its key
-(``RESENDS_SAFELY``), where an ambiguous send is simply sent again.
+Every end but ``SENT`` carries a ``DeliveryReasonCode`` -- what code reads --
+beside the sentence a member does. A send is retried only when a retry cannot
+be the duplicate the person sees. Saying something twice is worse than
+saying, visibly, that it may not have arrived -- except on a platform that
+dedupes a resend by its key (``RESENDS_SAFELY``), where an ambiguous send is
+simply sent again.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import StrEnum
 
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
 from app.modules.agent_surfaces.platforms.delivery import SendOutcome
+from app.modules.channels.contracts import DeliveryReasonCode as Code
 
 #: Platforms that honour the delivery's idempotency key: a resend under it is
 #: the first send's result, never a second message (Resend keeps a key for a
@@ -45,10 +49,16 @@ class Outcome:
     result: Result
     platform: str | None = None
     reason: str | None = None
+    code: Code | None = None
     external_message_id: str | None = None
     #: How long the platform asked to be left alone, in seconds: a retry waits
     #: at least this long.
     retry_after: float | None = None
+    #: What the platform last answered, when it said (an HTTP status).
+    provider_status: str | None = None
+    #: A push the hourly budget held (``FOLDED``): how long before its lines
+    #: may go again, with the member's next push from the channel.
+    hold_for: timedelta | None = None
 
     @property
     def sent(self) -> bool:
@@ -63,24 +73,50 @@ class Outcome:
         )
 
     @classmethod
-    def skipped(cls, reason: str, *, platform: str | None = None) -> Outcome:
-        return cls(Result.SKIPPED, platform=platform, reason=reason)
+    def skipped(
+        cls, reason: str, *, code: Code, platform: str | None = None
+    ) -> Outcome:
+        return cls(Result.SKIPPED, platform=platform, reason=reason, code=code)
+
+    @classmethod
+    def folded(cls, reason: str, *, hold_for: timedelta) -> Outcome:
+        return cls(Result.SKIPPED, reason=reason, code=Code.FOLDED, hold_for=hold_for)
 
     @classmethod
     def failed(
         cls,
         reason: str,
         *,
+        code: Code = Code.TRANSIENT,
         platform: str | None = None,
         retry_after: float | None = None,
+        provider_status: str | None = None,
     ) -> Outcome:
         return cls(
-            Result.FAILED, platform=platform, reason=reason, retry_after=retry_after
+            Result.FAILED,
+            platform=platform,
+            reason=reason,
+            code=code,
+            retry_after=retry_after,
+            provider_status=provider_status,
         )
 
     @classmethod
-    def dead(cls, reason: str, *, platform: str | None = None) -> Outcome:
-        return cls(Result.DEAD, platform=platform, reason=reason)
+    def dead(
+        cls,
+        reason: str,
+        *,
+        code: Code,
+        platform: str | None = None,
+        provider_status: str | None = None,
+    ) -> Outcome:
+        return cls(
+            Result.DEAD,
+            platform=platform,
+            reason=reason,
+            code=code,
+            provider_status=provider_status,
+        )
 
 
 def may_have_arrived(platform: str) -> str:
@@ -111,17 +147,21 @@ def of_send(
         return Outcome.delivered(
             platform, external_message_id=receipt.external_message_id
         )
+    status = sends.provider_status
     if sends.partial:
         return Outcome.dead(
             f"Only part of it reached {platform}; it was not sent again, so as "
             "not to repeat that part.",
+            code=Code.PARTIAL,
             platform=platform,
+            provider_status=status,
         )
     if sends.gave_up_transient:
         return Outcome.failed(
             f"{platform} could not take it just now. It will be tried again.",
             platform=platform,
             retry_after=sends.retry_after,
+            provider_status=status,
         )
     if not sends.tried:
         if raised is not None:
@@ -130,7 +170,9 @@ def of_send(
                 "It will be tried again.",
                 platform=platform,
             )
-        return Outcome.skipped(nothing_sent, platform=platform)
+        return Outcome.skipped(
+            nothing_sent, code=Code.NOTHING_TO_SEND, platform=platform
+        )
     if sends.ambiguous:
         if platform in RESENDS_SAFELY:
             return Outcome.failed(
@@ -138,10 +180,14 @@ def of_send(
                 "same key, which it does not deliver twice.",
                 platform=platform,
             )
-        return Outcome.dead(may_have_arrived(platform), platform=platform)
+        return Outcome.dead(
+            may_have_arrived(platform), code=Code.MAY_HAVE_ARRIVED, platform=platform
+        )
     return Outcome.dead(
         f"{platform} refused it; sending it again would meet the same refusal.",
+        code=Code.REFUSED,
         platform=platform,
+        provider_status=status,
     )
 
 
@@ -153,9 +199,14 @@ def timed_out(sends: SendOutcome, *, timeout: float) -> Outcome:
         return Outcome.failed(
             f"No answer from the platform within {timeout:g} s. "
             "It will be tried again.",
+            code=Code.TIMED_OUT,
             platform=platform,
         )
-    return Outcome.dead(may_have_arrived(platform or "The platform"), platform=platform)
+    return Outcome.dead(
+        may_have_arrived(platform or "The platform"),
+        code=Code.MAY_HAVE_ARRIVED,
+        platform=platform,
+    )
 
 
 def raised_before_recording(sends: SendOutcome, exc: BaseException) -> Outcome:
@@ -169,7 +220,9 @@ def raised_before_recording(sends: SendOutcome, exc: BaseException) -> Outcome:
             platform=sends.platform,
         )
     return Outcome.dead(
-        may_have_arrived(sends.platform or "The platform"), platform=sends.platform
+        may_have_arrived(sends.platform or "The platform"),
+        code=Code.MAY_HAVE_ARRIVED,
+        platform=sends.platform,
     )
 
 

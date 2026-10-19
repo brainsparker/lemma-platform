@@ -28,6 +28,11 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.modules.channels.domain.parts import Part
+from app.modules.channels.domain.deliveries import (  # noqa: F401 - re-exported
+    Delivery,
+    DeliveryReasonCode,
+    DeliveryStatus,
+)
 
 
 class ChannelKind(StrEnum):
@@ -54,9 +59,9 @@ class ContactStatus(StrEnum):
 
 class SourceKind(StrEnum):
     #: One person's chat with the bot.
-    PRIVATE = "PRIVATE"
-    #: A place several people read.
-    SHARED = "SHARED"
+    PERSON = "PERSON"
+    #: A chat several people read: a group, a shared channel, a group DM.
+    CHAT = "CHAT"
 
 
 class SenderKind(StrEnum):
@@ -88,6 +93,26 @@ class MemberRole(StrEnum):
     GUEST = "guest"
 
 
+class SeatedBy(StrEnum):
+    """Why somebody is in a channel. A seat means one of four things -- a
+    member's own channel, a contact's writer, access to a private group, a
+    subscription to a public one -- and who put it there decides who may take
+    it back: only the platform's own seats go when the platform says the
+    person left."""
+
+    #: The platform shows them in the place the channel mirrors.
+    PLATFORM = "PLATFORM"
+    #: They spoke there.
+    SPOKE = "SPOKE"
+    #: A member added them.
+    ADDED = "ADDED"
+    #: They made the channel, or it was made for them: its owner.
+    CREATOR = "CREATOR"
+    #: They joined it themselves -- a public group, a contact's channel, or a
+    #: private group on request.
+    JOINED = "JOINED"
+
+
 class AgentAnswers(StrEnum):
     """When an agent in a channel answers."""
 
@@ -108,6 +133,17 @@ class QuestionKind(StrEnum):
     FORM = "FORM"
 
 
+class QuestionAsker(StrEnum):
+    """What asked a question, and so what an answer resumes."""
+
+    #: An agent's paused ``ask_user`` or approval, in its conversation.
+    TOOL = "TOOL"
+    #: A workflow's form, in its run.
+    WORKFLOW = "WORKFLOW"
+    #: A question one member's agent put to another, from its conversation.
+    MESSAGE = "MESSAGE"
+
+
 class QuestionState(StrEnum):
     OPEN = "OPEN"
     #: An answer is being taken; nobody else may answer meanwhile.
@@ -125,17 +161,6 @@ class QuestionState(StrEnum):
             QuestionState.CANCELLED,
             QuestionState.EXPIRED,
         )
-
-
-class DeliveryStatus(StrEnum):
-    PENDING = "PENDING"
-    SENT = "SENT"
-    #: Did not go; will be tried again.
-    FAILED = "FAILED"
-    #: Not sent, on purpose: a rule said not to (opt-out, a window, a cap).
-    SKIPPED = "SKIPPED"
-    #: Tried as often as it will be.
-    DEAD = "DEAD"
 
 
 class Principal(BaseModel):
@@ -165,6 +190,16 @@ class Principal(BaseModel):
         return self.contact_id is not None
 
 
+class AccountKey(BaseModel):
+    """An account's name on its platform: where the bot is, and which bot
+    where a workspace holds several (``None`` until its id is known)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    workspace: str
+    bot: str | None = None
+
+
 class ExternalAccount(BaseModel):
     """An account a pod's bot speaks through: a Slack workspace, a Teams
     tenant, a WhatsApp number, an inbox, a web widget."""
@@ -174,7 +209,8 @@ class ExternalAccount(BaseModel):
     id: UUID
     pod_id: UUID
     platform: str
-    account_key: str
+    workspace_key: str
+    bot_key: str | None = None
     surface_id: UUID | None = None
 
 
@@ -197,6 +233,9 @@ class Channel(BaseModel):
     # -- a contact's channel ---------------------------------------------------
     agents_answer: bool = True
     hand_back_after_hours: int = 12
+    #: The rest is its current case's (``channel_cases``): a contact's
+    #: channel nobody has written in yet reads as an open case nobody holds.
+    case_id: UUID | None = None
     assignee_user_id: UUID | None = None
     assigned_at: datetime | None = None
     assignee_last_line_at: datetime | None = None
@@ -277,6 +316,8 @@ class Member(BaseModel):
     joined_at: datetime | None = None
     #: The seat's own id: what a page of members is cut at.
     seat_id: UUID | None = None
+    #: Why they are in it; only a platform's seat is the platform's to undo.
+    seated_by: SeatedBy | None = None
 
     @property
     def principal(self) -> Principal | None:
@@ -362,11 +403,39 @@ class Sender(BaseModel):
         )
 
 
+class Asker(BaseModel):
+    """What asked a question: the conversation or workflow run, and what in
+    it (``key``: a tool call, a form's node and wait, a key of the asker's)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: QuestionAsker
+    conversation_id: UUID | None = None
+    workflow_run_id: UUID | None = None
+    key: str
+
+    @classmethod
+    def tool(cls, conversation_id: UUID, call_id: str) -> Asker:
+        return cls(
+            kind=QuestionAsker.TOOL, conversation_id=conversation_id, key=call_id
+        )
+
+    @classmethod
+    def workflow(cls, run_id: UUID, key: str) -> Asker:
+        return cls(kind=QuestionAsker.WORKFLOW, workflow_run_id=run_id, key=key)
+
+    @classmethod
+    def message(cls, conversation_id: UUID, key: str) -> Asker:
+        return cls(kind=QuestionAsker.MESSAGE, conversation_id=conversation_id, key=key)
+
+
 class Question(BaseModel):
     """What a line asks of one person, and what became of it.
 
     ``question`` is the asker's own shape -- choices, a form's schema, the tool
-    an approval is for. ``ref`` names the asker and what an answer resumes.
+    an approval is for. ``ref`` is the asker's idempotency key for it;
+    ``asked_by`` what asked it -- ``None`` once the conversation or run that
+    asked is gone.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -380,6 +449,8 @@ class Question(BaseModel):
     state: QuestionState
     question: dict[str, object]
     awaits: Principal
+    asker: QuestionAsker
+    asked_by: Asker | None = None
     answer: dict[str, object] | None = None
     answered_by: Principal | None = None
     answered_at: datetime | None = None
@@ -390,11 +461,6 @@ class Question(BaseModel):
     def is_waiting(self) -> bool:
         """Not closed: open, or being answered -- a claim that may yet lapse."""
         return self.state in (QuestionState.OPEN, QuestionState.ANSWERING)
-
-    @property
-    def asker(self) -> str:
-        """What asked it: the ref's first part (``tool``, ``wf``, ``msg``)."""
-        return self.ref.partition(":")[0]
 
 
 class ChannelMessage(BaseModel):
@@ -448,33 +514,3 @@ class ChannelMessage(BaseModel):
     def heard_outside(self) -> bool:
         """Said on a platform and heard here -- not written in Lemma."""
         return self.source_id is not None
-
-
-class Delivery(BaseModel):
-    """One send of a line outside Lemma, and what became of it."""
-
-    model_config = ConfigDict(frozen=True)
-
-    id: UUID
-    message_id: UUID
-    pod_id: UUID
-    source_id: UUID | None = None
-    recipient_user_id: UUID | None = None
-    platform: str | None = None
-    status: DeliveryStatus
-    reason: str | None = None
-    external_message_id: str | None = None
-    attempts: int = 0
-    next_attempt_at: datetime | None = None
-    #: While a sender holds it (``claim``); cleared with the outcome.
-    claimed_at: datetime | None = None
-    sent_at: datetime | None = None
-    created_at: datetime | None = None
-
-    @property
-    def target_key(self) -> str:
-        """Where it goes, as one key: one place's (or one member's) sends run
-        one at a time, in the order their lines were written."""
-        if self.source_id is not None:
-            return f"place:{self.source_id}"
-        return f"member:{self.recipient_user_id}"

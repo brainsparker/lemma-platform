@@ -3,10 +3,10 @@
 A contact whose channel has its agents switched off is answered by a member,
 whenever one gets to it. Until then the pod may say so once -- its own line,
 set in the pod's settings (``config.contacts.auto_acknowledge``), for example
-"Thanks, someone from Acme will reply". Once per *open period*: from the
-contact's first unanswered message until a member writes to them, or their
-channel is closed. Two messages arriving together say it once (a conditional
-claim on the channel, ``channels.contracts.acknowledge``).
+"Thanks, someone from Acme will reply". Once per *wait*: from the contact's
+first unanswered message until a member writes to them, or their case is
+closed. Two messages arriving together say it once (a claim on the contact's
+case under its channel's lock, ``channels.contracts.acknowledge``).
 
 The line is the pod's agent's, on the contact's timeline at the place they
 wrote from, and goes there as a delivery like any other line. A contact who
@@ -56,8 +56,8 @@ async def acknowledge_contact(
     now: datetime | None = None,
 ) -> str | None:
     """Say the pod's acknowledgement to this contact, if it is due: their
-    channel's agents are off, the pod set one, it is the first of this open
-    period, and they may be written to. Returns what was said -- for their
+    channel's agents are off, the pod set one, it is the first of this wait,
+    and they may be written to. Returns what was said -- for their
     conversation, which is where a web chat shows it -- or ``None``."""
     text = await pod_auto_acknowledgement(uow.session, pod_id)
     if text is None:

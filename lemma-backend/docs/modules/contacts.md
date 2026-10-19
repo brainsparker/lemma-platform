@@ -19,7 +19,11 @@ a confirmed contact, and when that handle is an older contact's, the two are
 merged into it (`domain/merging`, `services/proofs`): the older vouched contact
 survives, the other keeps its row with `merged_into_id`, and everything that
 named it is moved -- handles and sessions here, conversations and contact-owned
-rows by the `ContactMerged` fact.
+rows by the `ContactMerged` fact (their channel folds into the survivor's, its
+cases with it: `channels`). Every foreign key to `contacts.id` in the models
+is listed with what moves it in
+`tests/unit/test_merge_covers_every_contact_key.py`: a new one fails it until
+the merge moves it too.
 
 ## What it owns
 
@@ -42,7 +46,8 @@ rows by the `ContactMerged` fact.
   main-database transaction for their conversations, handles, web chat
   sessions and codes, and stored platform profiles
   (`agent_surfaces/contracts/contacts`), blanking the questions of theirs that
-  reached members' inboxes. Their own channel goes; in groups their lines are
+  reached members' inboxes. Their own channel goes, and its cases -- who
+  answered them, and when -- with it; in groups their lines are
   emptied in place, so others' replies and threads stay
   (`channels/contracts/contacts`).
 - `GET /pods/{pod_id}/contacts/{id}/export`: a page of their handles, their

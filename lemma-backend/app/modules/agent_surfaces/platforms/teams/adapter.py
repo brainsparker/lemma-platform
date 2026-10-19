@@ -27,6 +27,8 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent_surfaces.domain.place_privacy import PlaceFacts, PlacePrivacy
 from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.line_changes import ParsedLineChange
+from app.modules.agent_surfaces.platforms.teams.line_changes import teams_line_changes
 from app.modules.agent_surfaces.platforms.teams.group_updates import (
     teams_group_updates,
 )
@@ -193,6 +195,9 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
         self, payload: dict[str, object]
     ) -> list[ParsedGroupUpdate]:
         return teams_group_updates(payload)
+
+    def parse_line_changes(self, payload: dict[str, object]) -> list[ParsedLineChange]:
+        return teams_line_changes(payload, self._parser)
 
     async def read_place_privacy(
         self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent

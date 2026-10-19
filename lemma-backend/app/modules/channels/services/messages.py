@@ -34,8 +34,11 @@ from app.modules.channels.domain.idempotency import keyed_client_id
 from app.modules.channels.domain.parts import MAX_PARTS, MentionPart, Part
 from app.modules.channels.infrastructure.lines import LineRepository, NewLine
 from app.modules.channels.infrastructure.members import MemberRepository
+from app.modules.channels.infrastructure.mentions import drop_mentions, sync_mentions
+from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.source_repository import SourceRepository
 from app.modules.channels.services.posting import Post, Timeline
+from app.modules.channels.services.pushes import push_named
 from app.modules.channels.services.viewers import member_sees
 
 
@@ -188,10 +191,20 @@ class MemberLines:
         body = (line.text if text is None else text).strip()
         if not body:
             raise LineRefused("Say something, or delete it", status_code=422)
-        if parts is not None:
+        if parts is None:
+            # The words change; who it names does not.
+            edited = await self.lines.edit(line.id, text=body)
+        else:
             # An edit names people by the same rule a post does.
-            await self._named(channel, parts)
-        edited = await self.lines.edit(line.id, text=body, parts=parts)
+            people, agents = await self._named(channel, parts)
+            edited = await rewrite_line(
+                self.uow,
+                message_id=line.id,
+                text=body,
+                parts=parts,
+                people=people,
+                agents=agents,
+            )
         if edited is None:
             raise LineRefused("That line was deleted")
         return edited
@@ -200,7 +213,7 @@ class MemberLines:
         self, channel: Channel, message_id: UUID, *, user_id: UUID
     ) -> ChannelMessage:
         line = await self._own(channel, message_id, user_id=user_id)
-        deleted = await self.lines.delete(line.id)
+        deleted = await erase_line(self.uow, message_id=line.id)
         if deleted is None:
             raise LineRefused("That line was deleted already")
         return deleted
@@ -214,6 +227,43 @@ class MemberLines:
         if line.sender.kind is not SenderKind.MEMBER or line.sender.user_id != user_id:
             raise LineRefused("Only who wrote a line may change it", status_code=403)
         return line
+
+
+async def rewrite_line(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    message_id: UUID,
+    text: str,
+    parts: Sequence[Part],
+    people: Sequence[Principal],
+    agents: Sequence[UUID],
+) -> ChannelMessage | None:
+    """What a line says now, and who it names: ``people`` and ``agents``, as
+    resolved from ``parts`` by ``Naming``. Somebody newly named is counted and
+    told, as a post tells them; somebody no longer named stops counting.
+    ``None`` when the line is gone or deleted."""
+    edited = await LineRepository(uow.session).edit(message_id, text=text, parts=parts)
+    if edited is None:
+        return None
+    change = await sync_mentions(
+        uow.session, message=edited, people=people, agents=agents
+    )
+    if change.added_users:
+        channel = await ChannelRepository(uow.session).get(edited.channel_id)
+        if channel is not None:
+            await push_named(uow, channel, edited, change.added_users)
+    return edited
+
+
+async def erase_line(
+    uow: SqlAlchemyUnitOfWork, *, message_id: UUID
+) -> ChannelMessage | None:
+    """Forget what a line said, and whom it named; it keeps its place.
+    ``None`` when it was deleted already."""
+    deleted = await LineRepository(uow.session).delete(message_id)
+    if deleted is not None:
+        await drop_mentions(uow.session, [deleted.id])
+    return deleted
 
 
 def _replayed(

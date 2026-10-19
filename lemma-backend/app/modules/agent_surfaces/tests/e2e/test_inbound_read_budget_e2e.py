@@ -61,10 +61,11 @@ def _no_typing_keepalive(monkeypatch):
 #: notes what it heard there; the heard line marks when they last wrote; and
 #: the answer's way out asks where the conversation's reply goes -- once to
 #: post the answer as a line at that place, once for the typing indicator,
-#: once for the place its delivery names, and once more for the send itself;
-#: and each of the two lines checks, as it is written, that the place it was
-#: heard at or goes to feeds this channel. A read keyed by the conversation and
-#: joined to its lines counts here, against the table the statement names first.
+#: once for the place its delivery names, and once more for the send itself.
+#: That the place a line was heard at or goes to feeds its channel is the
+#: database's to check (the lines' composite foreign keys), not a read. A read
+#: keyed by the conversation and joined to its lines counts here, against the
+#: table the statement names first.
 #:
 #: The first message also makes the place: its insert, and the read that
 #: returns it with the account's surface.
@@ -78,14 +79,14 @@ def _no_typing_keepalive(monkeypatch):
 #: questions waiting on the member are ``channel_questions`` now.)
 _FIRST_MESSAGE = {
     "agent_surfaces": 7,
-    "channel_sources": 13,
+    "channel_sources": 12,
     "channel_messages": 8,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }
 _LATER_MESSAGE = {
     "agent_surfaces": 5,
-    "channel_sources": 11,
+    "channel_sources": 10,
     "channel_messages": 8,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
@@ -202,3 +203,47 @@ async def test_the_budget_does_not_grow_with_the_conversation(
         if late[table] > early[table]
     }
     assert not grew, f"a read grew with the conversation: {grew}"
+
+
+def _first(statements: list[str], pattern: str) -> int:
+    found = re.compile(pattern)
+    for n, statement in enumerate(statements):
+        if found.search(" ".join(statement.split())):
+            return n
+    raise AssertionError(f"no statement matched {pattern!r}")
+
+
+async def test_the_heard_line_holds_its_channel_only_from_its_append(
+    db_session,
+    authenticated_client,
+    test_pod,
+    fixed_test_user,
+    fixed_test_org,
+    message_store,
+    monkeypatch,
+    fake_telegram,
+):
+    """The line takes its channel's row lock -- which every other writer of
+    the channel waits on -- after the turn it starts is written, not before:
+    the lock is held from the line's append to the commit."""
+    stage = await stage_surface(
+        SurfacePlatform.TELEGRAM,
+        authenticated_client=authenticated_client,
+        db_session=db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fixed_test_org=fixed_test_org,
+        message_store=message_store,
+        monkeypatch=monkeypatch,
+        fake=fake_telegram,
+    )
+    await stage.say("hello")
+
+    with counted_queries() as later:
+        await stage.say("and again")
+    locked = _first(later, r"FROM channels\b.* FOR UPDATE")
+    turn = _first(later, r"^INSERT INTO agent_runs\b")
+    assert turn < locked, (
+        "the channel was locked before the turn was written: "
+        f"lock at statement {locked}, turn at {turn}"
+    )

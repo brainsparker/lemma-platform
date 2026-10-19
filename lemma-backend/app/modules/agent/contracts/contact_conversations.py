@@ -37,6 +37,10 @@ from app.modules.agent.infrastructure.models.conversation import (
     ConversationModel,
     MessageModel,
 )
+from app.modules.channels.contracts.backgrounds import current_words
+
+#: Where a member's follow-up names the line it marks.
+FOLLOW_UP_LINE_KEY = "line_id"
 
 #: The message kinds a person outside the pod may have been shown. Thinking and
 #: tool traffic are the pod's working.
@@ -208,10 +212,14 @@ async def _messages_of(
         .where(numbered.c.place <= MAX_EXPORTED_MESSAGES)
         .order_by(numbered.c.conversation_id, numbered.c.sequence)
     )
+    seen = [row for row, run_metadata in rows if _was_seen(row, run_metadata)]
+    said = await _said(uow, seen)
     grouped: dict[UUID, list[ExportedMessage]] = {}
-    for row, run_metadata in rows:
-        if _was_seen(row, run_metadata):
-            grouped.setdefault(row.conversation_id, []).append(_exported(row))
+    for row in seen:
+        if row.id in said:
+            grouped.setdefault(row.conversation_id, []).append(
+                _exported(row, said[row.id])
+            )
     return {key: tuple(value) for key, value in grouped.items()}
 
 
@@ -233,23 +241,57 @@ async def visible_messages(
         .order_by(MessageModel.sequence)
         .limit(limit)
     )
+    seen = [
+        message for message, run_metadata in rows if _was_seen(message, run_metadata)
+    ]
+    said = await _said(uow, seen)
     return tuple(
         VisibleMessage(
             role=message.role,
-            text=message.text or "",
+            text=said[message.id],
             created_at=message.created_at,
             sequence=message.sequence,
             client_nonce=_client_nonce(message),
         )
-        for message, run_metadata in rows
-        if _was_seen(message, run_metadata)
+        for message in seen
+        if message.id in said
     )
 
 
-def _exported(message: MessageModel) -> ExportedMessage:
+async def _said(
+    uow: SqlAlchemyUnitOfWork, messages: list[MessageModel]
+) -> dict[UUID, str]:
+    """What each message says, by its id: a member's follow-up says what its
+    line says now, and one whose line is deleted or gone is not there."""
+    lines = {
+        message.id: line_id
+        for message in messages
+        if (line_id := _follow_up_line(message)) is not None
+    }
+    words = await current_words(uow, list(lines.values())) if lines else {}
+    said: dict[UUID, str] = {}
+    for message in messages:
+        if message.id not in lines:
+            said[message.id] = message.text or ""
+        elif (text := words.get(lines[message.id])) is not None:
+            said[message.id] = text
+    return said
+
+
+def _follow_up_line(message: MessageModel) -> UUID | None:
+    metadata = message.message_metadata or {}
+    if not metadata.get("follow_up"):
+        return None
+    try:
+        return UUID(str(metadata.get(FOLLOW_UP_LINE_KEY)))
+    except ValueError:
+        return None
+
+
+def _exported(message: MessageModel, text: str) -> ExportedMessage:
     return ExportedMessage(
         role=message.role,
-        text=message.text or "",
+        text=text,
         created_at=message.created_at,
         sequence=message.sequence,
     )
@@ -458,47 +500,47 @@ async def append_follow_up(
     uow: SqlAlchemyUnitOfWork,
     *,
     conversation_id: UUID,
-    message: str,
+    line_id: UUID,
     sent_by_user_id: UUID,
     delivered: bool | None = None,
-    line_id: UUID | None = None,
 ) -> None:
-    """Write a member's follow-up into a contact's conversation.
+    """Mark where a member's line to a contact falls in their conversation.
 
     Belongs to no run, like a notification: it is so the agent, and the
-    contact reading the thread, see what was sent and can answer it.
-    ``delivered`` is False for one the platform refused, so nothing reads it
-    as having reached them. One follow-up per channel line (``line_id``): a
-    retried send brings its ``delivered`` up to date rather than adding a
-    second copy.
+    contact reading the thread, see what was sent and can answer it. It keeps
+    which line, never the line's words: those are read from the channel
+    whenever the conversation is (``_said``), so an edit reads as it says
+    now and a deleted line is gone. ``delivered`` is False for one the
+    platform refused, so nothing reads it as having reached them. One mark
+    per line: a retried send brings its ``delivered`` up to date rather than
+    adding a second.
     """
     from app.modules.agent.infrastructure.repositories.conversation_repository import (
         ConversationRepository,
     )
 
+    earlier = await notification_keyed(
+        uow, conversation_id, key=FOLLOW_UP_LINE_KEY, value=str(line_id)
+    )
+    if earlier is not None:
+        if delivered is not None:
+            earlier.message_metadata = {
+                **(earlier.message_metadata or {}),
+                "delivered": delivered,
+            }
+            await uow.session.flush()
+        return
     metadata: dict[str, object] = {
         "follow_up": True,
         "sent_by_user_id": str(sent_by_user_id),
+        FOLLOW_UP_LINE_KEY: str(line_id),
     }
-    if line_id is not None:
-        metadata["line_id"] = str(line_id)
-        earlier = await notification_keyed(
-            uow, conversation_id, key="line_id", value=str(line_id)
-        )
-        if earlier is not None:
-            if delivered is not None:
-                earlier.message_metadata = {
-                    **(earlier.message_metadata or {}),
-                    "delivered": delivered,
-                }
-                await uow.session.flush()
-            return
     if delivered is not None:
         metadata["delivered"] = delivered
     await ConversationRepository(uow).append_message(
         conversation_id=conversation_id,
         agent_run_id=None,
-        draft=MessageDraft.of_notification(message, metadata=metadata),
+        draft=MessageDraft.of_notification("", metadata=metadata),
     )
 
 

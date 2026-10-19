@@ -44,6 +44,7 @@ from app.modules.channels.domain.entities import (
     QuestionState,
     SenderKind,
 )
+from app.modules.channels.infrastructure.change_models import ChannelChangeModel
 from app.modules.channels.infrastructure.inbox import Totals, Unread
 from app.modules.channels.infrastructure.models import ChannelModel
 from app.modules.channels.infrastructure.names import Names
@@ -116,16 +117,22 @@ async def changed_heads(
     uow: SqlAlchemyUnitOfWork, pod_id: UUID, since: datetime
 ) -> dict[UUID, Head]:
     """The heads of the pod's channels whose change counter may have moved
-    since ``since`` (by the database's clock): every change number is taken
-    with the channel's ``updated_at`` (``infrastructure.revisions``), so this
+    since ``since`` (by the database's clock): every change is a row of the
+    change log stamped by that clock (``infrastructure.revisions``), so this
     reads the few channels that moved rather than every channel of the pod."""
+    change = ChannelChangeModel
+    moved = (
+        select(change.channel_id)
+        .where(change.pod_id == pod_id, change.at > since)
+        .distinct()
+    )
     rows = await uow.session.execute(
         select(
             ChannelModel.id,
             ChannelModel.last_rev,
             ChannelModel.last_seq,
             ChannelModel.changed_rev,
-        ).where(ChannelModel.pod_id == pod_id, ChannelModel.updated_at > since)
+        ).where(ChannelModel.id.in_(moved))
     )
     return {row[0]: Head(int(row[1]), int(row[2]), int(row[3])) for row in rows}
 

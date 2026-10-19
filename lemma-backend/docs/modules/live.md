@@ -100,7 +100,7 @@ for the previous SDK.
 
 | `reason` | |
 | --- | --- |
-| `cursor_expired` | `since` is not a cursor this topic gave out, or is ahead of what it covers |
+| `cursor_expired` | `since` is not a cursor this topic gave out, is ahead of what it covers, or is older than the changes kept (a `channel` cursor: 14 days) |
 | `too_many` | More changes than `LIVE_MAX_CHANGES_PER_BATCH` to send one by one |
 | `permission_changed` | What the subscription covers changed under it (the reader's own access in the pod moved) |
 | `overflow` | The socket fell behind and its queued batches were dropped |
@@ -137,17 +137,18 @@ taken out of a private group, a grant removed -- gets
 The cursor is the channel's change counter plus its newest line
 (`"<rev>:<seq>"` today; treat it as opaque). Every line, edit, delete,
 question state, channel setting and membership change takes the next change
-number under the channel's row lock, so a resume from a cursor is exact
-however long the client was away (up to `too_many`).
+number under the channel's row lock and is kept in the channel's change log,
+so a resume from a cursor is exact however long the client was away (up to
+`too_many`) -- back to 14 days; a cursor older than that is answered `resync`
+(`cursor_expired`).
 
 Every line is the **REST line** (`ChannelMessageResponse`, as
 `GET …/messages` returns it) for this reader: an answer an agent made with
 another member's own access is `withheld: true` with no `text` or `parts`.
 Thread replies are sent too (they carry `thread_root_id`), and each one sends
 its root again (`line.edited`) with the new `reply_count`. A line is sent
-again too when the conversation answering it is first named
-(`conversation_id`), and when a platform message heard nameless is heard again
-with who said it.
+again too when a platform message heard nameless is heard again with who said
+it.
 
 | Event | Fields | |
 | --- | --- | --- |
@@ -271,7 +272,7 @@ flowchart LR
   W[REST write / worker] -->|commit| DB[(Postgres)]
   W -->|after commit: signal| R[(Redis pod:ID:live)]
   R --> H[channels hub, one per pod per process]
-  H -->|reads rev > cursor, projects per reader| DB
+  H -->|reads the change log past its cursor, projects per reader| DB
   H --> S1[socket queue] --> C1[browser]
   H --> S2[socket queue] --> C2[browser]
 ```
@@ -281,9 +282,10 @@ flowchart LR
   and the ephemeral `typing` and `answering`. A hub that hears one reads what
   changed from Postgres. A lost signal costs latency, never a change: each hub
   also polls every `LIVE_IDLE_POLL_SECONDS` -- the channels it watches, and
-  of the pod's other channels only those whose change counter moved since the
-  last poll (every change number stamps the channel's `updated_at`), so a poll
-  costs the same however many channels and contacts the pod has -- and after
+  of the pod's other channels only those with a change logged since the last
+  poll (every change number is a row of the channel's change log, stamped by
+  the database's clock), so a poll costs the same however many channels and
+  contacts the pod has -- and after
   its Redis listener reconnects, or a read fails, compares every head of the
   pod.
 - **One hub per pod per process** reads each change once and projects it once

@@ -27,14 +27,12 @@ from app.modules.channels.contracts import (
     ChannelKind,
     ChannelMessage,
     Question,
+    QuestionAsker,
     QuestionKind,
     channel_by_id,
 )
 from app.modules.channels.contracts import questions as channel_questions
 from app.modules.channels.contracts.lines import line_by_id, viewer_of
-
-#: The asker an agent's own paused ``ask_user`` / ``request_approval`` is.
-TOOL_ASKER = "tool"
 
 #: The longest stretch of somebody else's words put in front of the model.
 _MAX_QUOTED_CHARS = 1000
@@ -110,7 +108,7 @@ def shown_to_the_agent(question: Question) -> bool:
     agent paused on (its run takes the answer)."""
     return (
         question.kind in (QuestionKind.ASK, QuestionKind.FORM)
-        and question.asker != TOOL_ASKER
+        and question.asker is not QuestionAsker.TOOL
     )
 
 

@@ -8,6 +8,7 @@ from uuid import UUID
 
 from ..openapi_client.api.agent_surfaces import agent_notice_send
 from ..openapi_client.api.channels import (
+    channel_case_list,
     channel_create,
     channel_delete,
     channel_delivery_list,
@@ -36,6 +37,7 @@ from ..openapi_client.api.channels import (
     channel_update,
 )
 from ..openapi_client.models.channel_answer_request import ChannelAnswerRequest
+from ..openapi_client.models.channel_cases_response import ChannelCasesResponse
 from ..openapi_client.models.channel_create_request import ChannelCreateRequest
 from ..openapi_client.models.channel_detail_response import ChannelDetailResponse
 from ..openapi_client.models.channel_edit_request import ChannelEditRequest
@@ -300,6 +302,24 @@ class PodChannels(BoundResource):
         """Delete a group made in Lemma and its timeline: its owners' or an
         admin's. A channel an outside place feeds is archived instead."""
         self._call(channel_delete, self._pod_uuid(), as_uuid(channel_id))
+
+    def cases(
+        self,
+        channel_id: str | UUID,
+        *,
+        cursor: str | None = None,
+        limit: int = 20,
+    ) -> ChannelCasesResponse:
+        """A contact's channel's cases, the most recently opened first, each
+        with what happened in it: who answered and when, reopens, how it
+        ended. Page with ``next_cursor``."""
+        return self._call(
+            channel_case_list,
+            self._pod_uuid(),
+            as_uuid(channel_id),
+            cursor=_unset(cursor),
+            limit=limit,
+        )
 
     # -- members -------------------------------------------------------------------
 

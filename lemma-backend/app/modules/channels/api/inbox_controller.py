@@ -29,13 +29,14 @@ from app.modules.channels.api.message_schemas import (
     SearchResponse,
 )
 from app.modules.channels.api.views import lines_across
-from app.modules.channels.infrastructure.inbox import UNREAD_CAP, InboxReads
 from app.modules.channels.domain.entities import ChannelKind, SenderKind
-from app.modules.channels.infrastructure.lines import (
-    LineRepository,
+from app.modules.channels.infrastructure.inbox import UNREAD_CAP, InboxReads
+from app.modules.channels.infrastructure.line_search import (
+    LineSearch,
     SearchFilter,
     SpeakerRef,
 )
+from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.questions import QuestionRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 
@@ -124,7 +125,7 @@ async def search(
         raise unprocessable("Name a sender by both sender_kind and sender_id")
     if channel_id is not None:
         await visible(uow, caller, channel_id)
-    hits = await LineRepository(uow.session).search(
+    hits = await LineSearch(uow.session).search(
         caller.viewer,
         query=q,
         limit=limit,

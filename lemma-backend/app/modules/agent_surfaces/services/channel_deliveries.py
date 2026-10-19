@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -57,6 +57,11 @@ from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
 from app.modules.agent_surfaces.platforms.delivery import track_sends
 from app.modules.agent_surfaces.services.channel_lines import WEB
 from app.modules.agent_surfaces.services.contact_reach import reach_for
+from app.modules.agent_surfaces.services.contact_refusals import (
+    ContactRefused,
+    Ready,
+    outreach_kind,
+)
 from app.modules.agent_surfaces.services.cold_open_sends import (
     cold_open_surface,
     send_cold_open,
@@ -86,6 +91,7 @@ from app.modules.channels.contracts import (
     ChannelKind,
     ChannelMessage,
     Delivery,
+    DeliveryReasonCode as Code,
     SenderKind,
     Source,
     SourceKind,
@@ -98,6 +104,7 @@ from app.modules.channels.contracts.deliveries import (
     deliveries_of,
     delivery_dead,
     delivery_failed,
+    delivery_folded,
     delivery_interrupted,
     delivery_noted,
     delivery_sent,
@@ -109,8 +116,6 @@ from app.modules.channels.contracts.lines import line_by_id
 from app.modules.channels.contracts.places import conversation_at
 from app.modules.contacts.contracts.outreach import (
     UNSUBSCRIBE_TOKEN_KEY,
-    OutreachKind,
-    Verdict,
     count_against_today,
     may_send,
 )
@@ -133,48 +138,6 @@ class _Work:
     delivery: Delivery
     line: ChannelMessage
     channel: Channel
-
-
-@dataclass(frozen=True, slots=True)
-class Ready:
-    """A line a contact's rules let through: its text, and what the send
-    carries besides (an email's unsubscribe token)."""
-
-    text: str
-    metadata: dict[str, object] = field(default_factory=dict)
-    #: ``(contact, line)`` for a member's line, which counts against the
-    #: contact's day once it can go.
-    day_of: tuple[UUID, UUID] | None = None
-
-
-class ContactRefused(Exception):
-    """A line a contact's rules do not let through; the reason is the member's."""
-
-    def __init__(self, reason: str, *, code: str, retryable: bool = False) -> None:
-        super().__init__(reason)
-        self.reason = reason
-        self.code = code
-        self.retryable = retryable
-
-    @classmethod
-    def of(cls, verdict: Verdict) -> ContactRefused:
-        return cls(
-            verdict.reason or "Not sent.",
-            code=str(verdict.code),
-            retryable=verdict.retryable,
-        )
-
-    def outcome(self, platform: str) -> Outcome:
-        if self.retryable:
-            # The rules could not be read (Redis): try again, not give up.
-            return Outcome.failed(self.reason, platform=platform)
-        return Outcome.skipped(self.reason, platform=platform)
-
-
-def _outreach_kind(line: ChannelMessage) -> OutreachKind:
-    if line.sender.kind is SenderKind.MEMBER:
-        return OutreachKind.MEMBER_LINE
-    return OutreachKind.AGENT_ANSWER
 
 
 class ChannelDeliveries:
@@ -233,7 +196,9 @@ class ChannelDeliveries:
 
     async def _outcome(self, work: _Work) -> Outcome:
         if work.line.is_deleted:
-            return Outcome.skipped("The line was deleted before it went.")
+            return Outcome.skipped(
+                "The line was deleted before it went.", code=Code.LINE_GONE
+            )
         if work.delivery.source_id is not None:
             return await self._to_place(work, work.delivery.source_id)
         return await self._to_member(work)
@@ -249,7 +214,9 @@ class ChannelDeliveries:
             line = await line_by_id(uow, delivery.message_id)
             channel = await channel_by_id(uow, line.channel_id) if line else None
             if line is None or channel is None:
-                await delivery_skipped(uow, delivery.id, reason="The line is gone.")
+                await delivery_skipped(
+                    uow, delivery.id, code=Code.LINE_GONE, reason="The line is gone."
+                )
                 await uow.commit()
                 return None
             await uow.commit()
@@ -300,7 +267,10 @@ class ChannelDeliveries:
         """The line, to the outside place it was written for, as the pod's bot."""
         line, channel = work.line, work.channel
         if line.members_only:
-            return Outcome.skipped("A note for the pod's members goes nowhere else.")
+            return Outcome.skipped(
+                "A note for the pod's members goes nowhere else.",
+                code=Code.MEMBERS_ONLY,
+            )
         answer = is_run_answer(line)
         async with self.uow_factory() as uow:
             source = await source_by_id(uow, source_id)
@@ -312,12 +282,15 @@ class ChannelDeliveries:
                 else None
             )
         if source is None or source.channel_id != channel.id:
-            return Outcome.skipped("That place is no longer this channel's.")
+            return Outcome.skipped(
+                "That place is no longer this channel's.", code=Code.PLACE_GONE
+            )
         platform = source.platform
         if platform != WEB and source.surface_id is None:
             # The bot that reached it was removed: trying again reaches nobody.
             return Outcome.skipped(
                 "The bot that reached this place is no longer connected.",
+                code=Code.PLACE_GONE,
                 platform=platform,
             )
         try:
@@ -329,9 +302,7 @@ class ChannelDeliveries:
             return await self._cold_open(work, source, ready)
         if platform == WEB:
             # Nobody to hand it to: it waits in their web chat for the next visit.
-            await self._to_their_conversation(
-                channel, conversation_id, line, ready.text, None
-            )
+            await self._to_their_conversation(channel, conversation_id, line, None)
             return Outcome.delivered(platform)
         if answer:
             return await self.answers.send(
@@ -353,7 +324,7 @@ class ChannelDeliveries:
             metadata=ready.metadata,
         )
         await self._to_their_conversation(
-            channel, conversation_id, line, ready.text, receipt is not None
+            channel, conversation_id, line, receipt is not None
         )
         return outcome
 
@@ -380,7 +351,7 @@ class ChannelDeliveries:
                 pod_id=channel.pod_id,
                 contact_id=channel.contact_id,
                 to=to,
-                kind=_outreach_kind(line),
+                kind=outreach_kind(line),
                 at=datetime.now(timezone.utc),
                 window=window,
             )
@@ -422,7 +393,9 @@ class ChannelDeliveries:
         surface = await cold_open_surface(self.uow_factory, self.egress_for, source)
         if surface is None:
             return Outcome.skipped(
-                "The bot has not talked with anybody there yet.", platform=platform
+                "The bot has not talked with anybody there yet.",
+                code=Code.CANNOT_WRITE_FIRST,
+                platform=platform,
             )
         try:
             await self._count_today(ready)
@@ -446,7 +419,7 @@ class ChannelDeliveries:
         if ref is None:
             return source
         if line.thread_root_id is None:
-            if source.kind is not SourceKind.SHARED:
+            if source.kind is not SourceKind.CHAT:
                 return source
             aimed = at_place_level(ref, source.platform)
         else:
@@ -524,7 +497,6 @@ class ChannelDeliveries:
         channel: Channel,
         conversation_id: UUID,
         line: ChannelMessage,
-        text: str,
         delivered: bool | None,
     ) -> None:
         """A contact's conversation hears what a member wrote them, as theirs:
@@ -535,10 +507,9 @@ class ChannelDeliveries:
             await append_follow_up(
                 uow,
                 conversation_id=conversation_id,
-                message=text,
+                line_id=line.id,
                 sent_by_user_id=line.sender.user_id,
                 delivered=delivered,
-                line_id=line.id,
             )
             await uow.commit()
 
@@ -555,6 +526,8 @@ class ChannelDeliveries:
 
     async def _record(self, delivery: Delivery, outcome: Outcome) -> None:
         reason = outcome.reason or "Not sent."
+        code = outcome.code or Code.TRANSIENT
+        status = outcome.provider_status
         async with self.uow_factory() as uow:
             match outcome.result:
                 case Result.SENT:
@@ -563,22 +536,39 @@ class ChannelDeliveries:
                         delivery.id,
                         platform=outcome.platform or "LEMMA",
                         external_message_id=outcome.external_message_id,
+                        provider_status=status,
+                    )
+                case Result.SKIPPED if outcome.hold_for is not None:
+                    await delivery_folded(
+                        uow, delivery, reason=reason, hold_for=outcome.hold_for
                     )
                 case Result.SKIPPED:
                     await delivery_skipped(
-                        uow, delivery.id, reason=reason, platform=outcome.platform
+                        uow,
+                        delivery.id,
+                        code=code,
+                        reason=reason,
+                        platform=outcome.platform,
+                        provider_status=status,
                     )
                 case Result.DEAD:
                     await delivery_dead(
-                        uow, delivery.id, reason=reason, platform=outcome.platform
+                        uow,
+                        delivery.id,
+                        code=code,
+                        reason=reason,
+                        platform=outcome.platform,
+                        provider_status=status,
                     )
                 case Result.FAILED:
                     await delivery_failed(
                         uow,
                         delivery,
+                        code=code,
                         reason=reason,
                         platform=outcome.platform,
                         retry_after=outcome.retry_after,
+                        provider_status=status,
                     )
             # The next line to this target was waiting on this one.
             await announce_next_for_target(uow, delivery)

@@ -8,6 +8,12 @@ the member's own conversation with it in that channel -- with the member's
 access, like any turn they start -- and its answer comes back as a line in the
 thread of the line it answers, said for them.
 
+The turn records the line it answers (``channels.contracts.answers``), and
+the run that ends answers exactly those lines: a member who writes L1 and then
+L2 while the agent works on L1 has the answer under L1, where they asked. What
+the run is shown of the channel around the line is kept as which lines, never
+what they said (``channels.contracts.backgrounds``).
+
 Both halves are safe to run twice. The turn is started with the line as its
 client id, so a retried job finds the turn it already started; the answer is
 posted with the run as its client id, so a retried post is the same line.
@@ -18,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.delegation import effective_agent_id, is_pod_default_agent
@@ -32,6 +38,10 @@ from app.modules.agent.contracts import channel_conversations
 from app.modules.agent.contracts.run_replies import (
     answer_line_client_id,
     run_reply_material,
+)
+from app.modules.agent.domain.queued_messages import (
+    DURING_ACTIVE_RUN,
+    STEERED_INTO_RUN,
 )
 from app.modules.agent.infrastructure.models import AgentModel
 from app.modules.agent.infrastructure.models.conversation import (
@@ -51,12 +61,19 @@ from app.modules.channels.contracts import (
     channel_by_id,
     post,
 )
-from app.modules.channels.contracts.live import announce_answering
-from app.modules.channels.contracts.lines import (
-    claim_line,
-    line_by_id,
-    member_background,
+from app.modules.channels.contracts.answers import (
+    answers_of_run,
+    settle_answers,
+    start_answering,
 )
+from app.modules.channels.contracts.backgrounds import (
+    BACKGROUND_KEY,
+    BackgroundRefs,
+    BackgroundView,
+    refs_of,
+)
+from app.modules.channels.contracts.live import announce_answering
+from app.modules.channels.contracts.lines import line_by_id, member_background
 
 logger = get_logger(__name__)
 
@@ -64,10 +81,8 @@ logger = get_logger(__name__)
 IN_APP_CONTEXT_LINES = 30
 #: What a turn started by a line in Lemma says it came from.
 LEMMA_CHANNEL = "lemma_channel"
-#: Where a person's own words came from, as their messages say: in Lemma, on
-#: a platform, in a web chat. Anything else -- the news that answers arrived,
-#: a notification -- is not somebody saying something to answer.
-_SAID_BY_A_PERSON = (LEMMA_CHANNEL, "agent_surfaces", "web_widget")
+#: The most messages one run is taken to have read: a burst steered into it.
+MAX_LINES_A_RUN_READS = 50
 
 
 def turn_client_id(message_id: UUID) -> str:
@@ -158,10 +173,14 @@ async def _answer_as(
             agent_id=agent_id,
             agent_name=agent_name,
         )
-        await claim_line(uow, message_id=line.id, conversation_id=conversation_id)
-        background = await member_background(
-            uow, line=line, for_user_id=user_id, limit=IN_APP_CONTEXT_LINES
+        await start_answering(
+            uow,
+            message_id=line.id,
+            channel_id=line.channel_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
         )
+        background = await member_background(uow, line=line, limit=IN_APP_CONTEXT_LINES)
         started = await service.add_user_message_and_start_run(
             conversation_id=conversation_id,
             user_id=user_id,
@@ -171,6 +190,16 @@ async def _answer_as(
             message_metadata=turn_metadata(channel, line, background),
             require_execute_grant=False,
             client_message_id=turn_client_id(line.id),
+        )
+        # The run that answers it: the one this turn started, or the one
+        # already going that it joined.
+        await start_answering(
+            uow,
+            message_id=line.id,
+            channel_id=line.channel_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            run_id=started.agent_run_id,
         )
         await uow.commit()
         announce_answering(
@@ -247,47 +276,20 @@ def turn_metadata(
         metadata["channel_name"] = channel.title
     if line.sender.display_name:
         metadata["sender_display_name"] = line.sender.display_name
-    if background:
-        metadata["channel_context"] = [
-            {
-                "author": said.sender.display_name,
-                "text": said.text,
-                "ts": said.created_at.isoformat(),
-                "outside_pod": False,
-            }
-            for said in background
-        ]
+    if background and line.sender.user_id is not None:
+        # Which lines, not what they said: read from the timeline whenever the
+        # prompt is built, as this member may read them then.
+        metadata[BACKGROUND_KEY] = BackgroundRefs(
+            pod_id=channel.pod_id,
+            channel_id=channel.id,
+            view=BackgroundView.MEMBER_IN_LEMMA,
+            user_id=line.sender.user_id,
+            items=refs_of(background),
+        ).model_dump(mode="json")
     return metadata
 
 
 # -- the answer ------------------------------------------------------------------
-
-
-async def line_answered_by(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
-) -> UUID | None:
-    """The line in Lemma a run of this conversation answers, if it answers one.
-
-    The last thing a person said in the conversation: a line in Lemma, or a
-    message on a platform -- whose answer goes back there, not here.
-    """
-    metadata = MessageModel.message_metadata
-    said = await uow.session.scalar(
-        select(metadata)
-        .where(
-            MessageModel.conversation_id == conversation_id,
-            MessageModel.role == "user",
-            metadata["source"].astext.in_(_SAID_BY_A_PERSON),
-        )
-        .order_by(MessageModel.sequence.desc())
-        .limit(1)
-    )
-    if not isinstance(said, dict) or said.get("source") != LEMMA_CHANNEL:
-        return None
-    try:
-        return UUID(str(said.get("channel_message_id")))
-    except ValueError:
-        return None
 
 
 async def post_run_answer(
@@ -296,34 +298,97 @@ async def post_run_answer(
     run_id: UUID,
     conversation_id: UUID,
     answered: bool = True,
+    paused: bool = False,
 ) -> ChannelMessage | None:
-    """A finished run's answer, as the agent's line in the thread of the line
-    in Lemma it answers. Nothing for a run answering anything else.
+    """A finished run's answer, as the agent's line in the thread of the
+    oldest line in Lemma it answers. Nothing for a run answering none.
 
     ``answered``: the run ended with an answer, rather than failing, stopping
-    or pausing; either way the line's readers hear it is no longer being
-    answered, once this commits.
+    or pausing; either way the lines' readers hear they are no longer being
+    answered, once this commits. ``paused``: it is waiting on somebody, and
+    the run that carries it on answers the same lines.
     """
-    line_id = await line_answered_by(uow, conversation_id)
-    if line_id is None:
-        return None
-    line = await line_by_id(uow, line_id)
+    read, carries_on = await _lines_read_by(uow, run_id, conversation_id)
+    answers = await answers_of_run(
+        uow, conversation_id=conversation_id, line_ids=read, carries_on=carries_on
+    )
     conversation = await uow.session.get(ConversationModel, conversation_id)
-    if line is None or conversation is None:
+    if not answers or conversation is None:
         return None
-    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
+    lines = [await line_by_id(uow, answer.message_id) for answer in answers]
+    said = [line for line in lines if line is not None]
     if conversation.user_id is not None:
-        announce_answering(
-            pod_id=conversation.pod_id,
-            channel_id=line.channel_id,
-            message_id=line.id,
-            agent_id=agent_id,
-            for_user_id=conversation.user_id,
-            state="finished",
-            after_commit_of=uow.session,
-        )
-    if not answered or line.is_deleted:
+        for line in said:
+            announce_answering(
+                pod_id=conversation.pod_id,
+                channel_id=line.channel_id,
+                message_id=line.id,
+                agent_id=answers[0].agent_id,
+                for_user_id=conversation.user_id,
+                state="finished",
+                after_commit_of=uow.session,
+            )
+    if paused:
         return None
+    posted = (
+        await _post_answer(uow, run_id=run_id, conversation=conversation, line=said[0])
+        if answered and said and not said[0].is_deleted
+        else None
+    )
+    await settle_answers(
+        uow, answers, run_id=run_id, answered_with=posted.id if posted else None
+    )
+    return posted
+
+
+async def _lines_read_by(
+    uow: SqlAlchemyUnitOfWork, run_id: UUID, conversation_id: UUID
+) -> tuple[list[UUID], bool]:
+    """The lines in Lemma whose words this run read -- the one that started
+    it and any steered into it, oldest first -- and whether it carries on a
+    paused run, which no message of its own started.
+
+    Not a message that joined it and was never read: the run that delivers it
+    answers it (``conversation_turns.start_queued_followup``).
+    """
+    metadata = MessageModel.message_metadata
+    started_it = (MessageModel.agent_run_id == run_id) & (
+        func.coalesce(metadata[DURING_ACTIVE_RUN].astext, "false") != "true"
+    )
+    rows = (
+        await uow.session.execute(
+            select(
+                metadata["source"].astext,
+                metadata["channel_message_id"].astext,
+                started_it,
+            )
+            .where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.role == "user",
+                started_it | (metadata[STEERED_INTO_RUN].astext == str(run_id)),
+            )
+            .order_by(MessageModel.sequence)
+            .limit(MAX_LINES_A_RUN_READS)
+        )
+    ).all()
+    lines: list[UUID] = []
+    for source, line_id, _ in rows:
+        if source == LEMMA_CHANNEL and line_id:
+            try:
+                lines.append(UUID(line_id))
+            except ValueError:
+                continue
+    return lines, not any(row[2] for row in rows)
+
+
+async def _post_answer(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    run_id: UUID,
+    conversation: ConversationModel,
+    line: ChannelMessage,
+) -> ChannelMessage | None:
+    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
     material = await run_reply_material(uow, run_id)
     if material is None or material.private or not material.answer:
         return None
@@ -353,7 +418,7 @@ async def post_run_answer(
             text=text,
             target_source_id=place,
             client_message_id=answer_client_id(run_id),
-            conversation_id=conversation_id,
+            conversation_id=conversation.id,
             agent_run_id=run_id,
             thread_root_id=in_thread,
             reply_to_id=line.id,
@@ -383,7 +448,6 @@ __all__ = [
     "LEMMA_CHANNEL",
     "answer_client_id",
     "answer_line",
-    "line_answered_by",
     "turn_client_id",
     "post_run_answer",
     "turn_metadata",

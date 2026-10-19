@@ -3,9 +3,10 @@ one of them in.
 
 ``list_pod_members`` finds who to write to -- ``channel_post`` takes an id or
 an exact email address, never a name. ``ask_a_person`` is the one messaging
-tool a run answering somebody outside the pod has: it flags their channel as
-needing a member, and tells the member who looks after them in their own
-channel.
+tool a run answering somebody outside the pod has: it tells the member who
+looks after them, in that member's own channel, and -- in the contact's own
+channel -- flags their case as needing a member. A group has no case to flag:
+there the note is the call.
 """
 
 from __future__ import annotations
@@ -47,6 +48,10 @@ CALLED_IN = (
     "A contact you look after needs a person -- their channel is in Contacts, "
     "waiting on one, with what the bot said."
 )
+CALLED_IN_GROUP = (
+    "Somebody in a group you look after needs a person -- open the group in "
+    "Channels to see what they asked and what the bot said."
+)
 
 
 async def ask_a_person(
@@ -55,8 +60,9 @@ async def ask_a_person(
     """Call a person from the pod into this conversation.
 
     For when the person you are answering needs something only a member can
-    give. Their channel is flagged as waiting on a person, and the member who
-    looks after them is told; they will step in and reply here themselves.
+    give. The member who looks after them is told, and -- when you are
+    answering them in their own channel -- it is flagged as waiting on a
+    person; the member will step in and reply here themselves.
     Tell the person someone will get back to them -- do not promise when.
     """
     deps = ctx.deps
@@ -103,15 +109,18 @@ async def call_a_person_in(
     reason: str,
     key: str | None,
 ) -> bool:
-    """The contact's channel asks for a person, and the member who looks after
-    them hears so in their own channel. Whether there was a channel to flag."""
+    """The member who looks after the contact hears they need a person, in
+    their own channel, and the contact's own channel asks for one (a group's
+    has no case to ask in). Whether the conversation is in a channel."""
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         channel_id = await channel_conversations.channel_of_conversation(
             uow, conversation_id
         )
         if channel_id is None:
             return False
-        await call_for_person(uow, channel_id=channel_id, reason=reason[:255])
+        in_contacts = await call_for_person(
+            uow, channel_id=channel_id, reason=reason[:255]
+        )
         direct = await direct_channel(uow, pod_id=pod_id, user_id=keeper_user_id)
         await post(
             uow,
@@ -121,7 +130,7 @@ async def call_a_person_in(
                     effective_agent_id(None, pod_id=pod_id),
                     on_behalf_of=Principal.member(keeper_user_id),
                 ),
-                text=CALLED_IN,
+                text=CALLED_IN if in_contacts else CALLED_IN_GROUP,
                 client_message_id=line_client_id(f"ask-a-person:{key}")
                 if key
                 else None,
@@ -227,4 +236,10 @@ async def _reachable_on(
     )
 
 
-__all__ = ["CALLED_IN", "ask_a_person", "call_a_person_in", "list_pod_members"]
+__all__ = [
+    "CALLED_IN",
+    "CALLED_IN_GROUP",
+    "ask_a_person",
+    "call_a_person_in",
+    "list_pod_members",
+]

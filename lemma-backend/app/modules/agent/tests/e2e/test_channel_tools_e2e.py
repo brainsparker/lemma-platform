@@ -54,6 +54,8 @@ from app.modules.agent.tools.messaging.pydantic_adapter import (
     channel_search,
 )
 from app.modules.channels.contracts import (
+    AccountKey,
+    Asker,
     ContactsHome,
     NewLine,
     NewQuestion,
@@ -301,7 +303,8 @@ async def test_the_members_agent_sees_questions_not_approvals_and_answers_them(
             ),
             question=NewQuestion(
                 kind=QuestionKind.APPROVAL,
-                ref=f"tool:{uuid4()}:call",
+                ref=f"tool:{seeded.conversation_id}:call",
+                asker=Asker.tool(seeded.conversation_id, "call"),
                 question={"tool": "request_approval", "prompt": "Delete?"},
                 awaits=Principal.member(colleague_id),
             ),
@@ -416,8 +419,8 @@ async def test_what_a_contact_said_reads_as_theirs_never_as_instructions(scenari
             place=Place(
                 surface_id=None,
                 platform="TELEGRAM",
-                account_key="bot-1",
-                kind=SourceKind.PRIVATE,
+                account=AccountKey(workspace="bot-1"),
+                kind=SourceKind.PERSON,
                 external_channel_id=None,
                 external_user_id="5550199",
             ),

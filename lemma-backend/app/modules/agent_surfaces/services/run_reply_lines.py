@@ -137,7 +137,7 @@ async def _thread_root(
     source: Source,
     event: ParsedInboundSurfaceEvent | None,
 ) -> UUID | None:
-    if event is None or source.kind is not SourceKind.SHARED:
+    if event is None or source.kind is not SourceKind.CHAT:
         return None
     if source.platform not in THREADED:
         return None

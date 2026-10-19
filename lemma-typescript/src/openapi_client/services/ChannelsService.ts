@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { ChannelAnswerRequest } from '../models/ChannelAnswerRequest.js';
+import type { ChannelCasesResponse } from '../models/ChannelCasesResponse.js';
 import type { ChannelCreateRequest } from '../models/ChannelCreateRequest.js';
 import type { ChannelDetailResponse } from '../models/ChannelDetailResponse.js';
 import type { ChannelEditRequest } from '../models/ChannelEditRequest.js';
@@ -245,6 +246,40 @@ export class ChannelsService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Cases
+     * A contact's channel's cases, the most recently opened first, each with
+     * what happened in it: time to first response, reopens and time to close
+     * are read from here. Only a contact's channel has cases.
+     * @param podId
+     * @param channelId
+     * @param cursor
+     * @param limit
+     * @returns ChannelCasesResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelCaseList(
+        podId: string,
+        channelId: string,
+        cursor?: (string | null),
+        limit: number = 20,
+    ): CancelablePromise<ChannelCasesResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/channels/{channel_id}/cases',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+            },
+            query: {
+                'cursor': cursor,
+                'limit': limit,
+            },
             errors: {
                 422: `Validation Error`,
             },

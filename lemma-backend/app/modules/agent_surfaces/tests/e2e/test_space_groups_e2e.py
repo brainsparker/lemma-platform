@@ -21,6 +21,7 @@ from httpx import AsyncClient
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.agent.tools.messaging.people import CALLED_IN_GROUP
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -274,8 +275,9 @@ async def test_a_clients_question_and_the_bots_answer_are_the_groups_lines(
     """The group's channel shows who is in it and what was said.
 
     A question the bot cannot answer is passed to a person with
-    ``ask_a_person``: the group's channel waits on one, and answering is
-    stepping into it -- nothing waits on the member anywhere else.
+    ``ask_a_person``: the member who looks after the asker is told, and
+    answering is stepping into the group. The group itself has no case to
+    flag -- only a contact's own channel waits on a person.
     """
     _wire_whatsapp(monkeypatch, fake_whatsapp)
     pod_id = test_pod["id"]
@@ -311,14 +313,11 @@ async def test_a_clients_question_and_the_bots_answer_are_the_groups_lines(
     assert detail.status_code == 200, detail.text
     body = detail.json()
     assert body["kind"] == "GROUP"
-    # Read off the channel: the API shows a channel's attention only for a
-    # contact's channel.
+    # A group has no case to flag: only a contact's channel waits on a person.
+    assert body["attention"] is None
     db_session.expire_all()
     waiting = await db_session.get(ChannelModel, UUID(group["channel_id"]))
-    assert waiting is not None and waiting.attention_at is not None
-    assert waiting.attention_reason == (
-        "Tiago asks whether order 1182 can arrive by Friday."
-    )
+    assert waiting is not None and waiting.current_case_id is None
     people = {(p["person"]["kind"], p["person"]["name"]) for p in body["members"]}
     assert ("CONTACT", "Tiago") in people
 
@@ -332,6 +331,14 @@ async def test_a_clients_question_and_the_bots_answer_are_the_groups_lines(
     asked, answered = said[-2:]
     assert asked[0] == "CONTACT" and "order 1182 by Friday" in asked[1]
     assert answered == ("AGENT", "I've asked the team, and will answer here.")
+
+    # The keeper is told in their own channel, pointed at the group, not Contacts.
+    mine = await authenticated_client.get(f"/pods/{pod_id}/channels/me")
+    assert mine.status_code == 200, mine.text
+    notes = await authenticated_client.get(
+        f"/pods/{pod_id}/channels/{mine.json()['id']}/messages"
+    )
+    assert [line["text"] for line in notes.json()["items"]][-1:] == [CALLED_IN_GROUP]
 
 
 async def _file(

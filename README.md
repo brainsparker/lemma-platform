@@ -18,8 +18,8 @@ Your people meet it as a teammate: give it a job, share it with everyone, and te
 <br>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/Assets/features-dark.png">
-  <img src="docs/Assets/features-light.png" alt="Agents, Apps, People, Context, Surfaces, Workflows" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/Assets/hero-dark.svg">
+  <img src="docs/Assets/hero-light.svg" alt="A teammate's space in Lemma: its apps, context and workflows, the people who share it, the agent at work, and the places people ask it from." width="100%">
 </picture>
 
 It runs on the Claude Code or Codex subscription you already pay for, Lemma's hosted models, or any OpenAI- or Anthropic-compatible key.
@@ -77,7 +77,7 @@ each person and agent can touch, and nothing crosses it unless you connect it.
 It exports as a folder of files, so you can version it, share it, or import it
 somewhere else.
 
-## Agents
+## <img src="docs/Assets/icons/agents.svg" width="26" height="26" align="top" alt=""> Agents
 
 An agent is a role: a model, an instruction, and the tools, tables and
 connectors it is allowed to use. It answers when someone asks, and it also runs
@@ -89,7 +89,7 @@ Before anything consequential, like sending an email, issuing a refund or
 deleting a record, it pauses and asks the person who owns that decision. The run
 waits, for days if it has to, and carries on when they answer.
 
-## Apps
+## <img src="docs/Assets/icons/apps.svg" width="26" height="26" align="top" alt=""> Apps
 
 A lot of work needs a screen rather than a chat thread: a queue to clear, a
 board to move, a form to fill in. Ask the teammate for one and it builds a web
@@ -99,7 +99,7 @@ use. When an agent updates a record, the app is already showing it.
 Apps are built on the TypeScript SDK, so a developer can open the code, change
 it, and redeploy with `lemma apps deploy`.
 
-## People
+## <img src="docs/Assets/icons/people.svg" width="26" height="26" align="top" alt=""> People
 
 A teammate is shared by the whole team, and each person has their own account
 and role inside it. One permission model covers people and agents alike: which
@@ -109,7 +109,7 @@ part.
 
 Every action lands in one history: who asked, which agent ran, and what changed.
 
-## Context
+## <img src="docs/Assets/icons/context.svg" width="26" height="26" align="top" alt=""> Context
 
 The teammate keeps its memory as Markdown notes. Shared notes are readable by
 everyone on the team; personal notes only by you. Correct it once ("refunds over
@@ -120,7 +120,7 @@ Alongside the notes are tables, typed records with row-level security, and
 files, the documents and PDFs agents can search. All three are read at run time,
 so what the teammate knows is what your team can see and edit.
 
-## Surfaces
+## <img src="docs/Assets/icons/surfaces.svg" width="26" height="26" align="top" alt=""> Surfaces
 
 People reach the same teammate from Slack, Microsoft Teams, WhatsApp, Telegram
 and email. Each surface works out who is writing, matches them to their account,
@@ -131,7 +131,7 @@ anyone can write to.
 Approvals travel too: a workflow waiting on someone can ask them in the chat
 they already use.
 
-## Workflows
+## <img src="docs/Assets/icons/workflows.svg" width="26" height="26" align="top" alt=""> Workflows
 
 When work passes between people and agents in the same order every time, write
 it down as a workflow. Each step is an agent, a function (plain code that does

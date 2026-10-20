@@ -327,7 +327,12 @@ Under `/pods/{pod_id}` -- everybody named one way, a `PersonRef`
   answer is left out by the query itself --, newest first, each hit with its
   `rank` and a plain-text `snippet`; narrowed by `channel_id`, `kind`,
   `sender_kind` + `sender_id`, `since` / `until`, and `archived` to search
-  archived channels too; cursor). The index keeps the pod beside the words
+  archived channels too; cursor). Every word must be in the line, matched
+  by its start so a search finds as it is typed (`alph` finds `alpha`), and
+  both stemmed (`english`: `run` finds `running`) and as written (`simple`:
+  `runn` finds `running` too); the stored vector holds both forms. What a
+  reader types is only ever words -- `to_tsquery` syntax in it is a
+  separator, never an operator. The index keeps the pod beside the words
   (`GIN (pod_id, channel_id, search)`, `btree_gin`, so one channel's matches are found without the pod's), and the lines by when they were said
   (`ix_channel_messages_pod_time`): a common word's newest page is found by
   walking back from the newest line until the page is full, never by finding,

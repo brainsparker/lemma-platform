@@ -252,7 +252,7 @@ CREATE TABLE channel_messages (
 	sender_name VARCHAR(255),
 	body TEXT NOT NULL,
 	parts JSONB DEFAULT '[]'::jsonb NOT NULL,
-	search TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(body, ''))) STORED,
+	search TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', coalesce(body, '')) || to_tsvector('simple', coalesce(body, ''))) STORED,
 	members_only BOOLEAN DEFAULT false NOT NULL,
 	conversation_id UUID,
 	agent_run_id UUID,

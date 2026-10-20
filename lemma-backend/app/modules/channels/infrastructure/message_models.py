@@ -235,9 +235,16 @@ class ChannelMessageModel(UUIDAuditBase):
     parts: Mapped[list[dict[str, object]]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
+    #: Each word stemmed (``english``: "running" is "run") and as written
+    #: (``simple``), so a word being typed is found by its start either way
+    #: (``line_search``).
     search: Mapped[str] = mapped_column(
         TSVECTOR,
-        Computed("to_tsvector('simple', coalesce(body, ''))", persisted=True),
+        Computed(
+            "to_tsvector('english', coalesce(body, ''))"
+            " || to_tsvector('simple', coalesce(body, ''))",
+            persisted=True,
+        ),
         nullable=True,
     )
     members_only: Mapped[bool] = mapped_column(

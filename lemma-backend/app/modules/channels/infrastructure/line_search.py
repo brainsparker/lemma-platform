@@ -14,15 +14,24 @@ matches to that channel's.
 What is found is what the reader may see and reads in full -- an answer
 withheld from them is not found by what it said -- filtered in the same
 statement, before the page is cut.
+
+Words are matched by how they start, so a search finds as it is typed:
+"alph" finds "alpha". Each is looked up both stemmed (``english``: "run"
+finds "running") and as written (``simple``: "runn" finds "running" too,
+whose stem is "run"); a line must have every word. The stored vector holds
+both forms of each word (``ChannelMessageModel.search``). Order stays newest
+first -- the walk back in time depends on it -- with ``rank`` beside each
+hit.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Select, and_, func, or_, select
+from sqlalchemy import ColumnElement, Select, and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.access import Viewer
@@ -89,6 +98,8 @@ class LineSearch:
         see and lines they read in full. Notes to members are members' to
         find. Paged by ``before`` (a hit's time and id)."""
         within = within or SearchFilter()
+        if not words_of(query):
+            return []
         rows = await self.session.execute(
             self._matching(
                 viewer, query, within, before, limit=max(1, min(limit, MAX_LINES))
@@ -113,7 +124,7 @@ class LineSearch:
         limit: int,
     ) -> Select[tuple[ChannelMessageModel, ChannelQuestionModel, float]]:
         message = ChannelMessageModel
-        words = func.plainto_tsquery("simple", query)
+        words = prefix_query(query)
         statement = (
             select(
                 message,
@@ -147,6 +158,37 @@ class LineSearch:
         )
 
 
+#: A word is letters and digits; everything else separates words, so nothing
+#: a reader types reaches ``to_tsquery`` as its syntax.
+_WORD = re.compile(r"[^\W_]+")
+#: Words past this many are dropped: each is two lookups in the index.
+MAX_WORDS = 8
+
+
+def words_of(query: str) -> list[str]:
+    return _WORD.findall(query.lower())[:MAX_WORDS]
+
+
+def prefix_query(query: str) -> ColumnElement[str]:
+    """Every word of ``query`` as the start of a word, stemmed or as written.
+
+    A stop word (``english``: "the") is dropped from its stemmed half and
+    still matched as written."""
+    combined: ColumnElement[str] | None = None
+    for word in words_of(query):
+        start = f"{word}:*"
+        stemmed = func.to_tsquery("english", start)
+        written = func.to_tsquery("simple", start)
+        # Most words are their own stem: then one lookup, not the same one
+        # twice -- which the planner would count twice, and judge a rare word
+        # common enough to walk back in time for. Folded before planning.
+        either = case((stemmed == written, stemmed), else_=stemmed.op("||")(written))
+        combined = either if combined is None else combined.op("&&")(either)
+    if combined is None:
+        return func.to_tsquery("simple", "")
+    return combined
+
+
 def _bare(word: str) -> str:
     """A word as the ``simple`` dictionary keys it: lower case, without the
     punctuation around it."""
@@ -162,8 +204,11 @@ def snippet(body: str, query: str) -> str | None:
     words = body.split()
     if not words:
         return None
-    wanted = {_bare(word) for word in query.split()} - {""}
-    at = next((index for index, word in enumerate(words) if _bare(word) in wanted), 0)
+    wanted = tuple(words_of(query))
+    at = next(
+        (index for index, word in enumerate(words) if _bare(word).startswith(wanted)),
+        0,
+    )
     start = max(0, min(at - SNIPPET_BEFORE, len(words) - SNIPPET_WORDS))
     end = min(len(words), start + SNIPPET_WORDS)
     shown = " ".join(words[start:end])
@@ -204,5 +249,7 @@ __all__ = [
     "SearchFilter",
     "SearchHit",
     "SpeakerRef",
+    "prefix_query",
     "snippet",
+    "words_of",
 ]

@@ -54,6 +54,35 @@ async def test_each_hit_carries_its_rank_and_the_words_around_it(pod: Pod):
     assert "<" not in hit["snippet"], "a snippet is plain text, never markup"
 
 
+async def test_words_are_found_by_their_stem_and_as_they_are_typed(pod: Pod):
+    crew = await group(pod)
+    await say(pod, crew["id"], "Running the alpha build tonight")
+    await say(pod, crew["id"], "The beta is parked")
+    search = f"/pods/{pod.id}/search"
+    owner = pod.client()
+
+    async def found(q: str) -> list[str]:
+        return _texts(await owner.get(search, params={"q": q}))
+
+    alpha = ["Running the alpha build tonight"]
+    assert await found("run") == alpha, "a stem finds the word it came from"
+    assert await found("runs") == alpha
+    assert await found("alph") == alpha, "a word is found as it is typed"
+    assert await found("runn") == alpha, "a part-typed word past its stem"
+    assert await found("alpha BUILD") == alpha
+    assert await found("alpha beta") == [], "a line has every word"
+    assert await found("the") == [
+        "The beta is parked",
+        "Running the alpha build tonight",
+    ]
+    # Query syntax a reader types is only words, never an error.
+    assert await found("alpha & !(beta | 'x') :* <->") == []
+    assert await found("al:* | park") == []
+    assert await found("&|!") == []
+    [hit] = (await owner.get(search, params={"q": "alph"})).json()["items"]
+    assert hit["snippet"].startswith("Running the alpha")
+
+
 async def test_a_withheld_answer_never_leaves_a_search_page_short(pod: Pod):
     """The newest match is an answer made with the owner's own access: the
     editor's first page of one is the line they may read, not an empty page."""

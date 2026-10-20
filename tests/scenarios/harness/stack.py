@@ -1339,7 +1339,7 @@ def start_stack(configure: Callable[[StackSpec], None] | None = None):
                     "--port",
                     str(port),
                     "--ws-max-size",
-                    "16777216",
+                    "1048576",
                     "--log-level",
                     "warning",
                 ],

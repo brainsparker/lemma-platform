@@ -225,7 +225,7 @@ def build_specs(
                 "--ws",
                 "websockets-sansio",
                 "--ws-max-size",
-                "16777216",
+                "1048576",
             ),
             ports=((store.port(doc, "backend"), 8000),),
             binds=(

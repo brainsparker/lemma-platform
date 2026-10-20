@@ -200,7 +200,7 @@ def _commands(spec: StackSpec) -> dict[str, list[str]]:
             "--port",
             "8000",
             "--ws-max-size",
-            "16777216",
+            "1048576",
         ]
     if spec.worker != default.worker:
         commands["worker"] = ["python", *spec.worker]

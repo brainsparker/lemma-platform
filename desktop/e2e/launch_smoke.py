@@ -467,7 +467,7 @@ async def start_stack(
             "--ws",
             "websockets-sansio",
             "--ws-max-size",
-            "16777216",
+            "1048576",
         ],
         env=backend_env,
         cwd=BACKEND,

@@ -38,7 +38,7 @@ is a close frame the client can read, never a failed upgrade:
 | `4404` | No such pod | Stop |
 | `4429` | The user already holds `LIVE_MAX_SOCKETS_PER_USER_PER_POD` sockets on this pod | Close another, or wait |
 | `1011` | Server error | Reconnect with backoff |
-| `1009` | A message over 16 MiB: the server stops reading it as it arrives | Do not send it again; nothing a client sends is that large |
+| `1009` | A message over 1 MiB: the server stops reading it as it arrives | Do not send it again; nothing a client sends is that large |
 
 A socket ends with its session. Signing out, or anything that revokes a
 user's sessions (a password reset, a deactivated account), closes every live
@@ -60,15 +60,15 @@ subscription after each `ready`, each with its own last cursor.
 The client names each subscription and each call with its own `id` (1-64
 characters, unique among the socket's open subscriptions); the server answers
 on that id. Client frames are JSON text, at most 16 KiB of UTF-8. A larger one
-is refused with an `invalid` error and the socket stays open -- up to 16 MiB,
+is refused with an `invalid` error and the socket stays open -- up to 1 MiB,
 the most the server reads of any websocket message (`WS_MAX_BYTES`,
 `app/core/server_limits.py`). Past that the server closes the socket with
 `1009` while the message is still arriving, so it is never held whole. The
 ceiling is uvicorn's (`ws_max_size`), the same for every socket the API
-serves, and every launcher passes it (`--ws-max-size 16777216`;
-`test_ws_max_size_everywhere` holds them to it). It is not lower because the
-Agent Host link is a socket of the same server and an installed host sends
-messages past 1 MiB on it (`server_limits` says which).
+serves, and every launcher passes it (`--ws-max-size 1048576`;
+`test_ws_max_size_everywhere` holds them to it). Bulk bytes -- files, images --
+travel over the HTTP API, never a socket; that holds for the Agent Host link
+too.
 
 ### Client to server
 

@@ -162,6 +162,29 @@ def principal_of(user_id: UUID | None, contact_id: UUID | None) -> Principal | N
     return None
 
 
+def sender_values(sender: Sender) -> dict[str, object]:
+    """A sender as the columns of its line."""
+    behalf = sender.on_behalf_of
+    return {
+        "sender_kind": sender.kind.value,
+        "sender_user_id": sender.user_id,
+        "sender_contact_id": sender.contact_id,
+        "sender_agent_id": sender.agent_id,
+        "on_behalf_user_id": behalf.user_id if behalf else None,
+        "on_behalf_contact_id": behalf.contact_id if behalf else None,
+        "sender_name": sender.display_name[:255] if sender.display_name else None,
+    }
+
+
+def nameless(row: ChannelMessageModel) -> bool:
+    """Said by somebody nobody could name: no member, no contact."""
+    return (
+        row.sender_kind == SenderKind.CONTACT.value
+        and row.sender_contact_id is None
+        and row.sender_user_id is None
+    )
+
+
 def sender_of(row: ChannelMessageModel) -> Sender:
     return Sender(
         kind=SenderKind(row.sender_kind),

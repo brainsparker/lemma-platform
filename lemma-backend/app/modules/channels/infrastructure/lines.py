@@ -44,7 +44,13 @@ from app.modules.channels.infrastructure.models import (
     ChannelSourceModel,
 )
 from app.modules.channels.infrastructure.revisions import HeldHead, hold, next_rev
-from app.modules.channels.infrastructure.rows import MAX_LINES, message_entity, now
+from app.modules.channels.infrastructure.rows import (
+    MAX_LINES,
+    message_entity,
+    nameless,
+    now,
+    sender_values,
+)
 
 #: The constraints that hold a line to its own channel: its thread, the line
 #: it replies to, the place it was heard at or carried to.
@@ -81,28 +87,6 @@ class NewLine:
     reply_ref: dict[str, object] | None = None
     reply_to_id: UUID | None = None
     thread_root_id: UUID | None = None
-
-
-def _sender_values(sender: Sender) -> dict[str, object]:
-    behalf = sender.on_behalf_of
-    return {
-        "sender_kind": sender.kind.value,
-        "sender_user_id": sender.user_id,
-        "sender_contact_id": sender.contact_id,
-        "sender_agent_id": sender.agent_id,
-        "on_behalf_user_id": behalf.user_id if behalf else None,
-        "on_behalf_contact_id": behalf.contact_id if behalf else None,
-        "sender_name": sender.display_name[:255] if sender.display_name else None,
-    }
-
-
-def _nameless(row: ChannelMessageModel) -> bool:
-    """Said by somebody nobody could name: no member, no contact."""
-    return (
-        row.sender_kind == SenderKind.CONTACT.value
-        and row.sender_contact_id is None
-        and row.sender_user_id is None
-    )
 
 
 def _with_question() -> Select[tuple[ChannelMessageModel, ChannelQuestionModel]]:
@@ -195,7 +179,7 @@ class LineRepository:
             reply_ref=dict(line.reply_ref) if line.reply_ref is not None else None,
             reply_to_id=line.reply_to_id,
             thread_root_id=line.thread_root_id,
-            **_sender_values(line.sender),
+            **sender_values(line.sender),
         )
         self.session.add(row)
         await _in_its_channel(self.session.flush())
@@ -281,8 +265,8 @@ class LineRepository:
         if row.reply_ref is None and line.reply_ref is not None:
             row.reply_ref = dict(line.reply_ref)
         sender = line.sender
-        if _nameless(row) and (sender.user_id or sender.contact_id):
-            values = _sender_values(sender)
+        if nameless(row) and (sender.user_id or sender.contact_id):
+            values = sender_values(sender)
             values["sender_name"] = row.sender_name or values["sender_name"]
             for key, value in values.items():
                 setattr(row, key, value)

@@ -27,6 +27,7 @@ from ..openapi_client.api.channels import (
     channel_member_update,
     channel_message_answer,
     channel_message_delete,
+    channel_message_share,
     channel_message_file,
     channel_message_list,
     channel_message_post,
@@ -548,7 +549,8 @@ class PodChannels(BoundResource):
         )
 
     def delete_message(self, channel_id: str | UUID, message_id: str | UUID) -> None:
-        """Delete one of the caller's own lines; it keeps its place, empty."""
+        """Delete a line: the caller's own, or anybody's in a channel the caller
+        may change. It keeps its place, empty."""
         self._call(
             channel_message_delete,
             self._pod_uuid(),
@@ -579,18 +581,12 @@ class PodChannels(BoundResource):
         """Share an agent's answer made with the caller's own access with
         everybody in the channel (``can_share`` on the line). Until then only
         the caller reads it; sharing it again changes nothing."""
-        response = self.generated.get_httpx_client().request(
-            method="post",
-            url=(
-                f"/pods/{self._pod_uuid()}/channels/{as_uuid(channel_id)}"
-                f"/messages/{as_uuid(message_id)}/share"
-            ),
+        return self._call(
+            channel_message_share,
+            self._pod_uuid(),
+            as_uuid(channel_id),
+            as_uuid(message_id),
         )
-        if response.status_code >= 400:
-            raise self._transport.error_from_response(
-                response.status_code, None, response.content
-            )
-        return ChannelMessageResponse.from_dict(response.json())
 
     def deliveries(
         self, channel_id: str | UUID, message_id: str | UUID

@@ -17660,8 +17660,9 @@ var LemmaClient = (() => {
      *  everybody in the channel (`can_share` on the line). Until then only the
      *  caller reads it; sharing it again changes nothing. */
     share(podId, channelId, messageId) {
-      const path = [podId, "channels", channelId, "messages", messageId, "share"].map(encodeURIComponent).join("/");
-      return this.http.request("POST", `/pods/${path}`);
+      return this.client.request(
+        () => ChannelsService.channelMessageShare(podId, channelId, messageId)
+      );
     }
     /** Where a line went outside Lemma, and what became of each send. */
     deliveries(podId, channelId, messageId) {

@@ -285,7 +285,13 @@ def test_sharing_an_answer_posts_to_its_share_route() -> None:
 def test_sharing_someone_elses_answer_raises() -> None:
     channels, _ = _wired_channels(
         lambda _: httpx.Response(
-            403, json={"detail": "Only the member an answer was made for may share it"}
+            403,
+            json={
+                "message": "Only the member an answer was made for may share it",
+                "code": "INSUFFICIENT_PERMISSION",
+                "request_id": "r-1",
+                "details": None,
+            },
         )
     )
 

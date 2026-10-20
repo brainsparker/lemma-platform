@@ -17,6 +17,10 @@ from collections.abc import Collection, Sequence
 from uuid import UUID
 
 
+#: ``AgentSurfaceStatus`` other than ACTIVE: what the statement filters out.
+_NOT_ACTIVE = frozenset({"INACTIVE", "PENDING_ADMIN_CONSENT", "NEEDS_SETUP", "ERROR"})
+
+
 def routing_surfaces_double(surfaces: Sequence):
     """An async callable matching ``SurfaceRepository.list_active_for_routing``.
 
@@ -37,11 +41,13 @@ def routing_surfaces_double(surfaces: Sequence):
         also_paused: bool = False,
         limit: int | None = None,
     ) -> list:
-        # A paused surface is the repository's to drop unless asked for.
+        # A surface not ACTIVE is the repository's to drop unless asked for.
+        # Named by the statuses that are not, so a stand-in with no status of
+        # its own still reads as the live surface it stands in for.
         chosen = [
             surface
             for surface in surfaces
-            if also_paused or str(getattr(surface, "status", "ACTIVE")) != "INACTIVE"
+            if also_paused or str(getattr(surface, "status", "")) not in _NOT_ACTIVE
         ]
         if surface_ids is not None:
             # An empty collection means "none of them", as `IN ()` does.

@@ -423,12 +423,16 @@ class AppEventHandler:
         if parsed is None:
             return False
         if parsed.kind is SurfaceLifecycleKind.UNINSTALLED:
+            # Before the actor's authorization, which it has none of: the
+            # signature that resolved the receivers is what authorizes it.
             await retire_uninstalled_app(
                 self.uow,
                 surfaces_repo=self.surface_repository,
+                credential_resolver=self.credential_resolver,
                 request=request,
                 parsed=parsed,
             )
+            await self.uow.commit()
             return True
 
         (

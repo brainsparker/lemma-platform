@@ -42,6 +42,7 @@ from app.modules.channels.contracts.places import (
     owned_place,
     places_hearing,
     shared_places_of_pod,
+    shared_places_of_surfaces,
     surfaces_hearing,
 )
 
@@ -282,6 +283,21 @@ class SurfaceGroupRepository:
     async def bot_removed(self, group_id: UUID) -> bool:
         """The bot was taken out of the group: its channel is archived."""
         return await place_stopped(self.uow, group_id)
+
+    async def bots_removed_everywhere(self, surface_ids: Sequence[UUID]) -> int:
+        """These surfaces' bots taken out of every group at once -- their app
+        removed from the workspace, which sends no leave per channel. Each
+        group is archived as `bot_removed` archives one; returns how many were
+        not already."""
+        archived = 0
+        after: UUID | None = None
+        while page := await shared_places_of_surfaces(
+            self.uow, surface_ids, after=after, limit=_MAX_GROUPS_PAGE
+        ):
+            for source in page:
+                archived += await self.bot_removed(source.id)
+            after = page[-1].id
+        return archived
 
     async def bot_returned(self, group_id: UUID) -> bool:
         """The bot is back in the group: its channel is brought back."""

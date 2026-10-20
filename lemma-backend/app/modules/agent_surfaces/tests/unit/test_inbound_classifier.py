@@ -127,6 +127,22 @@ def test_taps_and_lifecycle_are_not_messages_to_ingest():
     )
 
 
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "app_uninstalled"},
+        {"type": "tokens_revoked", "tokens": {"bot": ["U_BOT"]}},
+    ],
+)
+def test_slack_removing_the_app_reaches_the_platform_update_path(event):
+    """Dropped here, the app's removal never reaches the worker that retires
+    its account, and the surface goes on reading as connected."""
+    verdict = classify("SLACK", _slack(event))
+
+    assert verdict.platform_update and not verdict.message
+    assert not verdict.dropped
+
+
 def test_an_edit_or_deletion_changes_a_heard_line_and_starts_no_turn():
     """Applied to the line it was heard as (``services/line_changes``): a
     platform update, never a message. In a channel, only where a group

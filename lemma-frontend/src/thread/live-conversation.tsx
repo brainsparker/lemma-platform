@@ -545,10 +545,13 @@ export function LiveConversation({
                     landed.push({ name: written.name ?? one.file.name, path: written.path });
                     settled.push({ ...one, status: "uploaded", path: written.path, error: undefined });
                 } catch (problem) {
-                    const sentence = saidAboutSending(problem, "Couldn’t upload " + one.file.name + ".");
                     /* Named, because "upload failed" with two files attached
                        leaves the reader to guess which one, and the chip that
-                       does say it is a title nobody hovers. */
+                       does say it is a title nobody hovers. The name comes
+                       first whatever the reason is — the platform's refusal
+                       and an unreachable server both say nothing of the file. */
+                    const reason = saidAboutSending(problem, "");
+                    const sentence = "Couldn’t upload " + one.file.name + "." + (reason ? " " + reason : "");
                     uploadFailure.current = sentence;
                     setAttachments(was => markAttachment(was, one.key, {
                         status: "failed",

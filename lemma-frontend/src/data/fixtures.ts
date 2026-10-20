@@ -1861,14 +1861,16 @@ let AGENTS: Record<string, unknown>[] = [
 
 /** What each sample pod has been told to run on. Most have been told
  *  nothing, which is the common case and the one worth drawing. */
-/* A conversation's own pin, when one was made in this sample session. The pod's
-   is above; this is the narrower one, and it starts empty — a conversation runs
-   on what the teammate runs on until somebody says otherwise. */
-const CONVERSATION_RUNTIME: Record<string, { profile_id: string; model_name?: string | null }> = {};
-
 const POD_RUNTIME: Record<string, { profile_id: string; model_name?: string | null; config_selections?: Record<string, string> }> = {
     marketing: { profile_id: "me:claude-code", model_name: "opus", config_selections: { effort: "high" } },
 };
+
+/* A conversation's own pin, when one was made in this sample session. The pod's
+   is above; this is the narrower one, and it starts empty — a conversation runs
+   on what the teammate runs on until somebody says otherwise. Keyed by pod as
+   well, because every sample pod has a conversation called "fixture". */
+const CONVERSATION_RUNTIME: Record<string, { profile_id: string; model_name?: string | null }> = {};
+const conversationKey = (podId: string, conversationId: string) => podId + "/" + conversationId;
 
 /** And who each has been told may let themselves in. Most have been told
     nothing either, which reads as the shut door — so one pod stands open, to
@@ -2853,19 +2855,20 @@ export const fixtureSource: PodSource = {
         RUNTIMES = RUNTIMES.map((raw) =>
             (raw as { id?: string }).id === runtimeId ? { ...(raw as object), status: "ACTIVE" } : raw);
     },
-    async getConversationRuntime(_podId: string, conversationId: string) {
+    async getConversationRuntime(podId: string, conversationId: string) {
         await wait(60);
-        return readChoice(CONVERSATION_RUNTIME[conversationId]);
+        return readChoice(CONVERSATION_RUNTIME[conversationKey(podId, conversationId)]);
     },
-    async setConversationRuntime(_podId: string, conversationId: string, choice) {
+    async setConversationRuntime(podId: string, conversationId: string, choice) {
         await wait(200);
+        const key = conversationKey(podId, conversationId);
         if (choice) {
-            CONVERSATION_RUNTIME[conversationId] = {
+            CONVERSATION_RUNTIME[key] = {
                 profile_id: choice.runtimeId,
                 model_name: choice.model,
             };
         }
-        else delete CONVERSATION_RUNTIME[conversationId];
+        else delete CONVERSATION_RUNTIME[key];
     },
     async getPodRuntime(podId: string) {
         await wait(80);

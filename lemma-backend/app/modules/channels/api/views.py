@@ -47,6 +47,7 @@ from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.names import Names
 from app.modules.channels.infrastructure.source_repository import SourceRepository
+from app.modules.contacts.contracts.outreach import opted_out
 
 
 async def _named(
@@ -160,6 +161,11 @@ async def channel_detail(
     )
     return ChannelDetailResponse(
         **row.model_dump(),
+        opted_out=(
+            await opted_out(uow, pod_id=channel.pod_id, contact_id=channel.contact_id)
+            if channel.contact_id is not None
+            else None
+        ),
         source_places=[
             source_response(source)
             for source in await SourceRepository(uow.session).of_channel(channel.id)

@@ -437,6 +437,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.onboarding.modal_click_refused': EventSpec('info', frozenset({'reason'})),
     'agent_surfaces.onboarding.modal_deadline_exceeded': EventSpec('warning', frozenset()),
     'agent_surfaces.onboarding.modal_unavailable': EventSpec('warning', frozenset({'error_type', 'installation_id'})),
+    'agent_surfaces.opt_out_notes.noted.observed': EventSpec('info', frozenset({'channel_id', 'platform'})),
     'agent_surfaces.outside_cap.contact_limit_reached.observed': EventSpec('info', frozenset({'contact_id', 'pod_id'})),
     'agent_surfaces.outside_cap.reply_not_sent.degraded': EventSpec('warning', frozenset({'platform'})),
     'agent_surfaces.outside_cap.turn_held.observed': EventSpec('info', frozenset({'conversation_id', 'pod_id', 'told'})),

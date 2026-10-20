@@ -1161,9 +1161,24 @@ async def test_stop_unsubscribes_the_address_it_came_from(
         )
         == "stop"
     )
+    # Members see it: a note in her channel, and on her handle and channel.
+    channel = await contact_channel_id(authenticated_client, pod_id, dana)
+    timeline = await authenticated_client.get(
+        f"/pods/{pod_id}/channels/{channel}/messages"
+    )
+    [note] = [
+        line
+        for line in timeline.json()["items"]
+        if line["text"] and "asked to stop" in line["text"]
+    ]
+    assert note["members_only"] is True
+    assert "by email" in note["text"]
+    shown = (await authenticated_client.get(f"/pods/{pod_id}/contacts/{dana}")).json()
+    assert [handle["opted_out"] for handle in shown["identities"]] == [True]
+    detail = await authenticated_client.get(f"/pods/{pod_id}/channels/{channel}")
+    assert detail.json()["opted_out"] is True
     # A member's line to her afterwards stays in Lemma, recorded as not sent.
     sent_before = len(message_store.get_all("RESEND"))
-    channel = await contact_channel_id(authenticated_client, pod_id, dana)
     written = await member_writes(
         authenticated_client, pod_id, channel, "One more thing."
     )

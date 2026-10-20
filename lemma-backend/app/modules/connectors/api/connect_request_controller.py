@@ -62,6 +62,7 @@ async def _browser_user_id(request: Request) -> UUID | None:
     except ValueError:
         return None
 
+
 router = APIRouter(prefix="/connectors/connect-requests", tags=["Connectors"])
 org_router = APIRouter(
     prefix="/organizations/{organization_id}/connectors/connect-requests",

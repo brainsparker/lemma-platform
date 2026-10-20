@@ -58,9 +58,7 @@ async def keep_form(form: AddForm) -> str | None:
     try:
         await _forms().set_raw(reference, json.dumps(sealed))
     except RedisError:
-        logger.warning(
-            "agent_surfaces.slack_manager.form_kept.degraded", exc_info=True
-        )
+        logger.warning("agent_surfaces.slack_manager.form_kept.degraded", exc_info=True)
         return None
     return reference
 

@@ -12,10 +12,9 @@ from app.core.api.callback_page import (
     render_callback_page,
     safe_provider_error,
 )
-from app.modules.agent_surfaces.services.slack_manager import (
-    ManagerSync,
-    handle_sync as handle_manager_sync,
-    is_manager_delivery,
+from app.modules.agent_surfaces.services import slack_manager
+from app.modules.agent_surfaces.platforms.slack.manager_parser import (
+    parse_manager_input,
 )
 from app.modules.agent_surfaces.config import (
     surface_settings,
@@ -153,7 +152,7 @@ async def handle_platform_webhook(
     # Authenticity failures raise SurfaceWebhookAuthenticationError (a DomainError),
     # translated to the right status by the global handler.
     security_service.assert_platform_request_allowed(resolved.value)
-    receiver_surface_ids = await _verify_inbound_request(
+    verified = await _verify_inbound_request(
         platform=source,
         headers=headers,
         raw_body=raw_body,
@@ -161,19 +160,34 @@ async def handle_platform_webhook(
         security_service=security_service,
         uow_factory=uow_factory,
     )
+    receiver_surface_ids = verified.receivers
+
+    if verified.is_managers:
+        # Lemma's own app managing the workspace: its own lane, decided here
+        # and only here, before onboarding and before `accept()` -- nothing it
+        # receives is stored as an inbound message or reaches group updates.
+        return await _answer_manager(
+            payload,
+            source_event_id=webhook_source_event_id(
+                source, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
+            ),
+            uow_factory=uow_factory,
+        )
 
     if resolved is SurfacePlatform.WHATSAPP and await _published_whatsapp_verification(
         payload, uow_factory
     ):
         return {"message": "Verification message received"}
 
-    manager = None
-    if resolved is SurfacePlatform.SLACK:
-        answered, manager = await _answered_by_slack_fast_lane(
-            payload, headers, receiver_surface_ids, uow_factory
-        )
-        if answered is not None:
-            return answered
+    if resolved is SurfacePlatform.SLACK and await open_onboarding_modal(
+        payload, receiver_surface_ids, uow_factory
+    ):
+        return Response(status_code=200)
+
+    if resolved is SurfacePlatform.SLACK and await _handled_slack_modal(
+        payload, headers, receiver_surface_ids, uow_factory
+    ):
+        return Response(status_code=200)
 
     # Classified, answered or stored, in this request: what nobody acts on is
     # dropped here, a tap is decided here, a message is a row and an item.
@@ -574,27 +588,25 @@ async def teams_admin_consent_callback(
     )
 
 
-async def _answered_by_slack_fast_lane(
+async def _answer_manager(
     payload: dict[str, JsonValue],
-    headers: dict[str, str],
-    receiver_surface_ids: list[UUID] | None,
+    *,
+    source_event_id: str,
     uow_factory: UnitOfWorkFactory,
-) -> tuple[Response | None, ManagerSync | None]:
-    """What a Slack delivery needs answered inside the request, if anything.
+) -> Response:
+    """Answer what Slack's three seconds require, queue the rest as ids, reply.
 
-    A trigger lives 3 seconds, so opening a modal and answering one cannot wait
-    for a worker. Returns the response to send now, if this request is fully
-    answered here, and the manager's result when the delivery was Lemma's own
-    app managing the workspace -- none of the teammate lanes apply to it.
+    A modal submission's body is protocol -- a ``response_action`` -- so it is
+    what Slack gets back; every other delivery gets an empty 200.
     """
-    if is_manager_delivery(payload, receiver_surface_ids):
-        manager = await handle_manager_sync(payload, uow_factory)
-        if manager.publish:
-            return None, manager
-        body = JSONResponse(manager.body) if manager.body else Response(status_code=200)
-        return body, manager
-    if await open_onboarding_modal(payload, receiver_surface_ids, uow_factory):
-        return Response(status_code=200), None
-    if await _handled_slack_modal(payload, headers, receiver_surface_ids, uow_factory):
-        return Response(status_code=200), None
-    return None, None
+    answer = await slack_manager.answer_now(uow_factory, parse_manager_input(payload))
+    if answer.queued is not None:
+        await slack_manager.queue(
+            uow_factory,
+            answer.queued,
+            source_event_id=source_event_id,
+            delay=answer.delay,
+        )
+    if answer.body is not None:
+        return JSONResponse(answer.body)
+    return Response(status_code=200)

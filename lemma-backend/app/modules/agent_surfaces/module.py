@@ -129,6 +129,7 @@ def _register_work() -> None:
     import app.modules.agent_surfaces.events.receiver_work  # noqa: F401
     import app.modules.agent_surfaces.events.reply_for_run_work  # noqa: F401
     import app.modules.agent_surfaces.events.reply_work  # noqa: F401
+    import app.modules.agent_surfaces.events.slack_manager_work  # noqa: F401
 
 
 module = LemmaModule(

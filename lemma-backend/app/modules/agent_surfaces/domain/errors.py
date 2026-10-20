@@ -415,6 +415,4 @@ class SlackSignInError(AgentSurfaceError):
 
     def __init__(self, reason: str, message: str) -> None:
         self.reason = reason if reason in self.REASONS else "unavailable"
-        super().__init__(
-            message=message, code="SLACK_SIGN_IN_REFUSED", status_code=422
-        )
+        super().__init__(message=message, code="SLACK_SIGN_IN_REFUSED", status_code=422)

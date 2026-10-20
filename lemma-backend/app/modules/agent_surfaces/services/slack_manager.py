@@ -6,31 +6,48 @@ sees its teammates (the Home tab), adds one ("Add to Slack"), and hands a
 channel to one: invited somewhere, it asks the inviter which teammate should
 join, brings that teammate's bot in, and leaves.
 
-A delivery is the manager's when Lemma's own app signed it in a workspace where
-no teammate answers through that app -- verification then names no receiving
-surface, only the app. Workspaces still on the older arrangement, where Lemma's
-app *was* a pod's bot, keep it: their deliveries name that pod's surface and
-never reach this module.
+**Its own lane.** A delivery is the manager's when Lemma's app signed it, no
+teammate's surface receives it, and Lemma's app manages that workspace
+(``SlackVerification.is_managers``). The webhook controller decides that once,
+before onboarding and before ``accept()``: a manager delivery is never stored
+as an inbound message (its modal carries pasted secrets), never classified, and
+never reaches the group-update path -- where the manager leaving a channel
+would read as "the bot left" and archive the teammate's mirror. What must be
+answered in Slack's three seconds is answered in the request (``answer_now``);
+the rest is one ``surface.slack_manager`` work item carrying ids only
+(``queue``), run here (``run``).
+
+**Webhook only.** The manager has no surface, so a Socket Mode deployment
+never reaches it; Lemma's app must deliver to the HTTP events URL.
+
+Workspaces still on the older arrangement, where Lemma's app *was* a pod's
+bot, keep it: their deliveries name that pod's surface and never come here.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from uuid import UUID
 
-from pydantic import JsonValue
-
+from app.core.authorization.scope import uow_scope
 from app.core.config import settings
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.infrastructure.work import SYSTEM_NAMESPACE, WorkWriter, org_namespace
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.ingress_request import (
-    SurfaceIngressRequest,
-    SurfacePlatformWebhookIngress,
+from app.modules.agent_surfaces.domain.place_privacy import PlacePrivacy
+from app.modules.agent_surfaces.domain.slack_manager import (
+    ManagerInput,
+    ManagerInputKind,
+    ParsedManagerDelivery,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (
+from app.modules.agent_surfaces.events.work_kinds import (
+    SURFACE_SLACK_MANAGER,
+    slack_manager_key,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (  # noqa: E501
     SlackManagerRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
@@ -38,91 +55,106 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 )
 from app.modules.agent_surfaces.platforms.slack import manager_blocks as views
 from app.modules.agent_surfaces.platforms.slack import workspace_calls as slack
-from app.modules.agent_surfaces.platforms.slack.manager_parser import (
-    ManagerInput,
-    ManagerInputKind,
-    parse_manager_input,
-)
+from app.modules.agent_surfaces.platforms.slack.home import SlackHomeSurface
 from app.modules.agent_surfaces.services import slack_manager_bots as bots
-from app.modules.agent_surfaces.services.channel_allow import allow_channel
-from app.modules.agent_surfaces.services.credential_resolver import (
-    SurfaceCredentialResolver,
+from app.modules.agent_surfaces.services.channel_allow import (
+    allow_channel,
+    take_back_channel,
 )
 from app.modules.agent_surfaces.services.slack_manager_context import (
     ManagerContext,
     Teammate,
     load_context,
+    load_install,
     organization_pod_ids,
-    person_link_url,
+    sign_in_url,
     teammates,
     workspace_surfaces,
+)
+from app.modules.agent_surfaces.services.slack_manager_messages import (
+    stage_teammate_hello,
 )
 from app.modules.connectors.contracts.retirement import retire_accounts
 
 logger = get_logger(__name__)
 
+#: An ADD_SUBMITTED waits this long before the worker replaces the modal, so
+#: Slack has applied the request's own "Making the app…" first.
+_AFTER_SLACK_APPLIES = timedelta(seconds=1)
 
-def is_manager_delivery(
-    payload: dict[str, JsonValue], receiver_surface_ids: Sequence[UUID] | None
-) -> bool:
-    """Lemma's own app, verified, with no teammate's surface receiving it.
-
-    ``receiver_surface_ids`` is what the signature check resolved: an empty list
-    -- not None, which means an unverified fan-in -- is the manager's own
-    candidate matching and nothing else.
-    """
-    app_id = surface_settings.slack_app_id
-    if not app_id or receiver_surface_ids is None or list(receiver_surface_ids):
-        return False
-    nested = payload.get("payload")
-    inner = nested if isinstance(nested, dict) else payload
-    return str(inner.get("api_app_id") or "") == app_id
+#: Kinds with nothing to do: read so the lane can drop them on purpose.
+_DROPPED = frozenset({ManagerInputKind.OTHER, ManagerInputKind.LEFT_CHANNEL})
 
 
-@dataclass(frozen=True)
-class ManagerSync:
-    """What the webhook request itself answers, before anything is queued.
+@dataclass(frozen=True, slots=True)
+class RequestAnswer:
+    """What the webhook request answers, and what it leaves for the worker.
 
-    ``body`` is the HTTP response Slack reads (a modal's ``response_action``);
-    ``publish`` says whether the delivery still goes to the worker.
+    ``body`` is the HTTP response Slack reads (a modal's ``response_action``),
+    or None for an empty 200. ``queued`` is the input to run off the request.
     """
 
     body: dict[str, object] | None = None
-    publish: bool = False
+    queued: ManagerInput | None = None
+    delay: timedelta | None = None
 
 
-async def handle_sync(payload: dict[str, JsonValue], uow_factory) -> ManagerSync:
+async def answer_now(
+    uow_factory: UnitOfWorkFactory, delivery: ParsedManagerDelivery
+) -> RequestAnswer:
     """The part that cannot wait for a worker: Slack gives a trigger 3 seconds."""
-    parsed = parse_manager_input(payload)
+    parsed = delivery.input
+    if parsed.kind in _DROPPED:
+        return RequestAnswer()
     if parsed.kind is ManagerInputKind.ADD_CLICKED:
-        async with uow_factory() as uow:
+        async with uow_scope(uow_factory) as uow:
             await bots.open_add_modal(uow, parsed)
-        return ManagerSync()
+        return RequestAnswer()
     if parsed.kind is ManagerInputKind.ADD_SUBMITTED:
-        async with uow_factory() as uow:
-            body = await bots.acknowledge_add(uow, parsed)
-        # A problem is shown in the modal and nothing is queued; otherwise the
-        # modal says "making the app" and the worker makes it.
-        return ManagerSync(body=body, publish=body.get("response_action") == "update")
-    return ManagerSync(publish=True)
+        if delivery.form is None:
+            return RequestAnswer()
+        async with uow_scope(uow_factory) as uow:
+            body, queued = await bots.acknowledge_add(uow, parsed, delivery.form)
+        return RequestAnswer(body=body, queued=queued, delay=_AFTER_SLACK_APPLIES)
+    # Nothing a person needs in the request: the trigger and the typed values
+    # stay behind, only ids go on.
+    return RequestAnswer(queued=parsed.model_copy(update={"trigger_id": None}))
 
 
-async def handle_event(uow_factory, request: SurfaceIngressRequest) -> bool:
-    """Everything else the manager receives. True when it was the manager's."""
-    if (
-        not isinstance(request, SurfacePlatformWebhookIngress)
-        or request.source != "slack"
-    ):
-        return False
-    if not is_manager_delivery(request.payload, request.receiver_surface_ids):
-        return False
-    parsed = parse_manager_input(request.payload)
-    async with uow_factory() as uow:
-        await _route(uow, parsed)
-    return True
+async def queue(
+    uow_factory: UnitOfWorkFactory,
+    parsed: ManagerInput,
+    *,
+    source_event_id: str,
+    delay: timedelta | None = None,
+) -> bool:
+    """Write the one ``surface.slack_manager`` item for this delivery.
+
+    Keyed by Slack's event id, so a delivery Slack retries while its first is
+    still queued adds nothing; and one person's items in one workspace run
+    one at a time.
+    """
+    async with uow_scope(uow_factory) as uow:
+        install = await load_install(uow, parsed.team_id)
+        namespace = (
+            org_namespace(install.organization_id) if install else SYSTEM_NAMESPACE
+        )
+        item = await WorkWriter.of(uow).add(
+            SURFACE_SLACK_MANAGER,
+            namespace,
+            parsed,
+            dedup_key=slack_manager_key(source_event_id),
+            concurrency_key=(
+                f"slack-manager:{parsed.team_id or '-'}:{parsed.user_id or '-'}"
+            ),
+            delay=delay,
+        )
+        await uow.commit()
+    return item is not None
 
 
-async def _route(uow: SqlAlchemyUnitOfWork, parsed: ManagerInput) -> None:
+async def run(uow: SqlAlchemyUnitOfWork, parsed: ManagerInput) -> None:
+    """One queued input, in the worker."""
     if parsed.kind is ManagerInputKind.UNINSTALLED:
         await _uninstalled(uow, parsed)
         return
@@ -148,22 +180,20 @@ async def show_home(uow: SqlAlchemyUnitOfWork, ctx: ManagerContext) -> None:
         return
     if ctx.user_id is None:
         view = views.connect_home(
-            link_url=person_link_url(ctx.team_id, ctx.slack_user_id),
+            link_url=sign_in_url(ctx.team_id, ctx.slack_user_id),
             team_name=ctx.install.team_name,
         )
     elif not ctx.is_member:
         view = views.outsider_home(
             organization_name=ctx.organization_name or "another organization",
-            link_url=person_link_url(ctx.team_id, ctx.slack_user_id),
+            link_url=sign_in_url(ctx.team_id, ctx.slack_user_id),
         )
     else:
         mates = await teammates(uow, ctx)
-        # Credentials only for the teammates the Home shows: each is its own
-        # app, so each is its own read.
         shown = mates[: views.ROSTER_SHOWN]
         view = views.roster_home(
             team_name=ctx.install.team_name,
-            teammates=[await _roster_entry(uow, ctx, mate) for mate in shown],
+            teammates=[_roster_entry(mate) for mate in shown],
             lemma_url=settings.frontend_url,
             more=len(mates) - len(shown),
         )
@@ -171,36 +201,35 @@ async def show_home(uow: SqlAlchemyUnitOfWork, ctx: ManagerContext) -> None:
         await slack.publish_home(ctx.credentials, user_id=ctx.slack_user_id, view=view)
 
 
-async def _roster_entry(
-    uow: SqlAlchemyUnitOfWork, ctx: ManagerContext, mate: Teammate
-) -> views.RosterEntry:
-    open_url = None
-    if mate.surface is not None:
-        app_id = (
-            await SurfaceCredentialResolver(uow=uow).slack_webhook_credentials(
-                mate.surface
-            )
-        ).app_id
-        if app_id:
-            open_url = f"https://slack.com/app_redirect?app={app_id}&team={ctx.team_id}"
+def _roster_entry(mate: Teammate) -> views.RosterEntry:
     return views.RosterEntry(
         pod_id=str(mate.pod_id),
+        agent_id=str(mate.agent_id),
         name=mate.name,
         bot_user_id=mate.bot_user_id,
-        open_url=open_url,
     )
 
 
 async def _offer_channel(
     uow: SqlAlchemyUnitOfWork, ctx: ManagerContext, parsed: ManagerInput
 ) -> None:
-    """Invited to a channel: ask the inviter, privately, which teammate joins."""
-    if not parsed.channel_id or not parsed.user_id:
+    """Invited to a channel: ask the inviter, privately, which teammate joins.
+
+    The manager stays only while there is a choice to make; with nobody to
+    ask, or nothing to offer, it says why and steps out.
+    """
+    if not parsed.channel_id:
         return
+    if not parsed.user_id:
+        async with connection_released(uow.session):
+            await slack.leave_channel(ctx.credentials, parsed.channel_id)
+        return
+    candidates: list[tuple[str, str]] = []
     if ctx.user_id is None:
         text = (
-            "Connect your Lemma account first, and I'll bring a teammate in here: "
-            f"<{person_link_url(ctx.team_id, parsed.user_id)}|connect>."
+            "Connect your Lemma account first, then invite me again and I'll "
+            "bring a teammate in here: "
+            f"<{sign_in_url(ctx.team_id, parsed.user_id)}|connect>."
         )
         blocks = None
     else:
@@ -220,16 +249,19 @@ async def _offer_channel(
             text=text,
             blocks=blocks,
         )
+        if not candidates:
+            await slack.leave_channel(ctx.credentials, parsed.channel_id)
 
 
 #: What a Slack refusal means to the person who asked, in their words.
 _HANDOFF_REASONS = {
-    "missing_scope": "its app is missing a permission. Reinstall it from my Home tab.",
     "not_in_channel": "I'm no longer in the channel. Invite me again.",
     "channel_not_found": "Slack can't find that channel any more.",
     "is_archived": "the channel is archived.",
     "app_cannot_join_channel": "this workspace doesn't let apps into that channel.",
     "restricted_action": "this workspace doesn't let apps into that channel.",
+    "cant_invite": "Slack won't let me invite that teammate there.",
+    "no_permission": "Slack won't let me invite that teammate there.",
 }
 
 
@@ -239,69 +271,104 @@ async def _hand_over(
     """Bring the chosen teammate's bot in, let it answer there, and step out."""
     channel = parsed.channel_id or ""
     reason = await _bring_in(uow, ctx, parsed)
-    if parsed.response_url:
-        if reason is None:
-            surface = await SurfaceRepository(uow).get(UUID(parsed.surface_id or ""))
-            text, blocks = views.handed_over(
-                channel_id=channel,
-                bot_user_id=(surface.surface_identity_id if surface else "") or "",
-            )
-        else:
-            text, blocks = views.not_handed_over(channel_id=channel, reason=reason)
+    if channel and reason != _NOT_HERE:
+        async with connection_released(uow.session):
+            await slack.leave_channel(ctx.credentials, channel)
+    if not parsed.response_url:
+        return
+    if reason is None:
+        surface = (
+            await SurfaceRepository(uow).get(parsed.surface_id)
+            if parsed.surface_id
+            else None
+        )
+        text, blocks = views.handed_over(
+            channel_id=channel,
+            bot_user_id=(surface.surface_identity_id if surface else "") or "",
+        )
+    else:
+        text, blocks = views.not_handed_over(channel_id=channel, reason=reason)
+    async with connection_released(uow.session):
         await slack.respond(parsed.response_url, text=text, blocks=blocks)
+
+
+#: A tap that names a channel other than the one it was tapped in.
+_NOT_HERE = "that button isn't for this channel."
 
 
 async def _bring_in(
     uow: SqlAlchemyUnitOfWork, ctx: ManagerContext, parsed: ManagerInput
 ) -> str | None:
-    """None when the teammate is in; otherwise why not, to say to the person."""
+    """None when the teammate is in; otherwise why not, to say to the person.
+
+    The channel's route and place are written first, so the teammate's own
+    ``member_joined_channel`` finds the channel already its own; a refused
+    invite takes them back. The channel is mirrored as private unless Slack
+    says it is public.
+    """
     channel = parsed.channel_id or ""
+    if (
+        parsed.container_channel_id
+        and channel
+        and parsed.container_channel_id != channel
+    ):
+        return _NOT_HERE
     chosen = next(
         (
             mate
             for mate in await teammates(uow, ctx)
-            if mate.surface is not None and str(mate.surface.id) == parsed.surface_id
+            if mate.surface is not None and mate.surface.id == parsed.surface_id
         ),
         None,
     )
     if not channel or chosen is None or chosen.surface is None:
         return "that teammate isn't yours to set up here."
     if not chosen.can_manage:
-        return f"only an editor of {chosen.name} can give it a channel."
+        return f"only an editor of {views.escape(chosen.name)} can give it a channel."
     surface = chosen.surface
-    teammate_credentials = await SurfaceCredentialResolver(uow=uow).for_surface(surface)
     async with connection_released(uow.session):
-        private = await slack.is_private_channel(ctx.credentials, channel)
-        if private:
-            error = await slack.invite(
-                ctx.credentials,
-                channel=channel,
-                user_ids=[surface.surface_identity_id or ""],
-            )
-        else:
-            error = await slack.join_channel(teammate_credentials, channel)
-    if error:
-        logger.info(
-            "agent_surfaces.slack_manager.handoff_failed",
-            team_id=ctx.team_id,
-            error=error,
-            private=bool(private),
-        )
-        return _HANDOFF_REASONS.get(error, f"Slack said {error}.")
-    await allow_channel(
+        facts = await SlackHomeSurface(credentials=ctx.credentials).place_facts(channel)
+    is_private = facts is None or facts.privacy is not PlacePrivacy.PUBLIC
+    surfaces = SurfaceRepository(uow)
+    allowed = await allow_channel(
         uow,
-        surfaces=SurfaceRepository(uow),
+        surfaces=surfaces,
         surface=surface,
         channel_id=channel,
         owner_user_id=ctx.user_id,
+        is_private=is_private,
     )
     async with connection_released(uow.session):
-        await slack.post_message(
-            teammate_credentials,
+        error = await slack.invite(
+            ctx.credentials,
             channel=channel,
-            text=f"Hi, I'm {chosen.name}. Mention me to ask me something.",
+            user_ids=[surface.surface_identity_id or ""],
         )
-        await slack.leave_channel(ctx.credentials, channel)
+    if error:
+        if allowed is not None:
+            await take_back_channel(
+                uow, surfaces=surfaces, surface_id=surface.id, allowed=allowed
+            )
+        logger.warning(
+            "agent_surfaces.slack_manager.handoff_failed.degraded",
+            team_id=ctx.team_id,
+            error=error,
+            private=is_private,
+        )
+        return _HANDOFF_REASONS.get(error, f"Slack said {error}.")
+    await stage_teammate_hello(
+        uow,
+        organization_id=ctx.organization_id,
+        surface_id=surface.id,
+        channel_id=channel,
+    )
+    await uow.commit()
+    logger.info(
+        "agent_surfaces.slack_manager.handed_over",
+        team_id=ctx.team_id,
+        surface_id=str(surface.id),
+        private=is_private,
+    )
     return None
 
 
@@ -314,7 +381,7 @@ async def _point_at_teammates(
     pods = await organization_pod_ids(uow, ctx.organization_id)
     bots_here = [
         surface.surface_identity_id or ""
-        for surface in await workspace_surfaces(uow, ctx, pod_ids=pods)
+        for surface in await workspace_surfaces(uow, ctx.team_id, pod_ids=pods)
     ]
     text = views.manager_reply(bot_user_ids=[bot for bot in bots_here if bot])
     async with connection_released(uow.session):
@@ -335,7 +402,8 @@ async def _uninstalled(uow: SqlAlchemyUnitOfWork, parsed: ManagerInput) -> None:
     """Lemma's app removed from the workspace: the binding and its token go.
 
     The teammates' own apps are their own installs and stay; only the manager
-    is gone, and installing Lemma again makes a fresh binding.
+    is gone, the workspace is free for any organization, and installing Lemma
+    again makes a fresh binding. Proofs of its people outlive it.
     """
     if not parsed.team_id:
         return
@@ -348,9 +416,8 @@ async def _uninstalled(uow: SqlAlchemyUnitOfWork, parsed: ManagerInput) -> None:
         and install.bot_user_id not in parsed.revoked_bots
     ):
         return
-    await retire_accounts(
-        uow.session, connector_id="slack", account_ids=[install.account_id]
-    )
+    account_id: UUID = install.account_id
+    await retire_accounts(uow.session, connector_id="slack", account_ids=[account_id])
     await repo.delete_install(parsed.team_id)
     await uow.commit()
     logger.info("agent_surfaces.slack_manager.uninstalled", team_id=parsed.team_id)

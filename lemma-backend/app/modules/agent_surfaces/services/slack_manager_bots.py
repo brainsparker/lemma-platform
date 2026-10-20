@@ -56,6 +56,7 @@ from app.modules.agent_surfaces.platforms.slack.manager_blocks import (
 )
 from app.modules.agent_surfaces.services.slack_app_provisioning import (
     SLACK_CONNECTOR_ID,
+    SlackAppCalls,
     SlackAppProvisioner,
 )
 from app.modules.agent_surfaces.services.slack_manager_context import (
@@ -69,7 +70,7 @@ from app.modules.agent_surfaces.services.slack_manager_form import keep_form, ta
 from app.modules.agent_surfaces.services.slack_manager_messages import (
     stage_manager_message,
 )
-from app.modules.connectors.contracts.facts import ConnectorAccountConnected
+from app.modules.connectors.contracts.facts import ConnectorAccountConnected  # noqa: TC001
 from app.modules.connectors.contracts.own_apps import (
     create_own_app_install,
     delete_unauthorised_install,
@@ -81,6 +82,11 @@ logger = get_logger(__name__)
 
 #: Where Slack's Allow lands: a page that says "back to Slack", nothing more.
 ALLOWED_RETURN_PATH = "/slack/allowed"
+
+
+def slack_app_calls() -> SlackAppCalls:
+    """Slack's side of making an app; a test stands in for it here."""
+    return SlackAppCalls()
 
 
 def new_app_url(app_name: str) -> str:
@@ -330,7 +336,7 @@ async def _make_and_authorise(
 ) -> dict[str, object]:
     if ctx.user_id is None:
         raise SlackAppCreationForbiddenError()
-    provisioner = SlackAppProvisioner(uow)
+    provisioner = SlackAppProvisioner(uow, calls=slack_app_calls())
     if form.has_refresh_token:
         await provisioner.save_token(
             organization_id=ctx.organization_id,
@@ -380,14 +386,6 @@ async def _free_surface_name(
         if await repo.get_by_pod_and_name(pod_id=pod_id, name=name) is None:
             return name
     return f"slack-{team_id.lower()}-{len(await repo.list_by_pod(pod_id))}"
-
-
-def allowed_from_slack(fact: ConnectorAccountConnected) -> bool:
-    """The grants ``bind_allowed_app`` finishes: a Slack Allow the manager's
-    modal started. An ordinary Slack connect is never one."""
-    return fact.connector_id == SLACK_CONNECTOR_ID and (
-        fact.purpose == SLACK_TEAMMATE_APP_PURPOSE
-    )
 
 
 async def bind_allowed_app(

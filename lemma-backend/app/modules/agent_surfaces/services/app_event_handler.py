@@ -143,11 +143,6 @@ class AppEventHandler:
         if setup is None:
             return False
 
-        if await _invited_by_the_manager(self.uow, parsed):
-            # Lemma's own app brought this bot in and has already set the
-            # channel up; there is nobody here to ask.
-            return True
-
         (
             candidates,
             user_id,
@@ -424,6 +419,11 @@ class AppEventHandler:
                 parsed=parsed,
             )
             await self.uow.commit()
+            return True
+
+        if await _invited_by_the_manager(self.uow, parsed):
+            # Lemma's own app brought this bot in and has already set the
+            # channel up; there is nobody here to ask.
             return True
 
         (

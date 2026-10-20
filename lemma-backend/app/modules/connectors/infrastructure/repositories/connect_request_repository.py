@@ -65,7 +65,6 @@ class ConnectRequestRepository(
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
 
-
     async def latest_grant(
         self, *, account_id: UUID, user_id: UUID, auth_config_id: UUID
     ) -> Optional[ConnectRequestEntity]:

@@ -108,14 +108,15 @@ class ParsedManagerDelivery:
 
 
 @dataclass(frozen=True, slots=True)
-class SlackVerification:
-    """Who a verified Slack delivery is for.
+class InboundVerification:
+    """Who a verified shared-endpoint delivery is for.
 
-    ``receivers``: the teammates' surfaces the signature selected, or ``None``
-    for an unscoped fan-in -- main's reading, unchanged. ``manager_team``: set
-    only when Lemma's own app signed the delivery, no teammate's surface
-    receives it, and Lemma's app manages that workspace. Such a delivery is
-    the manager's, and never enters the inbound pipeline.
+    ``receivers``: the surfaces the signature selected, or ``None`` for an
+    unscoped fan-in -- the inbound pipeline's reading, unchanged. An empty
+    list never stands for "the manager". ``manager_team``: set only when
+    Lemma's own Slack app signed the delivery, no teammate's surface receives
+    it, and Lemma's app manages that workspace. Such a delivery is the
+    manager's, and never enters the inbound pipeline.
     """
 
     receivers: list[UUID] | None
@@ -132,5 +133,5 @@ __all__ = [
     "ManagerInput",
     "ManagerInputKind",
     "ParsedManagerDelivery",
-    "SlackVerification",
+    "InboundVerification",
 ]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from app.core.config import reveal_secret
@@ -31,7 +30,7 @@ async def slack_candidates_for_workspace(
     *,
     service: AgentSurfaceService,
     team_id: str | None,
-    is_managed: Callable[[str], Awaitable[bool]] | None = None,
+    is_managed: bool = False,
     also_paused: bool = False,
 ) -> list[SlackWebhookVerificationCandidate]:
     # No resolver, no credentials to verify a signature against -- the same
@@ -66,7 +65,7 @@ async def slack_candidates_for_workspace(
     # teammate answering through it, so its Home and its invites verify. Where
     # Lemma's app is still a pod's bot, that pod's surface is already in the
     # group, and the delivery goes to it as before.
-    manager = await _manager_candidate(is_managed, team_id) if is_managed else None
+    manager = _manager_candidate() if is_managed else None
     if manager is not None:
         grouped.setdefault(manager, [])
     return [
@@ -79,12 +78,10 @@ async def slack_candidates_for_workspace(
     ]
 
 
-async def _manager_candidate(
-    is_managed: Callable[[str], Awaitable[bool]], team_id: str
-) -> tuple[str, str] | None:
-    """``(app_id, signing_secret)`` of Lemma's own app, when it manages this workspace."""
+def _manager_candidate() -> tuple[str, str] | None:
+    """``(app_id, signing_secret)`` of Lemma's own app, for a workspace it manages."""
     app_id = surface_settings.slack_app_id
     secret = reveal_secret(surface_settings.slack_signing_secret)
     if not app_id or not secret:
         return None
-    return (app_id, secret) if await is_managed(team_id) else None
+    return app_id, secret

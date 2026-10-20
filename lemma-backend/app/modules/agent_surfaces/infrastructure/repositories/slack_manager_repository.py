@@ -187,7 +187,8 @@ class SlackManagerRepository:
             ).all()
         )
         await self.session.execute(
-            insert(_Person).values(
+            insert(_Person)
+            .values(
                 id=uuid4(),
                 team_id=team_id,
                 slack_user_id=slack_user_id,

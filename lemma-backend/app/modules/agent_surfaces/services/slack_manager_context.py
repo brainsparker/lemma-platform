@@ -146,9 +146,7 @@ async def load_context(
         install.account_id, platform=SurfacePlatform.SLACK
     )
     user_id = (
-        await SlackManagerRepository(uow.session).person(
-            install.team_id, slack_user_id
-        )
+        await SlackManagerRepository(uow.session).person(install.team_id, slack_user_id)
         if slack_user_id
         else None
     )

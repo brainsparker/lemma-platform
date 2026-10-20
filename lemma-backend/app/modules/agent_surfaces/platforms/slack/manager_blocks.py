@@ -47,10 +47,9 @@ class RosterEntry:
     pod_id: str
     agent_id: str
     name: str
-    #: The teammate's bot user, when it is already in this workspace.
+    #: The teammate's bot user, when it is already in this workspace. Its
+    #: mention is the way to it: Slack opens the bot's profile, with Message.
     bot_user_id: str | None = None
-    #: Where "Message" opens: the teammate's app in Slack.
-    open_url: str | None = None
 
 
 def _text(text: str) -> dict[str, object]:
@@ -180,11 +179,9 @@ def roster_home(
             }
         )
     for teammate in teammates[:ROSTER_SHOWN]:
+        accessory: dict[str, object] | None = None
         if teammate.bot_user_id:
             status = f"In Slack as <@{teammate.bot_user_id}>"
-            accessory = (
-                _url_button("Message", teammate.open_url) if teammate.open_url else None
-            )
         else:
             status = "Not in Slack yet"
             accessory = {

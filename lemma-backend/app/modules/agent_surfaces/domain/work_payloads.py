@@ -82,4 +82,3 @@ class SlackManagerMessagePayload(BaseModel):
 class SlackTeammateHelloPayload(BaseModel):
     surface_id: UUID
     channel_id: str
-

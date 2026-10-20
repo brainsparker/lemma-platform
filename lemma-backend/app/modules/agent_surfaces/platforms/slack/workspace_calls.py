@@ -58,7 +58,7 @@ def _refused(call: str, exc: SlackApiError) -> str:
         "agent_surfaces.slack_manager.call_refused.degraded",
         call=call,
         error=code,
-        exc_info=True,
+        exc_info=exc,
     )
     return code
 
@@ -176,7 +176,9 @@ async def leave_channel(credentials: Credentials, channel: str) -> str | None:
     return None
 
 
-async def open_dm(credentials: Credentials, user_id: str) -> tuple[str | None, str | None]:
+async def open_dm(
+    credentials: Credentials, user_id: str
+) -> tuple[str | None, str | None]:
     """``(channel, error)``: the DM channel with this person, opened if it was not."""
     try:
         client = await build_slack_client(credentials)

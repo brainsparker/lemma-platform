@@ -263,7 +263,7 @@ async def finish_sign_in(
     state: str,
     code: str | None,
     session_user_id: UUID | None,
-    calls: SlackOidcCalls = SLACK_OIDC,
+    calls: SlackOidcCalls | None = None,
 ) -> SlackIdentity:
     """Check Slack's answer and record the proof; the Slack user proven.
 
@@ -287,9 +287,10 @@ async def finish_sign_in(
         raise SlackSignInError(
             "unavailable", "Sign in with Slack isn't set up on this Lemma."
         )
+    slack = calls or SLACK_OIDC
     try:
-        id_token = await calls.exchange(client, code, callback_url())
-        keys = await calls.signing_keys()
+        id_token = await slack.exchange(client, code, callback_url())
+        keys = await slack.signing_keys()
     except httpx.HTTPError, ValueError:
         logger.warning(
             "agent_surfaces.slack_person.sign_in_exchange.degraded", exc_info=True

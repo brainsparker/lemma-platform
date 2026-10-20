@@ -129,7 +129,7 @@ What the migrations do:
   surface reply the old transport owed, and everything else still in Redis or
   the outbox.
 
-Migration `0057_drop_old_transport`, in the next release, drops
+Migration `0059_drop_old_transport`, in the next release, drops
 `domain_event_outbox` and `domain_event_inbox` whatever they still hold, with
 the columns only the old workers read. Deploy it the same way, old workers
 stopped first. A separately configured datastore database keeps an unused

@@ -1,4 +1,4 @@
-"""Migration 0057 drops the old transport's tables and the old columns.
+"""Migration 0059 drops the old transport's tables and the old columns.
 
 The outbox is dropped whatever it still holds: the cutover replays nothing
 from it. The downgrade restores the columns and the index and recreates the
@@ -19,8 +19,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[4]
-BEFORE = "0056_agent_surface_bundle_work"
-REVISION = "0057_drop_old_transport"
+BEFORE = "0058_channels"
+REVISION = "0059_drop_old_transport"
 
 _TABLES = ("domain_event_outbox", "domain_event_inbox")
 
@@ -64,7 +64,7 @@ _OLD_COLUMNS = (
     "schedule_runs.last_inspected_at"
 )
 _UPGRADED = {"tables": (), "index": None, "columns": None}
-_KEPT_BY_0056 = {
+_KEPT_BEFORE = {
     "tables": _TABLES,
     "index": "ix_schedule_runs_recoverable",
     "columns": _OLD_COLUMNS,
@@ -76,7 +76,7 @@ def test_the_old_tables_are_dropped_with_what_they_still_hold() -> None:
         database_url = get_postgres_url(postgres)
         sync_url = database_url.replace("postgresql+asyncpg", "postgresql")
         _migrate(database_url, "upgrade", BEFORE)
-        assert _state(sync_url) == _KEPT_BY_0056, "0056 is expand-only"
+        assert _state(sync_url) == _KEPT_BEFORE, "nothing before 0059 drops them"
         with psycopg.connect(sync_url) as connection:
             connection.execute(
                 "INSERT INTO domain_event_outbox (id, stream, event_type, "
@@ -89,7 +89,7 @@ def test_the_old_tables_are_dropped_with_what_they_still_hold() -> None:
         assert _state(sync_url) == _UPGRADED
 
         _migrate(database_url, "downgrade", BEFORE)
-        assert _state(sync_url) == _KEPT_BY_0056
+        assert _state(sync_url) == _KEPT_BEFORE
         with psycopg.connect(sync_url) as connection:
             row = connection.execute(
                 "SELECT (SELECT count(*) FROM domain_event_outbox), "

@@ -1,7 +1,7 @@
 """Drop the old transport and the columns only the previous release read.
 
 The contract step after ``0056_agent_surface_bundle_work``, which was
-expand-only. Running it ends the rollback window to an image older than 0056.
+expand-only (``0057`` and ``0058`` came between, and touch none of this). Running it ends the rollback window to an image older than 0056.
 
 * ``agent_conversation_waits.fire_lease_until`` and ``.wake_attempts``: the
   waits fire through ``agent.wait.fire`` / ``agent.wait.poll`` items now.
@@ -22,16 +22,16 @@ failure after it leaves the revision half applied, and a rerun must finish it.
 The downgrade restores the columns and the index, and recreates the two
 tables, empty, as 0003 created them.
 
-Revision ID: 0057_drop_old_transport
-Revises: 0056_agent_surface_bundle_work
+Revision ID: 0059_drop_old_transport
+Revises: 0058_channels
 """
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0057_drop_old_transport"
-down_revision = "0056_agent_surface_bundle_work"
+revision = "0059_drop_old_transport"
+down_revision = "0058_channels"
 branch_labels = None
 depends_on = None
 

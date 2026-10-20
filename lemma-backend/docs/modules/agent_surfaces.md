@@ -384,6 +384,26 @@ is answered *for the pod*, in a group the pod has opened to them.
   places on that chat in the receiving surfaces, or -- on a shared app's
   webhook -- in the workspace or tenant the event names. WhatsApp's
   participant updates are not read.
+- **An app removed from Slack stands down what ran on it.** Slack's
+  `app_uninstalled`, or `tokens_revoked` naming the bot, sends no leave per
+  channel and refuses every later send. Both are classified to
+  `surface.platform_update` in the request and handled by
+  `services/app_uninstall.py`, before any actor authorization -- the event
+  names nobody, and the signature that resolved its receivers is its
+  authority. The verification candidates for these two include surfaces in
+  every status, so a paused one hears it too. Scoped to the verified
+  receivers, narrowed to the app the event's `api_app_id` names (so an
+  unsigned local delivery cannot stand down another app in the workspace),
+  the connector account each bot ran on is marked `REAUTH_REQUIRED` and every
+  group the bot was in is archived through `place_stopped`, as the bot taken
+  out of one is. The surface keeps its channels and settings: its setup reads
+  the account through `SurfaceConnectionResolver` and shows one blocking
+  `slack_reinstall` step -- "reconnect it" to the person who connected it,
+  "ask them, or connect your own and switch this surface to it" to anyone
+  else -- and its status reads `NEEDS_SETUP`. Reconnecting repairs the account
+  in place; each group returns as the bot is invited back (`BOT_RETURNED`). A
+  person's private chat stays open, and its sends fail until then. An
+  Enterprise Grid org-wide `app_uninstalled_team` is not read.
 - **A WhatsApp group is one the bot opened.** A business number cannot be added
   to a group, only create one, so a member asks in their own WhatsApp chat and
   the agent calls `whatsapp_open_group` (offered only in a member's private

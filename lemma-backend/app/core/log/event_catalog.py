@@ -270,6 +270,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.app_event_handler.channel_setup_failed.failed': EventSpec('warning', frozenset({'kind', 'surface_id'})),
     'agent_surfaces.app_event_handler.home_apps_unavailable.degraded': EventSpec('warning', frozenset({'surface_id'})),
     'agent_surfaces.app_event_handler.lifecycle_event_failed.failed': EventSpec('warning', frozenset({'surface_id'})),
+    'agent_surfaces.app_uninstalled.retired': EventSpec('info', frozenset({'accounts_changed', 'groups_archived', 'platform', 'surface_ids', 'tenant_id'})),
+    'agent_surfaces.app_uninstalled.unscoped': EventSpec('info', frozenset({'platform', 'reason', 'tenant_id'})),
     'agent_surfaces.attachment_ingest_memo.read_failed.degraded': EventSpec('warning', frozenset()),
     'agent_surfaces.attachment_ingest_memo.write_failed.degraded': EventSpec('warning', frozenset()),
     'agent_surfaces.available_surfaces_builder.pool_lookup_failed.diagnostic': EventSpec('debug', frozenset({'platform'})),

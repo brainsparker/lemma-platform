@@ -319,7 +319,7 @@ async def test_a_reader_who_cannot_change_the_surface_is_not_given_its_verify_to
     harness = _setup_harness(_whatsapp_surface(pod_id=pod_id), monkeypatch)
 
     setup = await harness.get_surface_setup_by_name(
-        pod_id=pod_id, name="whatsapp", reveal_secrets=False
+        pod_id=pod_id, name="whatsapp", reveal_secrets=False, connection=None
     )
 
     assert _A_VERIFY_TOKEN not in _copyable_values(setup)
@@ -339,7 +339,7 @@ async def test_a_reader_who_can_change_the_surface_still_gets_the_verify_token(
     harness = _setup_harness(_whatsapp_surface(pod_id=pod_id), monkeypatch)
 
     setup = await harness.get_surface_setup_by_name(
-        pod_id=pod_id, name="whatsapp", reveal_secrets=True
+        pod_id=pod_id, name="whatsapp", reveal_secrets=True, connection=None
     )
 
     assert _A_VERIFY_TOKEN in _copyable_values(setup)

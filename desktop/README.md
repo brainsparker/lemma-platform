@@ -835,17 +835,25 @@ permanently.
 4. Replace `TAURI_UPDATER_PRIVATE_KEY` with the new private key. From the next
    release on, the pair agrees again.
 
+   An installation that never took the step 2 release still trusts the old
+   public key, so it rejects every release from here on and stays where it is.
+   Updating cannot bring it back: it needs a fresh download from
+   [lemma.work/download](https://lemma.work/download), which keeps its data.
+   Say so in the release notes of the first release signed with the new key.
+
 `desktop/scripts/check_updater_key.py` runs in both release workflows and
 compares the key that signed the payload with the key committed in
 `tauri.conf.json`. It is deliberately a comparison of minisign key ids, not of
 key material: the private key is never decrypted and never leaves the runner.
 
 Between steps 2 and 4 the two disagree on purpose, and the check would
-otherwise refuse the release. Set `LEMMA_UPDATER_KEY_ROTATION=1` on the step 2
-release, and only on it: with that set the check *requires* the mismatch, so a
-flag left switched on afterwards fails the next release rather than silently
-disabling the check for good. Say which key signed the build in the release
-notes.
+otherwise refuse the release -- and fail the nightly every night. Both checks
+read the repository variable `LEMMA_UPDATER_KEY_ROTATION`: set it to `1`
+(Settings → Secrets and variables → Actions → Variables) before the step 2
+release, and delete it when you do step 4. While it is set the check *requires*
+the mismatch, so a variable left behind fails the next release rather than
+silently disabling the check for good. Say which key signed the build in the
+release notes.
 
 A lost private key is not recoverable through this path. Installed apps can only
 be moved to a new key by a build signed with the old one, so the remaining route

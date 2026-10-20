@@ -185,8 +185,8 @@ before they're installed, and they never reset your data.
 Official builds send a few anonymous events about whether the app started and
 installed correctly: `desktop.launched`, `desktop.runtime_install`,
 `desktop.runtime_ready`, `desktop.mode_selected` and `desktop.quit`. Each carries
-only the OS, architecture, app version and a rough timing. Nothing about your
-pods, organization, users, files or machine is sent.
+only the OS, architecture, app version and a rough timing. Nothing else about
+your machine, and nothing about your pods, organization, users or files, is sent.
 
 Events go to `https://eu.i.posthog.com` under a random ID created for this
 installation. To turn it off, use the switch in **Settings → This Mac → Server

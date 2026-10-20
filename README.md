@@ -32,12 +32,14 @@ It runs on the Claude Code or Codex subscription you already pay for, Lemma's ho
 **Local**. It installs everything it needs and runs on your machine. See
 [installation](docs/installation.md) if something doesn't start.
 
-**On your own server.** One command brings up the whole stack on a VM you
-control, with HTTPS. See [self-hosting](docs/self-hosting.md).
+**On your own server.** Bring up the whole stack on a VM you control, with
+HTTPS. See [self-hosting](docs/self-hosting.md).
 
 ```bash
 git clone https://github.com/lemma-work/lemma-platform.git
-cd lemma-platform/deploy/compose && ./bootstrap.sh && docker compose up -d
+cd lemma-platform/deploy/compose && ./bootstrap.sh
+# add your model provider key to .env, then:
+docker compose up -d
 ```
 
 **Your coding agent.**

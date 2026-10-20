@@ -8,7 +8,9 @@ bar fills for as long as it is up. SVG + CSS, so it plays inside a README.
 import base64
 import sys
 
-d, theme, out = sys.argv[1], sys.argv[2], sys.argv[3]
+if len(sys.argv) != 4 or sys.argv[2] not in ("light", "dark"):
+    sys.exit(__doc__)
+d, theme, out = sys.argv[1:4]
 dark = theme == "dark"
 
 

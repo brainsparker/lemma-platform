@@ -46,15 +46,22 @@ certificate. That's fine for trying it; for real use, give it a domain:
 1. Point an `A` record for `lemma.example.com` at the machine, plus a wildcard
    `A` record for `*.apps.lemma.example.com` (pod apps live there).
 2. Make sure ports 80 and 443 are reachable from the internet.
-3. Re-run bootstrap and restart:
+3. Re-run bootstrap, put back what you set by hand, and restart:
 
    ```bash
+   cp .env .env.before-bootstrap
    ./bootstrap.sh --force --domain lemma.example.com --email you@example.com
+   ```
+
+   `--force` keeps your database password and encryption keys, but rewrites
+   everything else in `.env`. Copy your model, email and any other settings you
+   added back from `.env.before-bootstrap`, then start it:
+
+   ```bash
    docker compose up -d
    ```
 
-Certificates come from Let's Encrypt. `--force` keeps your database password and
-encryption keys, but resets anything else you edited in `.env` by hand.
+Certificates come from Let's Encrypt.
 
 Lemma then lives at:
 
@@ -106,22 +113,35 @@ Comment out `COMPOSE_PROFILES=caddy` in `.env` to skip the bundled Caddy. Expose
 - allow responses longer than 60 seconds;
 - accept large uploads.
 
+Leave `SESSION_COOKIE_DOMAIN` empty, even with the API and the app on separate
+hostnames: the session cookie then stays on the API's own host. Setting it to
+your parent domain (`.example.com`) sends it to every pod app as well, and pod
+apps are pages people in your organization write. See
+[URLs, CORS and cookies](configuration.md#urls-cors-and-cookies).
+
 ## Back up and restore
 
-Back up the database and `.env` together:
+Back up the database, `.env` and the two volumes that hold uploaded files
+together (with S3, GCS or Azure storage, the files are in your bucket instead):
 
 ```bash
 docker compose exec -T db pg_dumpall -U postgres | gzip > lemma-$(date +%F).sql.gz
 cp .env lemma-env-$(date +%F).backup
+for volume in object_storage file_storage; do
+  docker run --rm -v lemma_$volume:/data -v "$PWD":/backup alpine \
+    tar czf /backup/lemma-$volume-$(date +%F).tgz -C /data .
+done
 ```
-
-Uploaded files live in the `lemma_object_storage` and `lemma_file_storage`
-volumes; back those up too, or use S3/GCS/Azure.
 
 To restore onto a fresh install:
 
 ```bash
 cp lemma-env-<date>.backup .env
+docker compose create   # makes the volumes; starts nothing
+for volume in object_storage file_storage; do
+  docker run --rm -v lemma_$volume:/data -v "$PWD":/backup alpine \
+    tar xzf /backup/lemma-$volume-<date>.tgz -C /data
+done
 docker compose up -d --wait db
 gunzip -c lemma-<date>.sql.gz | docker compose exec -T db psql -U postgres -d postgres
 docker compose up -d
@@ -130,7 +150,15 @@ docker compose up -d
 ## Upgrade
 
 ```bash
+cp .env .env.before-bootstrap
 ./bootstrap.sh --force --version 0.9.0
+```
+
+As with a new domain, copy the settings you added by hand back from
+`.env.before-bootstrap` (and pass the same `--domain` and `--email` again if you
+use your own), then:
+
+```bash
 docker compose up -d
 ```
 

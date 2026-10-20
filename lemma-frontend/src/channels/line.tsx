@@ -107,7 +107,8 @@ function EditBox({ line, pending, problem, onSave, onCancel }: {
 /** One line of a channel: who said it and for whom, where and when, what it
  *  said -- or that it was withheld, or deleted -- and, on a question, the way
  *  to answer it when it waits on the reader. The reader's own lines can be
- *  changed or deleted here; a copy already carried outside stays as sent. */
+ *  changed or deleted here, and whoever may change the channel can remove
+ *  anybody's; a copy already carried outside stays as sent. */
 export function LineView({ podId, channel, line, onThread, mayWrite = true, answering = [], agentName, highlighted = false }: {
     podId: string;
     channel: ChannelDetail;
@@ -137,6 +138,9 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
         onSuccess: () => { setConfirming(false); reread(); },
     });
     const mine = isMine(line, me) && mayWrite;
+    /* Who may change the channel removes anybody's line in it -- never edits
+       it. The server asks again; a copy already sent outside stays as sent. */
+    const removable = mine || (mayWrite && channel.me.canManage);
     const agent = line.sender.kind === "AGENT";
     const withheld = withheldNote(line, me);
     const meta = lineMeta(line, channel.places);
@@ -164,7 +168,7 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
                 </div>
 
                 {line.deleted ? (
-                    <p className="cline__gone">This line was deleted.</p>
+                    <p className="cline__gone">{removedNote(line, me)}</p>
                 ) : withheld ? (
                     <p className="cline__gone">{withheld}</p>
                 ) : editing ? (
@@ -196,9 +200,9 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
                         <span className="cline__acts">
                             {onThread && line.replyCount === 0 && <button type="button" className="cline__act" onClick={() => onThread(line)}>Reply in thread</button>}
                             {mine && line.text !== null && <button type="button" className="cline__act" onClick={() => { edit.reset(); setEditing(true); }}>Edit</button>}
-                            {mine && (confirming ? (
+                            {removable && (confirming ? (
                                 <>
-                                    <span className="cline__ask-delete">Delete it?</span>
+                                    <span className="cline__ask-delete">{!mine ? "Remove " + personName(line.sender, me) + "’s line for everyone?" : "Delete it?"}</span>
                                     <button type="button" className="cline__act cline__act--bad" disabled={remove.isPending} onClick={() => remove.mutate()}>{remove.isPending ? "Deleting…" : "Delete"}</button>
                                     <button type="button" className="cline__act" onClick={() => setConfirming(false)}>Keep</button>
                                 </>
@@ -219,6 +223,14 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
             </div>
         </li>
     );
+}
+
+/** What a deleted line says in its place: who removed it, when that was
+ *  not who wrote it. */
+function removedNote(line: Line, me: string | null): string {
+    if (!line.removedBy) return "This line was deleted.";
+    const who = me && line.removedBy.id === me ? "you" : personName(line.removedBy, me);
+    return "Removed by " + who + ".";
 }
 
 /** The question a line carries: answered here when it waits on the reader,

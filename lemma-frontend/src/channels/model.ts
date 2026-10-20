@@ -134,6 +134,9 @@ export interface Line {
     createdAt: string;
     editedAt: string | null;
     deleted: boolean;
+    /** On a deleted line: the member who removed it, when that was not who
+     *  wrote it -- somebody who may change the channel. */
+    removedBy: PersonRef | null;
     withheld: boolean;
     membersOnly: boolean;
     /** Where it was said; null for a line written in Lemma. */
@@ -347,6 +350,7 @@ export function readLine(raw: unknown): Line | null {
         createdAt: String(row.created_at ?? ""),
         editedAt: words(row.edited_at),
         deleted,
+        removedBy: deleted ? readPerson(row.removed_by) : null,
         withheld,
         membersOnly: row.members_only === true,
         sourceId: words(row.source_id),

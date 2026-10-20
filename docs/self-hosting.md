@@ -122,7 +122,14 @@ apps are pages people in your organization write. See
 ## Back up and restore
 
 Back up the database, `.env` and the two volumes that hold uploaded files
-together (with S3, GCS or Azure storage, the files are in your bucket instead):
+together. The commands below are for the bundled `db` service and files kept in
+Docker volumes, the default:
+
+- With a managed Postgres (`DATABASE_URL` pointing elsewhere), back it up with
+  your provider's snapshots, or `pg_dump "$DATABASE_URL"`, instead of the
+  `pg_dumpall` line, and restore it the same way instead of the `psql` line.
+- With S3, GCS or Azure storage, the files are in your bucket: keep it with
+  your provider's versioning or replication, and skip both volume loops.
 
 ```bash
 docker compose exec -T db pg_dumpall -U postgres | gzip > lemma-$(date +%F).sql.gz

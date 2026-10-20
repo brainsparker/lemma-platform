@@ -321,7 +321,10 @@ def old_host_params(method: str, params: JsonObject) -> JsonObject:
     if method != "process.start":
         return params
     asked = params.get("output_limit_bytes")
-    limit = asked if isinstance(asked, int) and asked > 0 else LINK_INLINE_DATA_BYTES
+    limit = LINK_INLINE_DATA_BYTES
+    # ``True`` is an ``int`` in Python; it is not a byte count.
+    if isinstance(asked, int) and not isinstance(asked, bool) and asked > 0:
+        limit = asked
     return {**params, "output_limit_bytes": min(limit, LINK_INLINE_DATA_BYTES)}
 
 

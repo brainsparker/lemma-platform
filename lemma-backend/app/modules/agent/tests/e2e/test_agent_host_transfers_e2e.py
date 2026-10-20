@@ -36,6 +36,7 @@ from app.modules.agent.domain.agent_host_transfer import (
 from app.modules.agent.infrastructure.agent_host.transfers import (
     AgentHostTransferStore,
 )
+from app.modules.agent.services.agent_host_link_ops import old_host_params
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     app_of,
     connected_host,
@@ -243,6 +244,17 @@ async def test_an_old_hosts_process_keeps_no_more_output_than_one_message_holds(
             }
         finally:
             await link.aclose()
+
+
+def test_an_old_hosts_output_limit_is_a_byte_count_or_the_inline_bound():
+    """``True`` is an ``int`` in Python; neither it nor nonsense is a limit."""
+    for asked in (True, False, 0, -5, "1024", None):
+        params = old_host_params("process.start", {"output_limit_bytes": asked})
+        assert params["output_limit_bytes"] == LINK_INLINE_DATA_BYTES, asked
+    assert old_host_params("process.start", {"output_limit_bytes": 4096}) == {
+        "output_limit_bytes": 4096
+    }
+    assert old_host_params("process.read", {"max_bytes": True}) == {"max_bytes": True}
 
 
 @pytest.mark.asyncio

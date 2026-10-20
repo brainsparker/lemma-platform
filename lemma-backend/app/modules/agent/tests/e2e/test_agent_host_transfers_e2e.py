@@ -206,6 +206,46 @@ async def test_a_host_released_before_transfers_still_reads_and_writes(
 
 
 @pytest.mark.asyncio
+async def test_an_old_hosts_process_keeps_no_more_output_than_one_message_holds(
+    authenticated_client, async_client
+):
+    """A host released before transfers ignores ``process.read``'s
+    ``max_bytes`` and answers with what its process kept since the last read.
+    Started with no more than ``LINK_INLINE_DATA_BYTES`` kept, no read of it
+    can pass the message ceiling; a current host is started as asked."""
+    for name, host_execution, kept in (
+        ("old", _OLD, LINK_INLINE_DATA_BYTES),
+        ("current", _ON, 1024 * 1024),
+    ):
+        machine = await pair(authenticated_client, async_client, display_name=name)
+        link = await connected_host(
+            app_of(async_client), machine, host_execution=host_execution
+        )
+        try:
+            starting = asyncio.ensure_future(
+                AgentHostOpClient().request(
+                    host_id=UUID(machine["host_id"]),
+                    workspace=uuid4(),
+                    method="process.start",
+                    params={
+                        "operation_id": "build",
+                        "shell_command": "make",
+                        "output_limit_bytes": 1024 * 1024,
+                    },
+                    deadline_at=_deadline(),
+                )
+            )
+            frame = await _next_op(link)
+            assert frame["body"]["params"]["output_limit_bytes"] == kept, name
+            link.reply("op_ok", frame["id"], {"result": {"process_id": "build"}})
+            assert await asyncio.wait_for(starting, timeout=10) == {
+                "process_id": "build"
+            }
+        finally:
+            await link.aclose()
+
+
+@pytest.mark.asyncio
 async def test_a_read_whose_data_never_arrived_is_not_a_read(
     authenticated_client, async_client
 ):

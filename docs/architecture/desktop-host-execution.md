@@ -185,9 +185,12 @@ answer that would still not fit in a frame is answered `too_large` instead.
 A host released before transfers reports no `transfers` in `host_execution`.
 Its link session does the host's half for it: a write's chunk is put inline as
 `data`, and a read asks for at most `INLINE_DATA_BYTES` and its inline answer
-is delivered into the slot. That host ignores `max_bytes`, so a command that
-prints more than about 750 KB between two reads closes its link with 1009;
-updating Desktop is the fix.
+is delivered into the slot. That host ignores `process.read`'s `max_bytes`
+and answers with whatever its process kept since the last read, so its
+`process.start` is sent `output_limit_bytes` of at most `INLINE_DATA_BYTES`
+(`old_host_params`): a read can then never pass the ceiling. A command that
+prints more than that between two reads keeps its newest output and reports
+the rest as truncated (`truncated_before_sequence`), as any full ring does.
 
 | `method` | `params` | `result` |
 |---|---|---|

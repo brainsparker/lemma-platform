@@ -171,7 +171,11 @@ class LinkOpRelay:
         self._pending[frame_id] = waiter
         transfer = None if self.host_moves_transfers else op_transfer(notice.params)
         try:
-            params = notice.params
+            params = (
+                notice.params
+                if self.host_moves_transfers
+                else old_host_params(notice.method, notice.params)
+            )
             if transfer is not None:
                 params = await self._old_host.outbound(
                     notice.method, params, transfer, host_id=host_id
@@ -304,6 +308,23 @@ class LinkOpRelay:
             task.cancel()
 
 
+def old_host_params(method: str, params: JsonObject) -> JsonObject:
+    """An op's params as a host released before transfers is sent them.
+
+    Such a host ignores ``process.read``'s ``max_bytes`` and answers a read
+    with up to 1 MiB of what its process printed -- 1.33 MiB once base64'd,
+    past the API's message ceiling, so the link closes with 1009 mid-run. What
+    it keeps between two reads is bounded by the ``output_limit_bytes`` it is
+    started with (newest kept, the rest reported dropped), so starting it with
+    no more than ``LINK_INLINE_DATA_BYTES`` keeps every read inside the ceiling.
+    """
+    if method != "process.start":
+        return params
+    asked = params.get("output_limit_bytes")
+    limit = asked if isinstance(asked, int) and asked > 0 else LINK_INLINE_DATA_BYTES
+    return {**params, "output_limit_bytes": min(limit, LINK_INLINE_DATA_BYTES)}
+
+
 def op_transfer(params: JsonObject) -> JsonObject | None:
     """The transfer an op names, if it names one."""
     transfer = params.get("transfer")
@@ -322,10 +343,9 @@ class OldHostTransfers:
 
     A write's chunk travels to the host inline, as it always did; only what
     the host *sends* meets the API's message ceiling, so a read asks for no
-    more than ``LINK_INLINE_DATA_BYTES``, which base64 keeps inside it. What
-    this cannot bound is ``process.read``: such a host ignores ``max_bytes``,
-    and a command that prints more than about 750 KB between two reads
-    closes its link with 1009. Updating Desktop is the fix for that.
+    more than ``LINK_INLINE_DATA_BYTES``, which base64 keeps inside it. Its
+    ``process.read`` answers are bounded where the process starts
+    (``old_host_params``).
     """
 
     def __init__(self, store: AgentHostTransferStore | None = None) -> None:

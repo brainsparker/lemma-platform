@@ -66,7 +66,7 @@ protocol and how a module adds a topic.
 
 These tables belong to no module. Five carry authorization, three carry the
 work runtime, and two are left from the old event transport until migration
-`0057_drop_old_transport` drops them. They sit in `app/core` because every
+`0059_drop_old_transport` drops them. They sit in `app/core` because every
 module depends on them, which is why the catalog above points at them instead
 of repeating them in each row.
 
@@ -76,8 +76,8 @@ of repeating them in each row.
 | `roles`, `role_permissions` | Organization- or pod-scoped roles and the permission bundle each one carries. Built-in pod roles are normalized by the pod module; custom roles are rows here |
 | `role_assignments` | Which principal — user or workload — holds which role, unique per role and principal |
 | `resource_permission_grants` | Named grants on one resource to one grantee inside one pod. This is what a delegated workload's context is built from, and what a bundle carries by name rather than by id |
-| `domain_event_outbox` | Legacy. Events the old transport published to Redis Streams. Nothing writes or reads it any more; `0057` drops it |
-| `domain_event_inbox` | Legacy. The old per-consumer delivery record. Nothing writes or reads it any more; `0057` drops it |
+| `domain_event_outbox` | Legacy. Events the old transport published to Redis Streams. Nothing writes or reads it any more; `0059` drops it |
+| `domain_event_inbox` | Legacy. The old per-consumer delivery record. Nothing writes or reads it any more; `0059` drops it |
 | `work_items` | The work runtime's live work: one row per queued or running item, written in the transaction that caused it and deleted in the one that completes it, plus dead items kept for inspection and retry. Its lease columns are what let a crashed or deployed process's work be reclaimed |
 | `work_queues` | One row per (work class, namespace) that has had work: the namespace's cap on running items, its named rates, whether it is paused, and when the fair claim last served it. No readiness flag — that is derived from `work_items` |
 | `work_rate_buckets` | Token buckets for rate-limited kinds, per namespace, rate name and optional key (a trigger), refilled and spent inside the claim transaction. A missing row is a full bucket |

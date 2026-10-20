@@ -75,6 +75,7 @@ from app.modules.agent_surfaces.services.delivery_outcome import (
     timed_out,
 )
 from app.modules.agent_surfaces.services.push_sends import PushesFor, push_outcome
+from app.modules.agent_surfaces.services.surface_problems import heed_send
 from app.modules.agent_surfaces.services.place_threads import (
     at_place_level,
     in_thread,
@@ -122,8 +123,7 @@ from app.modules.contacts.contracts.outreach import (
 
 logger = get_logger(__name__)
 
-#: A line to a web chat is in their chat, not in front of them: nothing tells
-#: a visitor who left that it is there.
+#: A line to a web chat waits there: nothing tells a visitor who left.
 WAITS_IN_WEB_CHAT = (
     "In their web chat: they see it when they next open it. Nothing tells them "
     "sooner -- the web chat sends no email."
@@ -301,6 +301,16 @@ class ChannelDeliveries:
                 code=Code.PLACE_GONE,
                 platform=platform,
             )
+        outcome = await self._to_source(work, source, conversation_id)
+        await heed_send(self.uow_factory, channel, source, outcome)
+        return outcome
+
+    async def _to_source(
+        self, work: _Work, source: Source, conversation_id: UUID | None
+    ) -> Outcome:
+        line, channel = work.line, work.channel
+        platform = source.platform
+        answer = is_run_answer(line)
         try:
             ready = await self._ready(channel, source, line)
         except ContactRefused as refused:

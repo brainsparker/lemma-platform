@@ -46,6 +46,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.contracts.provisioning import surface_response
 from app.modules.agent_surfaces.contracts.provisioning import warned_surface_response
+from app.modules.agent_surfaces.services.surface_problems import surface_problem
 from app.modules.agent_surfaces.services.contact_keepers import contacts_warnings
 from app.modules.agent_surfaces.services.surface_config_input import (
     merge_surface_config,
@@ -200,6 +201,7 @@ async def list_surfaces(
             reach=reach,
             connection=connections.get(surface.id),
             contacts_warning=warnings.get(surface.id),
+            problem=await surface_problem(surface),
         )
         for surface, resolved_agent_name, reach in visible
     ]

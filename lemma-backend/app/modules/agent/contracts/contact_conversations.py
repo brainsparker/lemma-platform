@@ -381,6 +381,8 @@ async def repoint_merged_contact(
     )
     pairs = [(row[0], row[1]) for row in unseated]
     if pairs:
+        from app.modules.agent.contracts.folded_history import fold_history
+
         await uow.session.execute(
             update(conversation)
             .where(conversation.id.in_([orphan for orphan, _ in pairs]))
@@ -388,7 +390,7 @@ async def repoint_merged_contact(
             .execution_options(synchronize_session=False)
         )
         for orphan, seated in pairs:
-            await _fold_history(uow, orphan, into=seated)
+            await fold_history(uow, orphan, into=seated)
     result = await uow.session.execute(
         update(ConversationModel)
         .where(*_theirs(pod_id, merged_id))
@@ -411,7 +413,7 @@ async def move_channel_conversations(
     Where the person already has a live conversation with the same agent
     there, that one keeps the seat and this one stays behind, unseated when
     the channel goes (``repoint_merged_contact``) -- what was said in it is
-    folded into the one that kept the seat (``_fold_history``). Returns how
+    folded into the one that kept the seat (``folded_history``). Returns how
     many moved.
     """
     conversation, theirs = ConversationModel, aliased(ConversationModel)
@@ -432,8 +434,10 @@ async def move_channel_conversations(
         .join(theirs, same_person_there)
         .where(*here, _live_in_a_channel(conversation))
     )
+    from app.modules.agent.contracts.folded_history import fold_history
+
     for orphan, seated in [(row[0], row[1]) for row in staying]:
-        await _fold_history(uow, orphan, into=seated)
+        await fold_history(uow, orphan, into=seated)
     result = await uow.session.execute(
         update(conversation)
         .where(*here, ~(_live_in_a_channel(conversation) & seated_there))
@@ -441,50 +445,6 @@ async def move_channel_conversations(
         .execution_options(synchronize_session=False)
     )
     return int(result.rowcount or 0)
-
-
-async def _fold_history(
-    uow: SqlAlchemyUnitOfWork, orphan_id: UUID, *, into: UUID
-) -> None:
-    """What the person saw of a conversation that lost its seat in a merge,
-    added to the one that kept it: the agent answering them next has it, and
-    so does their chat from the other browser, read back from that one.
-
-    Copied, not moved -- the runs, waits and answers that point at the
-    unseated one stay with it -- and marked (``FOLDED_FROM_KEY``), so an
-    export does not carry it twice. Appended after what the seated one holds.
-    """
-    from app.modules.agent.infrastructure.repositories.conversation_repository import (
-        ConversationRepository,
-    )
-
-    rows = await uow.session.execute(
-        _seen_by_them()
-        .where(MessageModel.conversation_id == orphan_id)
-        .order_by(MessageModel.sequence)
-        .limit(MAX_EXPORTED_MESSAGES)
-    )
-    seen = [
-        message
-        for message, run_metadata in rows
-        if _was_seen(message, run_metadata)
-        and FOLDED_FROM_KEY not in (message.message_metadata or {})
-    ]
-    conversations = ConversationRepository(uow)
-    for message in seen:
-        await conversations.append_message(
-            conversation_id=into,
-            agent_run_id=None,
-            draft=MessageDraft(
-                role=MessageRole(message.role),
-                kind=MessageKind(message.kind),
-                text=message.text,
-                metadata={
-                    **(message.message_metadata or {}),
-                    FOLDED_FROM_KEY: str(orphan_id),
-                },
-            ),
-        )
 
 
 def _live_in_a_channel(conversation: type[ConversationModel]) -> ColumnElement[bool]:

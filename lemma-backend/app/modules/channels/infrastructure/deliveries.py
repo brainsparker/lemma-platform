@@ -567,28 +567,16 @@ class DeliveryRepository:
         else:
             await touch_lines(self.session, lines)
 
-    async def to_places_of(self, message_ids: Sequence[UUID]) -> list[Delivery]:
-        """These lines' sends to places outside Lemma -- not pushes to members."""
+    async def of_messages(
+        self, message_ids: Sequence[UUID], *, to_places: bool = False
+    ) -> list[Delivery]:
+        """These lines' sends -- ``to_places``: not pushes to members."""
         if not message_ids:
             return []
-        rows = await self.session.scalars(
-            select(_D)
-            .where(
-                _D.message_id.in_(list(message_ids)[:MAX_LINES]),
-                _D.source_id.is_not(None),
-            )
-            .order_by(_D.created_at)
-        )
-        return [delivery_entity(row) for row in rows]
-
-    async def of_messages(self, message_ids: Sequence[UUID]) -> list[Delivery]:
-        if not message_ids:
-            return []
-        rows = await self.session.scalars(
-            select(_D)
-            .where(_D.message_id.in_(list(message_ids)[:MAX_LINES]))
-            .order_by(_D.created_at)
-        )
+        statement = select(_D).where(_D.message_id.in_(list(message_ids)[:MAX_LINES]))
+        if to_places:
+            statement = statement.where(_D.source_id.is_not(None))
+        rows = await self.session.scalars(statement.order_by(_D.created_at))
         return [delivery_entity(row) for row in rows]
 
     async def due(self, *, limit: int) -> list[UUID]:

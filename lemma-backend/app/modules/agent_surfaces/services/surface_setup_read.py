@@ -11,8 +11,12 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.setup_actions import build_surface_setup_actions
+from app.modules.agent_surfaces.domain.setup_actions import (
+    SurfaceSetupAction,
+    build_surface_setup_actions,
+)
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
+from app.modules.agent_surfaces.services.surface_problems import surface_problem
 
 
 class SurfaceSetupReadMixin:
@@ -62,6 +66,17 @@ class SurfaceSetupReadMixin:
                 else None
             ),
         )
+        problem = await surface_problem(surface)
+        if problem is not None:
+            # Whatever else is done, a surface the platform refuses is not ready.
+            actions = [
+                SurfaceSetupAction(
+                    key="surface_problem",
+                    title="Fix this surface",
+                    description=problem,
+                ),
+                *actions,
+            ]
         pending_consent = bool(
             admin_consent and admin_consent["required"] and not admin_consent["granted"]
         )

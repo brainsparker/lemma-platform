@@ -234,7 +234,9 @@ async def deliveries_of(
     """Where these lines went outside Lemma, by line: one read for a page.
     Pushes to members are not among them."""
     by_line: dict[UUID, list[Delivery]] = {}
-    for delivery in await DeliveryRepository(uow.session).to_places_of(message_ids):
+    for delivery in await DeliveryRepository(uow.session).of_messages(
+        message_ids, to_places=True
+    ):
         by_line.setdefault(delivery.message_id, []).append(delivery)
     return by_line
 

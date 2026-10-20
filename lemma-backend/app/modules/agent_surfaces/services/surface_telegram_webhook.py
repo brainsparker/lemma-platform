@@ -48,6 +48,10 @@ from app.modules.agent_surfaces.domain.errors import (
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_unique_telegram_account,
 )
+from app.modules.agent_surfaces.services.surface_problems import (
+    clear_problem,
+    note_problem,
+)
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy
 
@@ -197,11 +201,13 @@ class SurfaceTelegramWebhookMixin:
                 webhook_secret=reveal_secret(surface.webhook_secret) or "",
                 drop_pending_updates=drop_pending_updates,
             )
-        except AgentSurfacePlatformError:
+        except AgentSurfacePlatformError as refused:
             surface.mark_webhook_unregistered()
             await self.surface_repository.update(surface)
             await commit_now(self.surface_repository)
+            await note_problem(surface.id, refused.message)
             raise
+        await clear_problem(surface.id)
         if surface.status is AgentSurfaceStatus.ERROR:
             surface.activate()
             return await self.surface_repository.update(surface)

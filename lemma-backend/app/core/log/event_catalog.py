@@ -533,6 +533,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.surface_display_delivery.display_resource_delivery_failed.degraded': EventSpec('warning', frozenset({'conversation_id', 'tool_call_id'})),
     'agent_surfaces.surface_display_delivery.surface_message_delivery_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent_surfaces.surface_display_delivery.voice_note_delivery_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
+    'agent_surfaces.surface_problems.noted.degraded': EventSpec('warning', frozenset({'surface_id'})),
+    'agent_surfaces.surface_problems.unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
     'agent_surfaces.surface_reach_resolver.credentials_unavailable': EventSpec('warning', frozenset({'surface_type'})),
     'agent_surfaces.surface_reach_resolver.surface_reach_account_fallback_surface.observed': EventSpec('debug', frozenset()),
     'agent_surfaces.surface_reach_resolver.surface_reach_live_handle_surface.observed': EventSpec('debug', frozenset({'surface_type'})),

@@ -17,6 +17,7 @@ from app.modules.agent_surfaces.domain.setup_actions import (
 )
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
 from app.modules.agent_surfaces.services.surface_problems import surface_problem
+from app.modules.channels.contracts.places import surface_heard_from
 
 
 class SurfaceSetupReadMixin:
@@ -66,6 +67,16 @@ class SurfaceSetupReadMixin:
                 else None
             ),
         )
+        if surface.surface_type is SurfacePlatform.WHATSAPP and actions:
+            if await surface_heard_from(self.surface_repository.uow, surface.id):
+                # Messages are arriving: the webhook is set, whatever the
+                # checklist says. Kept as reference, not as work.
+                actions = [
+                    action.model_copy(update={"informational": True})
+                    if action.key == "whatsapp_webhook"
+                    else action
+                    for action in actions
+                ]
         problem = await surface_problem(surface)
         if problem is not None:
             # Whatever else is done, a surface the platform refuses is not ready.

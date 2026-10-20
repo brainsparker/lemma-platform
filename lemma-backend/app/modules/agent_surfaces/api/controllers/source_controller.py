@@ -272,7 +272,24 @@ async def _open(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(refused)
         ) from refused
-    except (GroupNotOpened, WhatsAppApiError, *platform_transport_errors()) as exc:
+    except WhatsAppApiError as exc:
+        if exc.status_code == 429 or exc.status_code >= 500:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                detail="WhatsApp would not start the group. Try again shortly.",
+            ) from exc
+        # Meta's refusal stands however often it is asked.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "WhatsApp refused the bot's credentials. Reconnect its account, "
+                "then start the group again."
+                if exc.status_code == 401
+                else "WhatsApp refused to start the group. Trying again will not "
+                "help until the bot's WhatsApp setup is fixed."
+            ),
+        ) from exc
+    except (GroupNotOpened, *platform_transport_errors()) as exc:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             detail="WhatsApp would not start the group. Try again shortly.",

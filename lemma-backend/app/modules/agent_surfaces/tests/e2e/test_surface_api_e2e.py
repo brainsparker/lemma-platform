@@ -1437,3 +1437,91 @@ async def test_a_second_slack_app_in_one_workspace_is_allowed(
         json={"platform": "SLACK", "account_id": str(second.id)},
     )
     assert allowed.status_code == 200, allowed.text
+
+
+async def test_a_whatsapp_number_messages_arrive_on_is_ready(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_whatsapp,
+):
+    """The webhook checklist is work until a message arrives through it; once
+    one has, it is reference, and the surface is ready."""
+    from sqlalchemy import update
+
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.channels.contracts import (
+        AccountKey,
+        ContactsHome,
+        Place,
+        SourceKind,
+        source_for,
+    )
+    from app.modules.channels.infrastructure.models import ChannelSourceModel
+    from app.modules.contacts.contracts import (
+        IdentityKind,
+        IdentityStrength,
+        open_contact,
+    )
+
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="whatsapp",
+        credentials={
+            "access_token": "whatsapp-ready-token",
+            "phone_number_id": "5550001111",
+            "waba_id": "waba-ready",
+            "app_secret": "whatsapp-ready-secret",
+            "verify_token": "whatsapp-ready-verify",
+            "api_base_url": f"{fake_whatsapp.api_base}/v21.0",
+        },
+    )
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={
+            "platform": "WHATSAPP",
+            "account_id": str(account.id),
+            "credential_mode": "CUSTOM",
+        },
+    )
+    assert created.status_code == 200, created.text
+    setup = f"/pods/{pod_id}/surfaces/whatsapp/setup"
+    before = (await authenticated_client.get(setup)).json()
+    assert before["ready"] is False
+    assert [action["key"] for action in before["actions"]] == ["whatsapp_webhook"]
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+    contact = await open_contact(
+        uow,
+        pod_id=pod_id,
+        kind=IdentityKind.PHONE,
+        value="+15550002222",
+        strength=IdentityStrength.CHANNEL,
+        display_name="Dana",
+    )
+    source = await source_for(
+        uow,
+        pod_id=pod_id,
+        place=Place(
+            surface_id=created.json()["id"],
+            platform="WHATSAPP",
+            account=AccountKey(workspace="5550001111"),
+            kind=SourceKind.PERSON,
+            external_channel_id=None,
+            external_user_id="15550002222",
+        ),
+        home=ContactsHome(contact.id),
+    )
+    await db_session.execute(
+        update(ChannelSourceModel)
+        .where(ChannelSourceModel.id == source.id)
+        .values(last_inbound_at=ChannelSourceModel.created_at)
+    )
+    await db_session.commit()
+
+    after = (await authenticated_client.get(setup)).json()
+    assert after["ready"] is True
+    assert after["actions"][0]["informational"] is True

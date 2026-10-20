@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import (
     ColumnElement,
     Select,
+    and_,
     delete,
     func,
     literal,
@@ -41,6 +42,10 @@ from app.modules.channels.contracts.backgrounds import current_words
 
 #: Where a member's follow-up names the line it marks.
 FOLLOW_UP_LINE_KEY = "line_id"
+
+#: A message copied from a conversation that lost its seat when its contact
+#: was merged into another: the conversation it came from.
+FOLDED_FROM_KEY = "folded_from"
 
 #: The message kinds a person outside the pod may have been shown. Thinking and
 #: tool traffic are the pod's working.
@@ -75,6 +80,8 @@ class VisibleMessage(ExportedMessage):
     """
 
     client_nonce: str | None = None
+    #: Written by a member of the pod, not the agent: a person answered.
+    from_person: bool = False
 
 
 class ExportedConversation(BaseModel):
@@ -212,7 +219,13 @@ async def _messages_of(
         .where(numbered.c.place <= MAX_EXPORTED_MESSAGES)
         .order_by(numbered.c.conversation_id, numbered.c.sequence)
     )
-    seen = [row for row, run_metadata in rows if _was_seen(row, run_metadata)]
+    # A folded copy was exported with the conversation it came from.
+    seen = [
+        row
+        for row, run_metadata in rows
+        if _was_seen(row, run_metadata)
+        and FOLDED_FROM_KEY not in (row.message_metadata or {})
+    ]
     said = await _said(uow, seen)
     grouped: dict[UUID, list[ExportedMessage]] = {}
     for row in seen:
@@ -252,6 +265,7 @@ async def visible_messages(
             created_at=message.created_at,
             sequence=message.sequence,
             client_nonce=_client_nonce(message),
+            from_person=_follow_up_line(message) is not None,
         )
         for message in seen
         if message.id in said
@@ -355,23 +369,31 @@ async def repoint_merged_contact(
     person's next message continues the one that kept it.
     """
     conversation, theirs = ConversationModel, aliased(ConversationModel)
-    await uow.session.execute(
-        update(conversation)
-        .where(
-            *_theirs(pod_id, merged_id),
-            _live_in_a_channel(conversation),
-            select(theirs.id)
-            .where(
+    unseated = await uow.session.execute(
+        select(conversation.id, theirs.id)
+        .join(
+            theirs,
+            and_(
                 _live_in_a_channel(theirs),
                 theirs.channel_id == conversation.channel_id,
                 _same_agent(theirs, conversation),
                 theirs.contact_id == survivor_id,
-            )
-            .exists(),
+            ),
         )
-        .values(channel_id=None)
-        .execution_options(synchronize_session=False)
+        .where(*_theirs(pod_id, merged_id), _live_in_a_channel(conversation))
     )
+    pairs = [(row[0], row[1]) for row in unseated]
+    if pairs:
+        from app.modules.agent.contracts.folded_history import fold_history
+
+        await uow.session.execute(
+            update(conversation)
+            .where(conversation.id.in_([orphan for orphan, _ in pairs]))
+            .values(channel_id=None)
+            .execution_options(synchronize_session=False)
+        )
+        for orphan, seated in pairs:
+            await fold_history(uow, orphan, into=seated)
     result = await uow.session.execute(
         update(ConversationModel)
         .where(*_theirs(pod_id, merged_id))
@@ -393,24 +415,32 @@ async def move_channel_conversations(
 
     Where the person already has a live conversation with the same agent
     there, that one keeps the seat and this one stays behind, unseated when
-    the channel goes (``repoint_merged_contact``). Returns how many moved.
+    the channel goes (``repoint_merged_contact``) -- what was said in it is
+    folded into the one that kept the seat (``folded_history``). Returns how
+    many moved.
     """
     conversation, theirs = ConversationModel, aliased(ConversationModel)
     here = (
         conversation.pod_id == pod_id,
         conversation.channel_id == from_channel_id,
     )
-    seated_there = (
-        select(theirs.id)
-        .where(
-            _live_in_a_channel(theirs),
-            theirs.channel_id == to_channel_id,
-            _same_agent(theirs, conversation),
-            func.coalesce(theirs.contact_id, theirs.user_id)
-            == func.coalesce(conversation.contact_id, conversation.user_id),
-        )
-        .exists()
+    same_person_there = and_(
+        _live_in_a_channel(theirs),
+        theirs.channel_id == to_channel_id,
+        _same_agent(theirs, conversation),
+        func.coalesce(theirs.contact_id, theirs.user_id)
+        == func.coalesce(conversation.contact_id, conversation.user_id),
     )
+    seated_there = select(theirs.id).where(same_person_there).exists()
+    staying = await uow.session.execute(
+        select(conversation.id, theirs.id)
+        .join(theirs, same_person_there)
+        .where(*here, _live_in_a_channel(conversation))
+    )
+    from app.modules.agent.contracts.folded_history import fold_history
+
+    for orphan, seated in [(row[0], row[1]) for row in staying]:
+        await fold_history(uow, orphan, into=seated)
     result = await uow.session.execute(
         update(conversation)
         .where(*here, ~(_live_in_a_channel(conversation) & seated_there))

@@ -29,6 +29,7 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceRuntimeUnsupportedError,
     AgentSurfaceAlreadyExistsError,
     AgentSurfaceNotFoundError,
+    AgentSurfacePlatformError,
     AgentSurfaceValidationError,
 )
 from app.modules.agent_surfaces.domain.ports import (
@@ -62,7 +63,8 @@ from app.modules.agent_surfaces.services.surface_telegram_webhook import (
 from app.modules.agent_surfaces.services.surface_consent import (
     SurfaceConsentMixin,
 )
-from app.core.infrastructure.db.session_uow import active_uow
+from app.core.infrastructure.db.session_uow import active_uow, commit_now
+from app.modules.agent_surfaces.services.surface_problems import clear_problem
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -212,9 +214,17 @@ class AgentSurfaceService(
             telegram_credentials = await self._prepare_telegram_webhook(entity)
         created = await self.surface_repository.create(entity)
         if telegram_credentials is not None:
-            created = await self._register_committed_telegram_webhook(
-                created, credentials=telegram_credentials, drop_pending_updates=True
-            )
+            try:
+                created = await self._register_committed_telegram_webhook(
+                    created, credentials=telegram_credentials, drop_pending_updates=True
+                )
+            except AgentSurfacePlatformError:
+                # A new bot the platform never took is not kept: nothing would
+                # reach it, and its name stays free to try again.
+                await self.surface_repository.delete(created.id)
+                await commit_now(self.surface_repository)
+                await clear_problem(created.id)
+                raise
         await self._notify_receivers_after_commit(created.id)
         return created
 

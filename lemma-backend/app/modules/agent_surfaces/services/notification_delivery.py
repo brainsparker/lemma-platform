@@ -197,10 +197,13 @@ class UndeliverableReason:
     # domain was unset reported "the pod has no active surface", which sent us
     # looking at pods and surfaces for a day. The reason a person is told should
     # be the reason it happened.
+    # A member reads this: what to do about it is theirs (connect a chat
+    # surface) or the operator's, whose instructions are in the log
+    # (``email_not_configured``), not here.
     EMAIL_NOT_CONFIGURED = (
         "Email is not set up for this deployment, so this agent has no mailbox "
-        "to reach people from. Set RESEND_API_KEY and RESEND_INBOUND_DOMAIN, or "
-        "connect a chat surface."
+        "to reach people from. Connect a chat surface, or ask whoever runs "
+        "Lemma here to set up email."
     )
     # "This agent" was read as the *recipient*, and sent someone looking for a
     # person who had been resolved as an agent. The agent here is the sender —

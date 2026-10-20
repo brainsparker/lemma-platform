@@ -15,6 +15,7 @@ And how a contact opts out and back in (``opt_out``, ``heard_from``).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -25,6 +26,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
 from app.modules.contacts.config import contacts_settings
+from app.modules.contacts.domain.entities import ContactHandle
 from app.modules.contacts.domain.handles import handle_hash, normalize_handle
 from app.modules.contacts.domain.kinds import IdentityKind
 from app.modules.contacts.domain.outreach import (
@@ -105,6 +107,24 @@ async def may_send(
     return verdict.model_copy(
         update={"footer": unsubscribe_footer(token), "unsubscribe_token": token}
     )
+
+
+async def opted_out_handles(
+    uow: SqlAlchemyUnitOfWork, handles: Sequence[ContactHandle], *, pod_id: UUID
+) -> set[UUID]:
+    """Which of a contact's handles asked the pod to stop: the ids, one read
+    per kind of handle."""
+    by_kind: dict[IdentityKind, list[ContactHandle]] = {}
+    for handle in handles:
+        by_kind.setdefault(handle.kind, []).append(handle)
+    suppressions = SuppressionRepository(uow.session)
+    stopped: set[UUID] = set()
+    for kind, of_kind in by_kind.items():
+        found = await suppressions.suppressed(
+            pod_id=pod_id, kind=kind, values=[handle.value for handle in of_kind]
+        )
+        stopped |= {handle.id for handle in of_kind if handle.value in found}
+    return stopped
 
 
 async def count_against_today(

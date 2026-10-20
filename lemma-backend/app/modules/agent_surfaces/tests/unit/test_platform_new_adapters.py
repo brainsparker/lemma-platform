@@ -130,6 +130,19 @@ def test_a_delivery_carrying_no_message_still_reaches_the_parser():
     assert WhatsAppMessageParser().parse(payload) is None
 
 
+def test_a_whatsapp_message_from_our_own_number_is_not_a_person():
+    """An echo of the business's own number: answering it would be the bot
+    talking to itself, and making it a contact would be a contact of us."""
+    payload = _whatsapp_text_payload()
+    value = payload["entry"][0]["changes"][0]["value"]
+    value["metadata"]["display_phone_number"] = "+1 555-055-5555"
+
+    assert WhatsAppMessageParser().parse(payload) is None
+
+    value["metadata"]["display_phone_number"] = "+1 555-000-0000"
+    assert WhatsAppMessageParser().parse(payload) is not None
+
+
 def test_whatsapp_undeliverable_message_is_not_read_as_the_persons_words():
     """WhatsApp answers what it cannot hand over with ``type: unsupported``.
 

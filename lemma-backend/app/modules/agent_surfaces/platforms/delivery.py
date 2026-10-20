@@ -183,6 +183,10 @@ def _note_status(exc: BaseException) -> None:
         status = exc.response.status_code
     elif isinstance(exc, aiohttp.ClientResponseError):
         status = exc.status
+    elif isinstance(code := getattr(exc, "status_code", None), int):
+        # A platform client's own error (``WhatsAppApiError``,
+        # ``TelegramApiError``), carrying the HTTP status it was answered with.
+        status = code
     if status is None:
         return
     for outcome in _tracked():

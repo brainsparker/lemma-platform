@@ -125,7 +125,8 @@ On top of seeing a channel, one table (`api/access.py` holds the same one).
 | One's own channel (`/channels/me`); joining a public group or a contact's channel; leaving; one's own notify settings; marking read | `channel.read` |
 | Joining a private group nobody let them into, on request (logged: `channels.member.joined_private_by_right.observed`) | `channel.manage` |
 | Answering a question | `channel.read`, and being the person it waits on |
-| Writing, editing and deleting one's own lines; starting a group; retrying one's own line's delivery; notices | `channel.write` (+ `contact.message` in a `CONTACT` channel) |
+| Writing, editing and deleting one's own lines; starting a group; retrying one's own line's delivery to a place (any line's, for who may change the channel; anybody else reading it is refused, 403); notices | `channel.write` (+ `contact.message` in a `CONTACT` channel) |
+| Retrying a push | `channel.write`, and being the member it was to |
 | A group's title, topic, visibility, archive, delete, members, roles, agents | `channel.write` and being its owner -- or `channel.manage` |
 | A contact's channel: assignee, status, the agent switch, the hand-back window | `channel.write` + `contact.message` |
 | Seeing a `CONTACT` channel at all | `contact.read` |
@@ -171,7 +172,10 @@ contact is assigned if nobody is, is the case's first response if nobody has
 written yet, and the case waits on the contact; the contact writing opens it
 again. A line after the case closed opens the next one, still held by the
 member who answered the last (the hand-back window lets them go). Setting the
-status or an assignee on a closed case by hand reopens that case. A post writes
+status or an assignee on a closed case by hand reopens that case, and being
+assigned seats the assignee in the channel. A contact held by a member asks
+for a reply (`attention`) whenever the contact writes, until the assignee
+writes back; a hand-back clears it. A post writes
 its case in at most one statement per case table, and a new case's id through
 the post's own write to the channel row. Every other case writer takes the
 channel's row lock before the case's, as a post does, so two never open two
@@ -182,7 +186,7 @@ nothing in it, and the member who looks after them is told as anywhere else.
 
 Pushes go to a member for: a line naming them; a question waiting on them; a
 line in their own channel they did not write; a contact's line in a channel
-assigned to them; and, set to `ALL`, any line written in Lemma in a group
+assigned to them, in it or not; and, set to `ALL`, any line written in Lemma in a group
 they are in. `MENTIONS` -- what a group seat starts at; a member's own channel
 and a contact's start at `ALL` -- and a note for members keep only the first
 two; `NONE` and a mute stop them all. Somebody named or asked who is not in
@@ -202,10 +206,11 @@ in that time, and they go as one delivery, on the newest line -- or the newest
 that calls them -- saying how many it stands for. A line that calls them goes
 at once and takes what was waiting with it. What became of a push is on
 the delivery it leads: `ChannelMessageResponse.delivered` lists only a line's
-sends to places, so it stays the writer's record of where the line went, and
-`…/deliveries` lists every send of a line, pushes included. Sending is
-`agent_surfaces`' (`services/channel_deliveries.py`): it holds back what does
-not call a member who had the app open in the last few minutes, and folds a
+sends to places -- shown to everybody who may read the line -- and
+`…/deliveries` lists every send of a line, a push only to its recipient.
+Sending is `agent_surfaces`' (`services/channel_deliveries.py`): what does not
+call a member is skipped once they have read it in the channel, held a few
+minutes while they have the app open (and pushed then if still unread), and a
 push the member's hourly budget holds back into their window
 (`delivery_folded`, `FOLDED`), so it goes with their next push from that
 channel.
@@ -319,10 +324,12 @@ Under `/pods/{pod_id}` -- everybody named one way, a `PersonRef`
   `after_seq`, or backwards: `newest`, `before_seq`; its root carries its
   live replies' count -- a deleted reply leaves it); `/answer`;
   `/deliveries` `GET` and `/deliveries/{d}/retry`;
-  `/files/{file_id}` `GET` (below). A reader's own lines carry `delivered`:
-  each place outside Lemma the line went to, with its status and why --
-  sent again on the socket when a send moves.
-- `/inbox` (counts, waiting, mentions) and `/search` (Postgres full text in
+  `/files/{file_id}` `GET` (below). Every line a reader may read carries
+  `delivered`: each place outside Lemma the line went to, with its status and
+  why -- sent again on the socket when a send moves.
+- `/inbox` (counts, waiting, mentions, and -- for a reader who sees contacts
+  -- `contacts` waiting on a reply: asking for a person, or assigned to them
+  with the contact's word last) and `/search` (Postgres full text in
   the channels the caller sees and the lines they read in full -- a withheld
   answer is left out by the query itself --, newest first, each hit with its
   `rank` and a plain-text `snippet`; narrowed by `channel_id`, `kind`,

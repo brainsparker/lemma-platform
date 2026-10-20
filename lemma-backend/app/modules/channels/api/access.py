@@ -23,8 +23,9 @@ marking read
 Answering a question                   ``channel.read``; only the person it
                                        waits on
 Writing, editing, deleting one's       ``channel.write`` (+ ``contact.message``
-lines; starting a group; retrying      in a CONTACT channel)
-one's own line's delivery
+lines; starting a group; retrying      in a CONTACT channel); a push to
+one's own line's delivery (or any,     oneself is retried by its recipient
+with ``may_manage``)                   alone, with ``channel.write``
 Group: rename, topic, visibility,      ``channel.write`` and the channel's
 archive, delete, members, roles,       owner -- or ``channel.manage``
 agents roster                          (``may_manage``)

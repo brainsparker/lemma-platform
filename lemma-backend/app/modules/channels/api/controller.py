@@ -530,6 +530,13 @@ async def _change_contact(
         ):
             raise unprocessable("Only a member who may see contacts can be assigned")
         await cases.assign(channel.id, assignee, by=caller.user_id)
+        # Seated, so the contact's lines reach them: unread, inbox and push.
+        await MemberRepository(uow.session).add_person(
+            channel,
+            Principal.member(assignee),
+            seated_by=SeatedBy.JOINED if assignee == caller.user_id else SeatedBy.ADDED,
+            added_by_user_id=caller.user_id,
+        )
     elif handing_back or "assignee" in named:
         await cases.assign(channel.id, None, by=caller.user_id)
     if "status" in named:

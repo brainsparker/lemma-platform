@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import re
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import column, delete, func, literal, select, table, tuple_, update
+from sqlalchemy import (
+    column,
+    delete,
+    exists,
+    func,
+    literal,
+    select,
+    table,
+    tuple_,
+    update,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -201,12 +213,33 @@ class ContactRepository:
         return found
 
     async def list(
-        self, *, pod_id: UUID, limit: int = 50, before: ContactCursor | None = None
+        self,
+        *,
+        pod_id: UUID,
+        limit: int = 50,
+        before: ContactCursor | None = None,
+        matching: str | None = None,
     ) -> list[Contact]:
-        """The pod's contacts, newest first, a page at a time."""
+        """The pod's contacts, newest first, a page at a time. ``matching``:
+        whose name, or a handle as stored or as it arrived, holds these
+        characters, in any case."""
         query = select(ContactModel).where(
             ContactModel.pod_id == pod_id, ContactModel.merged_into_id.is_(None)
         )
+        if matching:
+            pattern = f"%{_escaped(matching)}%"
+            # A number typed as it is said -- "+1 555 0100" -- is stored as one.
+            compact = f"%{_escaped(re.sub(r'[\s().-]', '', matching))}%"
+            handle = ContactIdentityModel
+            query = query.where(
+                ContactModel.display_name.ilike(pattern, escape="\\")
+                | exists().where(
+                    handle.contact_id == ContactModel.id,
+                    handle.value.ilike(pattern, escape="\\")
+                    | handle.value.ilike(compact, escape="\\")
+                    | handle.value_raw.ilike(pattern, escape="\\"),
+                )
+            )
         if before is not None:
             query = query.where(
                 tuple_(ContactModel.created_at, ContactModel.id)
@@ -427,6 +460,11 @@ class ContactRepository:
                 .order_by(ContactIdentityModel.created_at)
             )
         )
+
+
+def _escaped(text: str) -> str:
+    """``text`` matched as itself in a LIKE pattern."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _clean_name(display_name: str | None) -> str | None:

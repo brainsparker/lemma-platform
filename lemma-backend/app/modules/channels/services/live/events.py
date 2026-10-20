@@ -42,7 +42,6 @@ from app.modules.channels.domain.entities import (
     Delivery,
     Principal,
     QuestionState,
-    SenderKind,
 )
 from app.modules.channels.infrastructure.change_models import ChannelChangeModel
 from app.modules.channels.infrastructure.inbox import Totals, Unread
@@ -157,7 +156,7 @@ class LinesView:
     agents: dict[UUID, str]
     #: The newest line the readers had before this batch.
     since_seq: int
-    #: Members' lines' sends, by line: shown to each line's writer.
+    #: Where each line went outside Lemma: shown to everybody who reads it.
     deliveries: dict[UUID, list[Delivery]] = field(default_factory=dict)
     _encoded: dict[tuple[UUID, bool, bool, bool], list[str]] = field(
         default_factory=dict
@@ -223,10 +222,7 @@ async def lines_view(
             agent_ids=[agent for line in lines for agent in message_agents(line)],
         ),
         since_seq=since_seq,
-        deliveries=await deliveries_of(
-            uow,
-            [line.id for line in lines if line.sender.kind is SenderKind.MEMBER],
-        ),
+        deliveries=await deliveries_of(uow, [line.id for line in lines]),
     )
 
 

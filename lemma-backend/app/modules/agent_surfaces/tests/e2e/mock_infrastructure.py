@@ -1160,7 +1160,8 @@ class FakeTelegramServer:
     so getWebhookInfo confirms the URL (matching the real registration flow).
     ``fail_next`` forces transient failures per method to exercise retries
     (429, asking for ``retry_after`` seconds), ``refuse_next`` a permanent 403,
-    ``drop_answers`` a send that is taken and whose answer never comes back
+    ``unauthorized`` a 401 for a refused token, ``drop_answers`` a send that
+    is taken and whose answer never comes back
     (the connection closes after the message is recorded), and
     ``unavailable`` makes a method answer 404 the way a bot API that does not
     carry it would — which is the condition `send_chunk`'s fallback from
@@ -1178,6 +1179,8 @@ class FakeTelegramServer:
         self.refuse_next: dict[str, int] = {}
         self.drop_answers: dict[str, int] = {}
         self.unavailable: set[str] = set()
+        #: Methods answered 401: the bot's token is refused.
+        self.unauthorized: set[str] = set()
         self._updates: list[dict[str, Any]] = []
         self._update_tokens: dict[int, str] = {}
 
@@ -1303,6 +1306,11 @@ class FakeTelegramServer:
                     "description": "Forbidden: bot was blocked by the user",
                 },
                 status=403,
+            )
+        if method in self.unauthorized:
+            return web.json_response(
+                {"ok": False, "error_code": 401, "description": "Unauthorized"},
+                status=401,
             )
         return None
 

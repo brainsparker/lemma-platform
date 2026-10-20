@@ -97,6 +97,11 @@ class CaseRepository:
             case.assignee_last_line_at is None or at > case.assignee_last_line_at
         ):
             case.assignee_last_line_at = at
+        if case.assignee_user_id == user_id and case.attention_at is not None:
+            # Who answers them wrote: the wait for a reply is over.
+            case.attention_at = None
+            case.attention_reason = None
+            shown = True
         if case.first_response_at is None:
             case.first_response_at = at
             case.first_response_by_user_id = user_id
@@ -162,6 +167,9 @@ class CaseRepository:
         case.assignee_user_id = None
         case.assigned_at = None
         case.assignee_last_line_at = None
+        # The agent answers them again: nobody is waited on.
+        case.attention_at = None
+        case.attention_reason = None
         self._note(case, "handed_back", user_id=str(user_id))
         await self.session.flush()
         await touch_channel(self.session, channel_id)

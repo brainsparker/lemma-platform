@@ -9,6 +9,7 @@ deleting one -- a request to see or to forget a person -- takes a pod admin.
 from __future__ import annotations
 
 import base64
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -18,6 +19,7 @@ from pydantic import BaseModel, Field
 from app.core.api.dependencies import CurrentUser, UoWDep, get_uow_factory
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts.contact_conversations import ExportedConversation
 from app.modules.contacts.domain.entities import (
@@ -36,6 +38,7 @@ from app.modules.contacts.services.export import (
     export_contact as export_page,
 )
 from app.modules.contacts.services.forget import forget_contact
+from app.modules.contacts.services.outreach import opted_out_handles
 from app.modules.datastore.contracts.contact_rows import ContactRow
 
 router = APIRouter(prefix="/pods/{pod_id}/contacts", tags=["Contacts"])
@@ -46,11 +49,25 @@ class ContactIdentityResponse(BaseModel):
     value: str
     strength: IdentityStrength
     verified_at: datetime
+    opted_out: bool = Field(
+        default=False,
+        description=(
+            "They asked the pod to stop writing to this handle (STOP, an "
+            "unsubscribe link, a bounce or a complaint): nothing is sent to it "
+            "until they write from it again."
+        ),
+    )
 
 
 class ContactResponse(BaseModel):
     id: UUID
     display_name: str | None = None
+    label: str = Field(
+        description=(
+            "What to call them: their name, else the handle they are known "
+            "by (an email address, a number), else that they are a web visitor."
+        )
+    )
     created_at: datetime
     identities: list[ContactIdentityResponse] = Field(default_factory=list)
     is_anonymous: bool = Field(
@@ -96,10 +113,45 @@ class ContactUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=255)
 
 
-def _response(contact: Contact) -> ContactResponse:
+async def _response(uow: SqlAlchemyUnitOfWork, contact: Contact) -> ContactResponse:
+    [shown] = await _responses(uow, [contact])
+    return shown
+
+
+async def _responses(
+    uow: SqlAlchemyUnitOfWork, contacts: Sequence[Contact]
+) -> list[ContactResponse]:
+    """The contacts as shown, with which handles opted out: one read per kind
+    of handle for the page."""
+    if not contacts:
+        return []
+    stopped = await opted_out_handles(
+        uow,
+        [handle for contact in contacts for handle in contact.identities],
+        pod_id=contacts[0].pod_id,
+    )
+    return [_shown(contact, stopped) for contact in contacts]
+
+
+#: The kinds of handle a person would recognise themselves by, best first.
+_LABELLED_BY = (IdentityKind.EMAIL, IdentityKind.PHONE)
+
+
+def _label(contact: Contact) -> str:
+    if contact.display_name:
+        return contact.display_name
+    for kind in _LABELLED_BY:
+        for handle in contact.identities:
+            if handle.kind is kind:
+                return handle.value_raw or handle.value
+    return "Web visitor" if contact.is_anonymous else "A contact"
+
+
+def _shown(contact: Contact, stopped: set[UUID]) -> ContactResponse:
     return ContactResponse(
         id=contact.id,
         display_name=contact.display_name,
+        label=_label(contact),
         created_at=contact.created_at,
         identities=[
             ContactIdentityResponse(
@@ -107,6 +159,7 @@ def _response(contact: Contact) -> ContactResponse:
                 value=identity.value,
                 strength=identity.strength,
                 verified_at=identity.verified_at,
+                opted_out=identity.id in stopped,
             )
             for identity in contact.identities
         ],
@@ -160,15 +213,24 @@ async def list_contacts(
     uow: UoWDep,
     limit: int = Query(default=50, ge=1, le=MAX_PAGE),
     cursor: str | None = Query(default=None, max_length=200),
+    q: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Only contacts whose name, email address or number holds this.",
+    ),
 ) -> ContactListResponse:
     """The pod's contacts, newest first. Follow `next_cursor` until it is
     absent."""
     contacts = await ContactRepository(uow.session).list(
-        pod_id=pod_id, limit=limit, before=_list_cursor(cursor)
+        pod_id=pod_id,
+        limit=limit,
+        before=_list_cursor(cursor),
+        matching=(q or "").replace("\x00", "").strip() or None,
     )
     last = contacts[-1] if len(contacts) == limit else None
     return ContactListResponse(
-        items=[_response(contact) for contact in contacts],
+        items=await _responses(uow, contacts),
         next_cursor=_encode_cursor(last) if last else None,
     )
 
@@ -180,7 +242,7 @@ async def list_contacts(
     dependencies=[require_action(Permissions.CONTACT_READ)],
 )
 async def get_contact(pod_id: UUID, contact_id: UUID, uow: UoWDep) -> ContactResponse:
-    return _response(await _found(uow, pod_id=pod_id, contact_id=contact_id))
+    return await _response(uow, await _found(uow, pod_id=pod_id, contact_id=contact_id))
 
 
 @router.patch(
@@ -201,7 +263,7 @@ async def update_contact(
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
     await uow.commit()
-    return _response(await _found(uow, pod_id=pod_id, contact_id=contact.id))
+    return await _response(uow, await _found(uow, pod_id=pod_id, contact_id=contact.id))
 
 
 @router.get(
@@ -233,7 +295,7 @@ async def export_contact(
         uow_factory, pod_id=pod_id, contact_id=contact.id, cursor=after
     )
     return ContactExportResponse(
-        contact=_response(contact),
+        contact=await _response(uow, contact),
         conversations=list(page.conversations),
         rows=list(page.rows),
         next_cursor=page.next_cursor.encode() if page.next_cursor else None,

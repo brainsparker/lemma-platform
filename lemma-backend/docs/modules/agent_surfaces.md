@@ -110,7 +110,12 @@ Every outcome but `SENT` carries a `DeliveryReasonCode` beside the sentence a
 member reads (`Outcome.code`): code that decides by why a delivery stands
 where it does reads the code, never the sentence. Each try is a
 `channel_delivery_attempts` row, begun at the claim and ended with the outcome
-and the platform's HTTP status when it gave one (`SendOutcome.provider_status`).
+and the platform's HTTP status when it gave one (`SendOutcome.provider_status`,
+read from a platform client's own error too). A `401` refuses the bot, not the
+message: its surface carries the reason as `problem` (`surface_problems`, in
+Redis) -- as it does a webhook the platform refused -- its `/setup` is not
+ready, and a contact the bot was writing to waits on a person; a send that
+goes clears it. A new surface whose webhook is refused is not kept.
 A try is retried only when the retry cannot be the duplicate the person sees:
 
 - **`FAILED`**, due again after the backoff -- and no sooner than a
@@ -154,8 +159,10 @@ wait in Lemma. It is sent under its delivery's key, charged to the member's
 hourly push budget once per delivery (not per try), and never sent on a
 second app after a send that may already be on the first. One that names the
 member or asks them something (`Delivery.urgent`) is never held. Any other is
-`SKIPPED` (`IN_APP`) when the member had the app open in the last
-`push_sends.PRESENT_FOR_SECONDS` -- they read it there -- and, held by the
+`SKIPPED` (`IN_APP`) once the member has read past it in the channel; while
+they had the app open in the last `push_sends.PRESENT_FOR_SECONDS` it is held
+(`FOLDED`) until its newest line is that old, and pushed then if still unread
+-- the app open somewhere in the pod is not this channel read. Held by the
 budget, `SKIPPED` (`FOLDED`): its lines go back into the member's window and
 with their next push from that channel, no sooner than `push_sends.HOLD_FOR`. A plain
 line in a group is not emailed unless the member chose email for it: email is

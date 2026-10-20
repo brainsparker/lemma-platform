@@ -228,6 +228,14 @@ class MyMembershipResponse(BaseModel):
 
 
 class ChannelDetailResponse(ChannelResponse):
+    opted_out: bool | None = Field(
+        default=None,
+        description=(
+            "A contact's channel: whether they asked the pod to stop writing "
+            "to a handle of theirs -- lines to it are not sent until they "
+            "write from it again (the contact's `identities` say which)."
+        ),
+    )
     source_places: list[ChannelSourceResponse] = Field(default_factory=list)
     members: list[ChannelMemberResponse] = Field(default_factory=list)
     me: MyMembershipResponse = Field(default_factory=MyMembershipResponse)

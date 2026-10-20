@@ -20,9 +20,10 @@ surface asks first, before any run starts, and when the cap is reached:
 A member can also answer a contact by hand, whatever the cap
 (``contact_hold``): while the contact's channel has its agents off, or a member
 has stepped in there, no run starts for them either -- and they are not told
-"a person will reply" here, since one is, or has chosen to. With the agents
-off the pod's own acknowledgement may be said instead, once per wait
-(``contact_acknowledgement``).
+"a person will reply" here, since one is, or has chosen to. The pod's own
+acknowledgement may be said instead, once per wait
+(``contact_acknowledgement``), and the channel asks for a reply until a
+member writes.
 
 Used by every place a run for somebody outside the pod starts: the chat and
 email surfaces (``SurfaceTurnStarter``) and web chat. All of it is in the
@@ -305,17 +306,15 @@ async def _keep_for_a_member(
 ) -> None:
     """Their message, kept for the member answering them by hand.
 
-    A member who stepped in reads it in the channel they are writing in, and
-    nothing is said to the contact: a member is answering them. With the
-    agents off, the channel asks for a reply, the member who looks after them
-    is told once a day, and the contact is told -- once until a member writes
-    -- what the pod set to say then, if it set anything
-    (``contact_acknowledgement``).
+    Either way the channel asks for a reply until a member writes, and the
+    contact is told -- once until a member writes -- what the pod set to say
+    then, if it set anything (``contact_acknowledgement``, which says it to a
+    member's contact only before that member first wrote to them). A member
+    who stepped in is pushed it as the one the contact is assigned to; with
+    the agents off, the member who looks after them is told once a day.
     """
-    acknowledged = (
-        await acknowledge_contact(uow, pod_id=pod_id, conversation_id=conversation_id)
-        if hold is MemberHold.AGENTS_OFF
-        else None
+    acknowledged = await acknowledge_contact(
+        uow, pod_id=pod_id, conversation_id=conversation_id
     )
     await hold_outside_turn(
         uow,
@@ -324,15 +323,21 @@ async def _keep_for_a_member(
         metadata=metadata,
         reply=acknowledged,
     )
-    if hold is MemberHold.STEPPED_IN:
-        return
     channel_id = await channel_conversations.channel_of_conversation(
         uow, conversation_id
     )
     if channel_id is not None:
         await call_for_person(
-            uow, channel_id=channel_id, reason="Waiting on a reply: the agent is off"
+            uow,
+            channel_id=channel_id,
+            reason=(
+                "Waiting on a reply from the member answering them"
+                if hold is MemberHold.STEPPED_IN
+                else "Waiting on a reply: the agent is off"
+            ),
         )
+    if hold is MemberHold.STEPPED_IN:
+        return
     if tell and await pod_member_id(uow, pod_id, owner_id) is not None:
         await tell_member(
             uow,

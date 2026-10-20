@@ -467,8 +467,9 @@ class TestARunQueuedBehindAFullComputer:
             _RecordingStream(),
             uow_factory=_uow_factory,
             # Outlives the one-second wait, so a run that is not held fails
-            # on the wait and one that is held runs into this instead.
-            event_timeout_seconds=1.5,
+            # on the wait and one that is held runs into this instead -- by a
+            # margin a loaded runner cannot close (at 1.5s it once fired first).
+            event_timeout_seconds=3.0,
             lease_check_seconds=0.0,
             stream_block_ms=1,
         )

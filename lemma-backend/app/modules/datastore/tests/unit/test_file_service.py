@@ -1403,3 +1403,30 @@ def test_a_copy_number_goes_before_the_extension():
     assert numbered_name("report.tar.gz", 2) == "report.tar (2).gz"
     assert numbered_name("notes", 1) == "notes (1)"
     assert numbered_name(".env", 1) == ".env (1)"
+
+
+@pytest.mark.asyncio
+async def test_choosing_a_free_name_holds_the_folder_lock_first():
+    """Two uploads of one name must not both find the same number free.
+
+    The folder's lock is taken before the first candidate is read, so a second
+    upload waits until the first has inserted its row and sees it taken.
+    """
+    pod_id = uuid4()
+    lookup = _lookup_over({"/me/uploads/report.pdf"})
+    repository = lookup.file_repository
+    order: list[str] = []
+    repository.acquire_path_lock.side_effect = lambda *_a: order.append("lock")
+    scan = repository.get_by_path.side_effect
+
+    async def get_by_path(**kwargs):
+        order.append("read")
+        return await scan(**kwargs)
+
+    repository.get_by_path.side_effect = get_by_path
+
+    await lookup.available_path(pod_id, directory_path="/me/uploads", name="report.pdf")
+
+    repository.acquire_path_lock.assert_awaited_once_with(pod_id, "/me/uploads")
+    assert order[0] == "lock"
+    assert order.count("read") == 2

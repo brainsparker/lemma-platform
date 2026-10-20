@@ -125,7 +125,13 @@ class FileLookup:
         Returns the name and its path, so the caller stores exactly what the
         person will read back. Both the name and the path stay normalized the
         same way every other write normalizes them.
+
+        Two uploads of one name into one folder would otherwise both find the
+        same number free, and the unique path index would refuse the second.
+        The directory's lock holds until the caller's transaction ends, which
+        is after it inserts the row for the path returned here.
         """
+        await self.file_repository.acquire_path_lock(pod_id, directory_path)
         candidate = name
         index = 0
         while True:

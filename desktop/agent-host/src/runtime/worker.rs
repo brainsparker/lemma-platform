@@ -218,10 +218,19 @@ impl TargetWorker {
         // Paused for another person's session counts as draining here: no new
         // runs, and the ones in flight finish.
         let draining = !target.takes_work();
+        // Bulk bytes -- an op's file data, an event's image -- go over HTTP
+        // beside the link, as this host, never on it.
+        let transfers =
+            crate::link::transfer::TransferClient::new(&target.base_url, &target.host_secret)
+                .inspect_err(|error| {
+                    tracing::warn!(%error, "no HTTP client for file data; it stays off the link");
+                })
+                .ok();
         let flusher = Arc::new(tokio::sync::Mutex::new(EventFlusher {
             target_id: target.target_id,
             journal: journal.clone(),
             rejections: HashMap::new(),
+            blobs: transfers.clone(),
         }));
         let (slot_owner, link) = LinkSlotOwner::new();
         // The exec-server is this same binary, as the MCP bridge is. Only the
@@ -255,6 +264,7 @@ impl TargetWorker {
                         sandboxed: true,
                     }),
                     relay_paths,
+                    transfers.clone(),
                 )
             });
         Ok(Self {
@@ -352,10 +362,15 @@ impl TargetWorker {
                 .exec_relay
                 .as_ref()
                 .is_some_and(|relay| relay.available());
+            status.transfers &= self
+                .exec_relay
+                .as_ref()
+                .is_some_and(|relay| relay.moves_data_by_transfer());
         }
         #[cfg(not(unix))]
         {
             status.available = false;
+            status.transfers = false;
         }
         status
     }

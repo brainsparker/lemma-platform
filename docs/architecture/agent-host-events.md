@@ -74,7 +74,10 @@ Text is unchanged from the previous version: chunks stream live, and the host
 seals what it has buffered into an `*_upsert` before any non-text event and at
 64 KiB. Replaying only the upserts rebuilds the exact text. An image or other
 rich block still travels as an `agent_message_chunk` whose `content` is the ACP
-content block; the backend's artifact writer turns it into a pod file.
+content block; the backend's artifact writer turns it into a pod file. Its
+bytes do not travel in the event: the host uploads them first and the block
+names them, `lemma_blob: {sha256, size}` in place of `data`, because the link
+takes no message past 1 MiB ([Bulk bytes](agent-host.md#bulk-bytes)).
 
 Thinking is flushed at every step boundary: a tool call, a permission request,
 or the end of the turn. It used to be saved once per run, so a run showed one

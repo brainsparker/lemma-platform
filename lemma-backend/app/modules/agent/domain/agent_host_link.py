@@ -238,6 +238,10 @@ class HostExecutionCapability(BaseModel):
     enabled: bool = False
     platform: str | None = Field(default=None, max_length=32)
     available: bool = False
+    #: The host moves an op's file data over HTTP when the op names a transfer
+    #: (``domain/agent_host_transfer``). Absent from a host released before
+    #: the link's 1 MiB ceiling; its link session inlines that data instead.
+    transfers: bool = False
 
     @property
     def usable(self) -> bool:

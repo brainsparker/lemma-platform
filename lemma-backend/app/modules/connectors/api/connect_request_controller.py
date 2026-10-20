@@ -40,6 +40,28 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
+
+async def _browser_user_id(request: Request) -> UUID | None:
+    """Whose Lemma session the browser coming back from the provider carries.
+
+    This route authenticates by ``state``, so nothing here requires a session;
+    it is only read, to record whether the grant was completed by the person
+    who started it. Any failure to read one is "no session".
+    """
+    from supertokens_python.exceptions import SuperTokensError
+    from supertokens_python.recipe.session.asyncio import get_session
+
+    try:
+        session = await get_session(request, session_required=False)
+    except SuperTokensError:
+        return None
+    if session is None:
+        return None
+    try:
+        return UUID(session.get_user_id())
+    except ValueError:
+        return None
+
 router = APIRouter(prefix="/connectors/connect-requests", tags=["Connectors"])
 org_router = APIRouter(
     prefix="/organizations/{organization_id}/connectors/connect-requests",
@@ -316,6 +338,7 @@ async def oauth_callback(
         account = await connector_service.handle_oauth_callback(
             redirect_uri=redirect_uri,
             state=state,
+            browser_user_id=await _browser_user_id(request),
         )
     except ConnectorDomainError as exc:
         if wants_json:

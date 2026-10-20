@@ -47,6 +47,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedSurfaceLifecycleEvent,
     SurfaceLifecycleKind,
+    SurfacePlatform,
     platform_value_for_source,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -71,6 +72,9 @@ from app.modules.agent_surfaces.services.configuration_prompt import (
     prompt_for_configuration,
 )
 from app.modules.agent_surfaces.services.app_uninstall import retire_uninstalled_app
+from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (  # noqa: E501
+    SlackManagerRepository,
+)
 from app.modules.agent_surfaces.services.channel_allow import allow_channel
 from app.modules.agent_surfaces.services.group_hello import say_hello_in_group
 from app.modules.agent_surfaces.services.group_registry import (
@@ -138,6 +142,11 @@ class AppEventHandler:
             setup = await adapter.parse_channel_setup(request.payload, request.headers)
         if setup is None:
             return False
+
+        if await _invited_by_the_manager(self.uow, parsed):
+            # Lemma's own app brought this bot in and has already set the
+            # channel up; there is nobody here to ask.
+            return True
 
         (
             candidates,
@@ -555,3 +564,21 @@ class AppEventHandler:
                     credentials=credentials, channel_id=parsed.external_channel_id
                 ),
             )
+
+
+async def _invited_by_the_manager(
+    uow: SqlAlchemyUnitOfWork, parsed: ParsedSurfaceLifecycleEvent
+) -> bool:
+    """A teammate's bot joining a Slack channel because Lemma's own app, the
+    workspace's manager, invited it there."""
+    if (
+        parsed.kind is not SurfaceLifecycleKind.JOINED_CHANNEL
+        or parsed.platform is not SurfacePlatform.SLACK
+        or not parsed.actor_external_user_id
+        or not parsed.tenant_id
+    ):
+        return False
+    install = await SlackManagerRepository(uow.session).install_for_team(
+        parsed.tenant_id
+    )
+    return install is not None and install.bot_user_id == parsed.actor_external_user_id

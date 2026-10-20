@@ -117,8 +117,6 @@ class AccountRepository(
                     connector_id=instance.connector_id,
                     organization_id=instance.organization_id,
                     user_id=instance.user_id,
-                    account_id=instance.id,
-                    auth_config_id=instance.auth_config_id,
                 )
             ]
         )

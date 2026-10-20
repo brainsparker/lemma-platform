@@ -26,6 +26,15 @@ SURFACE_RECEIVER: Final = "surface.receiver"
 SURFACE_PLATFORM_UPDATE: Final = "surface.platform_update"
 #: Clears identities bound to a phone number a user no longer has.
 SURFACE_MOBILE_CHANGED: Final = "surfaces.mobile_changed"
+#: One thing Lemma's own Slack app (a workspace's manager) was told, off the request.
+SURFACE_SLACK_MANAGER: Final = "surface.slack_manager"
+#: A Slack grant a manager flow started, finished (a ``ConnectorAccountConnected``
+#: subscriber): a teammate's app allowed from Slack becomes its surface.
+SURFACE_SLACK_APP_ALLOWED: Final = "surface.slack_app_allowed"
+#: One DM from Lemma's own Slack app to a person, owed by the change that staged it.
+SURFACE_SLACK_MANAGER_MESSAGE: Final = "surface.slack_manager_message"
+#: A teammate's first word in a channel the manager handed it.
+SURFACE_SLACK_TEAMMATE_HELLO: Final = "surface.slack_teammate_hello"
 
 #: Periodic names (``periodic(name, every, kind)``).
 RECEIVERS_RECONCILE_PERIODIC: Final = "surfaces.receivers.reconcile"
@@ -53,6 +62,19 @@ def receiver_key(credential_key: str) -> str:
     return f"receiver:{credential_key}"
 
 
+def slack_manager_key(source_event_id: str) -> str:
+    return f"slack-manager:{source_event_id}"
+
+
+def slack_manager_message_key(cause: str) -> str:
+    """One message per cause: ``welcome:<install id>``, ``allowed:<account id>``."""
+    return f"slack-manager-message:{cause}"
+
+
+def slack_teammate_hello_key(surface_id: UUID, channel_id: str) -> str:
+    return f"slack-teammate-hello:{surface_id}:{channel_id}"
+
+
 __all__ = [
     "ONBOARDING_CLEANUP_PERIODIC",
     "RECEIVERS_RECONCILE_PERIODIC",
@@ -63,9 +85,16 @@ __all__ = [
     "SURFACE_RECEIVER",
     "SURFACE_REPLY",
     "SURFACE_REPLY_FOR_RUN",
+    "SURFACE_SLACK_APP_ALLOWED",
+    "SURFACE_SLACK_MANAGER",
+    "SURFACE_SLACK_MANAGER_MESSAGE",
+    "SURFACE_SLACK_TEAMMATE_HELLO",
     "ingest_key",
     "channel_delivery_key",
     "channel_delivery_target_key",
     "receiver_key",
     "run_reply_key",
+    "slack_manager_key",
+    "slack_manager_message_key",
+    "slack_teammate_hello_key",
 ]

@@ -1,10 +1,17 @@
-"""Making Lemma's own Slack app a workspace's manager, and proving its people.
+"""Making Lemma's own Slack app a workspace's manager.
 
 Authorising Lemma's app makes a connector account like any other. Binding it as
 the manager is what turns that into a workspace Lemma's teammates live in: the
-workspace becomes the organization's, and the person who authorised it is
-known in Slack from then on -- Slack's OAuth grant names them (``authed_user``),
-which is proof the profile email never was.
+workspace becomes the organization's (one organization per workspace), and the
+person who authorised it is known in Slack from then on -- Slack's grant names
+them (``authed_user``). That is proof only when the browser that came back from
+Slack carried that person's own Lemma session; a consent link somebody was sent
+would otherwise bind the sender's organization to the recipient's workspace and
+the recipient's Slack user to the sender. So a grant that was not
+browser-bound is refused here.
+
+A workspace held by one organization is freed by removing Lemma's app from it
+in Slack (``app_uninstalled``), which deletes the binding.
 """
 
 from __future__ import annotations
@@ -13,22 +20,32 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
     SlackAppCreationForbiddenError,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (
+from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (  # noqa: E501
+    PROVED_BY_INSTALL,
     SlackManagerRepository,
 )
-from app.modules.agent_surfaces.services.slack_manager_context import (
-    verify_person_link,
+from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+    SurfaceRepository,
 )
-from app.modules.connectors.contracts.own_apps import may_manage_installs
+from app.modules.agent_surfaces.services.slack_person_proof import record_proof
+from app.modules.connectors.contracts.own_apps import (
+    grant_is_browser_bound,
+    may_manage_installs,
+)
+from app.modules.connectors.contracts.retirement import retire_accounts
 from app.modules.connectors.contracts.surfaces import (
     account_with_secrets,
     auth_config,
 )
+
+logger = get_logger(__name__)
 
 _SYSTEM_DEFAULT = "SYSTEM_DEFAULT"
 
@@ -37,6 +54,15 @@ _SYSTEM_DEFAULT = "SYSTEM_DEFAULT"
 class ManagedWorkspace:
     team_id: str
     team_name: str | None
+
+
+@dataclass(frozen=True)
+class BoundWorkspace(ManagedWorkspace):
+    install_id: UUID
+    #: The workspace was not bound before: a first install, or one after Lemma
+    #: was removed from it.
+    created: bool
+    installer_slack_user_id: str | None
 
 
 def _raw(credentials: dict[str, object]) -> dict[str, object]:
@@ -51,8 +77,15 @@ def _nested_id(raw: dict[str, object], key: str) -> str:
 
 async def _lemma_app_grant(
     uow: SqlAlchemyUnitOfWork, *, user_id: UUID, organization_id: UUID, account_id: UUID
-) -> tuple[UUID, dict[str, object]]:
-    """The account's OAuth grant, if it is this person's grant of Lemma's own app."""
+) -> dict[str, object]:
+    """The account's OAuth answer, if it is this person's grant of Lemma's own app."""
+    expected_app = surface_settings.slack_app_id
+    if not expected_app:
+        # No app id, no way to tell Lemma's app from anybody's: no manager.
+        raise AgentSurfaceValidationError(
+            "This Lemma has no Slack app of its own configured, so it can't "
+            "manage a workspace."
+        )
     found = await account_with_secrets(uow, account_id)
     # "Not yours" and "not there" read the same, as everywhere else accounts are bound.
     if (
@@ -69,17 +102,16 @@ async def _lemma_app_grant(
         else None
     )
     raw = _raw(credentials)
-    expected_app = surface_settings.slack_app_id
     if (
         install is None
         or install.config_source != _SYSTEM_DEFAULT
-        or (expected_app and str(raw.get("app_id") or "") != expected_app)
+        or str(raw.get("app_id") or "") != expected_app
     ):
         raise AgentSurfaceValidationError(
             "That account is for a Slack app of your own, not Lemma's. A teammate's "
             "own app is added from the teammate; Lemma's app manages them."
         )
-    return account.id, raw
+    return raw
 
 
 def _workspace_of(raw: dict[str, object]) -> tuple[str, str | None, str]:
@@ -103,18 +135,24 @@ async def bind_manager(
     user_id: UUID,
     organization_id: UUID,
     account_id: UUID,
-) -> ManagedWorkspace:
-    """Bind the workspace this account authorised Lemma's app in to the organization."""
+) -> BoundWorkspace:
+    """Bind the workspace this account authorised Lemma's app in to the
+    organization, and record its installer. Commits."""
     if not await may_manage_installs(
         uow, user_id=user_id, organization_id=organization_id
     ):
         raise SlackAppCreationForbiddenError()
-    account_id, raw = await _lemma_app_grant(
+    raw = await _lemma_app_grant(
         uow, user_id=user_id, organization_id=organization_id, account_id=account_id
     )
+    if not await grant_is_browser_bound(uow, account_id=account_id):
+        raise AgentSurfaceValidationError(
+            "Slack's Allow finished in a browser that wasn't signed in to Lemma "
+            "as you. Connect Lemma's app again from this browser."
+        )
     team_id, team_name, bot_user_id = _workspace_of(raw)
     repo = SlackManagerRepository(uow.session)
-    await repo.save_install(
+    claimed = await repo.claim_install(
         team_id=team_id,
         team_name=team_name,
         organization_id=organization_id,
@@ -122,13 +160,42 @@ async def bind_manager(
         bot_user_id=bot_user_id,
         installed_by_user_id=user_id,
     )
-    installer = _nested_id(raw, "authed_user")
+    superseded = claimed.superseded_account_id
+    if superseded is not None and not await SurfaceRepository(
+        uow
+    ).get_by_platform_and_account_id(
+        platform=SurfacePlatform.SLACK.value, account_id=superseded
+    ):
+        # The workspace's earlier grant of Lemma's app, which only the
+        # binding used: its token goes with it. One a pod still answers
+        # through (the older arrangement, Lemma's app as a pod's bot) stays.
+        await retire_accounts(
+            uow.session, connector_id="slack", account_ids=[superseded]
+        )
+    installer = _nested_id(raw, "authed_user") or None
     if installer:
-        await repo.link_person(
-            team_id=team_id, slack_user_id=installer, user_id=user_id
+        await record_proof(
+            uow,
+            team_id=team_id,
+            slack_user_id=installer,
+            user_id=user_id,
+            proved_by=PROVED_BY_INSTALL,
         )
     await uow.commit()
-    return ManagedWorkspace(team_id=team_id, team_name=team_name)
+    logger.info(
+        "agent_surfaces.slack_manager.bound",
+        team_id=team_id,
+        organization_id=str(organization_id),
+        created=claimed.created,
+        superseded=claimed.superseded_account_id is not None,
+    )
+    return BoundWorkspace(
+        team_id=team_id,
+        team_name=claimed.team_name,
+        install_id=claimed.install_id,
+        created=claimed.created,
+        installer_slack_user_id=installer,
+    )
 
 
 async def manages_workspace(uow: SqlAlchemyUnitOfWork, team_id: str) -> bool:
@@ -148,95 +215,3 @@ async def managed_workspaces(
         ManagedWorkspace(team_id=row.team_id, team_name=row.team_name)
         for row in installs
     ]
-
-
-@dataclass(frozen=True)
-class PersonLinkPreview:
-    """Who a link would connect, shown before anything is connected."""
-
-    team_id: str
-    team_name: str | None
-    slack_user_name: str | None
-
-
-async def preview_person_link(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    team_id: str,
-    slack_user_id: str,
-    expires: int,
-    signature: str,
-) -> PersonLinkPreview:
-    """Check a link and say whose Slack account it is, connecting nothing.
-
-    The page asks this first and connects only when the person says "that's
-    me": a link sent by somebody else would otherwise connect *their* Slack
-    account to whoever opened it, signed in, without a word.
-    """
-    from app.modules.agent_surfaces.platforms.slack.workspace_calls import user_profile
-    from app.modules.agent_surfaces.services.slack_manager_context import load_context
-
-    if not verify_person_link(
-        team_id=team_id,
-        slack_user_id=slack_user_id,
-        expires=expires,
-        signature=signature,
-    ):
-        raise AgentSurfaceValidationError(
-            "That link has expired. Open Lemma's Home tab in Slack and connect again."
-        )
-    ctx = await load_context(uow, team_id=team_id, slack_user_id=None)
-    if ctx is None:
-        raise AgentSurfaceValidationError(
-            "Lemma isn't installed in that Slack workspace."
-        )
-    profile = await user_profile(ctx.credentials, slack_user_id)
-    details = profile.get("profile")
-    details = details if isinstance(details, dict) else {}
-    name = next(
-        (
-            str(value).strip()
-            for value in (
-                details.get("real_name"),
-                details.get("display_name"),
-                profile.get("name"),
-            )
-            if isinstance(value, str) and value.strip()
-        ),
-        None,
-    )
-    return PersonLinkPreview(
-        team_id=team_id, team_name=ctx.install.team_name, slack_user_name=name
-    )
-
-
-async def link_person(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    user_id: UUID,
-    team_id: str,
-    slack_user_id: str,
-    expires: int,
-    signature: str,
-) -> ManagedWorkspace:
-    """Record that the signed-in person is the Slack user whose Home showed the link."""
-    if not verify_person_link(
-        team_id=team_id,
-        slack_user_id=slack_user_id,
-        expires=expires,
-        signature=signature,
-    ):
-        raise AgentSurfaceValidationError(
-            "That link has expired. Open Lemma's Home tab in Slack and connect again."
-        )
-    repo = SlackManagerRepository(uow.session)
-    install = await repo.install_for_team(team_id)
-    if install is None:
-        raise AgentSurfaceValidationError(
-            "Lemma isn't installed in that Slack workspace."
-        )
-    await repo.link_person(
-        team_id=team_id, slack_user_id=slack_user_id, user_id=user_id
-    )
-    await uow.commit()
-    return ManagedWorkspace(team_id=team_id, team_name=install.team_name)

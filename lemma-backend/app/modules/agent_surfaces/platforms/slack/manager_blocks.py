@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 ACTION_PREFIX = "lemma_mgr_"
-#: Opens the "Add to Slack" modal for one teammate. Value: the pod id.
+#: Opens the "Add to Slack" modal for one teammate. Value: ``pod_id:agent_id``.
 ADD_ACTION_ID = "lemma_mgr_add"
 #: Brings a teammate into the channel the manager was invited to.
 #: Value: ``{"channel": …, "surface": …}``.
@@ -42,9 +42,10 @@ _TITLE = "Add to Slack"
 
 @dataclass(frozen=True)
 class RosterEntry:
-    """One teammate on the manager's Home tab."""
+    """One teammate on the manager's Home tab: one agent of one pod."""
 
     pod_id: str
+    agent_id: str
     name: str
     #: The teammate's bot user, when it is already in this workspace.
     bot_user_id: str | None = None
@@ -54,6 +55,20 @@ class RosterEntry:
 
 def _text(text: str) -> dict[str, object]:
     return {"type": "mrkdwn", "text": text}
+
+
+def escape(text: str) -> str:
+    """A name as mrkdwn shows it, not as markup: Slack's three control characters."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def teammate_value(pod_id: object, agent_id: object) -> str:
+    """What an "Add to Slack" button carries: which teammate it is."""
+    return f"{pod_id}:{agent_id}"
+
+
+def modal_metadata(pod_id: object, agent_id: object) -> dict[str, str]:
+    return {"pod": str(pod_id or ""), "agent": str(agent_id or "")}
 
 
 def _plain(text: str) -> dict[str, object]:
@@ -77,8 +92,11 @@ def _home(blocks: list[dict[str, object]]) -> dict[str, object]:
 
 
 def connect_home(*, link_url: str, team_name: str | None) -> dict[str, object]:
-    """For someone Lemma does not know yet: one way forward, signing in once."""
-    where = f" in {team_name}" if team_name else ""
+    """For someone Lemma does not know yet: one way forward, signing in once.
+
+    ``link_url`` opens Lemma, which asks them to sign in with Slack: Slack
+    itself then says which Slack user they are."""
+    where = f" in {escape(team_name)}" if team_name else ""
     return _home(
         [
             {"type": "header", "text": _plain("Lemma")},
@@ -96,7 +114,10 @@ def connect_home(*, link_url: str, team_name: str | None) -> dict[str, object]:
             {
                 "type": "context",
                 "elements": [
-                    _text("You sign in to Lemma once. After that I know it's you.")
+                    _text(
+                        "You sign in to Lemma, then with Slack, once. After that "
+                        "I know it's you."
+                    )
                 ],
             },
         ]
@@ -111,7 +132,8 @@ def outsider_home(*, organization_name: str, link_url: str) -> dict[str, object]
             {
                 "type": "section",
                 "text": _text(
-                    f"This workspace belongs to *{organization_name}* on Lemma, and "
+                    f"This workspace belongs to *{escape(organization_name)}* on "
+                    "Lemma, and "
                     "your Lemma account isn't in it. Ask an owner to invite you."
                 ),
             },
@@ -139,6 +161,7 @@ def roster_home(
         {
             "type": "header",
             "text": _plain(f"Teammates in {team_name}" if team_name else "Teammates"),
+            # plain_text: no markup to escape.
         },
         {
             "type": "section",
@@ -168,11 +191,11 @@ def roster_home(
                 "type": "button",
                 "text": _plain("Add to Slack"),
                 "action_id": ADD_ACTION_ID,
-                "value": teammate.pod_id,
+                "value": teammate_value(teammate.pod_id, teammate.agent_id),
             }
         section: dict[str, object] = {
             "type": "section",
-            "text": _text(f"*{teammate.name}*\n{status}"),
+            "text": _text(f"*{escape(teammate.name)}*\n{status}"),
         }
         if accessory:
             section["accessory"] = accessory
@@ -216,7 +239,8 @@ def add_modal_with_lemma(*, name: str, metadata: dict[str, str]) -> dict[str, ob
             {
                 "type": "section",
                 "text": _text(
-                    f"Lemma makes *{name}*'s app and names it {name}. Then Slack "
+                    f"Lemma makes *{escape(name)}*'s app and names it {escape(name)}. "
+                    "Then Slack "
                     "asks you to allow it, and that's all."
                 ),
             }
@@ -264,7 +288,7 @@ def add_modal_by_hand(
             {
                 "type": "section",
                 "text": _text(
-                    f"*Or make it yourself.* Create {name}'s app from Lemma's "
+                    f"*Or make it yourself.* Create {escape(name)}'s app from Lemma's "
                     "manifest, install it, then paste three values from its _Basic "
                     "Information_ page."
                 ),
@@ -281,7 +305,7 @@ def working_modal(*, name: str, metadata: dict[str, str]) -> dict[str, object]:
     return _modal(
         metadata=metadata,
         submit=None,
-        blocks=[{"type": "section", "text": _text(f"Making {name}'s app…")}],
+        blocks=[{"type": "section", "text": _text(f"Making {escape(name)}'s app…")}],
     )
 
 
@@ -295,7 +319,8 @@ def allow_modal(
             {
                 "type": "section",
                 "text": _text(
-                    f"*{name}'s app is ready.* Allow it in Slack and {name} joins "
+                    f"*{escape(name)}'s app is ready.* Allow it in Slack and "
+                    f"{escape(name)} joins "
                     "this workspace. I'll tell you here when it's in."
                 ),
             },
@@ -308,7 +333,7 @@ def allow_modal(
                 "elements": [
                     _text(
                         "Slack takes the bot's picture only on its own page: "
-                        f"<{_app_page(app_id)}|add {name}'s picture>."
+                        f"<{_app_page(app_id)}|add {escape(name)}'s picture>."
                     )
                 ],
             },

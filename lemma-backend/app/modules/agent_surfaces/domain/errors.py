@@ -392,3 +392,29 @@ class SurfaceWebhookAuthenticationError(DomainError):
         super().__init__(
             detail, code="SURFACE_WEBHOOK_AUTH_FAILED", status_code=status_code
         )
+
+
+class SlackSignInError(AgentSurfaceError):
+    """Sign in with Slack could not prove who this person is in the workspace.
+
+    ``reason`` is a fixed token the web page turns into words, so nothing a
+    caller sent is ever echoed back.
+    """
+
+    REASONS = frozenset(
+        {
+            "expired",
+            "session_changed",
+            "other_slack_user",
+            "not_in_organization",
+            "not_installed",
+            "unavailable",
+            "cancelled",
+        }
+    )
+
+    def __init__(self, reason: str, message: str) -> None:
+        self.reason = reason if reason in self.REASONS else "unavailable"
+        super().__init__(
+            message=message, code="SLACK_SIGN_IN_REFUSED", status_code=422
+        )

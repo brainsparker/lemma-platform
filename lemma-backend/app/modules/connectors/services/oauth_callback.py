@@ -33,6 +33,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.work import facts
 from app.core.log.log import get_logger
 from app.modules.connectors.domain.account import (
     AccountEntity,
@@ -44,6 +45,7 @@ from app.modules.connectors.domain.connect_request import (
     ConnectRequestEntity,
     ConnectRequestStatus,
 )
+from app.modules.connectors.contracts.facts import ConnectorAccountConnected
 from app.modules.connectors.domain.connector import ConnectorEntity
 from app.modules.connectors.domain.errors import (
     ConnectRequestIdentityMismatchError,
@@ -70,8 +72,10 @@ from app.modules.connectors.services.connect_request_lifecycle import (
     followup_account_id,
     followup_identity,
     oldest_claimable_connect_request,
+    purpose_of,
     stored_code_verifier,
     stored_provider_state,
+    with_grant,
     without_spent_secrets,
 )
 from app.modules.connectors.services.install_provisioning import (
@@ -117,8 +121,15 @@ async def handle_oauth_callback(
     *,
     redirect_uri: str,
     state: str | None = None,
+    browser_user_id: UUID | None = None,
 ) -> AccountEntity:
-    """Turn a provider's redirect into a connected account."""
+    """Turn a provider's redirect into a connected account.
+
+    ``browser_user_id`` is whose Lemma session the returning browser carried,
+    if any. The request is completed by ``state`` alone either way; whether
+    the two match is recorded on the grant (``browser_bound``) for the modules
+    that treat a grant as proof of who the provider's user is.
+    """
     if not state:
         raise ConnectRequestStateRequiredError()
 
@@ -173,6 +184,8 @@ async def handle_oauth_callback(
         auth_config=auth_config,
         connector=connector,
         identity=identity,
+        browser_bound=browser_user_id is not None
+        and browser_user_id == pending_request.user_id,
     )
 
     # After the commit: an install whose token lives on the account can only be
@@ -399,8 +412,13 @@ async def _persist_account(
     auth_config: AuthConfigEntity,
     connector: ConnectorEntity,
     identity: _ConnectedIdentity,
+    browser_bound: bool = False,
 ) -> AccountEntity:
-    """The second short unit of work: store the outcome and close the request."""
+    """The second short unit of work: store the outcome and close the request.
+
+    Announces ``ConnectorAccountConnected`` in the same transaction, for a new
+    account and for one granted again alike.
+    """
     user_id = pending_request.user_id
     provider_account_id = identity.provider_account_id
 
@@ -438,6 +456,7 @@ async def _persist_account(
         # A successful (re-)auth restores the account to a usable state.
         account.status = AccountStatus.CONNECTED
         account = await service.account_repository.update(account)
+        renewed = True
     else:
         # A new identity is the default only if the user has no account yet.
         has_existing = await service.account_repository.get_by_user_and_auth_config(
@@ -457,9 +476,27 @@ async def _persist_account(
                 display_name=identity.display_name,
             )
         )
+        renewed = False
 
     pending_request.status = ConnectRequestStatus.SUCCESS
-    pending_request.attributes = without_spent_secrets(pending_request)
+    pending_request.attributes = with_grant(
+        without_spent_secrets(pending_request),
+        account_id=account.id,
+        browser_bound=browser_bound,
+    )
     await service.connect_request_repository.update(pending_request)
+    await facts.emit(
+        service.uow,
+        ConnectorAccountConnected(
+            account_id=account.id,
+            auth_config_id=auth_config.id,
+            connector_id=connector.id,
+            organization_id=pending_request.organization_id,
+            user_id=user_id,
+            purpose=purpose_of(pending_request),
+            browser_bound=browser_bound,
+            renewed=renewed,
+        ),
+    )
     await service.uow.commit()
     return account

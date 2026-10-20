@@ -14,6 +14,7 @@ class EventSpec:
 
 EVENT_CATALOG: dict[str, EventSpec] = {
     "logging.contract.violation": EventSpec("error"),
+    'agent.agent_host.artifact_blob_unavailable.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.agent_host.final_answer_read_failed.degraded': EventSpec('warning', frozenset()),
     'agent.agent_host.parked_run_suspended': EventSpec('info', frozenset({'agent_run_id', 'conversation_id', 'tool_name'})),
     'agent.agent_host_legacy.pairing_refused': EventSpec('info', frozenset()),
@@ -27,6 +28,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.agent_host_link.host_reported_error': EventSpec('warning', frozenset({'error_code', 'error_message', 'host_id'})),
     'agent.agent_host_link.interaction_push_lost.degraded': EventSpec('warning', frozenset({'conversation_id', 'tool_call_id'})),
     'agent.agent_host_link.notices_lost.degraded': EventSpec('warning', frozenset({'host_id'})),
+    'agent.agent_host_link.old_host_transfer_unavailable.degraded': EventSpec('warning', frozenset({'host_id', 'method'})),
     'agent.agent_host_link.op_answered.diagnostic': EventSpec('debug', frozenset({'host_id', 'method', 'ok'})),
     'agent.agent_host_link.op_claim_unavailable.degraded': EventSpec('warning', frozenset({'op_id'})),
     'agent.agent_host_link.op_notice_unreadable': EventSpec('warning', frozenset({'host_id'})),
@@ -43,8 +45,11 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.agent_host_link.tool_call_unavailable.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent.agent_host_link.tool_call_unrecorded.degraded': EventSpec('warning', frozenset()),
     'agent.agent_host_ops.request_unavailable.degraded': EventSpec('warning', frozenset({'host_id', 'method'})),
+    'agent.agent_host_ops.transfer_discard_skipped.degraded': EventSpec('warning', frozenset()),
+    'agent.agent_host_ops.transfer_unavailable.degraded': EventSpec('warning', frozenset({'host_id', 'method'})),
     'agent.agent_host_profile_refresh.profile_refreshed': EventSpec('info', frozenset({'harness_id', 'pinned_model_withdrawn', 'profile_id'})),
     'agent.agent_host_profile_refresh.unreadable_profile_skipped.degraded': EventSpec('warning', frozenset({'harness_id', 'profile_id'})),
+    'agent.agent_host_transfer.refused': EventSpec('info', frozenset({'host_id', 'refusal', 'route'})),
     'agent.agent_runner_service.agent_run_cancelled_timeout_or.timeout': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),
     'agent.agent_runner_service.agent_run_finalization_run_s.failed': EventSpec('error', frozenset({'agent_run_id'})),

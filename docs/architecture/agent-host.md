@@ -615,8 +615,9 @@ say why here.
 The host talks to Lemma over **one WebSocket per paired workspace**, opened by
 the host to `wss://<api>/agent-host/link`. It is still outbound only, so the
 machine needs no inbound port. Everything travels on it: commands down, events,
-checkpoints and harnesses up, and the Lemma MCP tool calls the agent makes.
-There is no HTTP API for the host any more.
+checkpoints and harnesses up, and the Lemma MCP tool calls the agent makes --
+everything but bulk bytes, which go over HTTP beside it
+([Bulk bytes](#bulk-bytes)).
 
 It replaced a 25-second HTTP long-poll plus one POST per streamed event. The
 poll was cheap: about 2.4 requests a minute, woken early by a Redis poke. The
@@ -717,6 +718,52 @@ protocol violation.
 | 4408 | no frame from the host for `heartbeat_ms × 3` | reconnects |
 | 4409 | superseded by a newer connection for this host | stops this connection. A link that lasted a minute or more was a hand-over and is reopened at once; one superseded sooner is another host holding the same credential, so each consecutive one waits longer (0.5 s doubling to 5 minutes) instead of taking the link back for ever |
 | 4426 | the host's protocol is too old | reports `upgrade required` and stops; Desktop's updater takes over |
+
+### Bulk bytes
+
+The API reads no websocket message past 1 MiB (`WS_MAX_BYTES`,
+`app/core/server_limits.py`) and closes the socket with 1009 on a larger one
+-- every run's frames with it, and the next connection would be sent the same
+frame again. So bulk bytes never ride the link. They go over two HTTP routes
+beside it, authenticated exactly as the link is (`Authorization: Bearer <host
+secret>`), outside the OpenAPI schema like the link
+(`agent_host_transfer_controller.py`; `link/transfer.rs` on the host):
+
+| Route | What | Refused with |
+|---|---|---|
+| `GET /agent-host/transfers/{id}` | a `file.write` chunk Lemma staged for this host's op | 404 not this host's, unknown or expired; 409 already fetched |
+| `PUT /agent-host/transfers/{id}` | a `file.read` chunk, into the slot the op named; SHA-256 in `x-lemma-sha256` | 404; 409 already delivered; 413 past the slot's `max_bytes`; 422 digest |
+| `PUT /agent-host/runs/{run_id}/blobs/{sha256}` | an image a run's event names, before the event is sent | 404 a run this host does not hold; 413 past 5 MiB; 422 digest |
+
+Any route answers 401 to a missing, unknown or revoked secret. A transfer is
+one op's, used once, and lives until a minute past the op's deadline; the bytes
+wait in Redis, which already carried them inside the op messages before. A
+blob is kept as long as the run's event stream (24 hours), since the event
+naming it is read from there, and putting it again on a replay is harmless.
+
+The event names an uploaded image in place of its data: `{"type": "image",
+"mimeType": …, "lemma_blob": {"sha256", "size"}}` (or a resource's
+`resource.lemma_blob` in place of `blob`). Lemma saves it to pod files as it
+did the inline image. The host only changes the copy it sends: the journal
+keeps the agent's event, so a replay uploads again rather than naming a blob
+that may have expired.
+
+What still rides the link is bounded on the host:
+
+- an `events` frame by bytes as well as count: a batch closes before 512 KiB
+  (`EVENT_BATCH_MAX_BYTES`), and an event still past that once its
+  attachments are out has its longest strings cut, marked as cut, rather than
+  the run's transcript lost to a refused batch (`runtime/event_payloads.rs`);
+- an `op` answer and any request: a frame past 1 MiB is refused before it is
+  sent -- `FRAME_TOO_LARGE`, a rejection of that one request -- and an op
+  answer that large becomes a `too_large` failure.
+
+A Desktop released before this sends images inline and ignores `max_bytes`.
+Its batches of 256 events can pass 1 MiB, and then its link closes with 1009
+and the same batch is sent again on every reconnect: event delivery from that
+computer stalls behind it until Desktop is updated. Its file reads and writes still work, because
+its link session moves the data for it ([Host execution on
+Desktop](desktop-host-execution.md#4-the-op-frames)).
 
 ### Heartbeat and liveness
 

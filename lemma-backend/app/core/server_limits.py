@@ -15,8 +15,10 @@ image also sets ``UVICORN_WS_MAX_SIZE`` for a command that leaves the flag out.
 Why 1 MiB: nothing a client means to send is larger. Files and other bulk
 bytes travel over the HTTP API, never a socket -- a socket carries what
 changed, not what was stored. That includes the Agent Host link
-(``/agent-host/link``): a host that sends a larger message is closed with 1009
-and must move those bytes to the API.
+(``/agent-host/link``): file chunks and run-event images cross
+``/agent-host/transfers/{id}`` and ``/agent-host/runs/{run_id}/blobs/{sha256}``
+(``agent.domain.agent_host_transfer``), and the host bounds what remains on
+the socket. A host that sends a larger message is closed with 1009.
 """
 
 from __future__ import annotations

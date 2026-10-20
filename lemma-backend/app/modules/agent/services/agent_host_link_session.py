@@ -404,6 +404,9 @@ class AgentHostLinkSession:
             raise LinkClose(LinkCloseCode.UPGRADE_REQUIRED, "upgrade required")
         self._host, self._hello, self._capacity = host, body.hello, body.capacity
         self._ownership.generation = host.link_generation
+        self.ops.host_moves_transfers = bool(
+            body.host_execution and body.host_execution.transfers
+        )
         await self._writer.send_frame(
             ServerFrameType.WELCOME,
             WelcomeBody(

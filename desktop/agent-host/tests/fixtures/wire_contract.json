@@ -457,8 +457,21 @@
       "keys": [
         "enabled",
         "platform",
-        "available"
+        "available",
+        "transfers"
       ]
     }
+  },
+  "bulk_bytes": {
+    "_why": "The API reads no websocket message past max_message_bytes and closes the link with 1009 on one. File chunks and event attachments cross HTTP instead, at transfer_path and blob_path, under the host secret; what still rides the link is bounded by inline_data_bytes and event_batch_max_bytes.",
+    "max_message_bytes": 1048576,
+    "event_batch_max_bytes": 524288,
+    "inline_data_bytes": 262144,
+    "transfer_max_bytes": 1048576,
+    "blob_max_bytes": 5242880,
+    "transfer_path": "/agent-host/transfers/{transfer_id}",
+    "blob_path": "/agent-host/runs/{run_id}/blobs/{sha256}",
+    "digest_header": "x-lemma-sha256",
+    "blob_field": "lemma_blob"
   }
 }

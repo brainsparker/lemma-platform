@@ -20,8 +20,9 @@ use uuid::Uuid;
 
 use super::protocol::{
     CommandsBody, ControlBody, ControlOkBody, ErrorBody, EventsOkBody, Frame, HarnessesBody,
-    HarnessesOkBody, HelloBody, InteractionOkBody, InteractionWaitBody, LINK_PATH, McpBody,
-    McpOkBody, OpBody, OpOkBody, PublishedHarness, ReconnectBody, WelcomeBody, close, host, server,
+    HarnessesOkBody, HelloBody, InteractionOkBody, InteractionWaitBody, LINK_PATH,
+    MAX_MESSAGE_BYTES, McpBody, McpOkBody, OpBody, OpOkBody, PublishedHarness, ReconnectBody,
+    WelcomeBody, close, host, server,
 };
 use crate::host_exec::wire::{OP_FAILED, OpFailure, kind};
 use crate::protocol::{Command, EventAck, EventBatch, HarnessSnapshot, HostCapacity, HostHello};
@@ -275,6 +276,7 @@ impl LinkHandle {
         };
         let text = serde_json::to_string(&frame)
             .map_err(|error| LinkError::Protocol(error.to_string()))?;
+        too_large(kind, &text)?;
         let (answer, answered) = oneshot::channel();
         self.pending
             .lock()
@@ -759,7 +761,7 @@ fn dispatch_op(
             },
         };
         // A link that closed, or was abandoned, meanwhile has nobody to tell.
-        if let (Ok(text), Some(outgoing)) = (serde_json::to_string(&answer), outgoing.upgrade()) {
+        if let (Some(text), Some(outgoing)) = (bounded_answer(answer), outgoing.upgrade()) {
             let _ = outgoing.send(Outgoing::Frame(text));
         }
     });
@@ -784,6 +786,63 @@ fn push_from(frame: Frame) -> Option<Push> {
             None
         }
     }
+}
+
+/// The code a request too large to send is refused with, here, before it
+/// reaches the socket.
+pub const FRAME_TOO_LARGE: &str = "FRAME_TOO_LARGE";
+
+/// Refuse a frame Lemma would not read.
+///
+/// Lemma's API closes the socket with 1009 on a message past
+/// [`MAX_MESSAGE_BYTES`], which fails every request on the link -- every run's
+/// events, every tool call -- and the next connection would be sent the same
+/// frame again. Refused here, it is one request that fails, as a rejection of
+/// that request alone.
+fn too_large(kind: &str, text: &str) -> Result<(), LinkError> {
+    if text.len() <= MAX_MESSAGE_BYTES {
+        return Ok(());
+    }
+    tracing::warn!(
+        kind,
+        bytes = text.len(),
+        "refused to send a frame larger than Lemma reads"
+    );
+    Err(LinkError::Rejected {
+        code: FRAME_TOO_LARGE.to_owned(),
+        message: format!(
+            "a {kind} frame of {} bytes is larger than the {MAX_MESSAGE_BYTES} bytes Lemma reads",
+            text.len()
+        ),
+        retryable: false,
+    })
+}
+
+/// An op answer that would not fit in a frame, said as one that does.
+fn bounded_answer(answer: Frame) -> Option<String> {
+    let text = serde_json::to_string(&answer).ok()?;
+    if text.len() <= MAX_MESSAGE_BYTES {
+        return Some(text);
+    }
+    tracing::warn!(
+        bytes = text.len(),
+        "an op answer was larger than Lemma reads; answering too_large instead"
+    );
+    serde_json::to_string(&Frame {
+        kind: host::ERROR.to_owned(),
+        id: None,
+        re: answer.re,
+        body: serde_json::to_value(ErrorBody {
+            code: OP_FAILED.to_owned(),
+            message: format!(
+                "the answer was larger than the {MAX_MESSAGE_BYTES} bytes Lemma reads"
+            ),
+            retryable: false,
+            detail: Some(serde_json::json!({ "kind": kind::TOO_LARGE })),
+        })
+        .unwrap_or_default(),
+    })
+    .ok()
 }
 
 /// A secret that would split a header line is refused before it is sent.

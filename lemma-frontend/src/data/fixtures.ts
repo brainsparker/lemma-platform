@@ -3025,6 +3025,19 @@ export const fixtureSource: PodSource = {
         // The sample has no Slack: come straight back as if it said yes.
         return `/slack/connect?connected=1&team=${encodeURIComponent(link.teamId)}`;
     },
+    async slackInstallAvailable() {
+        await wait(200);
+        return true;
+    },
+    async ensureFirstWorkspace() {
+        await wait(400);
+        return { orgId: ORGS[0].id };
+    },
+    async startSlackInstall() {
+        await wait(400);
+        // The sample has no Slack: come straight back as if it said yes.
+        return "/slack/installed?connect=connected&connector=slack";
+    },
     async addCustomApp() {
         await wait(600);
         return "authcfg-sample";

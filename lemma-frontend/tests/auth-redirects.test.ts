@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { asksForDestination, rawDestination, safeDestinationIn, authLink, landing, rememberDestination, storedDestination, newOrganizationLink, afterNewOrganizationIn, installsTemplate, type Where } from "../src/auth/redirects.ts";
+import { asksForDestination, rawDestination, safeDestinationIn, authLink, landing, rememberDestination, storedDestination, newOrganizationLink, afterNewOrganizationIn, installsTemplate, addsToSlack, type Where } from "../src/auth/redirects.ts";
 
 /** Where a sign-in may put somebody down.
  *
@@ -165,4 +165,12 @@ test("a sign-in on its way to an install is told apart from any other", () => {
     assert.equal(installsTemplate("https://app.example.test/import/github/ada-member/ledger-pod", HERE.origin), true);
     assert.equal(installsTemplate("/t/marketing"), false);
     assert.equal(installsTemplate(null), false);
+});
+
+test("a sign-in on its way to add Lemma to Slack is greeted as a newcomer too", () => {
+    assert.equal(addsToSlack("/slack/install"), true);
+    assert.equal(addsToSlack("https://app.example.test/slack/install/", HERE.origin), true);
+    // Where Slack's consent comes back to is not a first arrival.
+    assert.equal(addsToSlack("/slack/installed"), false);
+    assert.equal(addsToSlack(null), false);
 });

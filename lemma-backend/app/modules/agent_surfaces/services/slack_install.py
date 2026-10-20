@@ -76,6 +76,18 @@ class SlackNotSetUpError(AgentSurfaceValidationError):
         self.code = "SLACK_NOT_SET_UP"
 
 
+class SlackInstallForbiddenError(SlackAppCreationForbiddenError):
+    """Adding the organization's installs is an owner's or editor's -- which a
+    person who joined a company's organization by its email domain is not."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.message = (
+            "Only an owner or editor of this organization can add Lemma to "
+            "Slack. Ask one of them to, or pick an organization you manage."
+        )
+
+
 async def install_available(uow: SqlAlchemyUnitOfWork) -> bool:
     """Whether "Add to Slack" can work here: Lemma's own Slack app has a client
     to send people to Slack with, and an app id to know its grants by."""
@@ -97,7 +109,7 @@ async def start_slack_install(
     if not await may_manage_installs(
         uow, user_id=user_id, organization_id=organization_id
     ):
-        raise SlackAppCreationForbiddenError()
+        raise SlackInstallForbiddenError()
     install_id = await ensure_system_install(
         uow, user_id=user_id, organization_id=organization_id, connector_id="slack"
     )

@@ -301,6 +301,24 @@ async def test_the_grant_coming_back_adopts_the_workspace_and_welcomes_once(
     assert len(_welcomes(fake_slack)) == 1
 
 
+async def test_cancelling_on_slack_comes_back_to_the_install_page(
+    authenticated_client, fixed_test_org, slack_set_up
+):
+    started = await _add_to_slack(authenticated_client, fixed_test_org["id"])
+    state = parse_qs(urlsplit(started.json()["authorization_url"]).query)["state"][0]
+
+    response = await authenticated_client.get(
+        f"{CALLBACK}?{urlencode({'state': state, 'error': 'access_denied'})}"
+    )
+
+    assert response.status_code == 303, response.text
+    landed = urlsplit(response.headers["location"])
+    # Where the person began, not the app root, with a code the page words.
+    assert landed.path == "/slack/installed"
+    query = parse_qs(landed.query)
+    assert (query["connect"], query["code"]) == (["error"], ["OAUTH_PROVIDER_ERROR"])
+
+
 async def test_an_ordinary_slack_connect_adopts_nothing_and_says_nothing(
     authenticated_client,
     async_client,

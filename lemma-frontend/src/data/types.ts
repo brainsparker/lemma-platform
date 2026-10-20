@@ -709,6 +709,16 @@ export interface PodSource {
     /** Start Sign in with Slack, to prove the signed-in person is the Slack
      *  user their App Home's link was for. Returns Slack's page to open. */
     startSlackSignIn(link: SlackPersonLink): Promise<string>;
+    /** Whether Lemma's own Slack app is set up on this server, so "Add to
+     *  Slack" can work. Asked before anybody is given an organization for it. */
+    slackInstallAvailable(): Promise<boolean>;
+    /** An organization and first teammate for somebody who has none -- the
+     *  server's own first-workspace provisioning (invitations honoured, a
+     *  company domain joined). Returns the organization. */
+    ensureFirstWorkspace(): Promise<{ orgId: string }>;
+    /** Slack's consent page for Lemma's own app, for "Add to Slack" into
+     *  this organization. */
+    startSlackInstall(orgId: string): Promise<string>;
     /** Register an app the organization made itself, so its credentials are
      *  what the authorisation runs against. Returns the auth config to
      *  authorise. */

@@ -85,7 +85,9 @@ drops some of the install's own authorize parameters for one request (Slack's
 `own_apps.ensure_system_install` finds or makes an organization's
 `SYSTEM_DEFAULT` install the way the web app's Connect does. Two first installs
 of one connector at once collide on being its default, which is a
-`ConnectorConflictError` like a taken name, never a 500. The analytics
+`ConnectorConflictError` like a taken name, never a 500. A refusal on the
+provider's own page (`?error=`) returns to the request's recorded return path,
+like a success, rather than to the app root. The analytics
 `connector.connected` event is a projection, not this contract. Credential
 accounts made without an OAuth round trip do not emit it.
 

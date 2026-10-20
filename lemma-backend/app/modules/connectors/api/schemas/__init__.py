@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationSummary,
@@ -301,9 +301,17 @@ class AuthConfigCreateSchema(BaseModel):
             "connector offers only one."
         ),
     )
-    config_source: AuthConfigSource = AuthConfigSource.SYSTEM_DEFAULT
+    config_source: str = "SYSTEM_DEFAULT"
     config: Optional[Dict[str, Any]] = None
     name: Optional[str] = None
+
+    @field_validator("config_source")
+    @classmethod
+    def _a_known_source(cls, value: str) -> str:
+        # A string on the wire, as clients have always sent it; anything but a
+        # known source is the request's mistake (422), not the service's (500).
+        AuthConfigSource(value)
+        return value
 
 
 class AuthConfigResponseSchema(BaseSchema):

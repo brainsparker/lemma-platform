@@ -9,6 +9,7 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.channel_response import ChannelResponse
     from ..models.inbox_item import InboxItem
     from ..models.inbox_totals import InboxTotals
 
@@ -21,17 +22,28 @@ class InboxResponse:
     """
     Attributes:
         totals (InboxTotals):
+        contacts (list[ChannelResponse] | Unset): Contacts waiting on a reply, most recently active first: those asking
+            for a person, and those assigned to the reader the contact wrote to last. Only for a reader who may see
+            contacts.
         mentions (list[InboxItem] | Unset): Unread lines naming the reader, newest first.
         waiting (list[InboxItem] | Unset): Questions waiting on the reader, newest first.
     """
 
     totals: InboxTotals
+    contacts: list[ChannelResponse] | Unset = UNSET
     mentions: list[InboxItem] | Unset = UNSET
     waiting: list[InboxItem] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         totals = self.totals.to_dict()
+
+        contacts: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.contacts, Unset):
+            contacts = []
+            for contacts_item_data in self.contacts:
+                contacts_item = contacts_item_data.to_dict()
+                contacts.append(contacts_item)
 
         mentions: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.mentions, Unset):
@@ -54,6 +66,8 @@ class InboxResponse:
                 "totals": totals,
             }
         )
+        if contacts is not UNSET:
+            field_dict["contacts"] = contacts
         if mentions is not UNSET:
             field_dict["mentions"] = mentions
         if waiting is not UNSET:
@@ -63,11 +77,21 @@ class InboxResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.channel_response import ChannelResponse
         from ..models.inbox_item import InboxItem
         from ..models.inbox_totals import InboxTotals
 
         d = dict(src_dict)
         totals = InboxTotals.from_dict(d.pop("totals"))
+
+        _contacts = d.pop("contacts", UNSET)
+        contacts: list[ChannelResponse] | Unset = UNSET
+        if _contacts is not UNSET:
+            contacts = []
+            for contacts_item_data in _contacts:
+                contacts_item = ChannelResponse.from_dict(contacts_item_data)
+
+                contacts.append(contacts_item)
 
         _mentions = d.pop("mentions", UNSET)
         mentions: list[InboxItem] | Unset = UNSET
@@ -89,6 +113,7 @@ class InboxResponse:
 
         inbox_response = cls(
             totals=totals,
+            contacts=contacts,
             mentions=mentions,
             waiting=waiting,
         )

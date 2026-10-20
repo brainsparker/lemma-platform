@@ -10,5 +10,5 @@ import type { NotifyLevel } from './NotifyLevel.js';
 export type MyMembershipUpdate = {
     muted_until?: (string | null);
     notify?: (NotifyLevel | null);
-    notify_via?: (Array<string> | null);
+    notify_via?: (Array<'EMAIL' | 'SLACK' | 'TEAMS' | 'WHATSAPP' | 'TELEGRAM' | 'RESEND'> | null);
 };

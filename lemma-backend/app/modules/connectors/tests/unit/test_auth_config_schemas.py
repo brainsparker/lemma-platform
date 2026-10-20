@@ -30,4 +30,4 @@ def test_an_unknown_config_source_is_refused_before_it_reaches_the_service():
     with pytest.raises(ValidationError):
         AuthConfigCreateSchema(connector_id="github", config_source="CUSTOM")
     made = AuthConfigCreateSchema(connector_id="github", config_source="ORG_CUSTOM")
-    assert made.config_source is AuthConfigSource.ORG_CUSTOM
+    assert made.config_source == AuthConfigSource.ORG_CUSTOM

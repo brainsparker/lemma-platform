@@ -40,6 +40,26 @@ def _parse_response(
 
         return response_200
 
+    if response.status_code == 400:
+        response_400 = ErrorResponse.from_dict(response.json())
+
+        return response_400
+
+    if response.status_code == 403:
+        response_403 = ErrorResponse.from_dict(response.json())
+
+        return response_403
+
+    if response.status_code == 404:
+        response_404 = ErrorResponse.from_dict(response.json())
+
+        return response_404
+
+    if response.status_code == 409:
+        response_409 = ErrorResponse.from_dict(response.json())
+
+        return response_409
+
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
 
@@ -72,8 +92,10 @@ def sync_detailed(
 ) -> Response[DeliveryResponse | ErrorResponse]:
     """Retry Delivery
 
-     Try a failed or given-up send again, now: for who wrote the line, or
-    may change the channel.
+     Try a failed or given-up send again, now. A send to a place: for who
+    wrote the line, or may change the channel -- anybody else who reads the
+    line is refused. A push to a member: theirs alone, as only they see it.
+    It is one more try: a send that fails again on its last is given up.
 
     Args:
         pod_id (UUID):
@@ -113,8 +135,10 @@ def sync(
 ) -> DeliveryResponse | ErrorResponse | None:
     """Retry Delivery
 
-     Try a failed or given-up send again, now: for who wrote the line, or
-    may change the channel.
+     Try a failed or given-up send again, now. A send to a place: for who
+    wrote the line, or may change the channel -- anybody else who reads the
+    line is refused. A push to a member: theirs alone, as only they see it.
+    It is one more try: a send that fails again on its last is given up.
 
     Args:
         pod_id (UUID):
@@ -149,8 +173,10 @@ async def asyncio_detailed(
 ) -> Response[DeliveryResponse | ErrorResponse]:
     """Retry Delivery
 
-     Try a failed or given-up send again, now: for who wrote the line, or
-    may change the channel.
+     Try a failed or given-up send again, now. A send to a place: for who
+    wrote the line, or may change the channel -- anybody else who reads the
+    line is refused. A push to a member: theirs alone, as only they see it.
+    It is one more try: a send that fails again on its last is given up.
 
     Args:
         pod_id (UUID):
@@ -188,8 +214,10 @@ async def asyncio(
 ) -> DeliveryResponse | ErrorResponse | None:
     """Retry Delivery
 
-     Try a failed or given-up send again, now: for who wrote the line, or
-    may change the channel.
+     Try a failed or given-up send again, now. A send to a place: for who
+    wrote the line, or may change the channel -- anybody else who reads the
+    line is refused. A push to a member: theirs alone, as only they see it.
+    It is one more try: a send that fails again on its last is given up.
 
     Args:
         pod_id (UUID):

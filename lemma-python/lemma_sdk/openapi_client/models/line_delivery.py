@@ -15,7 +15,7 @@ T = TypeVar("T", bound="LineDelivery")
 
 @_attrs_define
 class LineDelivery:
-    """Where a line went outside Lemma, as its writer is shown on it.
+    """Where a line went outside Lemma, as everybody who reads it is shown.
 
     Attributes:
         id (UUID): The delivery; retry it by this id.

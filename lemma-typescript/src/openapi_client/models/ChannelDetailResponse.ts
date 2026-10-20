@@ -45,6 +45,10 @@ export type ChannelDetailResponse = {
     me?: MyMembershipResponse;
     members?: Array<ChannelMemberResponse>;
     /**
+     * A contact's channel: whether they asked the pod to stop writing to a handle of theirs -- lines to it are not sent until they write from it again (the contact's `identities` say which).
+     */
+    opted_out?: (boolean | null);
+    /**
      * Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP.
      */
     person?: (PersonRef | null);

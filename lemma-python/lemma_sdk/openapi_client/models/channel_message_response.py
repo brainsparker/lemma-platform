@@ -9,6 +9,9 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
+from ..models.channel_message_response_visibility import (
+    ChannelMessageResponseVisibility,
+)
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
@@ -34,11 +37,15 @@ class ChannelMessageResponse:
             of its contacts, or one of its agents. There is nobody else -- everybody
             outside the pod is a contact.
         seq (int): Its place in the channel's timeline.
-        client_message_id (None | str | Unset):
+        can_share (bool | Unset): The reader is the member an `asker_only` answer was made for, and may share it with
+            the channel (`…/messages/{id}/share`). Default: False.
+        client_message_id (None | str | Unset): On the reader's own line: the name their client gave it, as sent
+            (`client_message_id`, or `Idempotency-Key`).
         conversation_id (None | Unset | UUID):
         deleted (bool | Unset):  Default: False.
-        delivered (list[LineDelivery] | None | Unset): Only on the reader's own line: each place outside Lemma it went
-            to, and what became of it. Pushes to members are not listed here (`…/deliveries` has every send).
+        delivered (list[LineDelivery] | None | Unset): Each place outside Lemma the line went to, and what became of it
+            -- on every line the reader may read. Pushes to members are not listed here (`…/deliveries` has the writer's
+            every send).
         edited_at (datetime.datetime | None | Unset):
         last_reply_at (datetime.datetime | None | Unset):
         members_only (bool | Unset):  Default: False.
@@ -46,11 +53,17 @@ class ChannelMessageResponse:
             the answer was made with.
         parts (list[FilePart | LinkPart | MentionPart] | Unset):
         question (None | QuestionResponse | Unset):
+        removed_by (None | PersonRef | Unset): On a deleted line: the member who removed it, when that was not who wrote
+            it -- somebody who may change the channel.
         reply_count (int | Unset): On a thread's first line. Default: 0.
         reply_to_id (None | Unset | UUID):
+        shared_at (datetime.datetime | None | Unset): When the member it was made for shared it with the channel.
         source_id (None | Unset | UUID): Where it was said or sent; absent for a line only in Lemma.
         text (None | str | Unset): Absent where the line is withheld from the reader, or deleted.
         thread_root_id (None | Unset | UUID): The line this one is a reply in the thread of.
+        visibility (ChannelMessageResponseVisibility | Unset): `asker_only`: an agent's answer made with one member's
+            own access, read in full by that member alone; everybody else here is shown it `withheld`. `channel`: everybody
+            here reads it. Default: ChannelMessageResponseVisibility.CHANNEL.
         withheld (bool | Unset): An answer an agent made with another member's own access: the reader sees that it was
             given, and for whom, not what it said. Default: False.
     """
@@ -60,6 +73,7 @@ class ChannelMessageResponse:
     id: UUID
     sender: PersonRef
     seq: int
+    can_share: bool | Unset = False
     client_message_id: None | str | Unset = UNSET
     conversation_id: None | Unset | UUID = UNSET
     deleted: bool | Unset = False
@@ -70,11 +84,16 @@ class ChannelMessageResponse:
     on_behalf_of: None | PersonRef | Unset = UNSET
     parts: list[FilePart | LinkPart | MentionPart] | Unset = UNSET
     question: None | QuestionResponse | Unset = UNSET
+    removed_by: None | PersonRef | Unset = UNSET
     reply_count: int | Unset = 0
     reply_to_id: None | Unset | UUID = UNSET
+    shared_at: datetime.datetime | None | Unset = UNSET
     source_id: None | Unset | UUID = UNSET
     text: None | str | Unset = UNSET
     thread_root_id: None | Unset | UUID = UNSET
+    visibility: ChannelMessageResponseVisibility | Unset = (
+        ChannelMessageResponseVisibility.CHANNEL
+    )
     withheld: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -93,6 +112,8 @@ class ChannelMessageResponse:
         sender = self.sender.to_dict()
 
         seq = self.seq
+
+        can_share = self.can_share
 
         client_message_id: None | str | Unset
         if isinstance(self.client_message_id, Unset):
@@ -170,6 +191,14 @@ class ChannelMessageResponse:
         else:
             question = self.question
 
+        removed_by: dict[str, Any] | None | Unset
+        if isinstance(self.removed_by, Unset):
+            removed_by = UNSET
+        elif isinstance(self.removed_by, PersonRef):
+            removed_by = self.removed_by.to_dict()
+        else:
+            removed_by = self.removed_by
+
         reply_count = self.reply_count
 
         reply_to_id: None | str | Unset
@@ -179,6 +208,14 @@ class ChannelMessageResponse:
             reply_to_id = str(self.reply_to_id)
         else:
             reply_to_id = self.reply_to_id
+
+        shared_at: None | str | Unset
+        if isinstance(self.shared_at, Unset):
+            shared_at = UNSET
+        elif isinstance(self.shared_at, datetime.datetime):
+            shared_at = self.shared_at.isoformat()
+        else:
+            shared_at = self.shared_at
 
         source_id: None | str | Unset
         if isinstance(self.source_id, Unset):
@@ -202,6 +239,10 @@ class ChannelMessageResponse:
         else:
             thread_root_id = self.thread_root_id
 
+        visibility: str | Unset = UNSET
+        if not isinstance(self.visibility, Unset):
+            visibility = self.visibility.value
+
         withheld = self.withheld
 
         field_dict: dict[str, Any] = {}
@@ -215,6 +256,8 @@ class ChannelMessageResponse:
                 "seq": seq,
             }
         )
+        if can_share is not UNSET:
+            field_dict["can_share"] = can_share
         if client_message_id is not UNSET:
             field_dict["client_message_id"] = client_message_id
         if conversation_id is not UNSET:
@@ -235,16 +278,22 @@ class ChannelMessageResponse:
             field_dict["parts"] = parts
         if question is not UNSET:
             field_dict["question"] = question
+        if removed_by is not UNSET:
+            field_dict["removed_by"] = removed_by
         if reply_count is not UNSET:
             field_dict["reply_count"] = reply_count
         if reply_to_id is not UNSET:
             field_dict["reply_to_id"] = reply_to_id
+        if shared_at is not UNSET:
+            field_dict["shared_at"] = shared_at
         if source_id is not UNSET:
             field_dict["source_id"] = source_id
         if text is not UNSET:
             field_dict["text"] = text
         if thread_root_id is not UNSET:
             field_dict["thread_root_id"] = thread_root_id
+        if visibility is not UNSET:
+            field_dict["visibility"] = visibility
         if withheld is not UNSET:
             field_dict["withheld"] = withheld
 
@@ -269,6 +318,8 @@ class ChannelMessageResponse:
         sender = PersonRef.from_dict(d.pop("sender"))
 
         seq = d.pop("seq")
+
+        can_share = d.pop("can_share", UNSET)
 
         def _parse_client_message_id(data: object) -> None | str | Unset:
             if data is None:
@@ -427,6 +478,23 @@ class ChannelMessageResponse:
 
         question = _parse_question(d.pop("question", UNSET))
 
+        def _parse_removed_by(data: object) -> None | PersonRef | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                removed_by_type_0 = PersonRef.from_dict(data)
+
+                return removed_by_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | PersonRef | Unset, data)
+
+        removed_by = _parse_removed_by(d.pop("removed_by", UNSET))
+
         reply_count = d.pop("reply_count", UNSET)
 
         def _parse_reply_to_id(data: object) -> None | Unset | UUID:
@@ -445,6 +513,23 @@ class ChannelMessageResponse:
             return cast(None | Unset | UUID, data)
 
         reply_to_id = _parse_reply_to_id(d.pop("reply_to_id", UNSET))
+
+        def _parse_shared_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                shared_at_type_0 = isoparse(data)
+
+                return shared_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        shared_at = _parse_shared_at(d.pop("shared_at", UNSET))
 
         def _parse_source_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -489,6 +574,13 @@ class ChannelMessageResponse:
 
         thread_root_id = _parse_thread_root_id(d.pop("thread_root_id", UNSET))
 
+        _visibility = d.pop("visibility", UNSET)
+        visibility: ChannelMessageResponseVisibility | Unset
+        if isinstance(_visibility, Unset):
+            visibility = UNSET
+        else:
+            visibility = ChannelMessageResponseVisibility(_visibility)
+
         withheld = d.pop("withheld", UNSET)
 
         channel_message_response = cls(
@@ -497,6 +589,7 @@ class ChannelMessageResponse:
             id=id,
             sender=sender,
             seq=seq,
+            can_share=can_share,
             client_message_id=client_message_id,
             conversation_id=conversation_id,
             deleted=deleted,
@@ -507,11 +600,14 @@ class ChannelMessageResponse:
             on_behalf_of=on_behalf_of,
             parts=parts,
             question=question,
+            removed_by=removed_by,
             reply_count=reply_count,
             reply_to_id=reply_to_id,
+            shared_at=shared_at,
             source_id=source_id,
             text=text,
             thread_root_id=thread_root_id,
+            visibility=visibility,
             withheld=withheld,
         )
 

@@ -53,7 +53,9 @@ export class AgentSurfacesService {
     /**
      * Send Notice
      * Tell another member of the pod something, in their own channel. The
-     * same `Idempotency-Key` from the same member is the same notice.
+     * same `Idempotency-Key` from the same member is the same notice; sent with
+     * other text, it is refused (422). A member sends at most
+     * `NOTICES_PER_MINUTE` a minute (429).
      * @param podId
      * @param member The member to tell: a pod member id, user id, or email address.
      * @param requestBody
@@ -80,7 +82,9 @@ export class AgentSurfacesService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
+                404: `Nobody in this pod is that member.`,
                 422: `Validation Error`,
+                429: `Too many notices this minute; see Retry-After.`,
             },
         });
     }

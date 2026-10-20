@@ -9,13 +9,20 @@ import type { MentionPart } from './MentionPart.js';
 import type { PersonRef } from './PersonRef.js';
 import type { QuestionResponse } from './QuestionResponse.js';
 export type ChannelMessageResponse = {
+    /**
+     * The reader is the member an `asker_only` answer was made for, and may share it with the channel (`…/messages/{id}/share`).
+     */
+    can_share?: boolean;
     channel_id: string;
+    /**
+     * On the reader's own line: the name their client gave it, as sent (`client_message_id`, or `Idempotency-Key`).
+     */
     client_message_id?: (string | null);
     conversation_id?: (string | null);
     created_at: string;
     deleted?: boolean;
     /**
-     * Only on the reader's own line: each place outside Lemma it went to, and what became of it. Pushes to members are not listed here (`…/deliveries` has every send).
+     * Each place outside Lemma the line went to, and what became of it -- on every line the reader may read. Pushes to members are not listed here (`…/deliveries` has the writer's every send).
      */
     delivered?: (Array<LineDelivery> | null);
     edited_at?: (string | null);
@@ -29,6 +36,10 @@ export type ChannelMessageResponse = {
     parts?: Array<(MentionPart | FilePart | LinkPart)>;
     question?: (QuestionResponse | null);
     /**
+     * On a deleted line: the member who removed it, when that was not who wrote it -- somebody who may change the channel.
+     */
+    removed_by?: (PersonRef | null);
+    /**
      * On a thread's first line.
      */
     reply_count?: number;
@@ -38,6 +49,10 @@ export type ChannelMessageResponse = {
      * Its place in the channel's timeline.
      */
     seq: number;
+    /**
+     * When the member it was made for shared it with the channel.
+     */
+    shared_at?: (string | null);
     /**
      * Where it was said or sent; absent for a line only in Lemma.
      */
@@ -51,7 +66,20 @@ export type ChannelMessageResponse = {
      */
     thread_root_id?: (string | null);
     /**
+     * `asker_only`: an agent's answer made with one member's own access, read in full by that member alone; everybody else here is shown it `withheld`. `channel`: everybody here reads it.
+     */
+    visibility?: ChannelMessageResponse.visibility;
+    /**
      * An answer an agent made with another member's own access: the reader sees that it was given, and for whom, not what it said.
      */
     withheld?: boolean;
 };
+export namespace ChannelMessageResponse {
+    /**
+     * `asker_only`: an agent's answer made with one member's own access, read in full by that member alone; everybody else here is shown it `withheld`. `channel`: everybody here reads it.
+     */
+    export enum visibility {
+        ASKER_ONLY = 'asker_only',
+        CHANNEL = 'channel',
+    }
+}

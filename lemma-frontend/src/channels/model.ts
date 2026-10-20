@@ -386,6 +386,20 @@ export function readParts(raw: unknown): Part[] {
     });
 }
 
+/** Parts as the API takes them back -- `readParts` the other way: a file by
+ *  its path, which the server reads again as the writer. */
+export function writeParts(parts: readonly Part[]): Record<string, unknown>[] {
+    return parts.map((part) => part.type === "mention"
+        ? { type: "mention", id: part.id, kind: part.kind, ...(part.name ? { name: part.name } : {}) }
+        : part.type === "file"
+            ? {
+                type: "file", path: part.path, name: part.name,
+                ...(part.mimeType ? { mime_type: part.mimeType } : {}),
+                ...(part.size !== null ? { size: part.size } : {}),
+            }
+            : { type: "link", url: part.url, ...(part.label ? { label: part.label } : {}) });
+}
+
 /** A page of a timeline, or a thread's replies. The page before it is asked
  *  for by the `seq` it starts at, and only while there are older lines. */
 export function readLinePage(raw: unknown): LinePage {

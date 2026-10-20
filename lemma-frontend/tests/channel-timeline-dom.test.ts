@@ -316,6 +316,87 @@ test("a draft keeps who was picked: come back to it and the @name still names th
     }
 });
 
+test("the space a pick wrote is not written twice when the next word starts with one", async () => {
+    const { Composer } = await import("../src/channels/composer.tsx");
+    const view = await page();
+    const bolt = { kind: "AGENT", id: "agent-bolt", name: "Bolt", inChannel: true };
+    try {
+        await view.draw(createElement(Composer, { podId: "pod", channel: channel as never, people: [bolt] as never, threadRootId: "root-space", placeholder: "Reply", onPosted: () => {} }));
+        await typeInto(view, "@Bo");
+        const option = view.dom.window.document.querySelector("[role=option]")!;
+        await act(async () => { option.dispatchEvent(new view.dom.window.MouseEvent("mousedown", { bubbles: true })); });
+        await view.flush();
+        const box = view.dom.window.document.querySelector("textarea")!;
+        assert.equal(box.value, "@Bolt ");
+        await typeInto(view, "@Bolt  ", 7);
+        await view.flush();
+        assert.equal(box.value, "@Bolt ", "the space typed after a pick is the pick's own");
+        await typeInto(view, "@Bolt w", 7);
+        await typeInto(view, "@Bolt w ", 8);
+        assert.equal(box.value, "@Bolt w ", "any other space is kept");
+    } finally {
+        await view.close();
+    }
+});
+
+test("a line is changed with the composer's @ menu, the caret after its last word, and keeps its files", async () => {
+    const { LineView } = await import("../src/channels/line.tsx");
+    const { MentionablesContext } = await import("../src/channels/mention-picker.tsx");
+    const view = await page();
+    const edits: unknown[][] = [];
+    api.edit = (async (...args: unknown[]) => { edits.push(args); return line(5); }) as never;
+    const bolt = { kind: "AGENT", id: "agent-bolt", name: "Bolt", inChannel: true };
+    const file = { type: "file", path: "/me/a.txt", name: "a.txt", mimeType: "text/plain", size: 3, fileId: "f1" };
+    const mine = line(5, { sender: { kind: "MEMBER", id: "me", name: "Me" }, text: "ask him", parts: [file] });
+    try {
+        await view.draw(createElement(MentionablesContext.Provider, { value: [bolt] as never },
+            createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: mine as never }))));
+        const editButton = [...view.dom.window.document.querySelectorAll("button")].find((button) => button.textContent === "Edit")!;
+        await act(async () => { editButton.click(); });
+        const box = view.dom.window.document.querySelector("textarea")!;
+        assert.equal(view.dom.window.document.activeElement, box);
+        assert.equal(box.selectionStart, "ask him".length, "the caret is after the last word");
+        await typeInto(view, "ask him @Bo");
+        const option = view.dom.window.document.querySelector("[role=option]");
+        assert.ok(option, "the @ menu opens in the edit box");
+        await act(async () => { box.dispatchEvent(new view.dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+        await view.flush();
+        assert.equal(box.value, "ask him @Bolt ");
+        assert.equal(edits.length, 0, "Enter picked; it did not save");
+        await act(async () => { box.dispatchEvent(new view.dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+        await view.flush();
+        assert.equal(edits.length, 1);
+        const [, lineId, text, parts] = edits[0];
+        assert.equal(lineId, "l5");
+        assert.equal(text, "ask him @Bolt");
+        assert.deepEqual(parts, [{ type: "mention", kind: "AGENT", id: "agent-bolt", name: "Bolt" }, file]);
+    } finally {
+        delete api.edit;
+        await view.close();
+    }
+});
+
+test("a change to the words alone sends only the words", async () => {
+    const { LineView } = await import("../src/channels/line.tsx");
+    const view = await page();
+    const edits: unknown[][] = [];
+    api.edit = (async (...args: unknown[]) => { edits.push(args); return line(6); }) as never;
+    const named = { type: "mention", kind: "MEMBER", id: "user-sam", name: "Sam" };
+    const mine = line(6, { sender: { kind: "MEMBER", id: "me", name: "Me" }, text: "@Sam hi", parts: [named] });
+    try {
+        await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: mine as never })));
+        const editButton = [...view.dom.window.document.querySelectorAll("button")].find((button) => button.textContent === "Edit")!;
+        await act(async () => { editButton.click(); });
+        await typeInto(view, "@Sam hello");
+        await act(async () => { view.dom.window.document.querySelector("form")!.requestSubmit(); });
+        await view.flush();
+        assert.deepEqual(edits[0].slice(1), ["l6", "@Sam hello", undefined]);
+    } finally {
+        delete api.edit;
+        await view.close();
+    }
+});
+
 test("files pasted in go up into the line's own folder, two of one name kept apart, saying how they are getting on", async () => {
     const { Composer } = await import("../src/channels/composer.tsx");
     const view = await page();

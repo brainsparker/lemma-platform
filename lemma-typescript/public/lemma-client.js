@@ -17471,11 +17471,15 @@ var LemmaClient = (() => {
       );
     }
     /** Change what one of the caller's own lines says: absent is unchanged,
-     *  `parts: null` clears them. */
+     *  `parts: null` clears them. Parts sent replace the line's parts, and
+     *  name whoever their mentions name, as a post does. */
     edit(podId, channelId, messageId, body) {
       const edit = typeof body === "string" ? { text: body } : body;
       return this.client.request(
-        () => ChannelsService.channelMessageUpdate(podId, channelId, messageId, edit)
+        () => (
+          // The generated type flattens `parts` to `null`: the API takes a list.
+          ChannelsService.channelMessageUpdate(podId, channelId, messageId, edit)
+        )
       );
     }
     /** Delete one of the caller's own lines; it keeps its place, empty. */

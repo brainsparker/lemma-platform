@@ -16,6 +16,13 @@ import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesSe
 import { ChannelsService } from "../openapi_client/services/ChannelsService.js";
 import { ChannelSourcesNamespace } from "./channel-sources.js";
 
+/** A change to one of the caller's own lines: absent is unchanged, `parts:
+ *  null` clears them. */
+export type ChannelLineEdit = {
+  text?: string | null;
+  parts?: ChannelPostRequest["parts"] | null;
+};
+
 /** An agent seated in a group: by id (answers when named), or with when it answers. */
 export type ChannelAgentSeat = string | { id: string; answers?: AgentAnswers | `${AgentAnswers}` };
 
@@ -297,11 +304,13 @@ export class ChannelsNamespace {
   }
 
   /** Change what one of the caller's own lines says: absent is unchanged,
-   *  `parts: null` clears them. */
-  edit(podId: string, channelId: string, messageId: string, body: ChannelEditRequest | string) {
+   *  `parts: null` clears them. Parts sent replace the line's parts, and
+   *  name whoever their mentions name, as a post does. */
+  edit(podId: string, channelId: string, messageId: string, body: ChannelLineEdit | string) {
     const edit = typeof body === "string" ? { text: body } : body;
     return this.client.request(() =>
-      ChannelsService.channelMessageUpdate(podId, channelId, messageId, edit),
+      // The generated type flattens `parts` to `null`: the API takes a list.
+      ChannelsService.channelMessageUpdate(podId, channelId, messageId, edit as ChannelEditRequest),
     );
   }
 

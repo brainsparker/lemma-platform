@@ -82,16 +82,22 @@ async def with_channel_background(
         if text is not None:
             read[index] = read[index].model_copy(update={"text": text})
     for index, line_id in said.items():
-        now = words.get(line_id)
-        if now is None and (read[index].text or "").strip():
-            now = DELETED_LINE
-        if now is not None and now != read[index].text:
-            read[index] = read[index].model_copy(update={"text": now})
+        read[index] = _as_said_now(read[index], words.get(line_id))
     return [
         message
         for index, message in enumerate(read)
         if index not in follow_ups or follow_ups[index] in words
     ]
+
+
+def _as_said_now(message: Message, now: str | None) -> Message:
+    """A member's line as it says now: ``now`` is ``None`` for one deleted
+    since -- or emptied, which says as much as deleted."""
+    if now is None and (message.text or "").strip():
+        now = DELETED_LINE
+    if now is None or now == message.text:
+        return message
+    return message.model_copy(update={"text": now})
 
 
 def _references(

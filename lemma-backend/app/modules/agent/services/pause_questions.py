@@ -18,11 +18,9 @@ actually took effect -- a concurrent answer that won is what the line shows.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -34,7 +32,6 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.redaction import redact_value
 from app.modules.agent.contracts import channel_conversations
 from app.modules.agent.domain.asked_questions import line_client_id
 from app.modules.agent.domain.outsiders import Audience
@@ -50,6 +47,7 @@ from app.modules.agent.infrastructure.models.conversation import MessageModel
 from app.modules.agent.infrastructure.repositories.conversation_repository import (
     ConversationRepository,
 )
+from app.modules.agent.services.approval_action import approval_action
 from app.modules.agent.services.pause_supersession import SUPERSEDED_KEY
 from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.channels.contracts import (
@@ -81,12 +79,6 @@ ASK_EXPIRES_AFTER = timedelta(hours=72)
 APPROVAL_EXPIRES_AFTER = timedelta(days=7)
 #: The most questions one conversation is shown waiting on at once.
 MAX_PAUSES = 20
-#: How much of an approval's action its line shows, as text.
-MAX_ACTION_CHARS = 1500
-#: The longest one argument of it is kept in the question, and the most
-#: items of a list.
-MAX_ARG_CHARS = 2000
-MAX_ARG_ITEMS = 50
 
 
 def tool_ref(conversation_id: UUID, tool_call_id: str) -> str:
@@ -168,38 +160,6 @@ def shown(pause: Pause) -> tuple[str, dict[str, object]]:
         "prompt": asked[0] if asked else "",
         "questions": questions,
     }
-
-
-def approval_action(args: object) -> tuple[dict[str, object], str]:
-    """The arguments an approval runs its tool with, as shown: every value
-    under a key that names a secret masked, a token or password written into
-    a value masked, each value clipped -- and the same as one text to read,
-    the command itself when the call is one."""
-    if not isinstance(args, Mapping) or not args:
-        return {}, ""
-    safe = _clipped_values(redact_value(dict(args)))
-    if len(safe) == 1 and isinstance(only := next(iter(safe.values())), str):
-        text = only
-    else:
-        text = json.dumps(safe, ensure_ascii=False, default=str)
-    if len(text) > MAX_ACTION_CHARS:
-        text = text[: MAX_ACTION_CHARS - 1].rstrip() + "…"
-    # Inside a fence on the line: a fence of its own would end it early.
-    return safe, text.replace("```", "'''")
-
-
-def _clipped_values(value: object) -> Any:
-    if isinstance(value, str):
-        return (
-            value
-            if len(value) <= MAX_ARG_CHARS
-            else value[: MAX_ARG_CHARS - 1].rstrip() + "…"
-        )
-    if isinstance(value, Mapping):
-        return {str(key): _clipped_values(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_clipped_values(item) for item in value[:MAX_ARG_ITEMS]]
-    return value
 
 
 def effective_answer(kind: str, decided: PauseDecision) -> dict[str, object]:
@@ -503,8 +463,9 @@ def ask_response(
             "Answer each question: " + ", ".join(missing), status_code=422
         )
     for header in headers:
-        if isinstance(answers[header], list | tuple):
-            _check_picked(asked[header], list(answers[header]))
+        value = answers[header]
+        if isinstance(value, list | tuple):
+            _check_picked(asked[header], list(value))
     return {"answers": {header: _cleaned(answers[header]) for header in headers}}
 
 

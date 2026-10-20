@@ -34,22 +34,16 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import effective_agent_id, is_pod_default_agent
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.core.redaction import redact_text
-from app.core.text.thinking_tags import strip_context_echo, strip_thinking_tokens
 from app.modules.agent.contracts import channel_conversations
-from app.modules.agent.contracts.run_failures import user_safe_stored_reason
 from app.modules.agent.contracts.run_replies import (
-    RunReplyMaterial,
     answer_line_client_id,
     run_reply_material,
 )
-from app.modules.agent.domain.asked_questions import line_client_id
 from app.modules.agent.domain.pod_asks import HANDED_BACK_SOURCES
 from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
 from app.modules.agent.domain.queued_messages import (
@@ -62,6 +56,13 @@ from app.modules.agent.infrastructure.models.conversation import (
     MessageModel,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.services.channel_answer_lines import (
+    COULD_NOT_ANSWER,
+    STOPPED_BEFORE_ANSWERING,
+    post_answer,
+    post_why_unanswered,
+    say_refused,
+)
 from app.modules.agent.services.channel_background import LEMMA_CHANNEL
 from app.modules.agent.services.live_conversation import CONVERSATION_STREAM
 from app.modules.agent.services.service_factories import build_conversation_service
@@ -69,12 +70,8 @@ from app.modules.channels.contracts import (
     ChannelKind,
     Channel,
     ChannelMessage,
-    NewLine,
-    Principal,
-    Sender,
     SenderKind,
     channel_by_id,
-    post,
 )
 from app.modules.channels.contracts.answers import (
     line_answered_in,
@@ -98,12 +95,6 @@ logger = get_logger(__name__)
 IN_APP_CONTEXT_LINES = 30
 #: The most messages one run is taken to have read: a burst steered into it.
 MAX_LINES_A_RUN_READS = 50
-#: What a line says when its run failed and left no reason of its own.
-COULD_NOT_ANSWER = "I couldn't answer this: something went wrong on my side."
-#: What a line says when its run was stopped before it answered.
-STOPPED_BEFORE_ANSWERING = "I was stopped before I finished answering this."
-#: The most of a refusal's or a failure's reason a line repeats.
-MAX_REASON_CHARS = 300
 
 
 class LineWaits(Exception):
@@ -151,7 +142,7 @@ async def answer_line(
 def _answerable(line: ChannelMessage) -> bool:
     """A member's own line written in Lemma -- wherever it was carried -- still
     there. One heard on a platform is answered there. A members' note is
-    answered too, by the agents it names, as a note (``_post_answer``)."""
+    answered too, by the agents it names, as a note (``channel_answer_lines``)."""
     return (
         line.sender.kind is SenderKind.MEMBER
         and line.sender.user_id is not None
@@ -252,9 +243,7 @@ async def _answer_as(
         )
         # Nothing of the turn stays; the member hears why, where they asked.
         await uow.rollback()
-        await _say_refused(
-            uow, channel=channel, line=line, agent_id=agent_id, refused=refused
-        )
+        await say_refused(uow, line=line, agent_id=agent_id, refused=refused)
         await uow.commit()
         return None
     finally:
@@ -295,36 +284,6 @@ async def _answering_another_thread(
 
 def _thread_of(line: ChannelMessage) -> UUID:
     return line.thread_root_id or line.id
-
-
-async def _say_refused(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    channel: Channel,
-    line: ChannelMessage,
-    agent_id: UUID,
-    refused: DomainError,
-) -> None:
-    """The agent's line saying it will not answer, and the reason it was
-    given -- an error's own sentence, written for whoever reads it."""
-    reason = _clipped(refused.message)
-    assert line.sender.user_id is not None  # an answerable line's
-    await _post_line(
-        uow,
-        channel=channel,
-        line=line,
-        agent_id=agent_id,
-        for_user_id=line.sender.user_id,
-        text=f"I can't answer this: {reason}" if reason else COULD_NOT_ANSWER,
-        client_message_id=line_client_id(f"refused:{line.id}:{agent_id}"),
-    )
-
-
-def _clipped(reason: str | None) -> str:
-    clean = " ".join(redact_text(reason or "").split())
-    if len(clean) > MAX_REASON_CHARS:
-        clean = clean[: MAX_REASON_CHARS - 1].rstrip() + "…"
-    return clean
 
 
 async def _members_conversation(
@@ -448,7 +407,7 @@ async def post_run_answer(
     if said and not said[0].is_deleted:
         material = await run_reply_material(uow, run_id)
         if answered:
-            posted = await _post_answer(
+            posted = await post_answer(
                 uow,
                 run_id=run_id,
                 conversation=conversation,
@@ -456,7 +415,7 @@ async def post_run_answer(
                 material=material,
             )
         else:
-            await _post_why_unanswered(
+            await post_why_unanswered(
                 uow,
                 run_id=run_id,
                 conversation=conversation,
@@ -532,141 +491,13 @@ async def _post_handed_back(
     line = await line_by_id(uow, line_id) if line_id else None
     if line is None or line.is_deleted:
         return None
-    return await _post_answer(
+    return await post_answer(
         uow,
         run_id=run_id,
         conversation=conversation,
         line=line,
         material=await run_reply_material(uow, run_id),
     )
-
-
-async def _post_answer(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    run_id: UUID,
-    conversation: ConversationModel,
-    line: ChannelMessage,
-    material: RunReplyMaterial | None,
-) -> ChannelMessage | None:
-    if material is None or not material.answer:
-        return None
-    if material.private and not line.members_only:
-        return None
-    # The same boundary as a platform's answer: no reasoning, and none of the
-    # platform's own context blocks a model repeated back.
-    text = strip_context_echo(strip_thinking_tokens(material.answer))
-    if not text:
-        return None
-    return await _post_line(
-        uow,
-        channel=await channel_by_id(uow, line.channel_id),
-        line=line,
-        agent_id=effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id),
-        for_user_id=conversation.user_id,
-        text=text,
-        client_message_id=answer_client_id(run_id),
-        conversation_id=conversation.id,
-        run_id=run_id,
-    )
-
-
-async def _post_why_unanswered(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    run_id: UUID,
-    conversation: ConversationModel,
-    line: ChannelMessage,
-    material: RunReplyMaterial | None,
-) -> ChannelMessage | None:
-    """A run that failed, or was stopped, says so where its answer would be:
-    otherwise the member reads the agent start, and then nothing."""
-    if material is None:
-        return None
-    if material.status == "FAILED":
-        reason = _clipped(user_safe_stored_reason(material.error))
-        text = f"I couldn't answer this: {reason}" if reason else COULD_NOT_ANSWER
-    elif material.status == "STOPPED":
-        text = STOPPED_BEFORE_ANSWERING
-    else:
-        return None
-    return await _post_line(
-        uow,
-        channel=await channel_by_id(uow, line.channel_id),
-        line=line,
-        agent_id=effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id),
-        for_user_id=conversation.user_id,
-        text=text,
-        client_message_id=answer_client_id(run_id),
-        conversation_id=conversation.id,
-        run_id=run_id,
-        carried=False,
-    )
-
-
-async def _post_line(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    channel: Channel | None,
-    line: ChannelMessage,
-    agent_id: UUID,
-    for_user_id: UUID,
-    text: str,
-    client_message_id: str,
-    conversation_id: UUID | None = None,
-    run_id: UUID | None = None,
-    carried: bool = True,
-) -> ChannelMessage | None:
-    """The agent's line answering ``line``, said for the member, where an
-    answer to it goes. ``carried``: it follows the line to a group's place,
-    as an answer does; a word about why there is none stays in Lemma. A
-    note's answer is a note, carried nowhere."""
-    agent_name = (
-        None  # the pod's own assistant is named by the channel, as the pod
-        if is_pod_default_agent(agent_id, pod_id=line.pod_id)
-        else await uow.session.scalar(
-            select(AgentModel.name).where(AgentModel.id == agent_id)
-        )
-    )
-    in_thread, place = _where_the_answer_goes(channel, line)
-    if not carried or line.members_only:
-        place = None
-    return await post(
-        uow,
-        channel_id=line.channel_id,
-        line=NewLine(
-            sender=Sender.agent(
-                agent_id,
-                on_behalf_of=Principal.member(for_user_id),
-                display_name=agent_name,
-            ),
-            text=text,
-            target_source_id=place,
-            members_only=line.members_only,
-            client_message_id=client_message_id,
-            conversation_id=conversation_id,
-            agent_run_id=run_id,
-            thread_root_id=in_thread,
-            reply_to_id=line.id,
-        ),
-        deliver_to=[place] if place else [],
-    )
-
-
-def _where_the_answer_goes(
-    channel: Channel | None, line: ChannelMessage
-) -> tuple[UUID | None, UUID | None]:
-    """The thread an answer is a reply in, and the place it is carried to.
-
-    A member's own channel reads as a chat: the answer follows the line it
-    answers. Elsewhere it is a reply in the line's thread. A group's line
-    carried to its platform was asked there too: the answer follows it, into
-    its thread there. A contact's channel never: the answer is the member's,
-    made with their access, not the contact's to read.
-    """
-    kind = channel.kind if channel is not None else None
-    in_thread = line.thread_root_id or (None if kind is ChannelKind.DIRECT else line.id)
-    return in_thread, line.place_id if kind is ChannelKind.GROUP else None
 
 
 __all__ = [

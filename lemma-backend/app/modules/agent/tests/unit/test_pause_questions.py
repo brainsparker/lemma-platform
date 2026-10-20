@@ -59,11 +59,8 @@ def test_a_choice_is_one_of_the_options():
 
 
 def test_an_approval_line_shows_the_action_and_masks_its_secrets():
-    from app.modules.agent.services.pause_questions import (
-        MAX_ACTION_CHARS,
-        Pause,
-        shown,
-    )
+    from app.modules.agent.services.approval_action import MAX_ACTION_CHARS
+    from app.modules.agent.services.pause_questions import Pause, shown
 
     def approval(args: dict) -> Pause:
         return Pause(

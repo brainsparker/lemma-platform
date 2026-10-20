@@ -125,7 +125,8 @@ On top of seeing a channel, one table (`api/access.py` holds the same one).
 | One's own channel (`/channels/me`); joining a public group or a contact's channel; leaving; one's own notify settings; marking read | `channel.read` |
 | Joining a private group nobody let them into, on request (logged: `channels.member.joined_private_by_right.observed`) | `channel.manage` |
 | Answering a question | `channel.read`, and being the person it waits on |
-| Writing, editing and deleting one's own lines; starting a group; retrying one's own line's delivery; notices | `channel.write` (+ `contact.message` in a `CONTACT` channel) |
+| Writing, editing and deleting one's own lines; starting a group; retrying one's own line's delivery to a place (any line's, for who may change the channel; anybody else reading it is refused, 403); notices | `channel.write` (+ `contact.message` in a `CONTACT` channel) |
+| Retrying a push | `channel.write`, and being the member it was to |
 | A group's title, topic, visibility, archive, delete, members, roles, agents | `channel.write` and being its owner -- or `channel.manage` |
 | A contact's channel: assignee, status, the agent switch, the hand-back window | `channel.write` + `contact.message` |
 | Seeing a `CONTACT` channel at all | `contact.read` |

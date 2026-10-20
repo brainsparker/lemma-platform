@@ -110,7 +110,12 @@ Every outcome but `SENT` carries a `DeliveryReasonCode` beside the sentence a
 member reads (`Outcome.code`): code that decides by why a delivery stands
 where it does reads the code, never the sentence. Each try is a
 `channel_delivery_attempts` row, begun at the claim and ended with the outcome
-and the platform's HTTP status when it gave one (`SendOutcome.provider_status`).
+and the platform's HTTP status when it gave one (`SendOutcome.provider_status`,
+read from a platform client's own error too). A `401` refuses the bot, not the
+message: its surface carries the reason as `problem` (`surface_problems`, in
+Redis) -- as it does a webhook the platform refused -- its `/setup` is not
+ready, and a contact the bot was writing to waits on a person; a send that
+goes clears it. A new surface whose webhook is refused is not kept.
 A try is retried only when the retry cannot be the duplicate the person sees:
 
 - **`FAILED`**, due again after the backoff -- and no sooner than a

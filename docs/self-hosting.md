@@ -125,9 +125,22 @@ Back up the database, `.env` and the two volumes that hold uploaded files
 together. The commands below are for the bundled `db` service and files kept in
 Docker volumes, the default:
 
-- With a managed Postgres (`DATABASE_URL` pointing elsewhere), back it up with
-  your provider's snapshots, or `pg_dump "$DATABASE_URL"`, instead of the
-  `pg_dumpall` line, and restore it the same way instead of the `psql` line.
+- With a managed Postgres (`DATABASE_URL` pointing elsewhere), use your
+  provider's snapshots, or dump both databases Lemma keeps with a client in a
+  container (its major version at least your server's) in place of the
+  `pg_dumpall` line:
+
+  ```bash
+  for url in DATABASE_URL DATASTORE_DATABASE_URL; do
+    docker run --rm --env-file .env postgres:18 \
+      bash -c 'u=${!1}; pg_dump "${u/+asyncpg/}"' _ "$url" | gzip > lemma-$url-$(date +%F).sql.gz
+  done
+  ```
+
+  and restore each the same way, with `-i`, `gunzip -c` piped in and `psql` for
+  `pg_dump`, in place of the `psql` line. The `+asyncpg` is stripped because
+  the client takes a plain `postgresql://` URL; if yours carries `ssl=`, give
+  it the client's `sslmode=` instead.
 - With S3, GCS or Azure storage, the files are in your bucket: keep it with
   your provider's versioning or replication, and skip both volume loops.
 

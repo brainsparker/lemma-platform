@@ -169,8 +169,11 @@ runtime files without touching your data.
 
 ### Checking for updates
 
-Lemma only checks for updates when you open **Settings → This Mac → Updates** and
-select **Check now**. There is no background check. It fetches one file:
+Lemma checks for updates when you open **Settings → This Mac → Updates** and
+select **Check now**, and once on its own about 20 seconds after it starts
+(unless updates are turned off, or it was started in Recovery). A newer version
+shows as a menu item; nothing is downloaded until you choose it. It fetches one
+file:
 
 ```
 https://github.com/lemma-work/lemma-platform/releases/latest/download/latest.json

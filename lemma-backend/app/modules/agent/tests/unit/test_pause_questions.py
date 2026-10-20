@@ -58,6 +58,16 @@ def test_a_choice_is_one_of_the_options():
     assert ask_response(TWO[:1], {"text": "XXL"}) == {"answers": {"size": "XXL"}}
 
 
+def test_a_choice_is_matched_whatever_its_case():
+    """ "Cats" picks the option "cats", and the agent reads it as the option
+    it offered."""
+    pets = [{"question": "Which?", "header": "pet", "options": [{"label": "cats"}]}]
+    assert ask_response(pets, {"choice": "Cats"}) == {"answers": {"pet": "cats"}}
+    assert ask_response(
+        TWO, {"answers": {"size": "s", "colour": [" red", "BLUE"]}}
+    ) == {"answers": {"size": "s", "colour": ["Red", "Blue"]}}
+
+
 def test_an_approval_line_shows_the_action_and_masks_its_secrets():
     from app.modules.agent.services.approval_action import MAX_ACTION_CHARS
     from app.modules.agent.services.pause_questions import Pause, shown

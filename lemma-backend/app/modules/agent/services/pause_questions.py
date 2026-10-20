@@ -450,7 +450,7 @@ def ask_response(
         choice, text = given.get("choice"), given.get("text")
         if len(headers) == 1 and choice is not None:
             # A choice is one of the options: words of their own are a text.
-            _check_picked(asked[headers[0]], [choice])
+            [choice] = _check_picked(asked[headers[0]], [choice])
         said = choice or text
         answers = (
             {headers[0]: said}
@@ -462,36 +462,44 @@ def ask_response(
         raise AnswerRefused(
             "Answer each question: " + ", ".join(missing), status_code=422
         )
+    answers = dict(answers)
     for header in headers:
         value = answers[header]
         if isinstance(value, list | tuple):
-            _check_picked(asked[header], list(value))
+            answers[header] = _check_picked(asked[header], list(value))
     return {"answers": {header: _cleaned(answers[header]) for header in headers}}
 
 
-def _check_picked(question: Mapping[str, object], picked: list[object]) -> None:
+def _check_picked(question: Mapping[str, object], picked: list[object]) -> list[str]:
     """Choices picked are the question's options, one unless it takes several.
 
     A text of their own is always an answer -- every question offers
     "Other" (``AskUserRequest``) -- but it is given as text, never as a
-    choice: a choice that is none of the options is refused.
+    choice: a choice that is none of the options is refused. Matched without
+    regard to case ("Cats" picks "cats") and given back as the option spells
+    it, so the agent reads the option it offered.
     """
     header = str(question.get("header") or "")
     if len(picked) > 1 and not question.get("multi_select"):
         raise AnswerRefused(f"Pick one answer for {header}", status_code=422)
     raw = question.get("options")
-    options = {
-        str(option.get("label")).strip()
-        for option in (raw if isinstance(raw, list) else [])
-        if isinstance(option, Mapping) and option.get("label")
-    }
-    outside = [str(choice) for choice in picked if str(choice).strip() not in options]
+    options: dict[str, str] = {}
+    for option in raw if isinstance(raw, list) else []:
+        if isinstance(option, Mapping) and option.get("label"):
+            label = str(option.get("label")).strip()
+            options.setdefault(label.casefold(), label)
+    outside = [
+        str(choice)
+        for choice in picked
+        if str(choice).strip().casefold() not in options
+    ]
     if outside:
         raise AnswerRefused(
             f"Not one of the choices for {header}: {', '.join(outside)}. "
             "Write it as your own answer instead.",
             status_code=422,
         )
+    return [options[str(choice).strip().casefold()] for choice in picked]
 
 
 def _cleaned(value: object) -> str | list[str]:

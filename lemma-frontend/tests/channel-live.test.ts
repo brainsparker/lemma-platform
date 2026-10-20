@@ -63,6 +63,21 @@ test("a new line joins the newest page in seq order; the same line twice is one 
     assert.deepEqual(joinPages(late.pages).map((one) => [one.seq, one.text]), [[3, "line 3"], [4, "line 4"], [5, "line 5"], [6, "line 6"], [7, "line 7"], [8, "edited"]]);
 });
 
+test("the reader's own line is matched by the id the server gave it, whatever comes back as its client_message_id", () => {
+    /* The composer shows a line once the post answers, under the server's
+       id; the socket brings the same line. A client_message_id that comes
+       back changed -- hashed -- must not make it two. */
+    const held = [page([5, 6])];
+    const answered = upsertTimeline(held, line(7, { client_message_id: "4f1c…sent" }));
+    const echoed = upsertTimeline(answered.pages, line(7, { client_message_id: "sha256:9a0b…" }));
+    assert.equal(echoed.added, false);
+    assert.deepEqual(joinPages(echoed.pages).map((one) => one.seq), [5, 6, 7]);
+    /* And the other way round: the socket first, then the post's answer. */
+    const first = upsertTimeline(held, line(7, { client_message_id: "sha256:9a0b…" }));
+    const then = upsertTimeline(first.pages, line(7, { client_message_id: "4f1c…sent" }));
+    assert.deepEqual(joinPages(then.pages).map((one) => one.seq), [5, 6, 7]);
+});
+
 test("an edit or delete of a line older than every page held waits for that page to be read", () => {
     const held = [page([20, 21], 20)];
     const result = upsertTimeline(held, line(4, { deleted: true }));

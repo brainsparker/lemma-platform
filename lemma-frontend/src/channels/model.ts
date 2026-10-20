@@ -527,13 +527,20 @@ export function badge(count: number): string | null {
     return count > 99 ? "99+" : String(count);
 }
 
-/** What the sidebar's badge counts and says: questions first, since only the
- *  reader can answer them; then mentions; then channels with anything new. */
-export function inboxBadge(totals: { channels: number; mentions: number; waiting: number }): { count: number; tone: "waiting" | "mention" | "new"; said: string } | null {
-    if (totals.waiting > 0) return { count: totals.waiting, tone: "waiting", said: totals.waiting === 1 ? "1 question waiting on you" : totals.waiting + " questions waiting on you" };
-    if (totals.mentions > 0) return { count: totals.mentions, tone: "mention", said: totals.mentions === 1 ? "1 mention of you" : totals.mentions + " mentions of you" };
-    if (totals.channels > 0) return { count: totals.channels, tone: "new", said: totals.channels === 1 ? "1 channel with something new" : totals.channels + " channels with something new" };
-    return null;
+/** What the sidebar's badge counts and says: what the bell counts -- the
+ *  questions waiting on the reader, the lines naming them, and the new lines
+ *  in their own channel -- so the two never disagree. Its tone is the most
+ *  pressing of them: a question, which only the reader can answer, then a
+ *  mention. A group with new lines and nothing for the reader is shown on
+ *  its row, not counted here: every public group would count otherwise. */
+export function inboxBadge(totals: { mentions: number; waiting: number }, directLines = 0): { count: number; tone: "waiting" | "mention" | "new"; said: string } | null {
+    const count = totals.waiting + totals.mentions + directLines;
+    if (count <= 0) return null;
+    const parts: string[] = [];
+    if (totals.waiting) parts.push(totals.waiting === 1 ? "1 question waiting on you" : totals.waiting + " questions waiting on you");
+    if (totals.mentions) parts.push(totals.mentions === 1 ? "1 mention of you" : totals.mentions + " mentions of you");
+    if (directLines) parts.push(directLines === 1 ? "1 new line in your channel" : directLines + " new lines in your channel");
+    return { count, tone: totals.waiting ? "waiting" : totals.mentions ? "mention" : "new", said: parts.join(", ") };
 }
 
 /** When something happened, short enough for a column: 12 min, 2 h,
@@ -637,12 +644,22 @@ export function sayQuestion(state: QuestionState): string | null {
 }
 
 /** What an answer said, in a few words: the choice, the words, or the
- *  decision. A form's fields are not repeated on the timeline. */
+ *  decision. An agent's question is answered as `{answers: {header:
+ *  value}}` -- each value the words or the choices picked -- and shows
+ *  those. A form's fields are not repeated on the timeline. */
 export function answerSummary(answer: Record<string, unknown> | null): string | null {
     if (!answer) return null;
     if (typeof answer.choice === "string" && answer.choice) return answer.choice;
     if (typeof answer.text === "string" && answer.text.trim()) return answer.text.trim();
     if (typeof answer.decision === "string") return answer.decision === "DENY" ? "Denied" : "Approved";
+    if (typeof answer.approved === "boolean") return answer.approved ? "Approved" : "Denied";
+    if (answer.answers && typeof answer.answers === "object" && !Array.isArray(answer.answers)) {
+        const said = Object.values(answer.answers as Record<string, unknown>).flatMap((value) => {
+            const one = Array.isArray(value) ? value.filter((pick): pick is string => typeof pick === "string" && Boolean(pick.trim())).join(", ") : typeof value === "string" ? value.trim() : "";
+            return one ? [one] : [];
+        });
+        return said.length ? said.join("; ") : null;
+    }
     return null;
 }
 

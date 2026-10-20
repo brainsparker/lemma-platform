@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readLine } from "../src/channels/model.ts";
 import { mentionables, pickedIn, removeMention } from "../src/channels/mentions.ts";
 import { extraLinks, isInlineImage, pieces, sizeShown } from "../src/channels/parts-model.ts";
-import { readSearchPage, snippet } from "../src/channels/search-model.ts";
+import { hitText, readSearchPage, snippet } from "../src/channels/search-model.ts";
 import { draftKey, keepDraft, parseDraft, readDraft } from "../src/channels/drafts.ts";
 import { muteChoices, mutedSaid, publicWarning } from "../src/channels/settings-model.ts";
 import { bellCount, readInbox } from "../src/channels/waiting.ts";
@@ -101,6 +101,24 @@ test("a search result reads its line and channel, and its snippet marks the word
     const long = snippet("x ".repeat(200) + "needle at the end", "needle", 40);
     assert.equal(long[0].text.startsWith("…"), true);
     assert.equal(long.some((piece) => piece.match && piece.text === "needle"), true);
+});
+
+test("a result shows plain words, whole, with the match marked -- the line's own where the reader has it", () => {
+    /* What QA saw: raw markdown, a dropped leading "[", cuts mid-word. */
+    const answer = "[Plan] **Constraints**: the _beta_ ships after `deploy` -- see [the doc](https://x.test/doc).\n\n## Next\n- tell support";
+    const pieces = snippet(answer, "beta");
+    const said = pieces.map((piece) => piece.text).join("");
+    assert.equal(said, "[Plan] Constraints: the beta ships after deploy -- see the doc. Next tell support");
+    assert.deepEqual(pieces.filter((piece) => piece.match).map((piece) => piece.text), ["beta"]);
+    const long = "alpha ".repeat(60) + "the needle is here " + "omega ".repeat(60);
+    const cut = snippet(long, "needle", 60).map((piece) => piece.text).join("");
+    assert.match(cut, /^…\w/, "starts on a whole word");
+    assert.match(cut, /\w…$/, "ends on a whole word");
+    for (const word of cut.replace(/…/g, "").split(" ")) assert.ok(["alpha", "omega", "the", "needle", "is", "here"].includes(word), "no word cut: " + word);
+    const hit = readSearchPage({ items: [{ channel: { id: "c1" }, message: { id: "l1", seq: 1, text: "[Plan] whole", created_at: "" }, snippet: "Plan] who" }] }).items[0];
+    assert.equal(hitText(hit), "[Plan] whole");
+    const withheld = readSearchPage({ items: [{ channel: { id: "c1" }, message: { id: "l2", seq: 2, text: null, created_at: "" }, snippet: "server cut" }] }).items[0];
+    assert.equal(hitText(withheld), "server cut");
 });
 
 test("a mute is said until it runs out", () => {

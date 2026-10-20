@@ -85,8 +85,12 @@ async def _seed(session: AsyncSession, pod: Pod) -> tuple[UUID, UUID, UUID]:
             params,
         )
     await session.commit()
+    # Planned with the statistics production has: uncommitted, the ANALYZE is
+    # rolled back and the explaining connection plans on defaults, where the
+    # recipient's whole-history index ties with its due one.
     await session.execute(text("ANALYZE channel_message_deliveries"))
     await session.execute(text("ANALYZE channel_messages"))
+    await session.commit()
     return source.channel_id, source.id, member
 
 

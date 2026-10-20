@@ -50,8 +50,8 @@ async def allow_channel(
     Commits. ``is_private`` as ``adopt_connected_channel`` takes it."""
     if not channel_id:
         return None
-    route_added = (
-        surface.channel_route_for(channel_id=channel_id, channel_name="") is None
+    route_added = not any(
+        str(route.channel_id or "") == channel_id for route in surface.config.channels
     )
     routes = [
         route

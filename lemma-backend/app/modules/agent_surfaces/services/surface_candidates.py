@@ -9,17 +9,17 @@ Functions taking their collaborators rather than an object of their own: each
 needs one or two of them and calls back into neither, which is the same shape as
 `surface_bulk_teardown` and `onboarding_replies`, and for the same reason. They
 were methods on `SurfaceInboundMixin`, where they read `self.router`,
-`self.surface_repository` and `self.conversation_link_repository` off a
-namespace that never declared them -- eleven of that file's baselined type
+`self.surface_repository` and the conversation links off a that never declared them -- eleven of that file's baselined type
 errors were exactly that, and they are gone now that the names arrive as
 arguments.
 """
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
+
 from uuid import UUID
 
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.adapter_port import (
     SurfacePlatformAdapterPort,
 )
@@ -27,16 +27,9 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
-    SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     bot_creates_groups_on,
@@ -45,39 +38,8 @@ from app.modules.agent_surfaces.services.credential_resolver import (
     arrival_number,
     native_credentials,
 )
+from app.modules.agent_surfaces.services.channel_places import ChannelSeats
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
-
-
-def needs_mention_verification(
-    platform: str,
-    parsed: ParsedInboundSurfaceEvent,
-    surfaces: list[AgentSurfaceEntity],
-) -> bool:
-    """Whether a group message might be an @mention of this bot.
-
-    The parser records any @username / text_mention entities but does not set
-    `mentioned_agent` for a generic mention -- a `mention` entity is a plain
-    @username and does not say *which* user was meant. Settling that costs a
-    getMe call, so it is only worth making when the message could plausibly be
-    for us, and it has to happen before `allows_inbound_event` filters the event
-    out.
-    """
-    if platform != SurfacePlatform.TELEGRAM.value:
-        return False
-    if parsed.is_dm or not surfaces:
-        return False
-    metadata = parsed.metadata or {}
-    if metadata.get("reply_to_user_id"):
-        # A reply to a bot reads as addressed, and which bot is only known
-        # once getMe has said who we are.
-        return True
-    if parsed.mentioned_agent:
-        return False
-    return bool(
-        metadata.get("mentioned_usernames")
-        or metadata.get("text_mention_user_ids")
-        or "@" in (parsed.message_text or "")
-    )
 
 
 type FanIn = tuple[
@@ -92,8 +54,6 @@ async def fan_in_candidates(
     adapter: SurfacePlatformAdapterPort,
     router: SurfaceRouter,
     surfaces: SurfaceInstallationRepositoryPort,
-    uow: SqlAlchemyUnitOfWork,
-    links: SurfaceConversationLinkRepository,
 ) -> FanIn:
     """The shared bot's candidates for one message, never its whole fan-in.
 
@@ -114,9 +74,15 @@ async def fan_in_candidates(
         if bot_creates_groups_on(platform) or not parsed.external_channel_id:
             # `created_group_surfaces` answers for a group the bot created.
             return [], None, None
-        adopted = await SurfaceGroupRepository(uow.session).surface_ids_for_channel(
-            platform=platform, external_channel_id=parsed.external_channel_id
-        )
+        adopted = [
+            place.surface_id
+            for place in await router.seats.places_hearing(
+                platform=platform,
+                external_channel_id=parsed.external_channel_id,
+                surface_ids=None,
+            )
+            if place.surface_id is not None
+        ]
         if adopted:
             return (
                 await surfaces.list_active_for_routing(
@@ -136,7 +102,7 @@ async def fan_in_candidates(
         return member, resolved_user, pod_ids
     return (
         await _stranger_fan_in(
-            platform=platform, parsed=parsed, surfaces=surfaces, links=links
+            platform=platform, parsed=parsed, surfaces=surfaces, seats=router.seats
         ),
         resolved_user,
         pod_ids,
@@ -148,24 +114,24 @@ async def _stranger_fan_in(
     platform: str,
     parsed: ParsedInboundSurfaceEvent,
     surfaces: SurfaceInstallationRepositoryPort,
-    links: SurfaceConversationLinkRepository,
+    seats: ChannelSeats,
 ) -> list[AgentSurfaceEntity]:
     """The surface a DM from somebody in none of these pods belongs to, if any.
 
-    The thread's own surface first: a signed-up non-member who has written
-    before is told, on it, that they have no access to the pod their
-    conversation is in. Otherwise the platform's only surface, which is where
-    signup runs; read two rows to know there is only one.
+    The surface they last wrote to privately first: a signed-up non-member
+    who has written before is told, on it, that they have no access to the
+    pod their conversation is in. Otherwise the platform's only surface,
+    which is where signup runs; read two rows to know there is only one.
     """
-    thread_surface_id = await links.find_surface_id_for_external_thread(
-        platform=platform,
-        external_channel_id=parsed.external_channel_id,
-        external_thread_id=parsed.external_thread_id,
-        external_user_id=parsed.sender_external_user_id,
+    person = parsed.sender_external_user_id
+    known = (
+        await seats.person_places(platform=platform, external_user_id=person, limit=1)
+        if person
+        else []
     )
-    if thread_surface_id is not None:
+    if known and known[0].surface_id is not None:
         return await surfaces.list_active_for_routing(
-            platform, surface_ids=[thread_surface_id], system_credentials_only=True
+            platform, surface_ids=[known[0].surface_id], system_credentials_only=True
         )
     few = await surfaces.list_active_for_routing(
         platform,
@@ -247,7 +213,7 @@ async def admitted_surfaces(
     surfaces: list[AgentSurfaceEntity],
     parsed: ParsedInboundSurfaceEvent,
     *,
-    links: SurfaceConversationLinkRepository,
+    seats: ChannelSeats,
 ) -> list[AgentSurfaceEntity]:
     """The surfaces that should act on this event.
 
@@ -264,13 +230,11 @@ async def admitted_surfaces(
     talking under somebody else's message paid for a model call each time,
     and the run began with no conversation to continue.
 
-    The link answers it, on the same key routing continues a conversation
-    with -- thread *and* sender. That equivalence is the point rather than a
-    convenience: if there is no link, `_route_to_surface` would not have
-    continued anything either, it would have opened a fresh conversation
-    with no history, which is precisely the run that should not happen. If
-    there is one, the reply belongs to a conversation already under way and
-    goes through exactly as before.
+    The channel answers it: a reply this sender made earlier in this thread,
+    at the place the surface hears the chat, that a conversation took up. With
+    none, `_route_to_surface` would open the person a fresh conversation for
+    a thread they were never in with us -- the run that should not happen.
+    With one, the reply continues a conversation already under way.
 
     The read is on the narrow path only, and it replaces an agent run rather
     than adding to one -- so the case that costs a query is the case that
@@ -281,20 +245,25 @@ async def admitted_surfaces(
         for surface in surfaces
         if surface.allows_inbound_event(parsed, thread_is_ours=False)
     ]
-    if admitted or not parsed.metadata.get("is_thread_reply"):
+    if admitted or not InboundRoutingFacts.of(parsed).is_thread_reply:
         return admitted
-    thread_surface_id = await links.find_surface_id_for_external_thread(
+    sender, thread = parsed.sender_external_user_id, parsed.external_thread_id
+    if not (sender and thread and parsed.external_channel_id):
+        return []
+    places = await seats.places_hearing(
         platform=parsed.platform.value,
         external_channel_id=parsed.external_channel_id,
-        external_thread_id=parsed.external_thread_id,
-        external_user_id=parsed.sender_external_user_id,
         surface_ids=[surface.id for surface in surfaces],
     )
-    if thread_surface_id is None:
-        return []
+    engaged: set[UUID] = set()
+    for place in places:
+        if place.surface_id and await seats.conversation_at(
+            place.id, sender_external_id=sender, external_thread_id=thread
+        ):
+            engaged.add(place.surface_id)
     return [
         surface
         for surface in surfaces
-        if surface.id == thread_surface_id
+        if surface.id in engaged
         and surface.allows_inbound_event(parsed, thread_is_ours=True)
     ]

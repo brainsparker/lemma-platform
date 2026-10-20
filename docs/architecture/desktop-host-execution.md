@@ -337,7 +337,9 @@ sandbox.
   whether to take it (`seatbelt::lemma_cli_root`): a folder holding
   `bin/lemma`, not the home folder or anything containing it, and not inside
   any path denied above except the host packs' own
-  (`Library/Application Support/Lemma/runtime`) -- so a pairing secret or the
+  (`Library/Application Support/Lemma/runtime`) and the CLIs the Agent Host
+  downloads for itself (`Library/Application Support/Lemma/agent-host/cli`,
+  see [Agent Host](agent-host.md)) -- so a pairing secret or the
   app's vault is never made readable by naming it. A folder it takes is
   `LEMMA_CLI`, readable and not writable (nothing a command writes may be run
   later by another conversation's `lemma`), and its `bin/` goes first on the

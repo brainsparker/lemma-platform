@@ -22,8 +22,24 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
+from uuid import UUID
 
-WAIT_TOOL_NAME = "wait_for"
+
+class PausingKind(str, Enum):
+    """A pausing tool, by the name its call is stored under.
+
+    A ``str`` enum so a member is the stored name: the message log keys pauses
+    by tool name, and SQL filters on it, so the two must never be spelt apart.
+    """
+
+    ASK_USER = "ask_user"
+    REQUEST_APPROVAL = "request_approval"
+    BROWSER_SIGN_IN = "browser_sign_in"
+    WAIT_FOR = "wait_for"
+
+
+WAIT_TOOL_NAME = PausingKind.WAIT_FOR.value
 
 #: The pauses a *person* resolves. Waiting is excluded on purpose: it resolves
 #: on a timer or on the thing it is watching, with nobody involved, so it must
@@ -34,7 +50,12 @@ WAIT_TOOL_NAME = "wait_for"
 #: same approvals endpoint and the same durable decision row, which is what
 #: makes it reach WhatsApp, Slack, Telegram and email without any new delivery
 #: path.
-USER_PAUSING_TOOL_NAMES = ("ask_user", "request_approval", "browser_sign_in")
+USER_PAUSING_KINDS = (
+    PausingKind.ASK_USER,
+    PausingKind.REQUEST_APPROVAL,
+    PausingKind.BROWSER_SIGN_IN,
+)
+USER_PAUSING_TOOL_NAMES = tuple(kind.value for kind in USER_PAUSING_KINDS)
 
 PAUSING_TOOL_NAMES = (*USER_PAUSING_TOOL_NAMES, WAIT_TOOL_NAME)
 
@@ -51,6 +72,20 @@ PARKED_IN_RUN_KEY = "parked_in_run"
 #: "cancelled" read as WAITING, and what tells a later decision that it has no
 #: live turn to land in and must resume a new run instead.
 SUSPENDED_WHILE_PARKED_KEY = "suspended_while_parked"
+
+
+@dataclass(frozen=True, slots=True)
+class PendingPause:
+    """A pausing tool call nobody has decided yet: what a card renders and a
+    typed reply is routed to."""
+
+    tool_call_id: str
+    kind: PausingKind
+    #: The call's own arguments, as stored. Unvalidated on purpose: a surface
+    #: validates them against the tool's request model and must be able to tell
+    #: an unparseable payload from an absent one.
+    tool_args: dict[str, object]
+    agent_run_id: UUID | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +112,9 @@ def parked_suspension_of(
 __all__ = [
     "PARKED_IN_RUN_KEY",
     "ParkedSuspension",
+    "PausingKind",
+    "PendingPause",
+    "USER_PAUSING_KINDS",
     "SUSPENDED_WHILE_PARKED_KEY",
     "parked_suspension_of",
     "PAUSING_TOOL_NAMES",

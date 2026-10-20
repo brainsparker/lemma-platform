@@ -6,9 +6,8 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import func, literal, select, update
+from sqlalchemy import DateTime, func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
-from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -39,9 +38,6 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
     MessageModel,
 )
-from app.modules.agent.infrastructure.conversation_origin_store import (
-    create_conversation_for_origin,
-)
 from app.modules.agent.infrastructure.conversation_run_queries import (
     ConversationRunQueriesMixin,
 )
@@ -58,6 +54,7 @@ from app.modules.agent.infrastructure.repositories.conversation_list_page import
 )
 from app.modules.agent.infrastructure.repositories.conversation_run_lifecycle import (
     finish_agent_run as _finish_agent_run,
+    lock_conversation_row as _lock_conversation_row,
     update_conversation_status as _write_conversation_status,
 )
 from app.modules.agent.domain.subagent_spawn import SPAWN_KEY
@@ -87,30 +84,7 @@ class ConversationRepository(
         self,
         conversation: ConversationEntity,
     ) -> ConversationEntity:
-        model = ConversationModel(
-            id=conversation.id,
-            created_at=conversation.created_at,
-            updated_at=conversation.updated_at,
-            user_id=conversation.user_id,
-            pod_id=conversation.pod_id,
-            organization_id=conversation.organization_id,
-            agent_id=conversation.agent_id,
-            title=conversation.title,
-            instructions=conversation.instructions,
-            agent_runtime=(
-                conversation.agent_runtime.model_dump(mode="json")
-                if conversation.agent_runtime
-                else None
-            ),
-            origin_type=conversation.origin_type,
-            origin_id=conversation.origin_id,
-            conversation_type=conversation.type.value,
-            status=conversation.status.value if conversation.status else None,
-            output_data=conversation.output,
-            parent_id=conversation.parent_id,
-            conversation_metadata=conversation.metadata,
-            is_archived=conversation.is_archived,
-        )
+        model = ConversationModel(**ConversationModel.values_from(conversation))
         self.session.add(model)
         await self.session.flush()
         self.uow.collect_events(
@@ -125,13 +99,6 @@ class ConversationRepository(
             ]
         )
         return model.to_entity()
-
-    async def create_conversation_once(
-        self,
-        conversation: ConversationEntity,
-    ) -> tuple[ConversationEntity, bool]:
-        """Create one conversation for a durable external invocation origin."""
-        return await create_conversation_for_origin(self.session, conversation)
 
     async def update_conversation(
         self,
@@ -152,8 +119,11 @@ class ConversationRepository(
             else None
         )
         model.conversation_type = conversation.type.value
-        model.status = conversation.status.value if conversation.status else None
-        model.output_data = conversation.output
+        # Not `status` or `output_data`: those move with the run, in the run's
+        # own transaction (`conversation_run_lifecycle`). An entity read before a
+        # run ended and saved after -- a rename, an auto-title -- would write the
+        # old RUNNING back over a finished conversation, and nothing would move
+        # it again.
         model.conversation_metadata = conversation.metadata
         model.is_archived = conversation.is_archived
         await self.session.flush()
@@ -212,14 +182,52 @@ class ConversationRepository(
         await self.session.execute(stmt)
         await self.session.flush()
 
+    async def remove_conversation_metadata_key(
+        self, conversation_id: UUID, key: str, *, matching: JsonObject
+    ) -> None:
+        """Drop one metadata key, only while its object still holds ``matching``.
+
+        Conditional, so a writer clearing the record it acted on cannot remove
+        a newer one written under the same key meanwhile. Removed rather than
+        set to null, so the key's presence -- what `list_metadata_due` finds
+        rows by, through the GIN index -- means a record is there.
+        """
+        column = ConversationModel.conversation_metadata
+        await self.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .where(column[key].op("@>")(literal(matching, JSONB)))
+            .values(conversation_metadata=column - key)
+        )
+        await self.session.flush()
+
+    async def list_metadata_due(
+        self, *, key: str, due_field: str, due_before: datetime, limit: int
+    ) -> list[tuple[UUID, JsonValue]]:
+        """Conversations whose ``key`` record fell due before ``due_before``.
+
+        ``due_field`` is an ISO timestamp inside the record. The key-exists
+        test is what the metadata GIN index answers, so the scan is of the
+        conversations holding such a record, not of every conversation.
+        """
+        column = ConversationModel.conversation_metadata
+        record = column[key]
+        result = await self.session.execute(
+            select(ConversationModel.id, record)
+            .where(column.has_key(key))
+            .where(func.jsonb_typeof(record) == "object")
+            .where(record[due_field].astext.cast(DateTime(timezone=True)) < due_before)
+            .limit(limit)
+        )
+        return [(row[0], row[1]) for row in result.all()]
+
     async def get_conversation(
         self,
         conversation_id: UUID,
         *,
-        include_messages: bool = False,
         include_runs: bool = False,
     ) -> ConversationEntity | None:
-        """Load a conversation, optionally with its messages and its latest run.
+        """Load a conversation, optionally with its latest run.
 
         ``include_runs`` used to eager-load every run of the conversation and
         every message of every run. Nothing consumed that: the entity derives
@@ -234,8 +242,6 @@ class ConversationRepository(
         ``status`` and the ``last_run_*`` fields from it unchanged.
         """
         stmt = select(ConversationModel).where(ConversationModel.id == conversation_id)
-        if include_messages:
-            stmt = stmt.options(selectinload(ConversationModel.messages))
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         if model is None:
@@ -282,8 +288,10 @@ class ConversationRepository(
         search: str | None = None,
         cursor: ConversationListCursor | None = None,
         limit: int = 20,
+        in_channel: bool | None = None,
     ) -> tuple[list[ConversationEntity], ConversationListCursor | None]:
         stmt = list_statement(
+            in_channel=in_channel,
             user_id=user_id,
             pod_id=pod_id,
             agent_selection=agent_selection,
@@ -307,11 +315,7 @@ class ConversationRepository(
         )
 
     async def lock_conversation(self, conversation_id: UUID) -> None:
-        await self.session.execute(
-            select(ConversationModel.id)
-            .where(ConversationModel.id == conversation_id)
-            .with_for_update()
-        )
+        await _lock_conversation_row(self.session, conversation_id=conversation_id)
 
     async def find_spawned_child(
         self, *, parent_id: UUID, parent_run_id: UUID, spawn_key: str
@@ -333,6 +337,26 @@ class ConversationRepository(
             .limit(1)
         )
         return model.to_entity() if model is not None else None
+
+    async def find_child_by_spawn_call(
+        self, *, parent_id: UUID, spawn_call: str
+    ) -> ConversationEntity | None:
+        """The child the spawning call ``spawn_call`` created, if it did."""
+        model = await self.session.scalar(
+            select(ConversationModel).where(
+                ConversationModel.parent_id == parent_id,
+                ConversationModel.spawn_tool_call_id == spawn_call,
+            )
+        )
+        return model.to_entity() if model is not None else None
+
+    async def set_spawn_call(self, conversation_id: UUID, spawn_call: str) -> None:
+        """Record the call that spawned ``conversation_id``; unique per parent."""
+        await self.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .values(spawn_tool_call_id=spawn_call)
+        )
 
     async def list_children(
         self,

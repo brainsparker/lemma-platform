@@ -31,10 +31,11 @@ const PLACES: [Address, string][] = [
     [at("space:chats"), "/t/" + POD + "/chats"],
     [at("run:run_42"), "/t/" + POD + "/run/run_42"],
     [at("workflow:budget-sign-off"), "/t/" + POD + "/workflow/budget-sign-off"],
-    [at("space:groups"), "/t/" + POD + "/groups"],
+    [at("space:channels"), "/t/" + POD + "/channels"],
     [at("space:contacts"), "/t/" + POD + "/contacts"],
-    [at("group:7f3c9a2e-4b1d-4e8a"), "/t/" + POD + "/group/7f3c9a2e-4b1d-4e8a"],
+    [at("channel:7f3c9a2e-4b1d-4e8a"), "/t/" + POD + "/channel/7f3c9a2e-4b1d-4e8a"],
     [at("space:about"), "/t/" + POD + "/about"],
+    [at("space:about", { section: "schedules" }), "/t/" + POD + "/about/schedules"],
     [at("library"), "/t/" + POD + "/library"],
     [at("history"), "/t/" + POD + "/history"],
     [at("computer"), "/t/" + POD + "/computer"],
@@ -58,6 +59,20 @@ test("a link to the space's old Settings page opens the teammate's page", () => 
     // from before that opens the page carrying them, rather than falling back
     // to wherever this teammate happened to be left.
     assert.deepEqual(readAddress("/t/" + POD + "/settings"), at("space:about"));
+});
+
+test("a part of About is a page under it, and Back steps out to the overview", () => {
+    const overview = at("space:about");
+    const people = at("space:about", { section: "people" });
+    assert.equal(isNewPlace(overview, people), true);
+    assert.equal(isNewPlace(people, overview), true);
+    assert.equal(isNewPlace(people, at("space:about", { section: "memory" })), true);
+    // A section that moved to Settings, or one this build has never heard of,
+    // still opens About rather than nothing.
+    assert.deepEqual(readAddress("/t/" + POD + "/about/org-usage"), overview);
+    assert.deepEqual(readAddress("/t/" + POD + "/about/people/more"), at(null));
+    // The overview's address carries no section at all.
+    assert.equal("section" in readAddress("/t/" + POD + "/about"), false);
 });
 
 test("every teammate at once has an address of its own", () => {
@@ -221,11 +236,24 @@ test("a bare space address filled in with the restored view replaces", () => {
     assert.equal(isNewPlace(readAddress("/t"), placeAt({ tabId: "space:home" })), false);
 });
 
-test("a group rebuilds from its id alone, named until its page reads it", () => {
-    assert.deepEqual(tabFromId("group:7f3c9a2e"), { id: "group:7f3c9a2e", kind: "group", label: "Group", groupId: "7f3c9a2e" });
-    assert.equal(tabFromId("group:"), null);
-    // A group's address is one id and nothing after it.
+test("a channel rebuilds from its id alone, named until its page reads it", () => {
+    assert.deepEqual(tabFromId("channel:7f3c9a2e"), { id: "channel:7f3c9a2e", kind: "channel", label: "Channel", channelId: "7f3c9a2e" });
+    assert.equal(tabFromId("channel:"), null);
+    // A channel's address is one id and nothing after it.
+    assert.deepEqual(readAddress("/t/" + POD + "/channel"), at(null));
+    assert.deepEqual(readAddress("/t/" + POD + "/channel/a/b"), at(null));
+    assert.deepEqual(readAddress("/t/" + POD + "/channels/extra"), at(null));
+});
+
+test("a link from when groups had pages of their own opens Channels", () => {
+    // Groups became channels. The old list is the new one; one group's id
+    // named a source, not a channel, so it opens the list every source's
+    // channel is in. The shell writes the new address back.
+    assert.deepEqual(readAddress("/t/" + POD + "/groups"), at("space:channels"));
+    assert.deepEqual(readAddress("/t/" + POD + "/group/7f3c9a2e"), at("space:channels"));
+    assert.equal(writeAddress(readAddress("/t/" + POD + "/groups")), "/t/" + POD + "/channels");
     assert.deepEqual(readAddress("/t/" + POD + "/group"), at(null));
     assert.deepEqual(readAddress("/t/" + POD + "/group/a/b"), at(null));
     assert.deepEqual(readAddress("/t/" + POD + "/groups/extra"), at(null));
+    assert.equal(tabFromId("group:7f3c9a2e"), null);
 });

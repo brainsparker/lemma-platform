@@ -32,9 +32,11 @@ from app.core.domain.generation import (
     ReasoningEffort,
     lighter_effort,
 )
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeProfileProtocol,
+    describe_invalid,
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, JsonObject
 from app.modules.agent.services.run_input_settings import (
@@ -89,11 +91,13 @@ def validated_stored_settings(stored: Mapping[str, object] | None) -> JsonObject
         provider_model_settings,
     )
 
-    layer = split_stored_settings(stored)
     try:
-        provider_model_settings(layer.wire)
+        provider_model_settings(split_stored_settings(stored).wire)
     except ValidationError as exc:
-        raise ValueError(f"model_settings is not valid: {exc}") from exc
+        # Described, not quoted: pydantic's own text repeats the input.
+        raise RuntimeProfileValidationError(
+            describe_invalid(exc, prefix="model_settings")
+        ) from None
     return dict(stored or {})
 
 
@@ -250,18 +254,31 @@ def compaction_generation_settings(merged: GenerationSettings) -> GenerationSett
     )
 
 
-def title_model_settings(resolved: ResolvedAgentRuntime) -> JsonObject:
+def title_model_settings(
+    resolved: ResolvedAgentRuntime, *, ask_no_reasoning: bool = True
+) -> JsonObject:
     """Request parameters for a conversation title: no reasoning at all.
 
     A title is a few words, and a reasoning model left at its default spends
-    almost all of its output on thinking before writing them. ``none`` is sent
-    only where the model declares it reasons; a model that does not reject the
-    field outright.
+    almost all of its output on thinking before writing them. ``none`` is
+    asked of every model, declared reasoning or not -- an undeclared reasoning
+    model is exactly the one that would otherwise think at length. A model
+    that rejects the field is asked again without it
+    (``ask_no_reasoning=False``); see the title generator.
     """
+    capabilities = list(resolved.capabilities)
+    if ask_no_reasoning:
+        capabilities.append(RuntimeModelCapability.REASONING)
+    else:
+        capabilities = [
+            c
+            for c in capabilities
+            if RuntimeModelCapability(c) is not RuntimeModelCapability.REASONING
+        ]
     return wire_settings(
         GenerationSettings(reasoning_effort=ReasoningEffort.NONE),
         protocol=resolved.profile.protocol,
-        capabilities=resolved.capabilities,
+        capabilities=capabilities,
     )
 
 

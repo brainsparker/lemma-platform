@@ -18,8 +18,15 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _ensure_connector_account,
     _load_slack_dm_fixture,
 )
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = pytest.mark.e2e
+
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
 
 
 async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
@@ -301,6 +308,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
         "contacts",
     }
@@ -370,6 +378,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
         "contacts",
     }
@@ -380,6 +389,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
         "contacts",
     }

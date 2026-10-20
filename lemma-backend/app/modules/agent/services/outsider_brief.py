@@ -8,7 +8,7 @@ business learning, handed to a model that is replying to them.
 
 So this says five things and nothing else: which pod the agent is speaking for,
 that the people in the chat are outside it, who looks after the conversation
-(so a question can be passed on with `message_user`), that a message written in
+(so a question can be passed on with `channel_post`), that a message written in
 Lemma is that member's and not a stranger's, and that only Public things are
 readable. It is short enough to rebuild every run, so it is not
 cached.
@@ -85,14 +85,13 @@ def render_outsider_brief(
             "in this pod is theirs unless it is marked Public."
         ),
         (
-            f"- Who looks after this conversation: {owner_name}. Pass on what "
-            "you cannot answer with `message_user` -- it always reaches them, "
-            "whatever you put in `to` -- and their reply comes back to you here."
+            f"- Who looks after this conversation: {owner_name}. When they need "
+            f"something you cannot give, call `ask_a_person`: {owner_name} or "
+            "another member steps in and answers them here themselves."
         ),
         (
             f"- A message marked as written in Lemma is from {owner_name}, not "
-            "from anybody in the chat. Answer it here; never pass it on to them "
-            "with `message_user`."
+            "from anybody in the chat. Answer it here."
         ),
         (
             "- You can read only what the pod has marked Public. A refusal from "
@@ -135,9 +134,9 @@ def render_contact_brief(
             "nothing in this pod is theirs unless it is marked Public."
         ),
         (
-            f"- Who looks after this conversation: {owner_name}. Pass on what "
-            "you cannot answer with `message_user` -- it always reaches them, "
-            "whatever you put in `to` -- and their reply comes back to you here."
+            f"- Who looks after this conversation: {owner_name}. When they need "
+            f"something you cannot give, call `ask_a_person`: {owner_name} or "
+            "another member steps in and answers them here themselves."
         ),
         (
             "- You can read only what the pod has marked Public, and what is "

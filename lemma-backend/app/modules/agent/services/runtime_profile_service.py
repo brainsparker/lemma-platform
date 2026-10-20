@@ -10,7 +10,10 @@ from pydantic import HttpUrl
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
+from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import (
@@ -19,6 +22,7 @@ from app.modules.agent.domain.agent_host import (
     effective_agent_host_status,
 )
 from app.modules.agent.domain.runtime_profiles import (
+    DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
     RuntimeProfileScope,
     AgentRuntimeProfile,
     RuntimeProfileKind,
@@ -175,7 +179,7 @@ class AgentRuntimeProfileService:
         description: str | None = None,
         default_model_name: str | None = None,
         config_selections: JsonObject | None = None,
-        host_wait_timeout_seconds: int = 300,
+        host_wait_timeout_seconds: int = DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
     ) -> AgentRuntimeProfile:
         """Bind a runtime profile to one harness on one paired Agent Host."""
         return await self.creation.create_agent_host_profile(
@@ -337,6 +341,7 @@ class AgentRuntimeProfileService:
                 if model is not None
                 else unselected_capabilities(profile, harness_sees=harness_sees)
             ),
+            selection_overrides=dict(runtime.config_selections or {}),
         )
 
     async def _harness_reads_images(self, profile: AgentRuntimeProfile) -> bool:
@@ -358,7 +363,8 @@ class AgentRuntimeProfileService:
             return False
         try:
             harnesses = await self.host_repository.get_harnesses({profile.harness_id})
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_if_database_unavailable(exc)
             # A capability hint is not worth losing a run over, but only a
             # database failure is expected here; anything else is a bug and
             # should surface as one.
@@ -395,7 +401,8 @@ class AgentRuntimeProfileService:
             if profile is None or profile.user_id in (None, user_id):
                 return None
             owner = await self.repository.owner_first_name(profile.user_id)
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_if_database_unavailable(exc)
             # A better message is not worth masking why the run cannot start.
             logger.warning(
                 "agent.runtime_profile.owner_lookup_failed.degraded",
@@ -456,6 +463,23 @@ class AgentRuntimeProfileService:
             organization_id=organization_id,
             user_id=user_id,
         )
+
+
+def runtime_profile_service_for(
+    uow: SqlAlchemyUnitOfWork,
+) -> AgentRuntimeProfileService:
+    """The one resolver every run path and route builds, over ``uow``.
+
+    Always with the host repository: without it a harness profile's vision
+    comes from the catalog copied at creation, often before the harness's own
+    probe said it reads images, while the MCP bridge -- which had it -- asked
+    the harness. Two resolvers gave one run two answers about whether its
+    model can see.
+    """
+    return AgentRuntimeProfileService(
+        AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
+        AgentHostRepository(uow),
+    )
 
 
 def _profile_availability(

@@ -29,7 +29,8 @@ async def slack_candidates_for_workspace(
 ) -> list[SlackWebhookVerificationCandidate]:
     # No resolver, no credentials to verify a signature against -- the same
     # reading `list_channels` gives it, and the reason this is `| None` at all.
-    if not team_id or service._credential_resolver is None:
+    resolver = service.credential_resolver
+    if not team_id or resolver is None:
         return []
     # The `team_id` names the workspace, and a workspace's surfaces are a
     # handful. This used to read every Slack surface in the deployment and then
@@ -43,9 +44,7 @@ async def slack_candidates_for_workspace(
     )
     grouped: dict[tuple[str, str], list[UUID]] = {}
     for surface in surfaces:
-        credentials = await service._credential_resolver.slack_webhook_credentials(
-            surface
-        )
+        credentials = await resolver.slack_webhook_credentials(surface)
         if not credentials.app_id or not credentials.signing_secret:
             continue
         grouped.setdefault((credentials.app_id, credentials.signing_secret), []).append(

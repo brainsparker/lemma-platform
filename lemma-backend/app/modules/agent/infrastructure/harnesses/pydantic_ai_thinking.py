@@ -34,19 +34,20 @@ catalog entry's metadata.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from uuid import UUID
 
 from pydantic_ai.messages import ThinkingPart
 
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
 #: Runtime-profile protocols, as `runtime_model_factory` spells them. Only these
 #: two build a pydantic-ai model, and they want different reasoning credentials.
-_OPENAI_PROTOCOL = "OPENAI_COMPATIBLE"
-_ANTHROPIC_PROTOCOL = "ANTHROPIC_COMPATIBLE"
+_OPENAI_PROTOCOL = RuntimeProfileProtocol.OPENAI_COMPATIBLE
+_ANTHROPIC_PROTOCOL = RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE
 
 
 class PendingThoughts:
@@ -60,7 +61,7 @@ class PendingThoughts:
 
     def __init__(
         self,
-        protocol: str | None,
+        protocol: RuntimeProfileProtocol | None,
         *,
         current_run_id: UUID | None = None,
         replay_prior_runs: bool = False,
@@ -101,20 +102,16 @@ class PendingThoughts:
         self._parts = []
 
 
-def replays_prior_run_reasoning(runtime_profile: object) -> bool:
+def replays_prior_run_reasoning(snapshot: RuntimeSnapshot | None) -> bool:
     """Whether this run's model asked, in its catalog entry, for earlier runs'
     reasoning to be replayed. Off unless the entry says ``true``."""
-    if not isinstance(runtime_profile, Mapping):
+    if snapshot is None:
         return False
-    metadata = runtime_profile.get("model_metadata")
-    return (
-        isinstance(metadata, Mapping)
-        and metadata.get("replay_prior_run_reasoning") is True
-    )
+    return snapshot.model_metadata.get("replay_prior_run_reasoning") is True
 
 
 def thinking_part_from_message(
-    msg: object, protocol: str | None
+    msg: object, protocol: RuntimeProfileProtocol | None
 ) -> ThinkingPart | None:
     """A stored thought, or None when it cannot be replayed faithfully.
 
@@ -178,10 +175,6 @@ def thinking_part_from_message(
         provider_name=provider_name,
         signature=signature,
     )
-
-
-def _identity_string(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
 
 
 def _identity_string(value: object) -> str | None:

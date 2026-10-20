@@ -1,6 +1,6 @@
 """The pooled provider clients: bounded, and holding nothing secret.
 
-Nothing evicted from the cache, and each entry pins an ``httpx.AsyncClient``
+Nothing evicted from the cache, and each entry pins an ``httpx2.AsyncClient``
 with its own connection pool, so on a multi-tenant deployment its size grew
 with the customer list for the life of the process.
 
@@ -14,7 +14,7 @@ runtime profile, and nothing in it is secret.
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 import pytest
 
 from app.modules.agent.services import runtime_model_factory as factory
@@ -84,11 +84,11 @@ def test_a_rotated_key_reuses_the_profile_s_pool() -> None:
 async def test_the_pool_keeps_no_cookies_between_runs() -> None:
     """A cookie set for one run would otherwise ride on the next one's request."""
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers={"Set-Cookie": "session=tenant-a"})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, headers={"Set-Cookie": "session=tenant-a"})
 
-    client = httpx.AsyncClient(
-        cookies=factory._no_cookies(), transport=httpx.MockTransport(handler)
+    client = httpx2.AsyncClient(
+        cookies=factory._no_cookies(), transport=httpx2.MockTransport(handler)
     )
     async with client:
         await client.get("https://api.example.com/v1/models")

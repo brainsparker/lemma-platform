@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
+
+from collections.abc import Callable
 from enum import StrEnum
 from datetime import datetime, timezone
 from typing import Any
@@ -134,12 +137,19 @@ def platform_value_for_source(source: str) -> str | None:
 _GROUPS_NEED_NO_ROUTE = frozenset({SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP})
 
 
-def is_slack_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
-    """A Slack conversation between several people and the bot (an ``mpim``)."""
-    return (
-        event.platform is SurfacePlatform.SLACK
-        and event.metadata.get("channel_type") == "mpim"
-    )
+#: What each workspace platform calls a chat of several people and the bot.
+_GROUP_DM_TYPES = {
+    SurfacePlatform.SLACK: "mpim",
+    SurfacePlatform.TEAMS: "groupchat",
+}
+
+
+def is_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
+    """A chat between several people and the bot, outside any channel: a Slack
+    ``mpim`` or a Teams group chat. Somebody started it with the bot in it."""
+    kind = _GROUP_DM_TYPES.get(event.platform)
+    channel_type = InboundRoutingFacts.of(event).channel_type
+    return kind is not None and (channel_type or "").lower() == kind
 
 
 class ExternalSurfaceUserEntity(Entity):
@@ -446,21 +456,11 @@ class AgentSurfaceEntity(AggregateRoot):
         row accept every tenant's events, and an event with no tenant reach
         every surface.
         """
-        if self.surface_type is SurfacePlatform.TEAMS:
-            expected = self.external_tenant_id
-        elif self.surface_type is SurfacePlatform.SLACK:
-            expected = self.external_workspace_id
-        else:
+        tenant_key = _TENANT_KEY.get(self.surface_type)
+        if tenant_key is None:
             return True
+        expected = tenant_key(self)
         return bool(expected) and bool(tenant_id) and expected == tenant_id
-
-    def should_ignore_sender(self, sender_external_user_id: str | None) -> bool:
-        if self.surface_type is SurfacePlatform.SLACK:
-            return bool(
-                sender_external_user_id
-                and self.surface_identity_id == sender_external_user_id
-            )
-        return False
 
     def matches_channel(self, channel_id: str | None) -> bool:
         if not channel_id:
@@ -513,14 +513,14 @@ class AgentSurfaceEntity(AggregateRoot):
         # groups have no allow-list — being added to the group is the
         # authorization — so any group is accepted (the @mention gate below, plus
         # the pod-membership check on the sender, still apply).
-        # A Slack group DM is the Telegram case too: somebody started it with
-        # the bot in it, so there is no channel to allow-list and no setup
+        # A Slack or Teams group DM is the Telegram case too: somebody started
+        # it with the bot in it, so there is no channel to allow-list and no setup
         # prompt to answer -- being in it is the authorization. A WhatsApp
         # group is one the bot created at a member's request, and ingress has
         # already narrowed it to the surface that created it.
         if (
             self.surface_type not in _GROUPS_NEED_NO_ROUTE
-            and not is_slack_group_dm(event)
+            and not is_group_dm(event)
             and not self.matches_channel(event.external_channel_id)
         ):
             return False
@@ -535,56 +535,18 @@ class AgentSurfaceEntity(AggregateRoot):
         # its own it admitted every threaded reply in a connected channel,
         # whoever it was to. The caller resolves the rest; see
         # `SurfaceInboundMixin._admit`.
-        if event.metadata.get("is_thread_reply") and thread_is_ours:
+        if InboundRoutingFacts.of(event).is_thread_reply and thread_is_ours:
             return True
-        if not event.mentioned_agent:
-            return False
-        if self.surface_type is SurfacePlatform.SLACK:
-            # Slack delivers `app_mention` only to the app that was mentioned,
-            # so the event type is itself the answer.
-            if event.metadata.get("event_type") == "app_mention":
-                return True
-            # A plain `message` reaches here whenever *anyone* was @-mentioned,
-            # because that is all the parser can tell. So it needs this
-            # surface's own bot id among them — and fails closed when there is
-            # no bot id to compare, which a surface created through the
-            # bundle/CLI path has not recorded. That case used to be read as
-            # "allow": the agent then answered every channel message in which
-            # two colleagues mentioned each other.
-            bot_user_id = self.surface_identity_id
-            mentioned_user_ids = set(event.metadata.get("mentioned_user_ids") or [])
-            return bool(bot_user_id) and bot_user_id in mentioned_user_ids
-        return True
+        # `mentioned_agent` means *this* bot by now: where the parser could
+        # not tell (a Slack `message` mentioning anyone, a Telegram @name),
+        # the platform's adapter settled it before admission
+        # (`InboundReader.settle_mention`).
+        return event.mentioned_agent
 
 
-class AgentSurfaceConversationLink(Entity):
-    surface_id: UUID
-    conversation_id: UUID
-    platform: str
-    external_channel_id: str | None = None
-    external_thread_id: str
-    external_user_id: str | None = None
-    routed_agent_id: UUID | None = None
-    conversation_kind: str = "DM"
-    route_key: str | None = None
-    last_event: dict[str, Any] = Field(default_factory=dict)
-    last_message_id: str | None = None
-    # When this person last wrote to us. Distinct from ``updated_at``, which an
-    # outbound notification also bumps — keying the DM reset off ``updated_at``
-    # means a proactive message silently suppresses the reset and leaks
-    # yesterday's context into today. Also the ranking key when choosing which of
-    # someone's channels to reach them on: freshest inbound is the best available
-    # guess at where they are actually looking.
-    last_inbound_at: datetime | None = None
-
-    @property
-    def inbound_activity_at(self) -> datetime:
-        """Last inbound time, falling back to ``updated_at`` for legacy rows.
-
-        Rows written before ``last_inbound_at`` existed have NULL there, and for
-        those ``updated_at`` *was* the last inbound time, because until then only
-        inbound events wrote this row. The fallback is correct by definition, and
-        it has to survive in code as well as in the backfill: a row the backfill
-        touched can still be NULL if it was created by an older worker mid-deploy.
-        """
-        return self.last_inbound_at or self.updated_at
+#: Where a surface records the tenant its installation is scoped to, on the
+#: platforms that scope one. A platform absent here is not tenant-scoped.
+_TENANT_KEY: dict[SurfacePlatform, Callable[[AgentSurfaceEntity], str | None]] = {
+    SurfacePlatform.TEAMS: lambda surface: surface.external_tenant_id,
+    SurfacePlatform.SLACK: lambda surface: surface.external_workspace_id,
+}

@@ -11,6 +11,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.services.host_native_commands import (
     NativeCommandFacts,
@@ -69,11 +71,15 @@ def _conversation() -> Conversation:
     )
 
 
+_SYSTEM_RUNTIME = AgentRuntimeConfig(profile_id=SYSTEM_LEMMA_PROFILE_ID)
+
+
 def _run(conversation: Conversation) -> AgentRun:
     return AgentRun(
         id=uuid4(),
         conversation_id=conversation.id,
         started_at=datetime(2026, 9, 25, tzinfo=timezone.utc),
+        agent_runtime=_SYSTEM_RUNTIME,
     )
 
 

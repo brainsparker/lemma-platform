@@ -42,11 +42,11 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileKind,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
+    SYSTEM_LEMMA_PROFILE_ID as SYSTEM_LEMMA_PROFILE_ID,
 )
 
 logger = get_logger(__name__)
 
-SYSTEM_LEMMA_PROFILE_ID = "system:lemma"
 DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID = SYSTEM_LEMMA_PROFILE_ID
 
 SystemOpenAICatalogCustomizer = Callable[

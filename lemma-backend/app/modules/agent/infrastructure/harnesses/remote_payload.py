@@ -400,13 +400,6 @@ def _turn_messages(
     return ordered[-1:]
 
 
-def _runtime_profile_value[DepsT](
-    options: HarnessOptions[DepsT], key: str
-) -> object | None:
-    profile = options.extra.get("runtime_profile")
-    return profile.get(key) if isinstance(profile, dict) else None
-
-
 def _workspace_cwd(ctx: AgentContext) -> str:
     get_workspace_cwd = getattr(ctx, "get_workspace_cwd", None)
     if callable(get_workspace_cwd):

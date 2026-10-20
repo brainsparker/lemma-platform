@@ -1145,6 +1145,7 @@ export function ProfilePane({
                 agents: (
                     <AgentsView
                         podId={pod.id}
+                        orgId={pod.orgId}
                         teammate={pod.teammate?.name ?? pod.name}
                         embedded
                         open={openAgentName ?? null}

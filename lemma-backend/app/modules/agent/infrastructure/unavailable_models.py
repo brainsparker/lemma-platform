@@ -7,13 +7,13 @@ it alike.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from functools import lru_cache
 
 from redis.exceptions import RedisError
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -69,17 +69,16 @@ def unavailable_models() -> UnavailableModels:
 
 
 async def remember_provider_refusal(
-    runtime_profile: object,
+    runtime_profile: RuntimeSnapshot | None,
     *,
     status_code: int,
     store: UnavailableModels | None = None,
 ) -> None:
     """Note a provider's 404 for the run's (profile, model)."""
-    if status_code != 404 or not isinstance(runtime_profile, Mapping):
+    if status_code != 404 or runtime_profile is None:
         return
-    profile_id = runtime_profile.get("profile_id")
-    model_name = runtime_profile.get("model_name")
-    if isinstance(profile_id, str) and isinstance(model_name, str):
+    if runtime_profile.model_name is not None:
         await (store or unavailable_models()).mark(
-            profile_id=profile_id, model_name=model_name
+            profile_id=runtime_profile.profile_id,
+            model_name=runtime_profile.model_name,
         )

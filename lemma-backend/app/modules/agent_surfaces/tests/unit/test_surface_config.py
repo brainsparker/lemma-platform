@@ -36,6 +36,12 @@ EXPECTED = [
     ("whatsapp_verify_token", "WHATSAPP_VERIFY_TOKEN", None),
     ("whatsapp_app_secret", "WHATSAPP_APP_SECRET", None),
     ("whatsapp_display_phone_number", "WHATSAPP_DISPLAY_PHONE_NUMBER", None),
+    ("whatsapp_reengage_template", "WHATSAPP_REENGAGE_TEMPLATE", None),
+    (
+        "whatsapp_reengage_template_language",
+        "WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE",
+        "en_US",
+    ),
     ("telegram_bot_token", "TELEGRAM_BOT_TOKEN", None),
     ("telegram_webhook_secret", "TELEGRAM_WEBHOOK_SECRET", None),
     ("telegram_manager_bot_token", "TELEGRAM_MANAGER_BOT_TOKEN", None),
@@ -63,11 +69,6 @@ EXPECTED = [
         "surface_allow_unverified_phone_match",
         "SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH",
         False,
-    ),
-    (
-        "surface_dm_conversation_reset_after_hours",
-        "SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS",
-        24,
     ),
     (
         "surface_outsider_turns_per_person_per_10_minutes",
@@ -109,11 +110,6 @@ EXPECTED = [
         "surface_new_contacts_per_surface_per_day",
         "SURFACE_NEW_CONTACTS_PER_SURFACE_PER_DAY",
         200,
-    ),
-    (
-        "surface_contact_follow_ups_per_contact_per_day",
-        "SURFACE_CONTACT_FOLLOW_UPS_PER_CONTACT_PER_DAY",
-        10,
     ),
     (
         "surface_parked_mail_notes_per_surface_per_hour",

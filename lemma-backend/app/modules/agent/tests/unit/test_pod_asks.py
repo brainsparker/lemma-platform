@@ -34,6 +34,7 @@ from app.modules.agent.domain.pod_ask_rules import (
     AskingRun,
     OpenModes,
     chain_for_person,
+    closed_reason,
     open_modes,
     plan_ask,
 )
@@ -153,7 +154,8 @@ class TestWhoMayAskAsTheirPerson:
         assert chain.pod_ids == (HERE, THERE)
 
     def test_a_direct_message_is_the_persons_alone(self):
-        chain_for_person(_run(surface_kind="dm"), to_pod_id=THERE)
+        chain = chain_for_person(_run(surface_kind="dm"), to_pod_id=THERE)
+        assert chain.pod_ids == (HERE, THERE)
 
     def test_not_this_pod(self):
         with pytest.raises(AskRefused, match="That is this pod"):
@@ -162,6 +164,12 @@ class TestWhoMayAskAsTheirPerson:
     def test_not_a_named_agent(self):
         with pytest.raises(AskRefused, match="named agent"):
             chain_for_person(_run(default_agent=False), to_pod_id=THERE)
+
+    def test_a_run_that_can_ask_nobody_is_told_why(self):
+        """An empty list of pods used to say "there is no other pod to ask"
+        when the real reason was the run: a named agent asks none."""
+        assert "named agent" in (closed_reason(_run(default_agent=False)) or "")
+        assert closed_reason(_run()) is None
 
     def test_not_a_conversation_answering_strangers(self):
         with pytest.raises(AskRefused, match="outside the pod"):
@@ -198,7 +206,8 @@ class TestWhoMayAskAsTheirPerson:
 
     @pytest.mark.parametrize("source", [None, "agent_surfaces", "queued_messages"])
     def test_a_turn_the_person_started_may(self, source):
-        chain_for_person(_run(turn_source=source), to_pod_id=THERE)
+        chain = chain_for_person(_run(turn_source=source), to_pod_id=THERE)
+        assert chain.pod_ids == (HERE, THERE)
 
     def test_the_handed_back_sources_are_the_ones_the_platform_writes(self):
         from app.modules.agent.services.message_reply_service import REPLY_SOURCE

@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.core.domain.generation import GenerationSettings, ReasoningEffort
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.modules.agent.domain.runtime_profiles import (
@@ -182,18 +183,21 @@ class TestReasoningGate:
 
         assert settings.model_settings == {}
 
-    def test_a_title_asks_for_no_effort_only_from_a_reasoning_model(self):
-        assert title_model_settings(_resolved()) == {"openai_reasoning_effort": "none"}
-        assert title_model_settings(_resolved(capabilities=_PLAIN)) == {}
+    def test_a_title_asks_every_model_for_no_effort_unless_told_not_to(self):
+        none = {"openai_reasoning_effort": "none"}
+        assert title_model_settings(_resolved()) == none
+        # An undeclared reasoning model is the one that would think at length.
+        assert title_model_settings(_resolved(capabilities=_PLAIN)) == none
+        assert title_model_settings(_resolved(), ask_no_reasoning=False) == {}
 
 
 class TestValidation:
     def test_a_profile_saved_with_a_bad_value_is_refused(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(RuntimeProfileValidationError):
             normalize_model_settings({"temperature": "hot"})
-        with pytest.raises(ValueError):
+        with pytest.raises(RuntimeProfileValidationError):
             normalize_model_settings({"reasoning_effort": "extreme"})
-        with pytest.raises(ValueError):
+        with pytest.raises(RuntimeProfileValidationError):
             normalize_model_settings({"max_tokens": "lots"})
 
     def test_good_values_are_kept_as_written(self):

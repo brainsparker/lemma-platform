@@ -17,6 +17,9 @@ answers as though the person had attached nothing.
 
 from __future__ import annotations
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from functools import partial
@@ -228,7 +231,7 @@ class SurfaceFileIngestService:
         platform: str,
         user_id: UUID,
         parsed: ParsedInboundSurfaceEvent,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
     ) -> AttachmentIngest:
         """Persist each inbound attachment to ``/me/{platform}``; return results.
 
@@ -304,7 +307,7 @@ class SurfaceFileIngestService:
         pod_id: UUID,
         platform: str,
         parsed: ParsedInboundSurfaceEvent,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         ctx: Any,
         attachments: list[dict[str, Any]],
         store: StoreInTransaction,
@@ -349,7 +352,7 @@ class SurfaceFileIngestService:
         pod_id: UUID,
         platform: str,
         parsed: ParsedInboundSurfaceEvent,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         ctx: Any,
         directory: str,
         attachment: dict[str, Any],
@@ -432,7 +435,7 @@ class SurfaceFileIngestService:
         pod_id: UUID,
         platform: str,
         parsed: ParsedInboundSurfaceEvent,
-        credentials: dict[str, object],
+        credentials: SurfaceCredentials,
         ctx: Context,
         directory: str,
         attachment: dict[str, object],
@@ -557,7 +560,8 @@ class SurfaceFileIngestService:
                 attempts=_NAME_ATTEMPTS,
             )
             return AttachmentFailure(name=label, reason="it could not be saved")
-        except Exception:
+        except Exception as exc:
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "agent_surfaces.file_ingest.attachment_store_failed.degraded",
                 platform=platform,

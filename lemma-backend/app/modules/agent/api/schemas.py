@@ -10,11 +10,17 @@ from pydantic import (
     ConfigDict,
     Field,
     computed_field,
+    field_validator,
     model_validator,
 )
 
-from app.core.authorization.context import ResourceType, ResourceVisibility
+from app.core.authorization.context import (
+    ResourceType,
+    ResourceVisibility,
+)
 from app.core.authorization.grants import ensure_grant_uses_resource_name
+from app.modules.agent.contracts.agent_response import AgentResponse as AgentResponse
+from app.modules.agent.contracts.agent_response import StoredVisibility
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import (
     MAX_AGENT_INSTRUCTION_CHARACTERS,
@@ -32,7 +38,7 @@ from app.modules.agent.domain.value_objects import (
     JsonValue,
     MessageKind,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     pod_cwd_for,
     workspace_location_for,
 )
@@ -66,30 +72,6 @@ class AgentPermissionsResponse(BaseModel):
     grants: list[AgentResourcePermissionResponse] = Field(default_factory=list)
 
 
-class AgentResponse(BaseModel):
-    id: UUID
-    pod_id: UUID
-    user_id: UUID
-    name: str
-    # Which of these the pod came with. A client renders the default
-    # assistant beside the agents somebody made, and has to be able to tell
-    # them apart to withhold edit and delete -- it is the same list.
-    kind: AgentKind = AgentKind.USER
-    description: str | None = None
-    icon_url: str | None = None
-    visibility: str = "POD"
-    instruction: str
-    agent_runtime: AgentRuntimeConfig | None = None
-    toolsets: list[AgentToolset] = Field(default_factory=list)
-    input_schema: JsonObject | None = None
-    output_schema: JsonObject | None = None
-    metadata: JsonObject | None = None
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
-
 class AgentActionResponse(AgentResponse):
     allowed_actions: list[str] = Field(default_factory=list)
 
@@ -116,7 +98,7 @@ class AgentSummaryResponse(BaseModel):
     kind: AgentKind = AgentKind.USER
     description: str | None = None
     icon_url: str | None = None
-    visibility: str = "POD"
+    visibility: StoredVisibility = ResourceVisibility.POD
     toolsets: list[AgentToolset] = Field(default_factory=list)
     metadata: JsonObject | None = None
     created_at: datetime
@@ -159,6 +141,9 @@ class ConversationResponse(BaseModel):
     instructions: str | None = None
     agent_runtime: AgentRuntimeConfig | None = None
     parent_id: UUID | None = None
+    #: The channel it is held in, if any: a channel's conversations are
+    #: reached through the channel.
+    channel_id: UUID | None = None
     type: ConversationType = ConversationType.CHAT
     status: ConversationStatus | None = None
     output: JsonValue | None = None
@@ -180,6 +165,15 @@ class ConversationResponse(BaseModel):
             "waiting on the conversation's owner. Not implied by status: a "
             "WAITING conversation may be waiting on a timer, and a permission "
             "request waits inside a RUNNING one."
+        ),
+    )
+    waiting_on_work: bool = Field(
+        default=False,
+        description=(
+            "WAITING on the agent's own work -- a sub-agent, a process or a "
+            "timer -- rather than on a person: a run will start when it ends, "
+            "so a viewer can follow the conversation to it. Set when one "
+            "conversation is read, false in lists."
         ),
     )
     created_at: datetime
@@ -365,6 +359,22 @@ class SendMessageRequest(BaseModel):
             "first send's run, with deduplicated=true."
         ),
     )
+
+    @field_validator("client_message_id")
+    @classmethod
+    def _not_a_system_name(cls, value: str | None) -> str | None:
+        """The pod names some sends itself -- the turn a channel line starts,
+        the news that answers arrived -- and a client never takes one of
+        those names first."""
+        if value is not None and value.startswith(SYSTEM_CLIENT_ID_PREFIXES):
+            raise ValueError("That client_message_id is reserved")
+        return value
+
+
+#: The ``client_message_id`` names the pod gives its own sends in a
+#: conversation: ``channel_answers.turn_client_id``,
+#: ``message_reply_service.replies_client_id``.
+SYSTEM_CLIENT_ID_PREFIXES = ("channel-line:", "replies:")
 
 
 class CreateAgentRequest(BaseModel):

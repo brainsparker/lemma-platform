@@ -4,32 +4,32 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from pydantic import SecretStr
 
+from app.modules.agent_surfaces.domain.credentials import TelegramCredentials
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     AgentSurfaceStatus,
     SurfaceConfig,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.services import telegram_mini_app_service
 from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceAgentPlatformConflictError,
     AgentSurfaceAlreadyExistsError,
     AgentSurfaceCredentialConflictError,
-    AgentSurfaceNotFoundError,
     AgentSurfaceError,
+    AgentSurfaceNotFoundError,
     AgentSurfaceValidationError,
 )
+from app.modules.agent_surfaces.domain.ports import (
+    SurfaceAccountInfo,
+)
+from app.modules.agent_surfaces.services import telegram_mini_app_service
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     TelegramMiniApp,
-)
-from app.modules.agent_surfaces.domain.errors import (
-    AgentSurfaceAgentPlatformConflictError,
-)
-from app.modules.agent_surfaces.domain.ports import (
-    SurfaceAccountInfo,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -400,7 +400,7 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
     assert result.webhook_secret
     webhook_url = f"https://api.example.test/surfaces/{result.id}/webhook"
     register.assert_awaited_once_with(
-        credentials={"bot_token": "telegram-token"},
+        credentials=TelegramCredentials(bot_token=SecretStr("telegram-token")),
         webhook_url=webhook_url,
         webhook_secret=result.webhook_secret.get_secret_value(),
         drop_pending_updates=True,
@@ -693,7 +693,7 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
     assert result.webhook_secret.get_secret_value() != "old-secret"
     # Resuming the same bot: what Telegram held while it was off is kept.
     register.assert_awaited_once_with(
-        credentials={"bot_token": "telegram-token"},
+        credentials=TelegramCredentials(bot_token=SecretStr("telegram-token")),
         webhook_url=f"https://api.example.test/surfaces/{entity.id}/webhook",
         webhook_secret=result.webhook_secret.get_secret_value(),
         drop_pending_updates=False,
@@ -742,6 +742,24 @@ async def test_list_surfaces_by_pod():
     repo.list_by_pod.assert_awaited_once_with(
         pod_id, platform=None, agent_id=None, match_agent=False, cursor=None, limit=100
     )
+
+
+async def test_every_surface_in_a_pod_is_read_past_the_first_page():
+    """A bundle export read one page of a hundred and dropped the rest."""
+    repo = _repo()
+    service = AgentSurfaceService(
+        surface_repository=repo,
+        account_binding_resolver=AsyncMock(),
+    )
+    pod_id = uuid4()
+    first = [_surface_entity(pod_id=pod_id) for _ in range(100)]
+    second = [_surface_entity(pod_id=pod_id)]
+    repo.list_by_pod.side_effect = [(first, first[-1].id), (second, None)]
+
+    surfaces = await service.all_surfaces_in_pod(pod_id)
+
+    assert len(surfaces) == 101
+    assert repo.list_by_pod.await_args_list[1].kwargs["cursor"] == first[-1].id
 
 
 async def test_delete_all_surfaces_for_pod_paginates_and_deletes():
@@ -923,8 +941,7 @@ async def test_resend_surface_allowed_without_public_url_when_polling_enabled(
     )
     surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
 
-    # Does not raise.
-    _runtime_service()._validate_runtime_supported(surface)
+    assert _runtime_service()._validate_runtime_supported(surface) is None
 
 
 async def test_resend_surface_rejected_on_local_url_without_polling(monkeypatch):

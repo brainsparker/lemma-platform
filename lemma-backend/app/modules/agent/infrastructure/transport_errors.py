@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+import httpx2
 from pydantic_ai.exceptions import (
     ModelHTTPError,
     UnexpectedModelBehavior,
@@ -60,12 +61,24 @@ _NEVER_RETRY: tuple[type[BaseException], ...] = (
     UnexpectedModelBehavior,
 )
 
+# Both HTTP stacks, because the provider SDKs and everything else disagree.
+# The model clients are `httpx2` (what the anthropic and openai SDKs require),
+# while tools, MCP servers and other callers still raise `httpx`. The two
+# hierarchies share no base class -- an `httpx2.ReadTimeout` is not an
+# `httpx.ReadTimeout` -- so a check naming only one silently stops matching
+# the other's failures.
+_TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
+    httpx.TransportError,
+    httpx2.TransportError,
+)
 
-class ModelResponseBudgetExceeded(httpx.ReadTimeout):
+
+class ModelResponseBudgetExceeded(httpx2.ReadTimeout):
     """One model exchange ran past its whole-response time budget.
 
-    Still a `ReadTimeout`, so every layer that already unwinds a stream on one
-    keeps doing so. Told apart from a dropped connection because it is not one:
+    An `httpx2.ReadTimeout`, because it is raised inside the provider client's
+    transport and the SDKs recognise only their own stack's timeouts. So every
+    layer that already unwinds a stream on one keeps doing so. Told apart from a dropped connection because it is not one:
     nothing dropped, the answer was simply longer than the budget allows, and
     re-sending the identical request takes the same time and expires again --
     paid for in full each time and thrown away. So it is never retried as a
@@ -76,7 +89,7 @@ class ModelResponseBudgetExceeded(httpx.ReadTimeout):
         self,
         message: str,
         *,
-        request: httpx.Request,
+        request: httpx2.Request,
         elapsed_seconds: float,
         budget_seconds: float,
     ) -> None:
@@ -124,7 +137,7 @@ def _provider_connection_error(exc: BaseException) -> bool:
 
     Imported lazily and matched by name so this module doesn't hard-depend on
     both SDKs being installed, and so a provider we haven't special-cased still
-    benefits when it wraps an httpx error (the ``__cause__`` walk below).
+    benefits when it wraps a transport error (the ``__cause__`` walk below).
     """
     return type(exc).__name__ in {"APIConnectionError", "APITimeoutError"}
 
@@ -142,10 +155,10 @@ def is_retryable_stream_error(exc: BaseException) -> bool:
         status = exc.status_code
         return status in RETRYABLE_STATUS_CODES or status >= 500
 
-    # httpx.TransportError covers ReadError/WriteError/ConnectError/ReadTimeout/
+    # TransportError covers ReadError/WriteError/ConnectError/ReadTimeout/
     # PoolTimeout/RemoteProtocolError — the whole mid-stream drop family, which
-    # is what the production ReadErrors were.
-    if isinstance(exc, httpx.TransportError):
+    # is what the production ReadErrors were — in either HTTP stack.
+    if isinstance(exc, _TRANSPORT_ERRORS):
         return True
 
     if _provider_connection_error(exc):
@@ -220,7 +233,7 @@ def local_model_server_name(exc: BaseException) -> str | None:
     try:
         url = connect.request.url
     except RuntimeError:
-        # httpx raises when an error was built without its request.
+        # Both stacks raise when an error was built without its request.
         return None
     if url.host not in _LOOPBACK_HOSTS:
         return None
@@ -229,11 +242,11 @@ def local_model_server_name(exc: BaseException) -> str | None:
 
 def _find_connect_failure(
     exc: BaseException, *, depth: int
-) -> httpx.ConnectError | None:
-    """The `httpx.ConnectError` inside whatever the provider SDK wrapped it in."""
+) -> httpx.ConnectError | httpx2.ConnectError | None:
+    """The `ConnectError` inside whatever the provider SDK wrapped it in."""
     if depth > 6:
         return None
-    if isinstance(exc, httpx.ConnectError):
+    if isinstance(exc, (httpx.ConnectError, httpx2.ConnectError)):
         return exc
     if isinstance(exc, BaseExceptionGroup):
         for child in exc.exceptions:

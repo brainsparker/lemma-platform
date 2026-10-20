@@ -1,6 +1,6 @@
 """Ending a model response that has stopped making progress, or run too long.
 
-The provider client's read timeout is *per chunk*: httpx resets it every time
+The provider client's read timeout is *per chunk*: httpx2 resets it every time
 bytes arrive, which is the right shape for "the provider has gone away" and the
 reason a legitimately long answer can stream for minutes without tripping it.
 
@@ -13,7 +13,7 @@ So this bounds the two things a per-chunk timeout structurally cannot:
 
 * how long the provider may take to send the *first* body chunk, which is where
   a request that was accepted but never really started shows itself. That one
-  raises :class:`httpx.ReadTimeout`, a transport error the harness already
+  raises :class:`httpx2.ReadTimeout`, a transport error the harness already
   retries from the snapshot taken before the failing request.
 * how long one exchange may run in total, counted from the moment the request
   is sent. That raises :class:`ModelResponseBudgetExceeded`, which is *not* a
@@ -23,6 +23,9 @@ So this bounds the two things a per-chunk timeout structurally cannot:
 
 The stream is closed on the way out rather than abandoned, so a provider that
 has stopped making progress does not keep a pooled connection with it.
+
+Everything here is ``httpx2``, the HTTP stack the provider SDKs are built on,
+because this transport sits inside their client.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterator
 
-import httpx
+import httpx2
 
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.transport_errors import (
@@ -48,7 +51,7 @@ def _disabled(seconds: float | None) -> bool:
     return seconds is None or seconds <= 0
 
 
-class _BudgetedByteStream(httpx.AsyncByteStream):
+class _BudgetedByteStream(httpx2.AsyncByteStream):
     """Wraps a response body, failing it when progress stops.
 
     Each chunk is awaited under its own deadline rather than the whole
@@ -60,9 +63,9 @@ class _BudgetedByteStream(httpx.AsyncByteStream):
 
     def __init__(
         self,
-        stream: httpx.AsyncByteStream,
+        stream: httpx2.AsyncByteStream,
         *,
-        request: httpx.Request,
+        request: httpx2.Request,
         first_chunk_seconds: float | None,
         total_seconds: float | None,
         sent_at: float | None = None,
@@ -115,7 +118,7 @@ class _BudgetedByteStream(httpx.AsyncByteStream):
 
     async def _expired(
         self, *, sent_at: float, first_chunk: bool, over_total: bool
-    ) -> httpx.ReadTimeout:
+    ) -> httpx2.ReadTimeout:
         """Close the connection, say why, and build the error to raise."""
         elapsed = time.monotonic() - sent_at
         if over_total:
@@ -143,13 +146,13 @@ class _BudgetedByteStream(httpx.AsyncByteStream):
                 elapsed_seconds=elapsed,
                 budget_seconds=self._total_seconds,
             )
-        return httpx.ReadTimeout(message, request=self._request)
+        return httpx2.ReadTimeout(message, request=self._request)
 
     async def aclose(self) -> None:
         await self._stream.aclose()
 
 
-class ModelStreamBudgetTransport(httpx.AsyncBaseTransport):
+class ModelStreamBudgetTransport(httpx2.AsyncBaseTransport):
     """Applies :class:`_BudgetedByteStream` to every response it passes on.
 
     A transport rather than something further up because this has to sit under
@@ -160,7 +163,7 @@ class ModelStreamBudgetTransport(httpx.AsyncBaseTransport):
 
     def __init__(
         self,
-        wrapped: httpx.AsyncBaseTransport,
+        wrapped: httpx2.AsyncBaseTransport,
         *,
         first_chunk_seconds: float | None,
         total_seconds: float | None,
@@ -170,10 +173,10 @@ class ModelStreamBudgetTransport(httpx.AsyncBaseTransport):
         self._total_seconds = total_seconds
 
     @property
-    def wrapped(self) -> httpx.AsyncBaseTransport:
+    def wrapped(self) -> httpx2.AsyncBaseTransport:
         return self._wrapped
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         sent_at = time.monotonic()
         response = await self._wrapped.handle_async_request(request)
         if _disabled(self._first_chunk_seconds) and _disabled(self._total_seconds):
@@ -192,13 +195,13 @@ class ModelStreamBudgetTransport(httpx.AsyncBaseTransport):
 
 
 def budgeted_stream(
-    stream: httpx.AsyncByteStream,
+    stream: httpx2.AsyncByteStream,
     *,
-    request: httpx.Request,
+    request: httpx2.Request,
     first_chunk_seconds: float | None,
     total_seconds: float | None,
     sent_at: float | None = None,
-) -> httpx.AsyncByteStream:
+) -> httpx2.AsyncByteStream:
     """A response body that fails rather than trickling forever."""
     return _BudgetedByteStream(
         stream,

@@ -182,7 +182,23 @@ about it when it eventually cannot.
   for the pod, and shall say why.
 - The system shall never deactivate a schedule silently.
 
-**Contracts:** `schedule.get`, `schedule.list`, `notification.send`
+**Contracts:** `schedule.get`, `schedule.list`
+
+### PS-SCHED-024 — A schedule can be held to a number of runs at once
+**Status:** covered
+
+- Where a schedule sets how many of its runs may be in flight at once, when it
+  fires while that many are in flight, the system shall skip the firing and
+  start nothing.
+- The system shall record a skipped firing in the schedule's history, saying
+  it was skipped because the schedule was full.
+- The system shall not count a firing skipped this way as a failure.
+- When a run in flight finishes, the system shall let the schedule's next
+  firing start work again.
+- If a person sets the number below one or above the most a schedule allows,
+  then the system shall refuse it.
+
+**Contracts:** `schedule.create`, `schedule.update`, `schedule.run.list`, `record.create`
 
 ---
 

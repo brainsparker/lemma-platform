@@ -6,14 +6,14 @@ import { source, type ConversationRef, type Pod, type Surface } from "@/data";
 import { AskBox } from "@/chat/ask-box";
 import { lemma } from "@/session/client";
 import {
-    AGENT_EDIT, AGENT_REMOVE, AGENT_RUN, may, runtimeLine, surfacesLost, whyNot,
+    AGENT_EDIT, AGENT_REMOVE, AGENT_RUN, may, surfacesLost, whyNot,
     type AgentDetail,
 } from "@/data/agents";
 import { displayAgentName } from "@/data/agent-names";
 import { surfacesForAgent, surfaceStatus } from "@/data/surface-settings";
-import { groupsSupported } from "@/data/surface-groups";
+import { groupsSupported } from "@/channels/sources";
 import { capabilityList, grantedToolsets } from "@/stage/colleagues";
-import { ConfirmRemove, Editor } from "@/stage/agents-view";
+import { ConfirmRemove, Editor, useRunsOn } from "@/stage/agents-view";
 import { useSchedules } from "@/schedule/queries";
 import { wakeFor, wakeRequest } from "@/docpages/comments/wake";
 import { readWorkflows, sayWhen } from "@/workflow/runs";
@@ -136,7 +136,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
                                 <Instructions detail={detail} />
                                 <Abilities detail={detail} />
                                 <Channels space={pod} detail={detail} surfaces={surfaces.data ?? []} loading={surfaces.isPending} />
-                                <Facts detail={detail} />
+                                <Facts orgId={pod.orgId} detail={detail} />
                                 <CommentReplies pod={pod} detail={detail} />
                                 <UsedBy pod={pod} detail={detail} onOpenSchedules={onOpenSchedules} onOpenWorkflows={onOpenWorkflows} />
                                 <Access pod={pod} detail={detail} />
@@ -310,11 +310,6 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
     const [selected, setSelected] = useState<Surface | null>(null);
     const pod = useQuery({ queryKey: ["surface-pod", podId], queryFn: () => source.getPod(podId), enabled: Boolean(selected) });
     const own = surfacesForAgent(surfaces, detail.front ? "pod_default" : detail.name);
-    /* A group's switches take what configuring the bot takes. Read off the
-       bot's own actions rather than `may`, which also says no to editing the
-       main bot's definition — a different question. An empty list is a bot
-       that did not say, and not saying is not a refusal. */
-    const canChange = detail.actions.length > 0 ? detail.actions.includes(AGENT_EDIT) : undefined;
     const saved = () => {
         for (const key of [["surfaces", 2, podId], ["surface-detail", podId], ["surface-setup", podId], ["surface-channels", podId], ["my-surfaces"]]) {
             void cache.invalidateQueries({ queryKey: key });
@@ -346,8 +341,6 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
                                         surface={surface}
                                         bot={detail.label}
                                         space={space.name}
-                                        members={space.members}
-                                        canChange={canChange}
                                     />
                                 )}
                             </li>
@@ -365,10 +358,10 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
     );
 }
 
-function Facts({ detail }: { detail: AgentDetail }) {
-    const runtime = runtimeLine(detail);
+function Facts({ orgId, detail }: { orgId: string; detail: AgentDetail }) {
+    const runtime = useRunsOn(orgId, detail);
     return (
-        <Rail title="Runs on">
+        <Rail title="Model">
             <p className="agentpage__fact">{runtime || "The default model here"}</p>
             {(detail.input || detail.output) && (
                 <dl className="agentpage__schema">

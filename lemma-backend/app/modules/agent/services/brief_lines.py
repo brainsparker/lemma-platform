@@ -16,6 +16,7 @@ whether a person was typing or a schedule had fired at six in the morning.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import source_of
 from typing import TYPE_CHECKING
 
 from uuid import UUID
@@ -147,11 +148,7 @@ def run_source_of(agent_run) -> str | None:
     *conversation* once, so the conversation cannot say whether a person is here
     on this turn. Only the run can.
     """
-    metadata = getattr(agent_run, "metadata", None)
-    if not isinstance(metadata, dict):
-        return None
-    source = metadata.get("source")
-    return str(source) if source else None
+    return source_of(getattr(agent_run, "metadata", None))
 
 
 def run_framing(conversation, *, run_source: str | None = None) -> str:

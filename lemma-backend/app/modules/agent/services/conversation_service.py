@@ -13,6 +13,7 @@ from app.modules.agent.services.conversation_approvals import (
 from app.modules.agent.services.conversation_queries import ConversationQueries
 from app.modules.agent.services.conversation_pauses import ConversationPauses
 from app.modules.agent.services.conversation_turns import TurnCoordinator
+from app.modules.agent.services.conversation_retry_service import RetryCoordinator
 from app.modules.agent.services.send_window import SendWindow, window_key
 from app.modules.agent.domain.queued_messages import CLIENT_MESSAGE_ID
 from app.modules.agent.services.conversation_resume_return import (
@@ -48,7 +49,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     ConversationType,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     apply_location_metadata,
 )
 from app.modules.pod.contracts.agent_access import pod_organization_id
@@ -69,16 +70,12 @@ class ConversationService(ConversationPauses):
         uow: SqlAlchemyUnitOfWork,
         conversation_repository: ConversationRepository,
         agent_repository: AgentRepository,
-        authorization_service: object,
-        fallback_model_name: str | None = None,
         usage_service: UsageService | None = None,
         turn_runtime_check: TurnRuntimeCheck = ensure_turn_runtime_available,
     ):
         self.uow = uow
         self.conversation_repository = conversation_repository
         self.agent_repository = agent_repository
-        self.authorization_service = authorization_service
-        self.fallback_model_name = fallback_model_name
         self.usage_service = usage_service
         self.send_window = SendWindow(getattr(uow, "session", None))
         self.resume_returns = ResumeToolReturnBuilder(uow, agent_repository)
@@ -100,6 +97,9 @@ class ConversationService(ConversationPauses):
             usage_service,
             runtime_check=turn_runtime_check,
         )
+        self.retries = RetryCoordinator(
+            uow, conversation_repository, agent_repository, self.turns
+        )
 
     async def create_conversation(
         self,
@@ -114,7 +114,15 @@ class ConversationService(ConversationPauses):
         type: ConversationType = ConversationType.CHAT,
         metadata: dict[str, object] | None = None,
         require_execute_grant: bool = True,
+        contact_id: UUID | None = None,
+        channel_id: UUID | None = None,
     ) -> Conversation:
+        """A new conversation in the pod.
+
+        ``contact_id`` makes it a contact's (``domain/outsiders``): only the
+        server's own openers pass it -- the surface that met the contact -- and
+        no request a client sends reaches it.
+        """
         organization_id = await self._get_pod_organization_id(pod_id)
         # A parent is the caller's own conversation in this pod, or it does not
         # exist: the child inherits its working directory and repository, and
@@ -137,26 +145,14 @@ class ConversationService(ConversationPauses):
             if agent_name is not None
             else None
         )
-        # require_execute_grant is False only for self-spawn (an agent launching
+        # require_execute_grant is False for self-spawn (an agent launching
         # another instance of itself) — see SubAgentService.spawn. An agent has no
         # agent.execute grant on itself, but running another copy of the agent the
-        # user is already running is no privilege escalation.
+        # user is already running is no privilege escalation. And for a caller
+        # that checked first (`authorize_opening`) so that nothing in here
+        # releases its connection.
         if require_execute_grant:
-            # Dispatching a *named* agent checks agent.execute and agent.read
-            # together. agent.execute implies agent.read (IMPLIED_PERMISSIONS),
-            # so an execute-only grant satisfies both; checking read here anyway
-            # warms the decision cache for the run-load that follows and keeps
-            # the error complete for callers missing everything. The default
-            # pod agent (agent is None) needs only execute.
-            actions = [Permissions.AGENT_EXECUTE]
-            if agent is not None:
-                actions.append(Permissions.AGENT_READ)
-            await require_agent_actions(
-                user_id=user_id,
-                pod_id=pod_id,
-                agent_id=agent.id if agent else None,
-                actions=actions,
-            )
+            await self._require_execute(pod_id=pod_id, user_id=user_id, agent=agent)
         # A PROJECT is an explicit user choice (a pinned group); never coerce it.
         # Otherwise a structured-output agent implies a TASK conversation.
         if type == ConversationType.PROJECT:
@@ -169,6 +165,8 @@ class ConversationService(ConversationPauses):
         conversation = Conversation(
             user_id=user_id,
             pod_id=pod_id,
+            contact_id=contact_id,
+            channel_id=channel_id,
             organization_id=organization_id,
             agent_id=agent.id if agent else None,
             title=title,
@@ -180,6 +178,43 @@ class ConversationService(ConversationPauses):
         )
         await self._apply_inherited_cwd(conversation, parent=parent)
         return await self.conversation_repository.create_conversation(conversation)
+
+    async def authorize_opening(
+        self, *, pod_id: UUID, agent_name: str | None, user_id: UUID
+    ) -> None:
+        """Refuse, as ``create_conversation`` would, a person who may not run
+        this agent.
+
+        Checking releases the pooled connection -- it commits -- so a caller
+        holding a transaction-scoped lock around opening checks here first,
+        then opens with ``require_execute_grant=False``.
+        """
+        agent_name = _named_agent(agent_name)
+        agent = (
+            await resolve_agent_for_path(
+                self.agent_repository, pod_id=pod_id, agent_name=agent_name
+            )
+            if agent_name is not None
+            else None
+        )
+        await self._require_execute(pod_id=pod_id, user_id=user_id, agent=agent)
+
+    async def _require_execute(self, *, pod_id: UUID, user_id: UUID, agent) -> None:
+        # Dispatching a *named* agent checks agent.execute and agent.read
+        # together. agent.execute implies agent.read (IMPLIED_PERMISSIONS), so
+        # an execute-only grant satisfies both; checking read here anyway warms
+        # the decision cache for the run-load that follows and keeps the error
+        # complete for callers missing everything. The default pod agent
+        # (agent is None) needs only execute.
+        actions = [Permissions.AGENT_EXECUTE]
+        if agent is not None:
+            actions.append(Permissions.AGENT_READ)
+        await require_agent_actions(
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_id=agent.id if agent else None,
+            actions=actions,
+        )
 
     async def _apply_inherited_cwd(
         self,
@@ -438,6 +473,22 @@ class ConversationService(ConversationPauses):
             message_id=message_id,
             user_id=user_id,
             pod_id=pod_id,
+        )
+
+    async def retry_failed_run(
+        self,
+        *,
+        conversation_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+        agent_name: str | None = None,
+    ) -> AgentRunStartResult:
+        """Run the failed latest turn again; see `RetryCoordinator`."""
+        return await self.retries.retry_failed_run(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_name=agent_name,
         )
 
 

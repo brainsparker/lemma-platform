@@ -16,23 +16,32 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.datastore.config_live import LiveSettings
+from app.core.live.config import LiveSettings
+from app.core.live.connection import LiveConnection
+from app.core.live.protocol import (
+    LiveAccessDenied,
+    LiveErrorCode,
+    LiveUnavailable as LiveHubUnavailable,
+    SubscribeRequest as CoreSubscribeRequest,
+)
+from app.core.live.socket import LiveDispatcher
+from app.core.live.topics import LiveContribution, LiveRegistry
 from app.modules.datastore.domain.live import (
     ChangePosition,
-    LiveAccessDenied,
     LiveChange,
     LiveCursorExpired,
-    LiveErrorCode,
     LiveOp,
     LivePage,
     LiveTable,
     RowPayload,
     SubscribeRequest,
     UnsubscribedReason,
+    records_request,
 )
-from app.modules.datastore.services.live.connection import LiveConnection
+from app.modules.datastore.services.live import hub_start
 from app.modules.datastore.services.live.hub import PodHub
 from app.modules.datastore.services.live.registry import LiveHubRegistry
+from app.modules.datastore.services.live.subscription import LegacyFrames
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
@@ -194,6 +203,21 @@ class Socket:
         ]
 
 
+class RigTopic:
+    """The ``records`` topic over the rig's own hubs, not the process's."""
+
+    name = "records"
+
+    def __init__(self, registry: LiveHubRegistry) -> None:
+        self.registry = registry
+
+    async def subscribe(
+        self, connection: LiveConnection, request: CoreSubscribeRequest
+    ) -> None:
+        hub = await self.registry.hub(connection.pod_id)
+        await hub.subscribe(connection, records_request(request))
+
+
 @dataclass
 class Rig:
     log: MemoryLog
@@ -221,16 +245,15 @@ class Rig:
             send_text=socket.send_text,
             queue_bytes=queue_bytes,
         )
-        (await self.hub()).attach(connection)
         self.senders.append(asyncio.create_task(connection.run_sender()))
         return connection, socket
 
     async def subscribe(self, connection: LiveConnection, **request: object) -> None:
-        hub = await self.hub()
-        await hub.subscribe(
-            connection,
-            SubscribeRequest(op="subscribe", **request),  # type: ignore[arg-type]
-            max_subscriptions=3,
+        """Through the socket's own dispatch, as a client's frame arrives."""
+        topics = LiveRegistry()
+        topics.install(LiveContribution(topics=(RigTopic(self.registry),)))
+        await LiveDispatcher(max_subscriptions=3, registry=topics).handle(
+            connection, json.dumps({"op": "subscribe", "topic": "records", **request})
         )
 
     async def publish(self) -> None:
@@ -340,7 +363,6 @@ async def test_resume_from_since_is_gap_free_and_not_duplicated(rig: Rig) -> Non
 
     # The client drops; three changes land while it is away.
     first.close()
-    (await rig.hub()).detach(first)
     for rid in ("r2", "r3", "r4"):
         rig.log.write(tickets, "insert", rid)
     await rig.publish()
@@ -477,8 +499,7 @@ async def test_ops_filter_and_unsubscribe(rig: Rig) -> None:
     await rig.settle()
     assert [c["op"] for f in socket.of("changes") for c in f["changes"]] == ["delete"]
 
-    hub = await rig.hub()
-    assert hub.unsubscribe(connection, "s")
+    connection.offer_unsubscribed("s", "client")
     rig.log.write(tickets, "delete", "r9")
     await rig.publish()
     await rig.settle()
@@ -488,9 +509,7 @@ async def test_ops_filter_and_unsubscribe(rig: Rig) -> None:
 async def test_idle_hub_is_reaped_and_a_new_one_starts_at_now(rig: Rig) -> None:
     connection, _ = await rig.connect()
     await rig.subscribe(connection, id="s", table="tickets")
-    hub = await rig.hub()
     connection.close()
-    hub.detach(connection)
     rig.log.write(rig.access.tables["tickets"], "insert", "while-nobody-watched")
     await asyncio.sleep(0.3)
     assert rig.pod_id not in rig.registry.hubs()
@@ -512,15 +531,14 @@ async def test_legacy_connection_frames_one_change_per_frame(rig: Rig) -> None:
         user_id=uuid4(),
         send_text=socket.send_text,
         queue_bytes=1 << 20,
-        legacy=True,
+        frames=LegacyFrames(),
     )
     hub = await rig.hub()
-    hub.attach(connection)
     rig.senders.append(asyncio.create_task(connection.run_sender()))
     await hub.subscribe(
         connection,
-        SubscribeRequest(op="subscribe", id="changes", table="tickets", since="1712-0"),
-        max_subscriptions=1,
+        SubscribeRequest(id="changes", table="tickets", since="1712-0"),
+        legacy=True,
     )
     rig.log.write(
         rig.access.tables["tickets"], "insert", "r1", row={"id": "r1", "body": "b"}
@@ -538,3 +556,96 @@ async def test_legacy_connection_frames_one_change_per_frame(rig: Rig) -> None:
     assert change["operation"] == "INSERT"
     assert change["payload"] == {"id": "r1", "body": "b"}
     assert change["stream_id"] == change["cursor"]
+
+
+async def test_an_unexpected_start_failure_refuses_the_socket_and_the_next_one_starts(
+    rig: Rig, monkeypatch
+) -> None:
+    """A start that fails in a way nobody planned for must still release the
+    sockets waiting on it, and must not refuse the pod until the hub is reaped."""
+    hub = await rig.hub()
+    real_horizon = hub._feed.horizon
+    calls = 0
+
+    async def flaky_horizon(pod_id: UUID) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("not one of the start errors anyone expected")
+        return await real_horizon(pod_id)
+
+    monkeypatch.setattr(hub._feed, "horizon", flaky_horizon)
+
+    with pytest.raises(LiveHubUnavailable):
+        await asyncio.wait_for(hub.ensure_started(), timeout=2)
+    await asyncio.wait_for(hub.ensure_started(), timeout=2)
+    assert hub.cursor is not None
+
+
+async def test_a_start_that_never_finishes_or_is_stopped_does_not_hang_the_socket(
+    rig: Rig, monkeypatch
+) -> None:
+    hub = await rig.hub()
+    stuck = asyncio.Event()
+
+    async def stuck_horizon(pod_id: UUID) -> str:
+        await stuck.wait()
+        return ""
+
+    monkeypatch.setattr(hub._feed, "horizon", stuck_horizon)
+    monkeypatch.setattr(hub_start, "START_TIMEOUT", 0.2)
+    with pytest.raises(LiveHubUnavailable):
+        await asyncio.wait_for(hub.ensure_started(), timeout=2)
+
+    # Stopped mid-start (the reaper, a shutdown): the waiter hears at once.
+    waiting = asyncio.create_task(hub.ensure_started())
+    await asyncio.sleep(0.05)
+    await hub.stop()
+    with pytest.raises(LiveHubUnavailable):
+        await asyncio.wait_for(waiting, timeout=2)
+
+
+async def test_a_waiter_reads_the_start_it_joined_not_a_retry_after_it() -> None:
+    """A retry begun before an earlier start's waiter resumed used to wipe the
+    failure that waiter woke for, so it reported a start that never happened."""
+    start = hub_start.HubStart("live-hub-test")
+    gate = asyncio.Event()
+
+    async def fails(attempt: hub_start.StartAttempt) -> None:
+        await gate.wait()
+        attempt.failed(RuntimeError("the first start failed"))
+
+    async def never(attempt: hub_start.StartAttempt) -> None:
+        await asyncio.Event().wait()
+
+    start.launch(fails)
+    waiter = asyncio.create_task(start.until_started())
+    await asyncio.sleep(0)
+    gate.set()
+    while start.task is not None and not start.task.done():
+        await asyncio.sleep(0)
+    start.launch(never)  # the retry, before the first waiter has run
+
+    with pytest.raises(LiveHubUnavailable):
+        await asyncio.wait_for(waiter, timeout=2)
+    start.take()
+
+
+async def test_a_start_stopped_before_it_began_releases_its_waiters_at_once(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(hub_start, "START_TIMEOUT", 30.0)
+    start = hub_start.HubStart("live-hub-test")
+
+    async def never(attempt: hub_start.StartAttempt) -> None:
+        await asyncio.Event().wait()
+
+    start.launch(never)
+    waiter = asyncio.create_task(start.until_started())
+    await asyncio.sleep(0)
+    task = start.take()  # stopped before its first step ran
+    assert task is not None
+    task.cancel()
+
+    with pytest.raises(LiveHubUnavailable):
+        await asyncio.wait_for(waiter, timeout=1)

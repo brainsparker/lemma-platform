@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAssistantSession } from "lemma-sdk/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
+import { withSocketConversations } from "@/live/socket-conversations";
 import { NEW_CONVERSATION, saidAboutSending, source } from "@/data";
 import { initialsOf } from "@/data/agent-names";
 import type { ApprovalDecision } from "./approval";
@@ -105,7 +106,9 @@ export function LiveConversation({
     callError?: string | null;
     callRefresh?: string;
 }) {
-    const client = useMemo(() => lemma(pod.id), [pod.id]);
+    /* The run streams over the pod's live socket, shared with every other
+       live view of the pod, and over SSE when the socket cannot carry it. */
+    const client = useMemo(() => withSocketConversations(lemma(pod.id), pod.id), [pod.id]);
     /* Who is answering. A conversation names its bot by `agent_id`, and a new
        one about to be made names it in `createWith`; either way the reply is
        that bot's, not the space's own. */

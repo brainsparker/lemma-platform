@@ -122,6 +122,35 @@ async def test_a_ten_thousand_row_bulk_write_is_twenty_skip_rows_not_ten_thousan
     assert await items(SCHEDULE_START) == []
 
 
+async def test_a_change_the_condition_does_not_hold_for_is_recorded_as_skipped(
+    authenticated_client: AsyncClient, fixed_test_org, fixed_test_user
+):
+    """A condition miss starts nothing, but says so: a skip row, and the
+    schedule's last fire reads FILTERED -- not the "never arrived" of no status.
+    A page that also fires reads as fired."""
+    pod_id = await create_pod(authenticated_client, fixed_test_org["id"])
+    schedule = await _datastore_schedule(
+        pod_id, UUID(fixed_test_user["id"]), when={"total": {"equals": 2}}
+    )
+    path = f"/pods/{pod_id}/schedules/{schedule.id}"
+
+    result = await _deliver(schedule, _changes(1, 3, WriteIntent.NORMAL))
+    assert (result.fired, result.skipped) == (1, {"condition_not_met": 2})
+    shown = (await authenticated_client.get(path)).json()
+    assert shown["last_fire_status"] == "TRIGGERED", shown
+
+    result = await _deliver(schedule, _changes(4, 2, WriteIntent.NORMAL))
+    assert (result.fired, result.skipped) == (0, {"condition_not_met": 2})
+    shown = (await authenticated_client.get(path)).json()
+    assert shown["last_fire_status"] == "FILTERED", shown
+    assert len(await runs(schedule.id)) == 1
+    skips = (await authenticated_client.get(f"{path}/skips")).json()["items"]
+    assert [(s["reason"], s["count"]) for s in skips] == [
+        ("condition_not_met", 2),
+        ("condition_not_met", 2),
+    ]
+
+
 async def test_write_modes_each_batch_and_the_pod_default(
     authenticated_client: AsyncClient, fixed_test_org, fixed_test_user
 ):

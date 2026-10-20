@@ -32,7 +32,7 @@ from app.modules.agent.domain.run_context_prompt import (
     render_run_context,
     task_list_section,
 )
-from app.modules.agent.capabilities.open_notifications import open_notification_text
+from app.modules.agent.capabilities.open_questions import open_question_text
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.attached_document_brief import (
     build_attached_document_section,
@@ -207,13 +207,18 @@ async def build_run_context(
         )
     # Never on a stranger's run: an open request is the owner's to answer.
     if not for_outsider:
-        ctx.open_notifications = await open_notification_text(conversation.id)
+        ctx.open_questions = await open_question_text(
+            conversation_id=conversation.id,
+            channel_id=getattr(conversation, "channel_id", None),
+            pod_id=conversation.pod_id,
+            user_id=conversation.user_id,
+        )
     ctx.run_context = render_run_context(
         sections=(
             run_brief,
             ctx.attached_document,
             task_list_section(conversation, toolsets=run_toolsets),
-            ctx.open_notifications,
+            ctx.open_questions,
         )
     )
     # How image-returning tools answer on this run. Settled before the

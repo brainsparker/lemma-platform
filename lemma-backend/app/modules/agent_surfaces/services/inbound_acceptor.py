@@ -29,7 +29,7 @@ as the rows it read.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 from uuid import UUID
 
@@ -168,7 +168,7 @@ class InboundAcceptor:
                 platform=platform.value, external_channel_id=channel
             )
         if adopted:
-            return Verdict(message=True)
+            return replace(verdict, unless_adopted=None)
         return Verdict(drop_reason="unrouted_channel")
 
     async def _handled_synchronously(

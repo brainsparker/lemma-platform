@@ -65,6 +65,18 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
     "apps": (f"{_CMD}.apps", "app", "App commands.", False),
     "schedule": (f"{_CMD}.schedules", "app", "Schedule commands.", False),
     "schedules": (f"{_CMD}.schedules", "app", "Schedule commands.", False),
+    "channel": (
+        f"{_CMD}.channels",
+        "app",
+        "Channel commands: where a pod's members, contacts and agents talk.",
+        False,
+    ),
+    "channels": (
+        f"{_CMD}.channels",
+        "app",
+        "Channel commands: where a pod's members, contacts and agents talk.",
+        False,
+    ),
     "decision": (
         f"{_CMD}.decisions",
         "app",
@@ -548,6 +560,12 @@ def chat(
     ),
     conversation: str | None = typer.Option(None, "--conversation"),
     title: str | None = typer.Option(None, "--title"),
+    wait_timeout: float = typer.Option(
+        900.0,
+        "--wait-timeout",
+        help="Seconds to keep following the agent's background work "
+        "(sub-agents, processes, timers) for its answer.",
+    ),
 ) -> None:
     """Chat with a pod agent, interactively or with a single message."""
     from .commands import conversations
@@ -575,6 +593,7 @@ def chat(
         title=title,
         show_header=True,
         show_user_message=True,
+        wait_timeout=wait_timeout,
     )
 
 

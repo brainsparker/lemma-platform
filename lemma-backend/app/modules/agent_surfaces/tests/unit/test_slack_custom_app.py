@@ -169,6 +169,13 @@ async def test_the_manifest_subscribes_to_everything_this_branch_needs():
     assert {
         "app_home_opened",  # the App Home tab
         "member_joined_channel",  # invite-is-setup
+        # A mirrored channel's people, and the bot itself, leaving it.
+        "member_left_channel",
+        "channel_left",
+        "group_left",
+        # Shared with another company, or no longer.
+        "channel_shared",
+        "channel_unshared",
         "app_mention",
         "message.im",
         "message.channels",

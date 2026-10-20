@@ -10,7 +10,7 @@ from uuid import UUID
 
 from app.core.domain.realtime import RealtimeChannel
 from app.core.request_context import create_background_task
-from app.modules.datastore.config_live import LiveSettings
+from app.core.live.config import LiveSettings
 from app.modules.datastore.domain.ports import LiveAccessPort, LiveChangeFeedPort
 from app.modules.datastore.services.live.hub import EpochReader, PodHub
 
@@ -73,7 +73,13 @@ class LiveHubRegistry:
                 if hub.idle_since is not None and now - hub.idle_since >= linger
             ]
             for hub in idle:
-                self._hubs.pop(hub.pod_id, None)
+                # Re-checked here: an earlier stop yielded, and a socket may
+                # have attached to this hub meanwhile.
+                since = hub.idle_since
+                if since is None or time.monotonic() - since < linger:
+                    continue
+                if self._hubs.get(hub.pod_id) is hub:
+                    self._hubs.pop(hub.pod_id)
                 await hub.stop()
             if not any(hub.idle_since is not None for hub in self._hubs.values()):
                 return

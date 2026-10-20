@@ -6,8 +6,7 @@ import { displayAgentName, initialsOf, isPodDefaultAgent } from "./agent-names";
 import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
-import { readGroup, readGroupDetail, readGroups, readTimeline } from "./groups";
-import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget } from "./contacts";
+import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget, type OutreachSent } from "./contacts";
 import { readOpening } from "./public-rows";
 import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
 import {
@@ -660,51 +659,8 @@ export const liveSource: PodSource = {
     async surfaceSetup(podId, name) { return lemma(podId).podSurfaces.setup(podId, name); },
     async surfaceChannels(podId, name) { return lemma(podId).podSurfaces.channels(podId, name); },
     async updateSurface(podId, name, patch) { await lemma(podId).podSurfaces.update(podId, name, patch); },
-    /* A channel's groups are the space's, narrowed to the channel: one list
-       and one update for both, so switching a group on a bot's page and on
-       the Groups page is the same write. */
-    async listSurfaceGroups(podId, surfaceName) {
-        return (await liveSource.listGroups(podId)).filter((group) => group.surfaceName === surfaceName);
-    },
-    async updateSurfaceGroup(podId, _surfaceName, groupId, change) {
-        return liveSource.updateGroup(podId, groupId, change);
-    },
-    async listGroups(podId) {
-        return readGroups(await lemma(podId).podGroups.list(podId));
-    },
-    async getGroup(podId, groupId) {
-        const group = readGroupDetail(await lemma(podId).podGroups.get(podId, groupId));
-        if (!group) throw new Error("The group came back without an id.");
-        return group;
-    },
-    async groupTimeline(podId, groupId) {
-        return readTimeline(await lemma(podId).podGroups.timeline(podId, groupId, { limit: 100 }));
-    },
-    async startGroup(podId, start) {
-        const group = readGroup(await lemma(podId).podGroups.start(podId, {
-            surface_name: start.surfaceName,
-            title: start.title,
-            answers_outsiders: start.answersOutsiders,
-        }));
-        if (!group) throw new Error("The group came back without an id.");
-        return group;
-    },
-    async groupLink(podId, surfaceName) {
-        const link = await lemma(podId).podGroups.link(podId, surfaceName);
-        return { url: link.url, expiresAt: link.expires_at };
-    },
-    async updateGroup(podId, groupId, change) {
-        const saved = readGroup(await lemma(podId).podGroups.update(podId, groupId, change));
-        if (!saved) throw new Error("The group came back without an id.");
-        return saved;
-    },
-    /* The notification the question arrived as is the reader's own, so it is
-       answered on the pod-scoped client the way the inbox answers one. */
-    async answerGroupQuestion(podId, notificationId, answer) {
-        await lemma(podId).notifications.respond(notificationId, { summary: answer });
-    },
     async listContacts(podId) {
-        return everyPage(async (before) => readContacts(await lemma(podId).contacts.list(podId, { limit: 200, before })));
+        return everyPage(async (cursor) => readContacts(await lemma(podId).contacts.list(podId, { limit: 200, cursor })));
     },
     async renameContact(podId, contactId, name) {
         return readContact(await lemma(podId).contacts.rename(podId, contactId, name));
@@ -715,9 +671,20 @@ export const liveSource: PodSource = {
     async exportContact(podId, contactId) {
         return lemma(podId).contacts.export(podId, contactId);
     },
-    async followUpContact(podId, contactId, message) {
-        const sent = await lemma(podId).contacts.followUp(podId, contactId, message);
-        return { delivered: sent.delivered, platform: sent.platform };
+    async followUpContact(podId, contactId, message, handle, clientMessageId) {
+        const sent = await lemma(podId).contacts.outreach(podId, contactId, {
+            handle: handle.value,
+            kind: handle.kind as Parameters<ReturnType<typeof lemma>["contacts"]["outreach"]>[2]["kind"],
+            text: message,
+            client_message_id: clientMessageId,
+        });
+        return {
+            channelId: sent.line.channel_id,
+            lineId: sent.line.id,
+            platform: sent.delivery.platform ?? null,
+            status: sent.delivery.status as OutreachSent["status"],
+            reason: sent.delivery.reason ?? null,
+        };
     },
     async listWidgets(podId) {
         return ((await lemma(podId).contacts.widgets.list(podId)).items ?? []).map(readWidget);
@@ -1391,6 +1358,9 @@ export const liveSource: PodSource = {
             limit: CONVERSATION_PAGE_SIZE,
             page_token: cursor ?? undefined,
             search: search || undefined,
+            /* The chats list is the conversations of no channel: a channel's
+               -- the member's own, a group's, a contact's -- open from it. */
+            in_channel: false,
         };
         /* `list` with no agent is every bot's; `listDefault` is the space's own. */
         const listed = everyone

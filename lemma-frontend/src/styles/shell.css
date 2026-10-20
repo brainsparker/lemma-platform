@@ -4546,6 +4546,13 @@ button.filecard__open {
 .notify__act:hover {
     border-color: var(--ink-3);
 }
+/* An agent's choices, or approve and deny: a row of answers, wrapping. */
+.notify__choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 4px 0 6px;
+}
 .notify__answer {
     display: flex;
     gap: 6px;

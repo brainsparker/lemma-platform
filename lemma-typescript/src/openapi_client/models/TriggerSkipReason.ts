@@ -7,4 +7,6 @@ export enum TriggerSkipReason {
     IMPORT_WRITE = 'import_write',
     FIRE_CAP = 'fire_cap',
     LAG_EXCEEDED = 'lag_exceeded',
+    CONDITION_NOT_MET = 'condition_not_met',
+    OUTSIDE_ROW = 'outside_row',
 }

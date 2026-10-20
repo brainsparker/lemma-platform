@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import facts
 from app.core.authorization.models import (
     RoleAssignmentModel,
     RoleModel,
@@ -19,6 +20,7 @@ from app.modules.pod.domain.ports import (
     PodMemberRepositoryPort,
     PodRepositoryPort,
 )
+from app.modules.pod.contracts.lifecycle import PodMemberAdded
 from app.modules.pod.domain.errors import PodConflictError
 from app.modules.pod.domain.pod_entities import (
     PodEntity,
@@ -252,7 +254,15 @@ class PodMemberRepository(PodMemberRepositoryPort):
         await self.session.flush()
         await self._collect_events(entity)
         created = await self.get(instance.id)
-        return created or instance.to_entity()
+        member = created or instance.to_entity()
+        # Every membership is made here, by whichever path, so this is where
+        # it is announced -- in the transaction that makes it.
+        user_id = member.user_id or entity.user_id
+        if user_id is not None:
+            await facts.emit(
+                self.uow, PodMemberAdded(pod_id=member.pod_id, user_id=user_id)
+            )
+        return member
 
     async def get(self, id: UUID) -> Optional[PodMemberEntity]:
         stmt = (

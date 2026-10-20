@@ -467,9 +467,9 @@ async def send_surface_message(
 ) -> SurfaceSendResponse:
     """Proactively send a message to a pod member on this surface.
 
-    Powers notifications from functions/workflows. Reuses the member's existing
-    thread (bots can't cold-DM), and a 404 carries the reason it could not be
-    reached, in the vocabulary the notification API uses."""
+    For functions and workflows that message a member on one platform. Reuses
+    the member's existing thread (bots can't cold-DM), and a 404 carries the
+    reason they could not be reached."""
     surface = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
     await require_surface_agent_action(
         ctx=ctx,

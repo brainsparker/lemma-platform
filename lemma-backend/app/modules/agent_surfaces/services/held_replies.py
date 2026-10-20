@@ -156,8 +156,8 @@ async def stage_held_replies(
 
     In the transaction that writes their message, so the held messages are on
     record -- and cleared from the conversation -- exactly when the message
-    that reopened the window is, and the destination pump sends them ahead of
-    the answer that message will get. Keyed by the set's version, so a
+    that reopened the window is, and the destination pump sends them at once
+    -- before the run answering that message has finished. Keyed by the set's version, so a
     retried ingest writes them once. The read is locked, so a hold racing this
     waits and stays held for the next reply rather than being cleared unsent.
 

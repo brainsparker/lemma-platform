@@ -2,7 +2,10 @@
 
 Stamping ``last_fired_at`` & co. on ``schedules`` was an UPDATE of a shared
 row on every event a trigger saw, matched or not. The ledger already has the
-answer: the newest ``schedule_runs`` row, one index probe per schedule shown.
+answer: the newest ``schedule_runs`` row, one index probe per schedule shown --
+or the newest ``trigger_skips`` row when that is later: a change the trigger let
+pass (its condition did not hold, a bulk write it skips) starts no run, and
+"skipped" must still read differently from "never arrived".
 """
 
 from __future__ import annotations
@@ -31,6 +34,19 @@ _LATEST = text(
              ORDER BY created_at DESC, id DESC
              LIMIT 1
       ) r
+    """
+)
+
+_LATEST_SKIP = text(
+    """
+    SELECT s.id AS schedule_id, k.at
+      FROM unnest(CAST(:ids AS uuid[])) AS s(id)
+      CROSS JOIN LATERAL (
+            SELECT at FROM trigger_skips
+             WHERE schedule_id = s.id
+             ORDER BY at DESC
+             LIMIT 1
+      ) k
     """
 )
 
@@ -63,8 +79,20 @@ async def with_last_fire(
     ids: list[UUID] = [entity.id for entity in entities]
     rows = (await session.execute(_LATEST, {"ids": ids})).all()
     latest = {row.schedule_id: row for row in rows}
+    skips = await session.execute(_LATEST_SKIP, {"ids": ids})
+    skipped = {row.schedule_id: row.at for row in skips.all()}
     for entity in entities:
         row = latest.get(entity.id)
+        skipped_at = skipped.get(entity.id)
+        # A page that skips one change and fires another writes both in one
+        # transaction; the skip's ``at`` is that transaction's start, so the
+        # run, created inside it, wins the tie.
+        if skipped_at is not None and (row is None or skipped_at > row.created_at):
+            entity.last_fired_at = skipped_at
+            entity.last_run_id = None
+            entity.last_fire_status = ScheduleFireStatus.FILTERED
+            entity.last_error = None
+            continue
         if row is None:
             continue
         status = row.target_outcome or row.status

@@ -23,30 +23,30 @@ from uuid import UUID
 
 from opentelemetry import metrics
 from redis.exceptions import RedisError
-from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.domain.realtime import RealtimeChannel, RealtimeSlowConsumerError
+from app.core.live.access_clock import AccessClock
+from app.core.live.config import LiveSettings
+from app.core.live.connection import LiveConnection
+from app.core.live.protocol import LiveAccessDenied, ResyncReason
 from app.core.log.log import get_logger
 from app.core.request_context import create_background_task
-from app.modules.datastore.config_live import LiveSettings
 from app.modules.datastore.domain.live import (
     ChangePosition,
-    LiveAccessDenied,
     LiveCursorExpired,
-    LiveErrorCode,
     LivePage,
     LiveTable,
     MergedChange,
-    ResyncReason,
     SubscribeRequest,
     UnsubscribedReason,
     merge_change,
 )
 from app.modules.datastore.domain.ports import LiveAccessPort, LiveChangeFeedPort
-from app.modules.datastore.services.live.connection import (
-    LiveConnection,
+from app.modules.datastore.services.live.subscription import (
     LiveSubscription,
+    offer_changes,
 )
+from app.modules.datastore.services.live.hub_start import HubStart, StartAttempt
 from app.modules.datastore.services.live.fanout import (
     HubStats,
     encode_batch,
@@ -104,18 +104,16 @@ class PodHub:
         self._lock = asyncio.Lock()
         self._wake = asyncio.Event()
         self._by_table: dict[UUID, set[LiveSubscription]] = {}
-        self._connections: set[LiveConnection] = set()
+        #: Subscribes in progress: the hub is not idle while one is joining.
+        self._joining = 0
         self._cursor: str | None = None
         self._position: ChangePosition | None = None
-        self._epoch: str | None = None
-        self._next_epoch_check = 0.0
+        self._authz = AccessClock(settings)
         self._recheck_at: float | None = None
         self._last_read = 0.0
         self._recheck_step = _RECHECK_FIRST
         self._next_poll = 0.0
-        self._task: asyncio.Task[None] | None = None
-        self._started = asyncio.Event()
-        self._start_error: BaseException | None = None
+        self._start = HubStart(f"live-hub-{pod_id}")
         self._idle_since: float | None = None
         self.stats = HubStats()
 
@@ -133,33 +131,19 @@ class PodHub:
         return sum(len(subs) for subs in self._by_table.values())
 
     async def ensure_started(self) -> None:
-        if self._task is None:
-            self._task = create_background_task(
-                self._run(), name=f"live-hub-{self.pod_id}"
-            )
+        """Start the hub if it is not running, and wait for its start."""
+        if self._start.launch(self._run):
             active_hubs.add(1)
-        await self._started.wait()
-        if self._start_error is not None:
-            raise self._start_error
+        await self._start.until_started()
 
     async def stop(self) -> None:
-        task, self._task = self._task, None
+        task = self._start.take()
         if task is None:
             return
         active_hubs.add(-1)
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
-
-    def attach(self, connection: LiveConnection) -> None:
-        self._connections.add(connection)
-        self._idle_since = None
-
-    def detach(self, connection: LiveConnection) -> None:
-        for subscription in list(connection.subscriptions.values()):
-            self._unindex(subscription)
-        self._connections.discard(connection)
-        self._maybe_idle()
 
     def wake(self) -> None:
         self._wake.set()
@@ -171,26 +155,25 @@ class PodHub:
         connection: LiveConnection,
         request: SubscribeRequest,
         *,
-        max_subscriptions: int,
+        legacy: bool = False,
     ) -> None:
-        """Check access, catch the subscription up, and join it to the fan-out."""
-        if request.id in connection.subscriptions:
-            connection.offer_error(
-                request.id, LiveErrorCode.INVALID, "Subscription id already in use."
-            )
-            return
-        if len(connection.subscriptions) >= max_subscriptions:
-            connection.offer_error(
-                request.id,
-                LiveErrorCode.LIMIT,
-                f"At most {max_subscriptions} subscriptions per socket.",
-            )
-            return
+        """Check access, catch the subscription up, and join it to the fan-out.
+
+        Raises ``LiveAccessDenied`` for a table the caller may not read; the
+        socket answers with an error frame and keeps going.
+        """
+        self._joining += 1
+        self._idle_since = None
         try:
-            tables = await self._tables_for(connection.user_id, request.table)
-        except LiveAccessDenied as denied:
-            connection.offer_error(request.id, denied.code, denied.message)
-            return
+            await self._subscribe(connection, request, legacy=legacy)
+        finally:
+            self._joining -= 1
+            self._maybe_idle()
+
+    async def _subscribe(
+        self, connection: LiveConnection, request: SubscribeRequest, *, legacy: bool
+    ) -> None:
+        tables = await self._tables_for(connection.user_id, request.table)
         await self.ensure_started()
         async with self._lock:
             if connection.closed:
@@ -209,18 +192,13 @@ class PodHub:
                 position=self._position,
                 cursor=self._cursor,
                 when=request.conditions(),
+                legacy=legacy,
+                on_release=self._unindex,
             )
             connection.subscriptions[request.id] = subscription
             await self._join(subscription, request.since)
-            self._index(subscription)
-
-    def unsubscribe(self, connection: LiveConnection, subscription_id: str) -> bool:
-        subscription = connection.subscriptions.pop(subscription_id, None)
-        if subscription is None:
-            return False
-        subscription.active = False
-        self._unindex(subscription)
-        return True
+            if subscription.active:
+                self._index(subscription)
 
     async def _tables_for(
         self, user_id: UUID, table_name: str | None
@@ -235,20 +213,20 @@ class PodHub:
         cursor = self._cursor
         assert cursor is not None and self._position is not None
         if since is None:
-            connection.offer_subscribed(subscription, cursor)
+            connection.offer_subscribed(subscription.id, cursor)
             return
         try:
             since_position = self._feed.position(since)
         except LiveCursorExpired:
-            connection.offer_subscribed(subscription, cursor)
+            connection.offer_subscribed(subscription.id, cursor)
             self._resync(subscription, cursor, ResyncReason.CURSOR_EXPIRED)
             return
         if since_position >= self._position:
             # Resuming from a cursor another process's hub had already reached.
             subscription.advance(since_position, since)
-            connection.offer_subscribed(subscription, since)
+            connection.offer_subscribed(subscription.id, since)
             return
-        connection.offer_subscribed(subscription, cursor)
+        connection.offer_subscribed(subscription.id, cursor)
         try:
             gap = await self._read_gap(subscription, since)
         except LiveCursorExpired:
@@ -261,7 +239,7 @@ class PodHub:
             encoded = await encode_batch(
                 self._feed, self.pod_id, {subscription: gap}, self.stats
             )
-            connection.offer_changes(
+            offer_changes(
                 subscription,
                 cursor,
                 encoded.get(subscription, []),
@@ -310,31 +288,32 @@ class PodHub:
         self._maybe_idle()
 
     def _maybe_idle(self) -> None:
-        if not self._by_table and not self._connections and self._idle_since is None:
+        if not self._by_table and not self._joining and self._idle_since is None:
             self._idle_since = time.monotonic()
             self._on_idle(self)
 
     # -- the loop ---------------------------------------------------------------
 
-    async def _run(self) -> None:
+    async def _run(self, start: StartAttempt) -> None:
         try:
             self._cursor = await self._feed.horizon(self.pod_id)
             self._position = self._feed.position(self._cursor)
-            self._epoch = await self._epoch_of(self.pod_id)
-        except (SQLAlchemyError, OSError, LiveCursorExpired) as exc:
-            self._start_error = exc
-            self._started.set()
+            epoch = await self._epoch_of(self.pod_id)
+        except BaseException as exc:
+            start.failed(exc)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             logger.error(
                 "datastore.live.hub_start_failed",
                 pod_id=str(self.pod_id),
                 error_type=type(exc).__name__,
                 exc_info=True,
             )
+            if not isinstance(exc, Exception):
+                raise
             return
-        self._next_epoch_check = (
-            time.monotonic() + self._settings.live_authz_check_seconds
-        )
-        self._started.set()
+        self._authz.start(epoch)
+        start.succeeded()
         pump = create_background_task(
             self._pump_wakes(), name=f"live-wake-{self.pod_id}"
         )
@@ -342,8 +321,10 @@ class PodHub:
             while True:
                 woken, read_due = await self._wait_for_work()
                 try:
-                    if time.monotonic() >= self._next_epoch_check:
-                        await self._check_epoch()
+                    if time.monotonic() >= self._authz.next_check:
+                        await self._authz.check(
+                            lambda: self._epoch_of(self.pod_id), self.recheck_access
+                        )
                     if read_due and self._by_table:
                         async with self._lock:
                             found = await self._drain()
@@ -376,7 +357,7 @@ class PodHub:
         read_due_at = (
             self._recheck_at if self._recheck_at is not None else self._next_poll
         )
-        timeout = max(0.0, min(read_due_at, self._next_epoch_check) - now)
+        timeout = max(0.0, min(read_due_at, self._authz.next_check) - now)
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(self._wake.wait(), timeout=timeout)
         # Reads are at least one coalescing window apart, whatever asked for
@@ -511,15 +492,13 @@ class PodHub:
         for subscription, changes in encoded.items():
             previous = subscription.cursor
             subscription.advance(position, cursor)
-            subscription.connection.offer_changes(
-                subscription, cursor, changes, previous_cursor=previous
-            )
+            offer_changes(subscription, cursor, changes, previous_cursor=previous)
 
     def _resync(
         self, subscription: LiveSubscription, cursor: str, reason: ResyncReason
     ) -> None:
-        hub_resyncs.add(1, {"reason": reason.value})
-        subscription.connection.offer_resync(subscription, cursor, reason)
+        hub_resyncs.add(1, {"reason": reason.value, "topic": "records"})
+        subscription.connection.offer_resync(subscription.id, cursor, reason)
 
     async def _restart_at_horizon(self) -> None:
         """The hub itself fell out of the log's window: everyone refetches."""
@@ -530,17 +509,7 @@ class PodHub:
                 subscription.advance(self._position, self._cursor)
                 self._resync(subscription, self._cursor, ResyncReason.CURSOR_EXPIRED)
 
-    # -- authorization epoch --------------------------------------------------
-
-    async def _check_epoch(self) -> None:
-        self._next_epoch_check = (
-            time.monotonic() + self._settings.live_authz_check_seconds
-        )
-        epoch = await self._epoch_of(self.pod_id)
-        if epoch is None or epoch == self._epoch:
-            return
-        self._epoch = epoch
-        await self.recheck_access()
+    # -- authorization (on ``self._authz``: ``app/core/live/access_clock.py``) --
 
     async def recheck_access(self) -> None:
         """Re-check every subscription; end the ones that lost their table."""
@@ -594,4 +563,4 @@ class PodHub:
 
     def _end(self, subscription: LiveSubscription, reason: str) -> None:
         self._unindex(subscription)
-        subscription.connection.offer_unsubscribed(subscription, reason)
+        subscription.connection.offer_unsubscribed(subscription.id, reason)

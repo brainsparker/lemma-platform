@@ -130,8 +130,9 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        """Send a reply via the Bot Framework Connector API.
+    ) -> str | None:
+        """Send a reply via the Bot Framework Connector API; the id of its
+        first activity.
 
         This uses Lemma's own bot credentials (from settings) together with the
         customer's tenant_id to acquire a Bot Framework token, then posts the
@@ -143,6 +144,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         reply_to_id = reply_target_as(event, TeamsReplyTarget).reply_to_id
         card = (metadata or {}).get("onboarding_card")
         chunks = chunk_text(message, limit=_TEAMS_TEXT_LIMIT) or [message]
+        first: str | None = None
         for index, chunk in enumerate(chunks):
             body: dict[str, Any] = {
                 "type": "message",
@@ -168,7 +170,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                     }
                 ]
             try:
-                await self._post_activity(url, token=token, body=body)
+                activity_id = await self._post_activity(url, token=token, body=body)
             except platform_transport_errors():
                 if index:
                     note_partial_delivery()
@@ -179,6 +181,8 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                         exc_info=True,
                     )
                 raise
+            first = first or activity_id
+        return first
 
     async def _activities_endpoint(
         self, event: ParsedInboundSurfaceEvent, metadata: dict[str, Any] | None

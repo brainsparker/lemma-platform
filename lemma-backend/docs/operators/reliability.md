@@ -118,7 +118,7 @@ What the migrations do:
 * **Armed** -- every TIME schedule gets its next fire (one already past due is
   skipped to its next occurrence, not fired late); flow timers, decisions,
   expiring waits and parked runs get their items; active agent waits, AGENT
-  workflow waits and open notifications' expiry get theirs.
+  workflow waits get theirs.
 * **Ended, saying so** -- a file waiting to be indexed is FAILED ("Retry
   processing to index this file"); a function run and the workflow on it,
   a running agent turn, a conversation paused on an approval that was decided

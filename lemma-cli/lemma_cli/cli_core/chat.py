@@ -9,7 +9,7 @@ from rich.rule import Rule
 from rich.text import Text
 
 from .io import emit
-from .sse import Reattach, StreamEvent, follow_run
+from .sse import TERMINAL_EVENTS, Reattach, StreamEvent, follow_run
 from .state import CliState, console, fail
 
 #: What a stream that carried no terminal event means. The run did not report
@@ -54,17 +54,17 @@ def emit_stream_events(
     *,
     owns_run: bool = True,
     reattach: Reattach | None = None,
-) -> None:
+) -> StreamEvent | None:
     error_text: str | None = None
-    saw_terminal = False
+    terminal: StreamEvent | None = None
     try:
         for event in follow_run(response, reattach):
             event_type = event.type.lower()
             if event_type == "error":
                 error_text = str(event.data)
-                saw_terminal = True
+                terminal = event
             elif event_type in {"completed", "stopped"}:
-                saw_terminal = True
+                terminal = event
             emit(
                 state,
                 {
@@ -87,8 +87,9 @@ def emit_stream_events(
     # the process exits -- a machine reading `--output json` has the same right
     # to the transcript as a person reading the rendered one.
     _exit_on_failed_run(
-        error_text=error_text, saw_terminal=saw_terminal, owns_run=owns_run
+        error_text=error_text, saw_terminal=terminal is not None, owns_run=owns_run
     )
+    return terminal
 
 
 def render_chat_stream(
@@ -99,16 +100,21 @@ def render_chat_stream(
     verbose: bool = False,
     owns_run: bool = True,
     reattach: Reattach | None = None,
-) -> None:
-    """Render a run's stream, ending at its terminal event (see `follow_run`)."""
+) -> StreamEvent | None:
+    """Render a run's stream, ending at its terminal event (see `follow_run`).
+
+    Returns that terminal event, so a caller can see what the run left the
+    conversation waiting on."""
     if state.output == "json":
-        emit_stream_events(state, response, owns_run=owns_run, reattach=reattach)
-        return
+        return emit_stream_events(state, response, owns_run=owns_run, reattach=reattach)
 
     renderer = ChatRenderer(agent=agent, verbose=verbose)
+    terminal: StreamEvent | None = None
     try:
         for event in follow_run(response, reattach):
             renderer.handle(event)
+            if event.type.lower() in TERMINAL_EVENTS:
+                terminal = event
     finally:
         response.close()
         renderer.finish()
@@ -117,6 +123,7 @@ def render_chat_stream(
         saw_terminal=renderer.seen_terminal,
         owns_run=owns_run,
     )
+    return terminal
 
 
 def _json_object_at(text: str, start: int) -> tuple[dict[str, Any] | None, int]:

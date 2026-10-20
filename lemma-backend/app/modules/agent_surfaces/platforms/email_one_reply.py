@@ -26,6 +26,7 @@ from app.modules.agent_surfaces.domain.envelope import (
     SurfaceEnvelope,
 )
 from app.modules.agent_surfaces.platforms.common import platform_transport_errors
+from app.modules.agent_surfaces.platforms.envelope_delivery import platform_message_id
 
 logger = get_logger(__name__)
 
@@ -100,7 +101,7 @@ class EmailOneReplyMixin:
         if attachments:
             send_metadata["attachments"] = attachments
         try:
-            await self.send_message(
+            email_id = await self.send_message(
                 credentials=credentials,
                 event=event,
                 message=body or " ",
@@ -126,7 +127,9 @@ class EmailOneReplyMixin:
         for name in ("resources", "voice", "choices", "decision"):
             if name in parts:
                 parts[name] = PartDelivery.DEGRADED
-        return DeliveryReceipt(parts=parts)
+        return DeliveryReceipt(
+            parts=parts, external_message_id=platform_message_id(email_id)
+        )
 
 
 def _named_parts(envelope: SurfaceEnvelope) -> list[str]:

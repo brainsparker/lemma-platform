@@ -456,32 +456,42 @@ class MemberRepository:
             )
             .scalar_subquery()
         )
-        moved = await self.session.scalar(
-            update(state)
-            .where(
-                state.user_id == user_id,
-                state.channel_id == channel_id,
-                state.last_read_seq < upto,
+        moved = (
+            await self.session.execute(
+                update(state)
+                .where(
+                    state.user_id == user_id,
+                    state.channel_id == channel_id,
+                    state.last_read_seq < upto,
+                )
+                .values(
+                    last_read_seq=upto,
+                    read_replies=state.read_replies + replies,
+                    updated_at=func.now(),
+                )
+                # Whether anything naming them is now read: the lines are
+                # visited only then, not on every read.
+                .returning(
+                    state.last_read_seq,
+                    _unread_mentions(
+                        pod_id, channel_id, user_id, upto=state.last_read_seq
+                    ),
+                )
             )
-            .values(
-                last_read_seq=upto,
-                read_replies=state.read_replies + replies,
-                updated_at=func.now(),
-            )
-            .returning(state.last_read_seq)
-        )
-        read_seq = (
-            int(moved)
-            if moved is not None
-            else await self.read_seq(channel_id=channel_id, user_id=user_id)
-        )
-        await self._read_mentions(
-            pod_id=pod_id,
-            channel_id=channel_id,
-            user_id=user_id,
-            upto=read_seq,
-            where=line.thread_root_id.is_(None),
-        )
+        ).first()
+        if moved is None:
+            # Not moved: what it reached was read when it got there.
+            read_seq = await self.read_seq(channel_id=channel_id, user_id=user_id)
+        else:
+            read_seq = int(moved[0])
+            if moved[1]:
+                await self._read_mentions(
+                    pod_id=pod_id,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    upto=read_seq,
+                    where=line.thread_root_id.is_(None),
+                )
         signal_after_commit(self.session, pod_id, read_signal(channel_id, user_id))
         return read_seq
 
@@ -495,6 +505,10 @@ class MemberRepository:
             select(ChannelModel.pod_id).where(ChannelModel.id == channel_id)
         )
         if pod_id is None:
+            return
+        if not await self.session.scalar(
+            select(_unread_mentions(pod_id, channel_id, user_id, upto=literal(seq)))
+        ):
             return
         read = await self._read_mentions(
             pod_id=pod_id,
@@ -589,3 +603,27 @@ class MemberRepository:
         await touch_channel(self.session, channel_id)
         await self.session.execute(delete(member).where(member.id == seated))
         return True
+
+
+def _unread_mentions(
+    pod_id: UUID,
+    channel_id: UUID,
+    user_id: UUID,
+    *,
+    upto: ColumnElement[int] | InstrumentedAttribute[int],
+) -> ColumnElement[bool]:
+    """Whether anything up to ``upto`` naming the member in the channel is
+    unread: one probe of ``ix_channel_mentions_user``, which holds only the
+    unread -- never the lines."""
+    mention = ChannelMentionModel
+    return (
+        select(mention.id)
+        .where(
+            mention.user_id == user_id,
+            mention.pod_id == pod_id,
+            mention.channel_id == channel_id,
+            mention.seq <= upto,
+            mention.read_at.is_(None),
+        )
+        .exists()
+    )

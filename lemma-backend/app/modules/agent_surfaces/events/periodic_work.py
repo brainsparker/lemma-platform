@@ -113,7 +113,7 @@ async def retention(ctx: JobContext, payload: NoPayload) -> None:
 
 
 async def slack_unauthorised_apps(ctx: JobContext, payload: NoPayload) -> None:
-    from app.modules.agent_surfaces.services.slack_app_provisioning import (
+    from app.modules.agent_surfaces.services.slack_app_sweep import (
         sweep_unauthorised_apps,
     )
 

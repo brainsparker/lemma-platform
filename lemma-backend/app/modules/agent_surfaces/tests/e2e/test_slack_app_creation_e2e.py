@@ -29,7 +29,11 @@ from app.modules.agent_surfaces.platforms.slack.app_configuration import (
     CreatedSlackApp,
     RotatedConfigurationToken,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.slack_configuration_token_repository import (  # noqa: E501
+    SlackConfigurationTokenRepository,
+)
 from app.modules.agent_surfaces.services import slack_app_provisioning as provisioning
+from app.modules.agent_surfaces.services import slack_app_sweep
 from app.modules.agent_surfaces.tests.e2e.helpers import _ensure_connector
 from app.modules.test_support.e2e_authz import (
     auth_headers,
@@ -59,6 +63,7 @@ class FakeSlack:
     created: list[tuple[str, str]] = field(default_factory=list)
     deleted: list[str] = field(default_factory=list)
     rotate_delay: float = 0.0
+    refuse_delete: bool = False
     n: int = 0
 
     async def rotate(self, refresh_token: SecretStr) -> RotatedConfigurationToken:
@@ -97,6 +102,8 @@ class FakeSlack:
         )
 
     async def delete_app(self, access_token: SecretStr, app_id: str) -> bool:
+        if self.refuse_delete:
+            return False
         self.deleted.append(app_id)
         return True
 
@@ -377,6 +384,56 @@ async def test_two_creates_near_expiry_rotate_once_and_both_succeed(
     assert row == (1, None, None), "one paste, one rotation; lease given back"
 
 
+async def test_a_rotation_cancelled_after_slack_answers_still_keeps_the_pair(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    db_session,
+    db_manager,
+    fake: FakeSlack,
+    monkeypatch,
+):
+    """Slack has spent the old refresh token once it answers. A request
+    cancelled while the new pair is being stored must still store it, or the
+    next use sends the spent token and the org has to paste a new one."""
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+    await _save(authenticated_client, pod_id)
+    await db_session.execute(
+        text(
+            "UPDATE slack_configuration_tokens "
+            "SET access_expires_at = now() - interval '1 minute'"
+        )
+    )
+    await db_session.commit()
+    fake.rotated.clear()  # saving rotated the paste once already
+    storing = asyncio.Event()
+    store = SlackConfigurationTokenRepository.store_rotation
+
+    async def slow_store(self, *args, **kwargs):
+        storing.set()
+        await asyncio.sleep(0.3)
+        return await store(self, *args, **kwargs)
+
+    monkeypatch.setattr(SlackConfigurationTokenRepository, "store_rotation", slow_store)
+
+    async def fresh() -> SecretStr:
+        async with _uows(db_manager)() as uow:
+            return await provisioning.SlackAppProvisioner(
+                uow, calls=fake.calls()
+            ).fresh_access_token(UUID(fixed_test_org["id"]), TEAM)
+
+    request = asyncio.create_task(fresh())
+    await asyncio.wait_for(storing.wait(), timeout=5)
+    request.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    await asyncio.sleep(0.5)  # the shielded store finishes on its own
+    monkeypatch.undo()
+
+    assert len(fake.rotated) == 1
+    assert (await fresh()).get_secret_value() == "xoxe.xoxp-access-2"
+    assert len(fake.rotated) == 1, "the stored pair was used, not rotated again"
+
+
 async def test_a_stored_token_slack_refuses_asks_for_a_new_paste(
     authenticated_client: AsyncClient, fixed_test_org, db_session, fake: FakeSlack
 ):
@@ -516,6 +573,60 @@ async def test_a_create_interrupted_after_the_install_committed_undoes_both(
     )
 
 
+@pytest.mark.asyncio
+async def test_an_app_slack_will_not_delete_is_kept_for_the_next_sweep(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    db_session,
+    db_manager,
+    fake: FakeSlack,
+):
+    """A failed delete must not forget an app that is still in Slack: its row
+    stays so a later sweep asks again -- until the retry window is over."""
+    retrying_pod = await _pod(authenticated_client, fixed_test_org["id"])
+    abandoned_pod = await _pod(authenticated_client, fixed_test_org["id"])
+    await _save(authenticated_client, retrying_pod)
+    retrying = (
+        await authenticated_client.post(
+            f"{_base(retrying_pod)}/apps", json={"team_id": TEAM}
+        )
+    ).json()
+    abandoned = (
+        await authenticated_client.post(
+            f"{_base(abandoned_pod)}/apps", json={"team_id": TEAM}
+        )
+    ).json()
+    for auth_config_id, days in (
+        (retrying["auth_config_id"], 8),
+        (abandoned["auth_config_id"], 40),
+    ):
+        await db_session.execute(
+            text(
+                "UPDATE slack_pending_app_bindings SET created_at = now() - "
+                "make_interval(days => :days) WHERE auth_config_id = :id"
+            ),
+            {"days": days, "id": auth_config_id},
+        )
+    await db_session.commit()
+    fake.refuse_delete = True
+
+    settled = await slack_app_sweep.sweep_unauthorised_apps(
+        _uows(db_manager), calls=fake.calls()
+    )
+
+    assert settled == 1
+    pending = {
+        str(row)
+        for row in (
+            await db_session.execute(
+                text("SELECT auth_config_id FROM slack_pending_app_bindings")
+            )
+        ).scalars()
+    }
+    assert retrying["auth_config_id"] in pending
+    assert abandoned["auth_config_id"] not in pending
+
+
 async def test_the_sweep_deletes_apps_nobody_authorised_and_keeps_authorised_ones(
     authenticated_client: AsyncClient,
     fixed_test_org,
@@ -555,7 +666,7 @@ async def test_the_sweep_deletes_apps_nobody_authorised_and_keeps_authorised_one
     async def is_authorised(uow, auth_config_id: UUID) -> bool:
         return str(auth_config_id) == authorised["auth_config_id"]
 
-    settled = await provisioning.sweep_unauthorised_apps(
+    settled = await slack_app_sweep.sweep_unauthorised_apps(
         _uows(db_manager),
         calls=fake.calls(),
         installs=provisioning.OrgInstalls(is_authorised=is_authorised),

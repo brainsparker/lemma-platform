@@ -6,7 +6,7 @@ import {
     SAMPLE_SOURCE_SETTINGS,
 } from "@/data/fixtures";
 import type { ChannelApi } from "./api";
-import { readChannelDetail, readChannelPage, readLine, readLinePage, readThreadPage, type Line } from "./model";
+import { readChannelDetail, readChannelPage, readLine, readLinePage, readThreadPage, writeParts, type Line } from "./model";
 import { readSearchPage } from "./search-model";
 import { readInbox } from "./waiting";
 import { readSourceSettings } from "./sources";
@@ -138,12 +138,12 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             save(channelId, { last_line_at: line.created_at, last_seq: line.seq });
             return readLine(line) as Line;
         },
-        async edit(channelId, lineId, text) {
+        async edit(channelId, lineId, text, parts) {
             await wait(200);
             const list = lines.get(channelId) ?? [];
             const was = list.find((line) => line.id === lineId);
             if (!was) throw missing("line");
-            const edited = { ...was, text, edited_at: now() };
+            const edited = { ...was, text, ...(parts ? { parts: writeParts(parts) } : {}), edited_at: now() };
             lines.set(channelId, list.map((line) => (line.id === lineId ? edited : line)));
             return readLine(withReplies(edited)) as Line;
         },

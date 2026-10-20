@@ -7,6 +7,7 @@ import {
     readLine,
     readLinePage,
     readThreadPage,
+    writeParts,
     type AgentAnswers,
     type Channel,
     type ChannelDetail,
@@ -67,7 +68,9 @@ export interface ChannelApi {
      *  one after reply `afterSeq`. */
     thread(channelId: string, rootId: string, afterSeq?: number): Promise<ThreadPage>;
     post(channelId: string, body: PostBody): Promise<Line>;
-    edit(channelId: string, lineId: string, text: string): Promise<Line>;
+    /** With `parts`, they replace the line's: who it names, and what it
+     *  shares. Without, they stay as they are. */
+    edit(channelId: string, lineId: string, text: string, parts?: readonly Part[]): Promise<Line>;
     remove(channelId: string, lineId: string): Promise<void>;
     /** The reader has seen the channel up to line `seq`. */
     markRead(channelId: string, seq: number): Promise<void>;
@@ -178,8 +181,9 @@ function liveApi(podId: string): ChannelApi {
         async post(channelId, body) {
             return must(readLine(await client().channels.post(podId, channelId, postRequest(body))), "line");
         },
-        async edit(channelId, lineId, text) {
-            return must(readLine(await client().channels.edit(podId, channelId, lineId, text)), "line");
+        async edit(channelId, lineId, text, parts) {
+            const body = parts ? { text, parts: writeParts(parts) as NonNullable<Parameters<Channels["post"]>[2]["parts"]> } : text;
+            return must(readLine(await client().channels.edit(podId, channelId, lineId, body)), "line");
         },
         async remove(channelId, lineId) {
             await client().channels.deleteMessage(podId, channelId, lineId);
@@ -229,7 +233,7 @@ function liveApi(podId: string): ChannelApi {
             return { type: "file", path: written.path, name: written.name ?? line.name, mimeType: file.type || null, size: file.size, fileId: null };
         },
         async file(channelId, lineId, fileId) {
-            return (await client().channels.file(podId, channelId, lineId, fileId)) as Blob;
+            return client().channels.file(podId, channelId, lineId, fileId);
         },
         async inbox() {
             return readInbox(await client().channels.inbox(podId));

@@ -85,6 +85,13 @@ function patchUnread(cache: QueryClient, podId: string, channelId: string, unrea
         : was);
 }
 
+/** The reader's own channel with the pod, whose new lines the bell -- and
+ *  the sidebar's badge, which counts what the bell does -- count. */
+export function useMyChannel(podId: string): Channel | null {
+    const direct = useChannelList(podId, DIRECT);
+    return allChannels(direct.data)[0] ?? null;
+}
+
 /** The bell is the inbox: the questions waiting on you, the lines naming
  *  you, and what is new in your own channel -- each opening its channel, and
  *  each question answered where it is. Holds the keyboard while open: Escape
@@ -98,8 +105,7 @@ export function WaitingBell({ podId }: { podId: string }) {
     const bell = useRef<HTMLButtonElement | null>(null);
     const inbox = useInbox(podId);
     useInboxLive(podId);
-    const direct = useChannelList(podId, DIRECT);
-    const mine = allChannels(direct.data)[0] ?? null;
+    const mine = useMyChannel(podId);
     const count = bellCount(inbox.data ?? null, mine?.unread.lines ?? 0);
 
     useEffect(() => {

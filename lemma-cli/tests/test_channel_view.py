@@ -6,14 +6,10 @@ server: the rendering is the subject, so nothing of it is stubbed.
 
 from __future__ import annotations
 
-from io import StringIO
 from types import SimpleNamespace
 
 import pytest
-from rich.console import Console
 
-import lemma_cli.cli_core.channel_view as view
-import lemma_cli.cli_core.io as io_mod
 from lemma_cli.cli_core.app import app
 from lemma_cli.cli_core.commands import channel_lines, channels
 
@@ -45,11 +41,8 @@ class Answers:
 
 @pytest.fixture
 def screen(monkeypatch):
-    buffer = StringIO()
-    wide = Console(file=buffer, width=240, highlight=False)
-    monkeypatch.setattr(view, "console", wide)
-    monkeypatch.setattr(io_mod, "console", wide)
-    return buffer
+    """A terminal wide enough that no column is cut; Rich reads it each time."""
+    monkeypatch.setenv("COLUMNS", "240")
 
 
 def _invoke(runner, patch_run, json_state, module, args, **answers):
@@ -88,7 +81,7 @@ def test_the_timeline_shows_who_said_what_and_when(
     )
 
     assert result.exit_code == 0, result.output
-    out = screen.getvalue()
+    out = result.output
     assert "Ada Lovelace (member)" in out
     assert "Launch is Friday" in out
     assert "3 replies" in out
@@ -105,7 +98,7 @@ def test_a_long_line_is_one_line_cut_short_unless_full(
     words = "word " * 60
     page = {"items": [_line(1, f"first\nsecond {words}")], "has_more": False}
 
-    _invoke(
+    result = _invoke(
         runner,
         patch_run,
         json_state,
@@ -114,7 +107,7 @@ def test_a_long_line_is_one_line_cut_short_unless_full(
         messages=page,
     )
 
-    out = screen.getvalue()
+    out = result.output
     assert "first second" in out
     assert "…" in out
     assert "--full" in out
@@ -143,7 +136,7 @@ def test_a_thread_starts_with_its_first_line(runner, patch_run, json_state, scre
         "has_more": False,
     }
 
-    _invoke(
+    result = _invoke(
         runner,
         patch_run,
         json_state,
@@ -152,7 +145,7 @@ def test_a_thread_starts_with_its_first_line(runner, patch_run, json_state, scre
         thread=thread,
     )
 
-    out = screen.getvalue()
+    out = result.output
     assert out.index("Question for all") < out.index("An answer")
 
 
@@ -169,9 +162,9 @@ def test_the_inbox_says_what_waits_and_where(runner, patch_run, json_state, scre
         "mentions": [{"channel": channel, "message": _line(6, "@you look")}],
     }
 
-    _invoke(runner, patch_run, json_state, channels, ["inbox"], inbox=inbox)
+    result = _invoke(runner, patch_run, json_state, channels, ["inbox"], inbox=inbox)
 
-    out = screen.getvalue()
+    out = result.output
     assert "1 waiting on you" in out
     assert "[live] launch" in out
     assert "Approve the post?" in out and "question: waiting" in out
@@ -193,46 +186,26 @@ def test_a_search_shows_the_snippet_and_its_channel(
         "next_cursor": "c2",
     }
 
-    _invoke(
+    result = _invoke(
         runner, patch_run, json_state, channels, ["search", "invoices"], search=found
     )
 
-    out = screen.getvalue()
+    out = result.output
     assert "about invoices" in out and "whole long line" not in out
     assert "Launch" in out and "Ada Lovelace" in out
     assert "--cursor c2" in out
 
 
-def test_a_malformed_id_says_what_an_id_is_not_a_python_error(runner, monkeypatch):
-    """The real path: the CLI's error boundary and the SDK's id check, with a
-    client whose server would fail the test if it were ever asked."""
-    from contextlib import contextmanager
-
-    import httpx
-    from lemma_sdk import Lemma
-
-    import lemma_cli.cli_core.state as state_mod
-
-    asked: list[httpx.Request] = []
-    lemma = Lemma(token="t", base_url="https://api.example.test")
-    lemma._transport.generated.set_httpx_client(
-        httpx.Client(
-            transport=httpx.MockTransport(
-                lambda request: asked.append(request) or httpx.Response(500)
-            ),
-            base_url="https://api.example.test",
-        )
-    )
-
-    @contextmanager
-    def session(_state):
-        yield lemma
-
-    monkeypatch.setattr(state_mod, "client_session", session)
-
+def test_a_malformed_id_says_what_an_id_is_not_a_python_error(runner):
+    """The real path: the CLI's error boundary and the SDK's id check. The
+    server named does not exist, so a request would fail the test, not pass it."""
     result = runner.invoke(
         app,
         [
+            "--base-url",
+            "https://api.example.invalid",
+            "--token",
+            "t",
             "channels",
             "messages",
             "list",
@@ -245,7 +218,6 @@ def test_a_malformed_id_says_what_an_id_is_not_a_python_error(runner, monkeypatc
     assert result.exit_code == 1
     assert "'not-a-channel' is not an id" in result.stderr
     assert "badly formed" not in result.stderr
-    assert asked == []
 
 
 def test_a_line_s_markup_prints_as_typed(runner, patch_run, json_state, screen):
@@ -260,7 +232,7 @@ def test_a_line_s_markup_prints_as_typed(runner, patch_run, json_state, screen):
         "has_more": False,
     }
 
-    _invoke(
+    result = _invoke(
         runner,
         patch_run,
         json_state,
@@ -269,7 +241,7 @@ def test_a_line_s_markup_prints_as_typed(runner, patch_run, json_state, screen):
         messages=page,
     )
 
-    out = screen.getvalue()
+    out = result.output
     assert "[bold red]x[/bold red]" in out
     assert "[link=https://evil]y[/link]" in out
     assert "[blink]Mallory[/blink]" in out

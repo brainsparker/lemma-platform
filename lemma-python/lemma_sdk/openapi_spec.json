@@ -18353,6 +18353,49 @@
         "title": "SlackConfigurationTokenRequest",
         "type": "object"
       },
+      "SlackInstallAvailabilityResponse": {
+        "description": "Whether \"Add to Slack\" can work on this server, asked before anything\nis made for it.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "SlackInstallAvailabilityResponse",
+        "type": "object"
+      },
+      "SlackInstallRequest": {
+        "description": "Which organization Lemma's app joins the workspace for.",
+        "properties": {
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id"
+        ],
+        "title": "SlackInstallRequest",
+        "type": "object"
+      },
+      "SlackInstallResponse": {
+        "description": "Slack's consent page for Lemma's own app, to send the browser to.",
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url"
+        ],
+        "title": "SlackInstallResponse",
+        "type": "object"
+      },
       "SlackManagedWorkspaceListResponse": {
         "properties": {
           "items": {
@@ -47149,6 +47192,85 @@
           "resource": "public.web.table",
           "result": "entity",
           "verb": "read"
+        }
+      }
+    },
+    "/surface-setup/slack/install": {
+      "get": {
+        "description": "Whether Lemma's own Slack app is set up on this server, so \"Add to\nSlack\" can work -- checked before a person with no organization is given\none for it.",
+        "operationId": "agent.surface.slack_install.availability",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackInstallAvailabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Slack Install Availability",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface.slack_install",
+          "result": "entity",
+          "verb": "availability"
+        }
+      },
+      "post": {
+        "description": "Add Lemma to a Slack workspace from \"Add to Slack\", for this organization.\n\nAnswers with Slack's consent page for Lemma's own app, asking for its bot\nalone. Refused before anything is made when Slack isn't set up here, or\nthe caller may not add the organization's installs. When the grant comes\nback to this same signed-in browser, the workspace becomes the\norganization's and Lemma's app says hello there; a grant finished anywhere\nelse adopts nothing.",
+        "operationId": "agent.surface.slack_install.start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackInstallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackInstallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Slack Install Flow",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_install"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_install",
+          "result": "entity",
+          "verb": "start"
         }
       }
     },

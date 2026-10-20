@@ -13,6 +13,9 @@ import type { SlackAppCreateResponse } from '../models/SlackAppCreateResponse.js
 import type { SlackAppWorkspaceListResponse } from '../models/SlackAppWorkspaceListResponse.js';
 import type { SlackAppWorkspaceResponse } from '../models/SlackAppWorkspaceResponse.js';
 import type { SlackConfigurationTokenRequest } from '../models/SlackConfigurationTokenRequest.js';
+import type { SlackInstallAvailabilityResponse } from '../models/SlackInstallAvailabilityResponse.js';
+import type { SlackInstallRequest } from '../models/SlackInstallRequest.js';
+import type { SlackInstallResponse } from '../models/SlackInstallResponse.js';
 import type { SlackManagedWorkspaceListResponse } from '../models/SlackManagedWorkspaceListResponse.js';
 import type { SlackManagedWorkspaceResponse } from '../models/SlackManagedWorkspaceResponse.js';
 import type { SlackManagerBindRequest } from '../models/SlackManagerBindRequest.js';
@@ -677,6 +680,47 @@ export class AgentSurfacesService {
                 'pod_id': podId,
                 'widget_id': widgetId,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Slack Install Availability
+     * Whether Lemma's own Slack app is set up on this server, so "Add to
+     * Slack" can work -- checked before a person with no organization is given
+     * one for it.
+     * @returns SlackInstallAvailabilityResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackInstallAvailability(): CancelablePromise<SlackInstallAvailabilityResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/surface-setup/slack/install',
+        });
+    }
+    /**
+     * Start Slack Install Flow
+     * Add Lemma to a Slack workspace from "Add to Slack", for this organization.
+     *
+     * Answers with Slack's consent page for Lemma's own app, asking for its bot
+     * alone. Refused before anything is made when Slack isn't set up here, or
+     * the caller may not add the organization's installs. When the grant comes
+     * back to this same signed-in browser, the workspace becomes the
+     * organization's and Lemma's app says hello there; a grant finished anywhere
+     * else adopts nothing.
+     * @param requestBody
+     * @returns SlackInstallResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackInstallStart(
+        requestBody: SlackInstallRequest,
+    ): CancelablePromise<SlackInstallResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surface-setup/slack/install',
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

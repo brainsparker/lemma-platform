@@ -929,4 +929,22 @@ describe("the live socket url", () => {
         expect(onError).toHaveBeenCalledTimes(1);
         expect(onError.mock.calls[0][0].message).toMatch(/"\/api" is relative/);
     });
+
+    it("stops for good on a malformed apiUrl instead of hanging in connecting", async () => {
+        const onError = vi.fn();
+        const onStatus = vi.fn();
+        const handle = watchDatastoreChanges("https://[broken", makeAuth(), "POD", {
+            onChange: vi.fn(),
+            onError,
+            onStatus,
+        });
+        await flush();
+        await flush();
+
+        expect(FakeWebSocket.instances.length).toBe(0);
+        expect(handle.closed).toBe(true);
+        expect(onStatus).toHaveBeenLastCalledWith("closed");
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(onError.mock.calls[0][0].message).toMatch(/"https:\/\/\[broken" is not a valid URL/);
+    });
 });

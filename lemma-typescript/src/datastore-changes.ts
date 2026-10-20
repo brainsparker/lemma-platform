@@ -341,12 +341,17 @@ export class LiveConnection {
         try {
             url = liveWsUrl(this.apiUrl, this.podId, token);
         } catch (error) {
-            if (error instanceof UnresolvableApiUrl) {
-                // Said once and stopped: retrying could only fail the same way.
-                this.failAll(error);
-                return;
-            }
-            throw error;
+            // Said once and stopped: apiUrl does not change, so retrying could
+            // only fail the same way -- relative with no origin, or malformed.
+            this.failAll(
+                error instanceof UnresolvableApiUrl
+                    ? error
+                    : new Error(
+                          `Datastore change stream: apiUrl "${this.apiUrl}" is not a valid URL`,
+                          { cause: error },
+                      ),
+            );
+            return;
         }
         let ws: WebSocket;
         try {

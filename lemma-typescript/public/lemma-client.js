@@ -20466,11 +20466,13 @@ var LemmaClient = (() => {
       try {
         url = liveWsUrl(this.apiUrl, this.podId, token);
       } catch (error) {
-        if (error instanceof UnresolvableApiUrl) {
-          this.failAll(error);
-          return;
-        }
-        throw error;
+        this.failAll(
+          error instanceof UnresolvableApiUrl ? error : new Error(
+            `Datastore change stream: apiUrl "${this.apiUrl}" is not a valid URL`,
+            { cause: error }
+          )
+        );
+        return;
       }
       let ws;
       try {

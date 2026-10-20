@@ -1298,6 +1298,7 @@ code.gsheet__code-text {
     color: var(--ink-3);
 }
 .cline__edit {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 6px;

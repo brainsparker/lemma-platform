@@ -19,6 +19,7 @@ import { channelTitle, newestSeq, personName, platformsOf, whoAnswers, type Chan
 import { linesKey, refreshLists, useChannel, useLines } from "./queries";
 import { readTarget, unseenThreadMention, usePageShown } from "./read-state";
 import { platformName } from "./sources";
+import { MentionablesContext } from "./mention-picker";
 import { ThreadPanel } from "./thread-panel";
 import { Timeline } from "./timeline";
 import { useAbilities } from "./use-abilities";
@@ -174,6 +175,8 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
     }, [live.answering, agentName]);
 
     return (
+        /* Who the box a line is changed in can name: as the composer's. */
+        <MentionablesContext.Provider value={people}>
         <div className="cpage" data-side={side ?? undefined}>
             <div className="cpage__main">
                 <header className="cpage__head">
@@ -269,5 +272,6 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
             )}
             {side === "about" && <ChannelPanel pod={pod} channel={channel} may={may} onClose={() => setSide(null)} onLeft={onOpenChannels} />}
         </div>
+        </MentionablesContext.Provider>
     );
 }

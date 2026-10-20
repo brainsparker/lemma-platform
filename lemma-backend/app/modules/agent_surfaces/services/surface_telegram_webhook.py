@@ -22,6 +22,7 @@ from uuid import UUID
 
 from app.core.config import reveal_secret, settings
 from app.core.infrastructure.db.session_uow import commit_now
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent_surfaces.platforms.common import (
     platform_transport_errors,
     public_https_api_url_available,
@@ -194,6 +195,7 @@ class SurfaceTelegramWebhookMixin:
         completes clears it.
         """
         await commit_now(self.surface_repository)
+        refused: AgentSurfacePlatformError | None = None
         try:
             await self._register_telegram_webhook(
                 credentials=credentials,
@@ -201,13 +203,21 @@ class SurfaceTelegramWebhookMixin:
                 webhook_secret=reveal_secret(surface.webhook_secret) or "",
                 drop_pending_updates=drop_pending_updates,
             )
-        except AgentSurfacePlatformError as refused:
+        except AgentSurfacePlatformError as exc:
+            refused = exc
+        # Why it does not work, for its readers (``surface_problems``).
+        async with connection_released(
+            getattr(self.surface_repository.uow, "session", None)
+        ):
+            if refused is None:
+                await clear_problem(surface.id)
+            else:
+                await note_problem(surface.id, refused.message)
+        if refused is not None:
             surface.mark_webhook_unregistered()
             await self.surface_repository.update(surface)
             await commit_now(self.surface_repository)
-            await note_problem(surface.id, refused.message)
-            raise
-        await clear_problem(surface.id)
+            raise refused
         if surface.status is AgentSurfaceStatus.ERROR:
             surface.activate()
             return await self.surface_repository.update(surface)

@@ -9,7 +9,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import column, delete, func, literal, select, table, tuple_, update
+from sqlalchemy import (
+    column,
+    delete,
+    exists,
+    func,
+    literal,
+    select,
+    table,
+    tuple_,
+    update,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -223,13 +233,11 @@ class ContactRepository:
             handle = ContactIdentityModel
             query = query.where(
                 ContactModel.display_name.ilike(pattern, escape="\\")
-                | ContactModel.id.in_(
-                    select(handle.contact_id).where(
-                        handle.pod_id == pod_id,
-                        handle.value.ilike(pattern, escape="\\")
-                        | handle.value.ilike(compact, escape="\\")
-                        | handle.value_raw.ilike(pattern, escape="\\"),
-                    )
+                | exists().where(
+                    handle.contact_id == ContactModel.id,
+                    handle.value.ilike(pattern, escape="\\")
+                    | handle.value.ilike(compact, escape="\\")
+                    | handle.value_raw.ilike(pattern, escape="\\"),
                 )
             )
         if before is not None:

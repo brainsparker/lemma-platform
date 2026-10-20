@@ -245,7 +245,7 @@ moves the watch to it.
 | --- | --- | --- | --- |
 | `typing` | `channel_id`, `thread_root_id` (optional: typing in that thread) | `{}` | `channel.write`, may see the channel, and `contact.message` in a CONTACT channel. Reaches the channel's other subscribers, never the caller's own sockets. Send at most every ~3 s while typing |
 | `read` | `channel_id`, `seq` (≥ 0) | `{channel_id, read_seq}` | `POST /channels/{c}/read`, the same rule and the same write: it never goes back, and never past the newest line. Other sockets hear `read.updated` and `inbox.updated` |
-| `presence` | | `{online: [user_id, …]}` | A socket on the pod. Users with a socket open now (claims lapse after 90 s without one). The same record says who had the app open lately (`core/live/presence.seen_within`), which channels reads to hold back a push the member would have read in the app ([channels.md](channels.md#posting-a-line)); with Redis unreachable it says nobody, so the push goes |
+| `presence` | | `{online: [user_id, …]}` | A socket on the pod. Users with a socket open now (claims lapse after 90 s without one). The same record says who had the app open lately (`core/live/presence.seen_within`), which channels reads to hold a push a few minutes while the member may read it in the app ([channels.md](channels.md#posting-a-line)); with Redis unreachable it says nobody, so the push goes |
 
 ## Limits
 

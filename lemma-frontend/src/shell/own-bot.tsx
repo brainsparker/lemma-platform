@@ -67,14 +67,30 @@ export function OwnBot({
     if (workspaces.isPending) {
         return <p className="guided__wait" role="status"><RefreshIcon size={13} /> Checking what Lemma can do here…</p>;
     }
-    if (!workspaces.data.length) {
+    /* Saving a token and creating an app are an organization owner's or
+       editor's: offering the form to anyone else only ends in a refusal. */
+    if (!workspaces.data.canManage) {
         return <>
-            <LetLemmaMakeApps pod={pod} onSaved={() => void workspaces.refetch()} />
+            <p className="smanage__quiet">
+                An owner or editor of your organization can let Lemma make Slack apps, so {pod.teammate.name}&rsquo;s
+                bot is one click. Until then, make the app by hand.
+            </p>
+            <ByHand entry={entry} pod={pod} onDone={onDone} />
+        </>;
+    }
+    const usable = workspaces.data.workspaces.filter((one) => !one.needsNewToken);
+    if (!usable.length) {
+        return <>
+            <LetLemmaMakeApps
+                pod={pod}
+                expired={workspaces.data.workspaces.find((one) => one.needsNewToken) ?? null}
+                onSaved={() => void workspaces.refetch()}
+            />
             {handIt}
         </>;
     }
     return <>
-        <MadeByLemma entry={entry} pod={pod} workspaces={workspaces.data} onDone={onDone} />
+        <MadeByLemma entry={entry} pod={pod} workspaces={usable} onDone={onDone} />
         {handIt}
     </>;
 }
@@ -82,7 +98,15 @@ export function OwnBot({
 /** Once per workspace: the token that lets Lemma create apps there. Only the
  *  refresh token is asked for, since the access token beside it on Slack's
  *  page lasts hours and Lemma rotates its own. */
-function LetLemmaMakeApps({ pod, onSaved }: { pod: Pod; onSaved: () => void }) {
+function LetLemmaMakeApps({
+    pod,
+    expired,
+    onSaved,
+}: {
+    pod: Pod;
+    expired: SlackAppWorkspace | null;
+    onSaved: () => void;
+}) {
     const [refreshToken, setRefreshToken] = useState("");
     const save = useMutation({
         mutationFn: () => source.saveSlackConfigurationToken(pod.id, refreshToken),
@@ -93,10 +117,17 @@ function LetLemmaMakeApps({ pod, onSaved }: { pod: Pod; onSaved: () => void }) {
     });
     return (
         <div className="ownbot">
+            {expired && (
+                <p className="approval__error">
+                    Slack no longer accepts the token saved for {expired.teamName || expired.teamId}. Generate a
+                    new one and paste its refresh token.
+                </p>
+            )}
             <p>
                 Let Lemma make Slack apps in your workspace, and {pod.teammate.name}&rsquo;s bot is one click. On
                 Slack&rsquo;s app page, under <em>Your App Configuration Tokens</em>, choose <em>Generate Token</em>,
-                pick the workspace, and paste the refresh token here. You do this once per workspace.
+                pick the workspace, and paste the refresh token here. You do this once per workspace. The token is
+                yours: Slack makes every app as you, so its owners include you.
             </p>
             <div className="ownbot__fields">
                 <label>
@@ -140,6 +171,9 @@ function MadeByLemma({
     onDone: () => void;
 }) {
     const [teamId, setTeamId] = useState(workspaces[0].teamId);
+    /* One key per sheet: a retry after a failed authorisation start, or a
+       double click, answers with the app the first try made. */
+    const [attempt] = useState(() => crypto.randomUUID());
     const [made, setMade] = useState<{ appId: string; authorization: AccountConnect } | null>(null);
     const [error, setError] = useState<string | null>(null);
     const where = (one: SlackAppWorkspace) => one.teamName || one.teamId;
@@ -147,7 +181,7 @@ function MadeByLemma({
 
     const create = useMutation({
         mutationFn: async () => {
-            const app = await source.createSlackApp(pod.id, teamId, pod.teammate.name);
+            const app = await source.createSlackApp(pod.id, teamId, `${attempt}:${teamId}`);
             const authorization = await source.startAccount(
                 pod.orgId, entry.connectorId, app.authConfigId, completionPath(hereWith({ reach: "1" })),
             );

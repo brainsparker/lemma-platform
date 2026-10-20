@@ -8,7 +8,9 @@ use std::time::Duration;
 use lemma_agent_host::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
 use lemma_agent_host::adapters::{AdapterSpec, ResolvedAdapter};
 use lemma_agent_host::permissions::PermissionGate;
-use lemma_agent_host::protocol::{EventType, JsonMap, RunSpec, RunState};
+use lemma_agent_host::protocol::{
+    ConfigOption, EventType, JsonMap, MODEL_OPTION_SET_KEY, RunSpec, RunState,
+};
 use serde_json::Value;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -348,6 +350,103 @@ async fn a_forgotten_session_is_answered_and_reported_rather_than_silently_lost(
         .find(|(_, payload)| payload.get("status") == Some(&Value::from("session_lost")))
         .expect("Lemma is told which session was lost, not just the log file");
     assert_eq!(reported.1["requested_session"], "fake-session");
+}
+
+/// The probe of an agent whose models each offer their own reasoning levels,
+/// and the value of each model on its published model option.
+async fn probe_per_model_options(directory: &TempDir) -> (Vec<JsonMap>, Vec<ConfigOption>) {
+    let (adapter, _log) = fake_adapter_in_mode(directory, Some("per-model-options"));
+    let probe = AcpDriver::default()
+        .probe(adapter, directory.path().join("probe"))
+        .await
+        .expect("a model that cannot be read does not fail the probe");
+    let model = probe
+        .config_options
+        .iter()
+        .find(|option| option.category == "model")
+        .expect("the model option is published")
+        .options
+        .clone();
+    (model, probe.config_options)
+}
+
+fn model_entry<'a>(models: &'a [JsonMap], value: &str) -> &'a JsonMap {
+    models
+        .iter()
+        .find(|entry| entry.get("value") == Some(&Value::from(value)))
+        .unwrap_or_else(|| panic!("{value} is published: {models:?}"))
+}
+
+/// The levels an effort option offers, from its published JSON.
+fn levels(option: &Value) -> Vec<&str> {
+    option["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|level| level["value"].as_str().unwrap())
+        .collect()
+}
+
+/// `session/new` describes the default model only. Each model carries the
+/// options it offers once chosen, and the top level stays the default's.
+#[tokio::test]
+async fn the_probe_publishes_each_models_own_options() {
+    let directory = TempDir::new().unwrap();
+    let (models, top_level) = probe_per_model_options(&directory).await;
+
+    let second = model_entry(&models, "fake-2")[MODEL_OPTION_SET_KEY]
+        .as_array()
+        .expect("fake-2 has its own options");
+    assert_eq!(
+        second.len(),
+        1,
+        "the model option is not nested: {second:?}"
+    );
+    assert_eq!(second[0]["category"], "thought_level");
+    assert_eq!(levels(&second[0]), ["low", "high", "max"]);
+
+    let first = model_entry(&models, "fake-1")[MODEL_OPTION_SET_KEY]
+        .as_array()
+        .expect("the default model has its own options too");
+    assert_eq!(levels(&first[0]), ["low", "medium"]);
+
+    let effort = top_level
+        .iter()
+        .find(|option| option.category == "thought_level")
+        .expect("the default's effort is still at the top level");
+    assert_eq!(effort.current_value, "medium");
+    assert_eq!(effort.options.len(), 2);
+    let model = top_level
+        .iter()
+        .find(|option| option.category == "model")
+        .unwrap();
+    assert_eq!(model.current_value, "fake-1");
+}
+
+/// A model the agent will not switch to is published without a set of its
+/// own -- the same as the top level -- and every other model keeps its own.
+/// The default is put back afterwards, so the probe does not move it.
+#[tokio::test]
+async fn a_model_whose_options_cannot_be_read_is_published_with_the_defaults() {
+    let directory = TempDir::new().unwrap();
+    let (models, _) = probe_per_model_options(&directory).await;
+
+    assert!(
+        !model_entry(&models, "fake-broken").contains_key(MODEL_OPTION_SET_KEY),
+        "absent means the top level's options: {models:?}"
+    );
+    assert!(model_entry(&models, "fake-1").contains_key(MODEL_OPTION_SET_KEY));
+    assert!(model_entry(&models, "fake-2").contains_key(MODEL_OPTION_SET_KEY));
+
+    let log = directory.path().join("messages.jsonl");
+    let chosen: Vec<String> = std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|message| message["method"] == "session/set_config_option")
+        .map(|message| message["params"]["value"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(chosen, ["fake-1", "fake-2", "fake-broken", "fake-1"]);
 }
 
 /// A run of `adapter` with nothing special about it, working in `cwd`.

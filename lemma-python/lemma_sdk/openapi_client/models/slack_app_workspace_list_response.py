@@ -17,13 +17,18 @@ T = TypeVar("T", bound="SlackAppWorkspaceListResponse")
 class SlackAppWorkspaceListResponse:
     """
     Attributes:
+        can_manage (bool): Whether the caller may save tokens and create apps: an owner or editor of the organization.
+            Others are shown no workspace.
         items (list[SlackAppWorkspaceResponse]):
     """
 
+    can_manage: bool
     items: list[SlackAppWorkspaceResponse]
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        can_manage = self.can_manage
+
         items = []
         for items_item_data in self.items:
             items_item = items_item_data.to_dict()
@@ -33,6 +38,7 @@ class SlackAppWorkspaceListResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
+                "can_manage": can_manage,
                 "items": items,
             }
         )
@@ -44,6 +50,8 @@ class SlackAppWorkspaceListResponse:
         from ..models.slack_app_workspace_response import SlackAppWorkspaceResponse
 
         d = dict(src_dict)
+        can_manage = d.pop("can_manage")
+
         items = []
         _items = d.pop("items")
         for items_item_data in _items:
@@ -52,6 +60,7 @@ class SlackAppWorkspaceListResponse:
             items.append(items_item)
 
         slack_app_workspace_list_response = cls(
+            can_manage=can_manage,
             items=items,
         )
 

@@ -8,4 +8,8 @@
 export type SlackAppCreateResponse = {
     app_id: string;
     auth_config_id: string;
+    /**
+     * An app made earlier for the same agent and workspace (or the same Idempotency-Key), not a new one.
+     */
+    reused?: boolean;
 };

@@ -46,21 +46,19 @@ def active_surfaces_of_type(surface_type: str, *, also_paused: bool = False) -> 
     sender resolves to several candidate surfaces on a shared bot or number, and
     it is what picks the identity surface. Every narrowing below inherits it.
 
-    ``also_paused`` adds INACTIVE surfaces, for the one event a paused surface
-    must still hear: its app being removed. Nothing that answers a message
-    passes it.
+    ``also_paused`` drops the status filter altogether, for the one event a
+    surface that is not answering must still hear: its app being removed. A
+    surface paused, waiting on setup or on an admin's consent, or in error, is
+    one somebody will bring back -- to an app that is gone, still reading as
+    connected. Nothing that answers a message passes it.
     """
-    statuses = [AgentSurfaceStatus.ACTIVE.value]
-    if also_paused:
-        statuses.append(AgentSurfaceStatus.INACTIVE.value)
-    return (
-        select(AgentSurface)
-        .where(
-            AgentSurface.surface_type == surface_type,
-            AgentSurface.status.in_(statuses),
+    statement = select(AgentSurface).where(AgentSurface.surface_type == surface_type)
+    if not also_paused:
+        statement = statement.where(
+            AgentSurface.status == AgentSurfaceStatus.ACTIVE.value
         )
-        .join(Pod, in_a_live_pod())
-        .order_by(AgentSurface.created_at, AgentSurface.id)
+    return statement.join(Pod, in_a_live_pod()).order_by(
+        AgentSurface.created_at, AgentSurface.id
     )
 
 

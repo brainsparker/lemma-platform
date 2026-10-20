@@ -6,14 +6,8 @@ import type { AgentSurfaceListResponse } from '../models/AgentSurfaceListRespons
 import type { AgentSurfaceResponse } from '../models/AgentSurfaceResponse.js';
 import type { AvailableSurfaceChannelsResponse } from '../models/AvailableSurfaceChannelsResponse.js';
 import type { AvailableSurfacesResponse } from '../models/AvailableSurfacesResponse.js';
-import type { GroupDetailResponse } from '../models/GroupDetailResponse.js';
-import type { GroupLinkRequest } from '../models/GroupLinkRequest.js';
-import type { GroupLinkResponse } from '../models/GroupLinkResponse.js';
-import type { GroupListResponse } from '../models/GroupListResponse.js';
-import type { GroupResponse } from '../models/GroupResponse.js';
-import type { GroupStartRequest } from '../models/GroupStartRequest.js';
-import type { GroupTimelineResponse } from '../models/GroupTimelineResponse.js';
-import type { GroupUpdateRequest } from '../models/GroupUpdateRequest.js';
+import type { NoticeRequest } from '../models/NoticeRequest.js';
+import type { NoticeResponse } from '../models/NoticeResponse.js';
 import type { SlackAppCreateRequest } from '../models/SlackAppCreateRequest.js';
 import type { SlackAppCreateResponse } from '../models/SlackAppCreateResponse.js';
 import type { SlackAppWorkspaceListResponse } from '../models/SlackAppWorkspaceListResponse.js';
@@ -67,171 +61,40 @@ export class AgentSurfacesService {
         });
     }
     /**
-     * List Groups
-     * Every group the pod's bots are in, most recently changed first.
+     * Send Notice
+     * Tell another member of the pod something, in their own channel. The
+     * same `Idempotency-Key` from the same member is the same notice; sent with
+     * other text, it is refused (422). A member sends at most
+     * `NOTICES_PER_MINUTE` a minute (429).
      * @param podId
-     * @returns GroupListResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentGroupList(
-        podId: string,
-    ): CancelablePromise<GroupListResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/pods/{pod_id}/groups',
-            path: {
-                'pod_id': podId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Start Group
-     * Start a WhatsApp group with the pod's bot in it, answered for by the caller.
-     *
-     * WhatsApp confirms the group moments later: it comes back ``pending``, and
-     * its invite link appears once confirmed. Telegram and Slack cannot create
-     * groups for a bot; add the bot to one of theirs instead.
-     * @param podId
+     * @param member The member to tell: a pod member id, user id, or email address.
      * @param requestBody
-     * @returns GroupResponse Successful Response
+     * @param idempotencyKey
+     * @returns NoticeResponse Successful Response
      * @throws ApiError
      */
-    public static agentGroupStart(
+    public static agentNoticeSend(
         podId: string,
-        requestBody: GroupStartRequest,
-    ): CancelablePromise<GroupResponse> {
+        member: string,
+        requestBody: NoticeRequest,
+        idempotencyKey?: (string | null),
+    ): CancelablePromise<NoticeResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/pods/{pod_id}/groups',
+            url: '/pods/{pod_id}/members/{member}/notices',
             path: {
                 'pod_id': podId,
+                'member': member,
+            },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
             },
             body: requestBody,
             mediaType: 'application/json',
             errors: {
+                404: `Nobody in this pod is that member.`,
                 422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Group Link
-     * A one-use link that adds the pod's Telegram bot to a group the caller picks.
-     *
-     * The group is then the caller's to answer for. Which Telegram account is
-     * theirs is still their profile's to say: a link is easily passed on, so the
-     * one that used it is never taken for them. The link works for an hour.
-     * @param podId
-     * @param requestBody
-     * @returns GroupLinkResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentGroupLink(
-        podId: string,
-        requestBody: GroupLinkRequest,
-    ): CancelablePromise<GroupLinkResponse> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/pods/{pod_id}/groups/links',
-            path: {
-                'pod_id': podId,
-            },
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Get Group
-     * One group: who is in it, and what its outsiders are waiting on you for.
-     * @param podId
-     * @param groupId
-     * @returns GroupDetailResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentGroupGet(
-        podId: string,
-        groupId: string,
-    ): CancelablePromise<GroupDetailResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/pods/{pod_id}/groups/{group_id}',
-            path: {
-                'pod_id': podId,
-                'group_id': groupId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Update Group
-     * Switch outsiders on or off in one group, or take it over.
-     *
-     * The member who answers for the group may; so may anybody who configures the
-     * bot when nobody in the pod answers for it, and an admin of the pod, whose
-     * change the member is told about.
-     * @param podId
-     * @param groupId
-     * @param requestBody
-     * @returns GroupResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentGroupUpdate(
-        podId: string,
-        groupId: string,
-        requestBody: GroupUpdateRequest,
-    ): CancelablePromise<GroupResponse> {
-        return __request(OpenAPI, {
-            method: 'PATCH',
-            url: '/pods/{pod_id}/groups/{group_id}',
-            path: {
-                'pod_id': podId,
-                'group_id': groupId,
-            },
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Group Timeline
-     * What was said in the group, oldest first, as far as the pod kept it.
-     *
-     * Kept for WhatsApp and Telegram groups. A Slack channel's history is
-     * Slack's; it comes back empty here. An answer the bot made with one member's
-     * own access comes back withheld to everybody else: they may not be able to
-     * see what it was made from.
-     * @param podId
-     * @param groupId
-     * @param limit
-     * @returns GroupTimelineResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentGroupTimeline(
-        podId: string,
-        groupId: string,
-        limit: number = 60,
-    ): CancelablePromise<GroupTimelineResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/pods/{pod_id}/groups/{group_id}/timeline',
-            path: {
-                'pod_id': podId,
-                'group_id': groupId,
-            },
-            query: {
-                'limit': limit,
-            },
-            errors: {
-                422: `Validation Error`,
+                429: `Too many notices this minute; see Retry-After.`,
             },
         });
     }
@@ -284,6 +147,9 @@ export class AgentSurfacesService {
     /**
      * Forget Slack Configuration Token
      * Stop Lemma creating apps there. Apps it already made are not touched.
+     *
+     * Slack offers no way to revoke a configuration token, so it stays valid at
+     * Slack: revoke it on api.slack.com/apps as well.
      * @param podId
      * @param teamId
      * @returns void
@@ -307,15 +173,22 @@ export class AgentSurfacesService {
     }
     /**
      * Create Slack App
-     * Create this pod's own Slack app. What is left is authorising it.
+     * Create an agent's own Slack app, named after it. What is left is
+     * authorising it.
+     *
+     * One app per agent per workspace: until it is authorised, asking again
+     * answers with the same app, and so does the same `Idempotency-Key` from the
+     * same member for a day.
      * @param podId
      * @param requestBody
+     * @param idempotencyKey
      * @returns SlackAppCreateResponse Successful Response
      * @throws ApiError
      */
     public static agentSurfaceSlackAppCreate(
         podId: string,
         requestBody: SlackAppCreateRequest,
+        idempotencyKey?: (string | null),
     ): CancelablePromise<SlackAppCreateResponse> {
         return __request(OpenAPI, {
             method: 'POST',
@@ -323,10 +196,15 @@ export class AgentSurfacesService {
             path: {
                 'pod_id': podId,
             },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
+            },
             body: requestBody,
             mediaType: 'application/json',
             errors: {
+                409: `Not set up, the token needs replacing, or busy.`,
                 422: `Validation Error`,
+                429: `Slack is rate-limiting app creation.`,
             },
         });
     }
@@ -577,9 +455,9 @@ export class AgentSurfacesService {
      * Send Surface Message
      * Proactively send a message to a pod member on this surface.
      *
-     * Powers notifications from functions/workflows. Reuses the member's existing
-     * thread (bots can't cold-DM), and a 404 carries the reason it could not be
-     * reached, in the vocabulary the notification API uses.
+     * For functions and workflows that message a member on one platform. Reuses
+     * the member's existing thread (bots can't cold-DM), and a 404 carries the
+     * reason they could not be reached.
      * @param podId
      * @param surfaceName
      * @param requestBody

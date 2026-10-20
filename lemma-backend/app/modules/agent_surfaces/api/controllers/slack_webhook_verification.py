@@ -46,8 +46,9 @@ async def slack_candidates_for_workspace(
     # "verify every inbound message before acting on it". The credential resolve
     # below was in the same loop, so it ran per surface that happened to match
     # rather than per surface that could.
-    # `also_paused` only for an app's removal: a paused surface hears nothing
-    # else, but must hear that, or turning it back on reads a dead app as fine.
+    # `also_paused` (every status, not only paused) only for an app's removal:
+    # a surface that is not answering hears nothing else, but must hear that,
+    # or bringing it back reads a dead app as fine.
     surfaces = await service.surface_repository.list_active_for_routing(
         SurfacePlatform.SLACK.value,
         external_workspace_id=team_id,

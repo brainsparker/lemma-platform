@@ -66,6 +66,9 @@ def sync_detailed(
 
      Stop Lemma creating apps there. Apps it already made are not touched.
 
+    Slack offers no way to revoke a configuration token, so it stays valid at
+    Slack: revoke it on api.slack.com/apps as well.
+
     Args:
         pod_id (UUID):
         team_id (str):
@@ -100,6 +103,9 @@ def sync(
 
      Stop Lemma creating apps there. Apps it already made are not touched.
 
+    Slack offers no way to revoke a configuration token, so it stays valid at
+    Slack: revoke it on api.slack.com/apps as well.
+
     Args:
         pod_id (UUID):
         team_id (str):
@@ -128,6 +134,9 @@ async def asyncio_detailed(
     """Forget Slack Configuration Token
 
      Stop Lemma creating apps there. Apps it already made are not touched.
+
+    Slack offers no way to revoke a configuration token, so it stays valid at
+    Slack: revoke it on api.slack.com/apps as well.
 
     Args:
         pod_id (UUID):
@@ -160,6 +169,9 @@ async def asyncio(
     """Forget Slack Configuration Token
 
      Stop Lemma creating apps there. Apps it already made are not touched.
+
+    Slack offers no way to revoke a configuration token, so it stays valid at
+    Slack: revoke it on api.slack.com/apps as well.
 
     Args:
         pod_id (UUID):

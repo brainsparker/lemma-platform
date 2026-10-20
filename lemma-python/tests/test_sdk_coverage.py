@@ -30,7 +30,6 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "scheduler.job",  # internal scheduler ops
     "usage.",
     "workspace.",  # workspace runtime is driven by the backend
-    "channel.",
     "app.public",
     "health_check",  # liveness probe
     # OAuth/consent browser callbacks — never called by a client
@@ -74,15 +73,6 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "workflow.visualize",
     "workflow.run.visualize",
     "workflow.run.waiting_assigned_to_me",
-    # Setting up a teammate's own Slack app: a web reach sheet and Slack's
-    # own Home tab drive it, with a browser consent at the end. Not a
-    # scripted operation.
-    "agent.surface.slack_app",
-    # Lemma's own Slack app as a workspace's manager: binding it after the
-    # reach sheet's authorisation, and proving a Slack user from the link
-    # their App Home shows. Browser steps by design.
-    "agent.surface.slack_manager",
-    "agent.surface.slack_person",
     # Widget/app unification endpoints pending facade adoption
     "app.create_from_widget",
     "widget.embed_token",
@@ -137,6 +127,7 @@ def test_schedule_run_contract_includes_retry_without_fire_aliases() -> None:
     assert "ScheduleRunListResponse" in schemas
     assert schemas["ScheduleRunStatus"]["enum"] == [
         "RECEIVED",
+        "FILTERING",
         "PROCESSING",
         "DISPATCHED",
         "COMPLETED",

@@ -19,7 +19,7 @@ it; one typed in Lemma carries no label, and the model reads it as the next line
 of the chat. In the conversation that answers people outside the pod that is
 worse than a muddle: the brief says everyone writing is a stranger, so "ask him
 what's up" from the member who looks after the group was read as the stranger's,
-and passed on with ``message_user`` -- to that same member. So the server stamps
+and passed on with ``channel_post`` -- to that same member. So the server stamps
 where such a message was written (``written_in_lemma``), the history labels it,
 and the run it starts is marked.
 """
@@ -30,6 +30,7 @@ import re
 from collections.abc import Mapping
 from typing import Literal
 
+from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.value_objects import JsonObject
 
@@ -82,8 +83,7 @@ WRITTEN_BY_KEEPER_LABEL = (
     "(Written in Lemma by the member who looks after this conversation -- not "
     "by anybody outside the pod. Nobody in the chat saw this message; only your "
     "answer is posted there, so write it to make sense on its own to the people "
-    "in the chat, and do not quote this message. Do not pass it on with "
-    "`message_user`: that only reaches the member who wrote it.)"
+    "in the chat, and do not quote this message.)"
 )
 
 #: A reply typed in Lemma into a member's own slice of a group.
@@ -99,9 +99,7 @@ def is_private_note(message_metadata: Mapping[str, object] | None) -> bool:
     return bool(message_metadata and message_metadata.get(PRIVATE_NOTE_KEY) is True)
 
 
-def written_in_lemma_into(
-    conversation_metadata: Mapping[str, object] | None,
-) -> WrittenIn | None:
+def written_in_lemma_into(conversation: Conversation) -> WrittenIn | None:
     """What a message typed in Lemma into this conversation is to be marked as.
 
     Any conversation answering people outside the pod is the keeper's thread,
@@ -111,8 +109,8 @@ def written_in_lemma_into(
     direct chat the person typing in Lemma is the person the bot is talking
     to, and a plain Lemma conversation has no chat to have missed the message.
     """
-    metadata = conversation_metadata or {}
-    if Audience.from_conversation_metadata(metadata).answers_outsiders:
+    metadata = conversation.metadata or {}
+    if Audience.of(conversation).answers_outsiders:
         return IN_OUTSIDERS_THREAD
     if metadata.get("surface_platform") and metadata.get("conversation_kind") == (
         "CHANNEL"
@@ -121,20 +119,16 @@ def written_in_lemma_into(
     return None
 
 
-def note_in_member_dm(
-    conversation_metadata: Mapping[str, object] | None,
-) -> bool:
+def note_in_member_dm(conversation: Conversation) -> bool:
     """Whether a note typed into this conversation is one in a member's own DM.
 
     The only conversation whose note is labelled as written "by the person in
     this chat". A contact's chat is a DM on the platform too, but the person
     in it is the contact: a note there is the keeper's, and is labelled so.
     """
-    metadata = conversation_metadata or {}
-    return (
-        metadata.get("conversation_kind") == "DM"
-        and not Audience.from_conversation_metadata(metadata).answers_outsiders
-    )
+    return (conversation.metadata or {}).get(
+        "conversation_kind"
+    ) == "DM" and not Audience.of(conversation).answers_outsiders
 
 
 def _written_in(metadata: Mapping[str, object] | None) -> WrittenIn | None:

@@ -44,6 +44,18 @@ def _forms() -> RedisJsonCache[str]:
     return _cache
 
 
+def _encoded(sealed: dict[str, object] | None) -> str:
+    """One envelope around four short form values: bounded, so on the loop."""
+    return json.dumps(sealed)
+
+
+def _decoded(raw: str) -> dict[str, object]:
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("not a kept form")
+    return value
+
+
 async def keep_form(form: AddForm) -> str | None:
     """Encrypt the values and keep them; the reference, or None without Redis."""
     sealed = await get_secret_cipher().encrypt_json_async(
@@ -56,7 +68,7 @@ async def keep_form(form: AddForm) -> str | None:
     )
     reference = token_urlsafe(24)
     try:
-        await _forms().set_raw(reference, json.dumps(sealed))
+        await _forms().set_raw(reference, _encoded(sealed))
     except RedisError:
         logger.warning("agent_surfaces.slack_manager.form_kept.degraded", exc_info=True)
         return None
@@ -77,7 +89,7 @@ async def take_form(reference: str) -> AddForm | None:
     if raw is None:
         return None
     try:
-        values = await get_secret_cipher().decrypt_json_async(json.loads(raw)) or {}
+        values = await get_secret_cipher().decrypt_json_async(_decoded(raw)) or {}
     except ValueError:
         logger.warning(
             "agent_surfaces.slack_manager.form_unreadable.degraded", exc_info=True

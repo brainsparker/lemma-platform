@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from uuid import UUID
-from pydantic import JsonValue
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 
 from app.core.config import reveal_secret
 from app.core.api.callback_page import (
@@ -12,9 +11,8 @@ from app.core.api.callback_page import (
     render_callback_page,
     safe_provider_error,
 )
-from app.modules.agent_surfaces.services import slack_manager
-from app.modules.agent_surfaces.platforms.slack.manager_parser import (
-    parse_manager_input,
+from app.modules.agent_surfaces.api.controllers.slack_manager_lane import (
+    answer_manager,
 )
 from app.modules.agent_surfaces.config import (
     surface_settings,
@@ -166,7 +164,7 @@ async def handle_platform_webhook(
         # Lemma's own app managing the workspace: its own lane, decided here
         # and only here, before onboarding and before `accept()` -- nothing it
         # receives is stored as an inbound message or reaches group updates.
-        return await _answer_manager(
+        return await answer_manager(
             payload,
             source_event_id=webhook_source_event_id(
                 source, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
@@ -586,27 +584,3 @@ async def teams_admin_consent_callback(
             "The Lemma bot is installed and ready to use in your workspace."
         ),
     )
-
-
-async def _answer_manager(
-    payload: dict[str, JsonValue],
-    *,
-    source_event_id: str,
-    uow_factory: UnitOfWorkFactory,
-) -> Response:
-    """Answer what Slack's three seconds require, queue the rest as ids, reply.
-
-    A modal submission's body is protocol -- a ``response_action`` -- so it is
-    what Slack gets back; every other delivery gets an empty 200.
-    """
-    answer = await slack_manager.answer_now(uow_factory, parse_manager_input(payload))
-    if answer.queued is not None:
-        await slack_manager.queue(
-            uow_factory,
-            answer.queued,
-            source_event_id=source_event_id,
-            delay=answer.delay,
-        )
-    if answer.body is not None:
-        return JSONResponse(answer.body)
-    return Response(status_code=200)

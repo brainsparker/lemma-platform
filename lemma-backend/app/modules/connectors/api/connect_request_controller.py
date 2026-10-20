@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Annotated, Optional
 from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from app.core.api.callback_page import (
@@ -278,6 +278,7 @@ async def initiate_install_request(
 )
 async def oauth_callback(
     request: Request,
+    browser_user_id: Annotated[UUID | None, Depends(_browser_user_id)],
     connector_service: ConnectorServiceDep,
     error: Optional[str] = Query(default=None),
     response_format: Optional[str] = Query(
@@ -339,7 +340,7 @@ async def oauth_callback(
         account = await connector_service.handle_oauth_callback(
             redirect_uri=redirect_uri,
             state=state,
-            browser_user_id=await _browser_user_id(request),
+            browser_user_id=browser_user_id,
         )
     except ConnectorDomainError as exc:
         if wants_json:

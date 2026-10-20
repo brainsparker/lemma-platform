@@ -231,3 +231,21 @@ def with_grant(
 
 def was_browser_bound(connect_request: ConnectRequestEntity) -> bool:
     return (connect_request.attributes or {}).get(_BROWSER_BOUND_KEY) is True
+
+
+def request_attributes(
+    state: str,
+    provider_state: str | None,
+    code_verifier: str | None,
+    return_to: object,
+    purpose: str | None,
+) -> dict[str, str]:
+    """What a new connect request remembers until its callback: the flow's
+    secrets, where to put the person back, and what another module started it
+    for (``purpose``, carried to the ``ConnectorAccountConnected`` it emits)."""
+    attributes = {"state": state}
+    if provider_state is not None:
+        attributes["provider_state"] = provider_state
+    if code_verifier:
+        attributes["code_verifier"] = code_verifier
+    return with_purpose(with_return_path(attributes, return_to), purpose)

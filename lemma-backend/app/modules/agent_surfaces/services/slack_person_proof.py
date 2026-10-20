@@ -204,7 +204,7 @@ async def start_sign_in(
     try:
         await get_redis().set(
             _key(state),
-            json.dumps(_as_dict(started)),
+            _encoded(started),
             ex=SIGN_IN_TTL_SECONDS,
             nx=True,
         )
@@ -230,13 +230,20 @@ async def start_sign_in(
     return f"{SLACK_OIDC_AUTHORIZE_URL}?{query}"
 
 
-def _as_dict(started: _SignIn) -> dict[str, str]:
-    return {
-        "nonce": started.nonce,
-        "user_id": started.user_id,
-        "team_id": started.team_id,
-        "slack_user_id": started.slack_user_id,
-    }
+def _encoded(started: _SignIn) -> str:
+    """Four short ids: bounded, so on the loop."""
+    return json.dumps(
+        {
+            "nonce": started.nonce,
+            "user_id": started.user_id,
+            "team_id": started.team_id,
+            "slack_user_id": started.slack_user_id,
+        }
+    )
+
+
+def _decoded(raw: str | bytes) -> _SignIn:
+    return _SignIn(**json.loads(raw))
 
 
 async def _take(state: str) -> _SignIn:
@@ -252,7 +259,7 @@ async def _take(state: str) -> _SignIn:
     if not raw:
         raise SlackSignInError("expired", "That sign-in has expired. Try again.")
     try:
-        return _SignIn(**json.loads(raw))
+        return _decoded(raw)
     except TypeError, ValueError:
         raise SlackSignInError("expired", "That sign-in has expired.") from None
 

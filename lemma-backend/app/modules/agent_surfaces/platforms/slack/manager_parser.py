@@ -123,6 +123,18 @@ def _event(payload: Mapping[str, object], team_id: str | None) -> ManagerInput:
             user_id=_text(event.get("inviter")) or None,
             channel_id=channel,
         )
+    return _said(event, team_id, user=user, channel=channel)
+
+
+def _said(
+    event: Mapping[str, object],
+    team_id: str | None,
+    *,
+    user: str | None,
+    channel: str | None,
+) -> ManagerInput:
+    """Something written to the manager, as if it answered."""
+    event_type = event.get("type")
     # Bots, edits and joins say nothing to answer.
     if event.get("bot_id") or event.get("subtype"):
         return ManagerInput(kind=ManagerInputKind.OTHER, team_id=team_id)

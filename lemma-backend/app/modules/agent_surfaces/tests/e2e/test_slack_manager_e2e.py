@@ -658,7 +658,8 @@ async def _mirrors(
         .where(ChannelSourceModel.external_channel_id == workspace.channel)
     )
     return [
-        (str(visibility).lower() == "private", archived is not None) for visibility, archived in rows
+        (str(visibility).lower() == "private", archived is not None)
+        for visibility, archived in rows
     ]
 
 

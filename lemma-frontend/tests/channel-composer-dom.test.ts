@@ -98,6 +98,9 @@ test("a send that fails keeps what was typed; sending again is the same line; no
         let fail!: (error: Error) => void;
         answer = () => new Promise((_resolve, reject) => { fail = reject; });
         await view.send();
+        // The send is still out (``answer`` never settles until ``fail``):
+        // let the pending state reach the page before reading it.
+        await view.flush();
         const box = view.dom.window.document.querySelector("textarea")!;
         const button = view.dom.window.document.querySelector<HTMLButtonElement>(".chcompose__send")!;
         assert.equal(box.readOnly, true, "the text cannot change under a send in flight");

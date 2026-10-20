@@ -337,7 +337,13 @@ async def test_the_cutover_ends_every_unfinished_job_and_queues_none(
             snap=json.dumps({}),
         )
 
-    for statement in migration.cutover_statements():
+    # `notifications` is dropped by 0058, which this database is past; that
+    # seed is the notifications' own, not the bundle jobs'.
+    for statement in (
+        statement
+        for statement in migration.cutover_statements()
+        if "FROM notifications" not in statement
+    ):
         await execute(statement)
 
     for name, (job_id, *_rest) in jobs.items():

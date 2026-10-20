@@ -62,6 +62,9 @@ def test_the_datastore_engine_keeps_no_compiled_statements() -> None:
     assert get_datastore_engine().sync_engine._compiled_cache is None
 
 
+# The two soaks loop a workload until retained memory would show, which is
+# most of a minute between them; the protected lane runs them.
+@pytest.mark.slow
 async def test_bulk_writes_of_varying_size_retain_nothing(
     pod_api: DatastoreApi,
 ) -> None:
@@ -119,6 +122,7 @@ async def _handshake(app, pod_id: str, token: str, *, leave_after_ready: bool) -
         await communicator.wait(timeout=5)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("outcome", ["no_token", "bad_token", "no_access", "accepted"])
 async def test_changes_socket_handshakes_retain_nothing(
     outcome: str,

@@ -162,6 +162,11 @@ async def _answers(
     return answers
 
 
+# Each seed builds and compares a whole randomized corpus, most of a minute
+# between them; the protected lane runs all three.
+# `test_version_2_reaches_chunks_through_the_text_indexes` stays in the
+# pull-request lane.
+@pytest.mark.slow
 @pytest.mark.parametrize("seed", _SEEDS)
 async def test_version_2_matches_and_ranks_exactly_as_version_1(
     engine: AsyncEngine, seed: int

@@ -13,7 +13,7 @@ sandbox lifecycle belongs to [workspace](workspace.md).
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Agent CRUD/permissions, conversations/messages/SSE, runtime profiles, Agent Host pairing/dispatch, tools, widgets |
-| Work kinds | `agent.turn` (`interactive`) and `agent.turn.automation` (`automation`), one per run and one at a time per conversation, written with the run; `agent.title`; `agent.approval.execute`, written with an approval decision; `agent.wait.fire`, `agent.wait.poll` and `agent.wait.resolve_child` for paused turns; `agent.followup`, `agent.subagent_result`, `pod_ask.deliver` and `agent.replies_arrived`, written in a finished run's transaction |
+| Work kinds | `agent.turn` (`interactive`) and `agent.turn.automation` (`automation`), one per run and one at a time per conversation, written with the run; `agent.title`; `agent.approval.execute`, written with an approval decision; `agent.wait.fire`, `agent.wait.poll` and `agent.wait.resolve_child` for paused turns; `agent.followup`, `agent.subagent_result` and `pod_ask.deliver`, written in a finished run's transaction; `agent.pause_questions` after a run ends (its pause questions brought in line, its batch of questions to people sealed) and `agent.asked_question_closed` as one closes, which write `agent.replies_arrived` once the run has finished and nothing it asked still waits; `agent.pause_expired` when a paused question's time ran out (resumed as nobody answering, never approved) |
 | Facts emitted | `AgentRunFinished` in every run's terminal transaction; workflow, schedule, surfaces and the parent's wait subscribe |
 | Periodic work | `agent.host_dispatch_reconcile` (5 min), `agent.host_retained_state_cleanup` (daily) |
 | After-commit projection | Drops a cached memory-brief section when the file behind it is written, from the committed `datastore.file.*` events |
@@ -94,6 +94,20 @@ and fragments for its enabled toolsets. Resource authoring details live in
 skills. Agent and conversation instructions follow
 the static guidance; runtime context and the task list follow those to preserve
 the cached prefix. In-process capabilities and Agent Host use the same fragments.
+
+A message answering a line in a channel keeps which lines of the channel it
+was handed as background, never what they said, and a member's line written
+into a contact's conversation is a mark naming its line, never its words
+(`contact_conversations.append_follow_up`). Both are read from the channel's
+timeline as the run's history is put together
+(`services/channel_background.with_channel_background`, from
+`runtime_history.assemble_runtime_history` and for messages steered into a
+run), so an edit, a deletion or a forgotten contact reaches every later
+prompt; the visitor's page and an export read a follow-up the same way. Only
+the runs carried whole get their background -- an older run is reduced to its
+requests and answer -- so the read is bounded and moves in elision's blocks.
+A run answering a line in Lemma answers the lines whose words it read
+(`services/channel_answers`, recorded in `channel_line_answers`).
 
 Table summaries include primary keys, column types and write constraints,
 foreign keys, RLS, and visibility. Column descriptions are available through

@@ -34,8 +34,13 @@ def _slack(event: dict) -> dict:
             "bot_echo",
         ),
         (
-            {"type": "message", "channel": "C1", "subtype": "message_changed"},
-            "slack_message_changed",
+            {
+                "type": "message",
+                "channel": "C1",
+                "subtype": "message_changed",
+                "message": {"bot_id": "B1", "text": "edited", "ts": "1"},
+            },
+            "bot_echo",
         ),
         ({"type": "reaction_added", "user": "U1"}, "slack_event_reaction_added"),
         ({"type": "user_change", "user": "U1"}, "slack_event_user_change"),
@@ -117,9 +122,46 @@ def test_taps_and_lifecycle_are_not_messages_to_ingest():
     assert classify("TELEGRAM", {"update_id": 1, "callback_query": {}}).interaction
     assert classify("TELEGRAM", {"update_id": 1, "my_chat_member": {}}).platform_update
     assert (
-        classify("TELEGRAM", {"update_id": 1, "edited_message": {}}).drop_reason
+        classify("TELEGRAM", {"update_id": 1, "edited_channel_post": {}}).drop_reason
         == "edit"
     )
+
+
+def test_an_edit_or_deletion_changes_a_heard_line_and_starts_no_turn():
+    """Applied to the line it was heard as (``services/line_changes``): a
+    platform update, never a message. In a channel, only where a group
+    adopted it -- elsewhere nothing was heard to change."""
+    changed = classify(
+        "SLACK",
+        _slack(
+            {
+                "type": "message",
+                "channel": "C1",
+                "subtype": "message_changed",
+                "message": {"user": "U1", "text": "edited", "ts": "1"},
+            }
+        ),
+    )
+    assert changed.platform_update and not changed.message
+    assert changed.unless_adopted == "C1"
+    deleted = classify(
+        "SLACK",
+        _slack(
+            {
+                "type": "message",
+                "channel": "D1",
+                "subtype": "message_deleted",
+                "deleted_ts": "1",
+            }
+        ),
+    )
+    assert deleted.platform_update and deleted.unless_adopted is None
+    edited = classify("TELEGRAM", {"update_id": 1, "edited_message": {}})
+    assert edited.platform_update and not edited.message
+    for kind in ("messageUpdate", "messageDelete"):
+        verdict = classify("TEAMS", {"type": kind, "from": {"id": "29:1"}})
+        assert verdict.platform_update and not verdict.message
+    assert classify("TEAMS", {"type": "messageUpdate", "from": {"role": "bot"}}).dropped
 
 
 def test_whatsapp_receipts_drop_and_a_failed_send_is_a_platform_update():

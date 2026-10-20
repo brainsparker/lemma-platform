@@ -289,7 +289,7 @@ class TurnResume:
                 conversation=conversation,
                 agent_run_id=run_id,
                 tool_call_id=call.tool_call_id,
-                include_notification_tools=True,
+                include_question_tools=True,
                 grants=getattr(ctx, "grant_summary", None),
             )
         except Exception as exc:  # noqa: BLE001 - the return reports it to the run

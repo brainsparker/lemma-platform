@@ -9,16 +9,16 @@ about the rows and the order the "platform" saw:
 * 500 replies to one destination, with 429s injected, all arrive, once, in
   the order they were written;
 * a sender killed mid-send leaves the row SENDING; once its deadline passes
-  the pump marks it UNKNOWN and never sends it again;
-* a finished run's answer is written as a row by the finalize's fact and sent
-  once by the pump, from the run's stored output -- whatever happened to the
-  run's own worker.
+  the pump marks it UNKNOWN and never sends it again.
+
+The pump carries what has no channel line of its own (a held message, a reply
+to somebody outside any run, a "please resend"). A run's answer is a line and
+its channel delivery: ``test_run_answer_deliveries_e2e.py``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -27,29 +27,18 @@ from sqlalchemy import text
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.work import WorkClass, facts
+from app.core.infrastructure.work import WorkClass
 from app.core.infrastructure.work.testing import dispatcher_for
-from app.modules.agent.contracts.run_facts import AgentRunFinished
-from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.deliveries import (
     ConversationTarget,
     DeliveryContent,
-    DeliveryStatus,
 )
 from app.modules.agent_surfaces.services.surface_deliveries import (
     SendResult,
     stage_delivery,
 )
-from app.modules.agent_surfaces.tests.e2e.helpers import (
-    _seed_external_user,
-    _telegram_payload,
-)
-from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
-    build_telegram_secret_headers,
-)
 from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     clean_surface_work,  # noqa: F401  (fixture)
-    a_telegram_bot,
     drain,
     scalar,
     surface_registry,
@@ -265,211 +254,3 @@ async def test_a_slow_send_is_retried_rather_than_left_to_go_unknown(test_pod):
 
     assert await _statuses(destination) == ["SENT"]
     assert platform.arrived == ["late"]
-
-
-class _Counted:
-    """Stands in for an OTel counter: what was added, with which attributes."""
-
-    def __init__(self) -> None:
-        self.added: list[tuple[int, dict]] = []
-
-    def add(self, amount: int, attributes: dict | None = None) -> None:
-        self.added.append((amount, dict(attributes or {})))
-
-
-@pytest.mark.drives_work
-async def test_a_reply_lost_mid_send_is_said_in_the_conversation_and_counted(
-    authenticated_client,
-    db_session,
-    test_pod,
-    fixed_test_user,
-    fake_telegram,
-    monkeypatch,
-):
-    """The worker dies between the claim and the settle of a run's answer.
-
-    The row goes UNKNOWN and is never resent -- and the person reading the
-    conversation in Lemma is told the reply may not have reached Telegram,
-    and the loss is counted, instead of the reply simply never arriving.
-    """
-    from app.modules.agent_surfaces.events import reply_work
-
-    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
-    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
-    counted = _Counted()
-    monkeypatch.setattr(reply_work, "delivery_unknown_counter", counted)
-    conversation_id, run_id = await _a_finished_run(
-        authenticated_client,
-        db_session,
-        test_pod,
-        fixed_test_user,
-        fake_telegram,
-        "lost-bot",
-    )
-    entered = asyncio.Event()
-
-    async def dies(row) -> SendResult:
-        entered.set()
-        await asyncio.sleep(3600)
-        return SendResult(delivered=True)
-
-    killed = asyncio.create_task(
-        drain(surface_registry(sender=dies, sending_lease=timedelta(seconds=1)))
-    )
-    await asyncio.wait_for(entered.wait(), timeout=30)
-    # SIGKILL: nothing the sender would have written gets written.
-    killed.cancel()
-    await asyncio.gather(killed, return_exceptions=True)
-    key = f"run-reply:{run_id}"
-    assert (
-        await scalar(
-            "SELECT status FROM surface_deliveries WHERE idempotency_key = :k", k=key
-        )
-        == "SENDING"
-    )
-    async with async_session_maker() as session:
-        await session.execute(
-            text(
-                "UPDATE work_items SET lease_until = now() - interval '1 second' "
-                "WHERE kind = 'surface.reply' AND state = 'running'"
-            )
-        )
-        await session.commit()
-    await asyncio.sleep(1.1)  # past the row's own sending deadline
-
-    platform = Platform()
-    registry = surface_registry(sender=platform, sending_lease=timedelta(seconds=1))
-    await drain(registry)
-    await drain(registry, due=True)
-
-    assert (
-        await scalar(
-            "SELECT status FROM surface_deliveries WHERE idempotency_key = :k", k=key
-        )
-        == "UNKNOWN"
-    )
-    assert platform.arrived == [], "never sent again"
-    notices = [
-        text_
-        for (text_,) in (
-            await db_session.execute(
-                text(
-                    "SELECT text FROM agent_messages WHERE conversation_id = :c "
-                    "AND kind = 'NOTIFICATION' AND agent_run_id IS NULL"
-                ),
-                {"c": conversation_id},
-            )
-        ).all()
-    ]
-    assert notices == [reply_work.UNKNOWN_DELIVERY_NOTICE.format(surface="Telegram")]
-    assert counted.added == [(1, {"platform": "TELEGRAM", "purpose": "answer"})]
-
-
-async def _a_finished_run(
-    authenticated_client, db_session, test_pod, fixed_test_user, fake_telegram, name
-):
-    """A real surface conversation whose run has finished with an answer."""
-    surface_id, secret, _ = await a_telegram_bot(
-        db_session,
-        authenticated_client,
-        pod_id=test_pod["id"],
-        user_id=fixed_test_user["id"],
-        api_base=fake_telegram.api_base,
-        bot_token=f"e2e-{name}-token",
-        surface_name=name,
-    )
-    sender = 6120000 + len(name)
-    await _seed_external_user(
-        db_session,
-        platform="TELEGRAM",
-        external_user_id=str(sender),
-        resolved_user_id=UUID(fixed_test_user["id"]),
-    )
-    response = await authenticated_client.post(
-        f"/surfaces/{surface_id}/webhook",
-        content=json.dumps(
-            _telegram_payload(
-                text="What is due?", message_id=7700 + len(name), sender_id=sender
-            )
-        ).encode(),
-        headers=build_telegram_secret_headers(secret),
-    )
-    assert response.status_code == 200
-    await drain(surface_registry())
-    conversation_id = await scalar(
-        "SELECT conversation_id FROM surface_inbound_messages WHERE surface_id = :s",
-        s=surface_id,
-    )
-    run_id = await scalar(
-        "SELECT id FROM agent_runs WHERE conversation_id = :c", c=conversation_id
-    )
-    async with async_session_maker() as session:
-        await session.execute(
-            text(
-                "UPDATE agent_runs SET status = 'COMPLETED', "
-                'output_data = \'{"answer": "Three invoices are due."}\'::jsonb '
-                "WHERE id = :r"
-            ),
-            {"r": run_id},
-        )
-        uow = SqlAlchemyUnitOfWork(session)
-        # The finalize's fact, as the agent module emits it.
-        await facts.emit(
-            uow,
-            AgentRunFinished(
-                run_id=run_id,
-                conversation_id=conversation_id,
-                pod_id=UUID(test_pod["id"]),
-                status="COMPLETED",
-                conversation_status="COMPLETED",
-                origin="surface",
-                has_reply_target=True,
-            ),
-        )
-        await uow.commit()
-    return conversation_id, run_id
-
-
-@pytest.mark.drives_work
-async def test_a_finished_runs_answer_is_sent_once_from_its_stored_output(
-    authenticated_client,
-    db_session,
-    test_pod,
-    fixed_test_user,
-    fake_telegram,
-    message_store,
-    monkeypatch,
-):
-    """The finalize's fact writes the reply row; the pump sends the run's answer.
-
-    Nothing of the run's own process is involved -- which is the point: a
-    worker that dies between finishing the run and sending loses nothing.
-    """
-    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
-    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
-    _conversation, run_id = await _a_finished_run(
-        authenticated_client,
-        db_session,
-        test_pod,
-        fixed_test_user,
-        fake_telegram,
-        "died-bot",
-    )
-    registry = surface_registry()
-    before = len(message_store.get_all("TELEGRAM"))
-    await drain(registry)
-    await drain(registry)  # a second pass finds nothing left to send
-
-    assert (
-        await scalar(
-            "SELECT status FROM surface_deliveries WHERE idempotency_key = :k",
-            k=f"run-reply:{run_id}",
-        )
-        == DeliveryStatus.SENT.value
-    )
-    answers = [
-        item
-        for item in message_store.get_all("TELEGRAM")[before:]
-        if "Three invoices are due." in json.dumps(item)
-    ]
-    assert len(answers) == 1, message_store.get_all("TELEGRAM")[before:]

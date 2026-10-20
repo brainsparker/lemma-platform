@@ -12,6 +12,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from app.modules.test_support import source_tree
 
 pytestmark = pytest.mark.unit
 
@@ -29,7 +30,7 @@ _GONE = (
 
 def _imports(path: Path) -> set[str]:
     names: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+    for node in ast.walk(source_tree.tree(path)):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
@@ -40,7 +41,7 @@ def _imports(path: Path) -> set[str]:
 def test_nothing_imports_the_old_transport() -> None:
     offenders = []
     for root in ("app", "migrations", "scripts"):
-        for path in (BACKEND / root).rglob("*.py"):
+        for path in source_tree.python_files(BACKEND / root):
             for name in _imports(path):
                 if any(name == gone or name.startswith(f"{gone}.") for gone in _GONE):
                     offenders.append(f"{path.relative_to(BACKEND)}: {name}")

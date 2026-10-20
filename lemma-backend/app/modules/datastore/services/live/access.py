@@ -16,12 +16,8 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.datastore.domain.live import (
-    LiveAccessDenied,
-    LiveErrorCode,
-    LiveTable,
-    UnsubscribedReason,
-)
+from app.core.live.protocol import LiveAccessDenied, LiveErrorCode
+from app.modules.datastore.domain.live import LiveTable, UnsubscribedReason
 from app.modules.datastore.services.table_service import TableService
 from app.modules.datastore.services.wiring import build_table_service
 

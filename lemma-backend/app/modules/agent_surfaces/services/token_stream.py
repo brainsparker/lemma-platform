@@ -71,8 +71,8 @@ class TokenStreamMixin:
     ) -> None:
         """Tell the run's reply where the stream is and what it shows.
 
-        The reply (``surface.reply``) closes this message with the rest of the
-        answer, so the thread holds one message; see ``live_display``.
+        The answer's delivery (``run_answer_sends``) closes this message with
+        the rest of the answer, so the thread holds one message; see ``live_display``.
         """
         run_id = self._run_files.agent_run_id
         if run_id is None or self._progress_handle is None:

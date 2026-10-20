@@ -136,15 +136,14 @@ async def create_conversation(
     dependencies=[CONVERSATION_ENUMERATION],
     summary="List Pod Agent Conversations",
     description=(
-        "List root conversations for the current user in a pod. Omit "
-        "agent_name to list conversations across the pod, pass POD_DEFAULT "
-        "(or pod_default) to list default pod assistant conversations, or "
-        "pass a name to list conversations for a specific pod agent. Child "
-        "(sub-agent) conversations are omitted by default; pass parent_id to "
-        "list the children of a specific conversation instead. Archived "
-        "conversations are omitted; pass archived=true for the archive. "
-        "Pass search to keep only conversations whose title contains it "
-        "(case-insensitive). Ordered by last_activity_at, most recent first."
+        "List root conversations for the current user in a pod. Omit agent_name for "
+        "conversations across the pod, pass POD_DEFAULT (or pod_default) for the pod "
+        "assistant's, or a name for one pod agent's. Child (sub-agent) conversations "
+        "are omitted by default; pass parent_id to list one conversation's children "
+        "instead. Archived conversations are omitted; pass archived=true for the "
+        "archive. search keeps titles containing it (case-insensitive); "
+        "in_channel=false keeps conversations of no channel (the chats list), true "
+        "those in one. Ordered by last_activity_at, most recent first."
     ),
 )
 async def list_conversations(
@@ -158,6 +157,7 @@ async def list_conversations(
     parent_id: UUID | None = Query(default=None),
     archived: bool = Query(default=False),
     search: str | None = Query(default=None, min_length=1, max_length=200),
+    in_channel: bool | None = Query(default=None),
     page_token: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ConversationListResponse:
@@ -175,6 +175,7 @@ async def list_conversations(
         search=search,
         cursor=parse_conversation_page_token(page_token),
         limit=limit,
+        in_channel=in_channel,
     )
     return ConversationListResponse(
         items=[ConversationResponse.model_validate(item) for item in conversations],

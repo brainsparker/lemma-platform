@@ -25,6 +25,10 @@ e2e_process_clients = e2e_base.e2e_process_clients
 fixed_test_user = e2e_base.fixed_test_user
 authenticated_client = e2e_base.authenticated_client
 fixed_test_org = e2e_base.fixed_test_org
+module_identity = e2e_base.module_identity
+module_test_user = e2e_base.module_test_user
+module_test_user_own_session = e2e_base.module_test_user_own_session
+module_test_org = e2e_base.module_test_org
 sample_pod_entity = e2e_base.sample_pod_entity
 
 __all__ = [
@@ -36,6 +40,10 @@ __all__ = [
     "e2e_settings",
     "fixed_test_org",
     "fixed_test_user",
+    "module_identity",
+    "module_test_org",
+    "module_test_user",
+    "module_test_user_own_session",
     "postgres_container",
     "postgres_only_container",
     "postgres_only_database_url",

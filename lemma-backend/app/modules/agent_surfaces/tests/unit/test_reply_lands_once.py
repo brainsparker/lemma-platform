@@ -333,6 +333,6 @@ async def test_held_files_stay_held_when_their_part_did_not_arrive(
         held=["/me/report.pdf"],
     )
 
-    assert delivered is True
+    assert delivered is not None
     still_held = await pending_envelope.held_display_paths(conversation_id, run)
     assert still_held == ([] if released else ["/me/report.pdf"])

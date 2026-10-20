@@ -96,6 +96,26 @@ def public_web_switched_on(monkeypatch):
     monkeypatch.setattr(public_web_settings, "public_web_altcha_enabled", False)
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def a_fresh_visitor_address():
+    """Every request in a shard comes from one test client address, so the
+    per-address window on starting web chats -- an abuse limit for one
+    browser, which no journey here is about -- would be spent by whichever
+    tests ran first and refuse the next. Each test starts it afresh; the
+    limiter's own unit tests cover the window."""
+    from redis.exceptions import RedisError
+
+    from app.core.infrastructure.redis.client import get_redis
+
+    try:
+        client = get_redis()
+        async for key in client.scan_iter(match="web:sessions:addr:*"):
+            await client.delete(key)
+    except RedisError:
+        pass
+    yield
+
+
 # Set before anything imports settings, so every reader sees it — including the
 # worker, which serves these tests from its own task and picked up an attribute
 # patched onto one Settings instance too late to matter. The fixture below says

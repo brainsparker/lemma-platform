@@ -55,14 +55,14 @@ async def _viable(pod_id) -> list[tuple[str, bool, int]]:
     return [(row.schedule_id, row.is_active, row.viable) for row in rows]
 
 
+# A race soak: even the short variant spends most of half a minute racing, so
+# both run in the protected lane rather than in front of every merge.
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "rounds",
     [
-        # Enough rounds to exercise every edit against a fire on each PR; the
-        # long soak runs in the protected lane, where 40 rounds (~70s on CI)
-        # do not hold up a merge.
         pytest.param(12, id="pr"),
-        pytest.param(40, id="soak", marks=pytest.mark.slow),
+        pytest.param(40, id="soak"),
     ],
 )
 async def test_edits_racing_fires_never_leave_two_fire_chains(

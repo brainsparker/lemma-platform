@@ -211,6 +211,16 @@ def unattached_notification_window(
     return after, first_sequence_of_run(runs, run_id)
 
 
+class ChannelReader(Protocol):
+    """Reads the channel a history's messages refer to into them
+    (``channel_background``): the background of the runs named, and every
+    member's follow-up."""
+
+    async def __call__(
+        self, messages: list[Message], *, background_of_runs: set[UUID]
+    ) -> list[Message]: ...
+
+
 class RuntimeHistorySource(Protocol):
     """The two reads history assembly makes, and nothing else of a repository."""
 
@@ -234,6 +244,7 @@ async def assemble_runtime_history(
     *,
     conversation_id: UUID,
     run_id: UUID,
+    read_channel: ChannelReader | None = None,
 ) -> list[Message]:
     """Every message the model is shown for ``run_id``, in the order it reads them.
 
@@ -250,10 +261,8 @@ async def assemble_runtime_history(
     bounded, dropped_runs = bound_runtime_history(
         window.runs, total_runs=window.total_runs
     )
-    await source.attach_runtime_history_messages(
-        bounded,
-        full_run_ids=runtime_full_run_ids(bounded, already_dropped=dropped_runs),
-    )
+    full_run_ids = runtime_full_run_ids(bounded, already_dropped=dropped_runs)
+    await source.attach_runtime_history_messages(bounded, full_run_ids=full_run_ids)
     messages = select_runtime_history(bounded, already_dropped=dropped_runs)
     # Belong to no run, so the run-keyed reads above never see them; sequences
     # are conversation-wide, so the harness places them.
@@ -268,7 +277,10 @@ async def assemble_runtime_history(
             limit=MAX_UNATTACHED_NOTIFICATIONS,
         )
     )
-    return messages
+    if read_channel is None:
+        return messages
+    # A run cut to its requests keeps none of what it was shown around them.
+    return await read_channel(messages, background_of_runs=full_run_ids | {run_id})
 
 
 def without_private_runs(

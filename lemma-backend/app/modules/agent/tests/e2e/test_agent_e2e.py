@@ -64,8 +64,15 @@ from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
     item_names,
 )
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = pytest.mark.e2e
+
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
 
 DEFAULT_AGENT_RUNTIME = {"profile_id": "system:lemma"}
 

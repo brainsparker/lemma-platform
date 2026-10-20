@@ -162,8 +162,8 @@ def _audience_refusal(run: AskingRun) -> AskRefused | None:
     if run.answers_outsider:
         return AskRefused(
             "This conversation answers people outside the pod, and another "
-            "pod's answer would reach them. Pass the question to a member with "
-            "message_user instead."
+            "pod's answer would reach them. Call ask_a_person to bring a member "
+            "in instead."
         )
     kind = (run.surface_conversation_kind or "").upper() or None
     if kind is not None and kind not in _PRIVATE_SURFACE_KINDS:

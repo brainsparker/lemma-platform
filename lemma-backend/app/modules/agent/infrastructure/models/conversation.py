@@ -15,6 +15,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     Text,
@@ -51,6 +52,14 @@ class ConversationModel(UUIDAuditBase):
 
     __tablename__ = "agent_conversations"
     __table_args__ = (
+        # A channel of the conversation's own pod. Its channel going leaves the
+        # conversation in no channel -- never in no pod.
+        ForeignKeyConstraint(
+            ["channel_id", "pod_id"],
+            ["channels.id", "channels.pod_id"],
+            name="fk_agent_conversations_channel",
+            ondelete="SET NULL (channel_id)",
+        ),
         # The history list's order, `(last_activity_at, id)` descending. The
         # agent-scoped one is on the same COALESCE the listing spells out.
         Index(
@@ -74,6 +83,17 @@ class ConversationModel(UUIDAuditBase):
             "ix_agent_conv_metadata",
             "conversation_metadata",
             postgresql_using="gin",
+        ),
+        # A person has one live conversation per agent in a channel.
+        Index(
+            "uq_agent_conversations_channel_person",
+            "channel_id",
+            text("COALESCE(agent_id, pod_id)"),
+            text("COALESCE(contact_id, user_id)"),
+            unique=True,
+            postgresql_where=text(
+                "channel_id IS NOT NULL AND parent_id IS NULL AND NOT is_archived"
+            ),
         ),
         Index(
             "uq_agent_conversation_origin",
@@ -103,6 +123,16 @@ class ConversationModel(UUIDAuditBase):
         index=True,
         nullable=False,
     )
+    #: The contact this conversation answers, when it answers one. Forgetting
+    #: the contact deletes what was said with them.
+    contact_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
+    #: The channel this conversation's agent works in, when it lives on one.
+    #: A conversation started in Lemma, and an agent's own task, have none.
+    channel_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     organization_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"),
         index=True,
@@ -205,6 +235,8 @@ class ConversationModel(UUIDAuditBase):
             "updated_at": conversation.updated_at,
             "user_id": conversation.user_id,
             "pod_id": conversation.pod_id,
+            "contact_id": conversation.contact_id,
+            "channel_id": conversation.channel_id,
             "organization_id": conversation.organization_id,
             "agent_id": conversation.agent_id,
             "title": conversation.title,
@@ -234,6 +266,8 @@ class ConversationModel(UUIDAuditBase):
             updated_at=self.updated_at,
             user_id=self.user_id,
             pod_id=self.pod_id,
+            contact_id=self.contact_id,
+            channel_id=self.channel_id,
             organization_id=self.organization_id,
             agent_id=self.agent_id,
             title=self.title,

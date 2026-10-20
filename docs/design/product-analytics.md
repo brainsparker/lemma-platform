@@ -114,8 +114,7 @@ to know about pods first; until then the split above holds at the org level.
 ## 3. Origin: the missing enum
 
 The platform has no single name for how work entered. `Conversation` carries a
-loose `origin_type: str | None`; `NotificationOriginKind` is a proper enum but
-covers only notifications. Analytics needs one canonical spine, and *origin*
+loose `origin_type: str | None`. Analytics needs one canonical spine, and *origin*
 is already the platform's word for "what produced this" — so canonicalize it
 rather than inventing `client_surface`. This fixes an existing inconsistency
 as a side effect.

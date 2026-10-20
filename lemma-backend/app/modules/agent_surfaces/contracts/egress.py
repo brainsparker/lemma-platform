@@ -2,7 +2,7 @@
 
 Six operations, replacing `app/composition/agent_surface_runtime.py`. That file
 existed because `agent` importing `agent_surfaces` would have closed a loop; the
-loop is cut (see `contracts/notifications.py`), so this is an ordinary contract
+loop is cut, so this is an ordinary contract
 and can say what it takes and returns. Every signature on the shim was `object`
 or `list[object]` -- not because the types were unknown, but because naming them
 in the composition root would have put a third module's paths into `agent`'s

@@ -31,6 +31,12 @@ from app.core.infrastructure.db.session import (
 )
 from app.core.infrastructure.work import RetryPolicy, WorkClass, WorkRegistry
 from app.core.infrastructure.work.testing import run_until_idle
+from app.modules.agent.events.channel_answer_work import (
+    register_channel_answer_work,
+)
+from app.modules.agent.events.channel_question_work import (
+    register_channel_question_work,
+)
 from app.modules.agent.events.run_followup_work import register_run_followup_work
 from app.modules.agent.events.turn_work import RunnerFactory, register_turn_work
 
@@ -75,6 +81,9 @@ def turn_registry(
         observer_factory=lambda _uow: None,
     )
     register_run_followup_work(registry)
+    # What a finished run leaves the channels: its answer, its questions.
+    register_channel_answer_work(registry)
+    register_channel_question_work(registry)
     for register in extra:
         register(registry)
     return registry

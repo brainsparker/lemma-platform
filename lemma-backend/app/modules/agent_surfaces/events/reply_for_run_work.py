@@ -1,17 +1,23 @@
-"""``surface.reply_for_run``: a finished run's answer, owed to its surface thread.
+"""``surface.reply_for_run``: a finished run's answer, as a line owed its place.
 
 Subscribed to the agent module's ``AgentRunFinished``, so the item is written
 in the transaction that finished the run: once a run has an outcome, the reply
-it owes its thread is on record, and the window in which a worker could die
-between the run ending and the send -- with nothing left to resend from -- is
-gone. It is the only way a run's answer reaches a surface: the run's observer
-only shows progress.
+it owes is on record. It is the only way a run's answer reaches a surface: the
+run's observer only shows progress.
 
-The text is not copied here. The row names the run, and the sender renders it
-from the run's stored output (or its failure) when it sends, so a run's reply
-is one row however late it goes.
+The answer is posted as the agent's line at the place the run was asked, with
+a delivery to that place (``services/run_reply_lines``), which the channel
+delivery executor sends -- finishing a live stream in place, carrying the
+run's held files, offering a retry on a failure notice -- and records with
+the platform's id (``services/channel_deliveries``). A redelivered fact is
+the same line and the same delivery: one line, one send.
 
-FAST: one run row, one link row, one insert. No network in this module.
+An answer to something asked in the web chat is shown by the widget: its line
+is written and its delivery ``SENT`` at once, and no platform thread the same
+conversation also has is sent anything. Nor is one to something asked in
+Lemma itself: the agent module answers it there, in the same thread.
+
+FAST: a few rows read, one line written. No network in this module.
 """
 
 from __future__ import annotations
@@ -30,19 +36,13 @@ from app.core.infrastructure.work import (
 )
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.contracts.run_replies import run_reply_material
-from app.modules.agent_surfaces.domain.deliveries import (
-    ConversationTarget,
-    DeliveryContent,
-)
 from app.modules.agent_surfaces.events.work_kinds import (
     SURFACE_REPLY_FOR_RUN,
     run_reply_key,
 )
-from app.modules.agent_surfaces.services.surface_deliveries import (
-    conversation_destination,
-    run_reply_idempotency_key,
-    stage_delivery,
-)
+from app.modules.agent_surfaces.services.run_reply_lines import post_run_reply
+from app.modules.channels.contracts.lines import last_heard_line
+from app.modules.channels.contracts.places import reply_address
 
 _REPLYING_STATUSES = frozenset({"COMPLETED", "FAILED"})
 
@@ -66,35 +66,30 @@ def owes_a_reply(fact: AgentRunFinished) -> bool:
     return fact.status in _REPLYING_STATUSES and fact.conversation_status != "WAITING"
 
 
-async def stage_run_reply(ctx: FastContext, payload: RunReplyPayload) -> None:
+async def post_run_answer(ctx: FastContext, payload: RunReplyPayload) -> None:
     material = await run_reply_material(ctx.uow, payload.run_id)
     if material is None or material.private:
         return
-    failed = payload.status == "FAILED"
-    if not failed and not material.answer:
+    if await _answered_in_lemma(ctx, payload):
         return
-    destination, surface_id = await conversation_destination(
-        ctx.uow, payload.conversation_id
-    )
-    if surface_id is None:
+    address = await reply_address(ctx.uow, payload.conversation_id)
+    if address is None:
         return
-    await stage_delivery(
+    await post_run_reply(
         ctx.uow,
-        idempotency_key=run_reply_idempotency_key(payload.run_id),
-        target=ConversationTarget(conversation_id=payload.conversation_id),
-        content=DeliveryContent(
-            text="",
-            purpose="failure" if failed else "answer",
-            metadata={"retry_action": True} if failed else {},
-            attach_files_of_run=None if failed else payload.run_id,
-        ),
-        destination_key=destination,
-        pod_id=payload.pod_id,
-        surface_id=surface_id,
+        run_id=payload.run_id,
         conversation_id=payload.conversation_id,
-        agent_run_id=payload.run_id,
-        work=ctx.work,
+        address=address,
+        material=material,
     )
+
+
+async def _answered_in_lemma(ctx: FastContext, payload: RunReplyPayload) -> bool:
+    """Whether the run answers something asked in Lemma -- which the agent
+    module answers there, in the same thread (``agent.channel_reply``), and
+    which no platform is sent."""
+    heard = await last_heard_line(ctx.uow, payload.conversation_id)
+    return heard is not None and heard.source_id is None
 
 
 def register_reply_for_run_work(registry: WorkRegistry) -> None:
@@ -103,7 +98,7 @@ def register_reply_for_run_work(registry: WorkRegistry) -> None:
         cls=WorkClass.DELIVERY,
         mode=WorkMode.FAST,
         payload=RunReplyPayload,
-    )(stage_run_reply)
+    )(post_run_answer)
 
 
 register_reply_for_run_work(default_registry)

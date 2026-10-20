@@ -53,7 +53,9 @@ def test_pauses_are_never_settled_by_a_resumed_turn() -> None:
         ("view_image", SAFE),
         # Writes the same bytes twice, but over whatever was written between.
         ("pod_write_file", UNSAFE),
-        ("message_user", KEYED),
+        ("channel_post", KEYED),
+        ("channel_read", SAFE),
+        ("answer_question", KEYED),
         ("contact_function", KEYED),
         ("spawn_subagent", KEYED),
         ("exec_command", UNSAFE),

@@ -35,7 +35,6 @@ from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Mes
 from app.modules.agent.domain.errors import ConversationNotFoundError
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.private_notes import run_is_private
-from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -65,6 +64,7 @@ from app.modules.agent.services.run_limits import (
     harness_usage_limits,
     make_stop_checker,
 )
+from app.modules.agent.services.channel_background import with_channel_background
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_phase_spans import (
     record_history_size,
@@ -549,8 +549,6 @@ class AgentRunnerService:
                     user_id=user_id,
                     pod_id=pod_id,
                 )
-                # Before anything reads it: the runtime, the context, the tools.
-                conversation = await with_effective_audience(uow, conversation)
                 agent = await resolve_agent(
                     conversation,
                     user_id=user_id,
@@ -562,6 +560,7 @@ class AgentRunnerService:
                     window,
                     conversation_id=agent_run.conversation_id,
                     run_id=agent_run.id,
+                    read_channel=partial(with_channel_background, uow),
                 )
                 if Audience.of(conversation).answers_outsiders and not run_is_private(
                     agent_run.metadata

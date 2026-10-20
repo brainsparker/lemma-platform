@@ -1,6 +1,6 @@
 """``/pods/{pod_id}/datastore/changes``: the previous change socket, kept as a shim.
 
-Superseded by ``/pods/{pod_id}/live`` (see ``live_controller``). It stays for
+Superseded by ``/pods/{pod_id}/live`` (``app/core/live``). It stays for
 one release so app bundles built against the previous SDK keep working: the
 socket is one implicit subscription on the same per-process pod hub, framed the
 way those bundles read it -- a ``ready`` with ``since``, then one frame per
@@ -14,6 +14,9 @@ Differences a previous client can notice, all of them safe for it:
 * A burst too large to send row by row, or a socket that falls behind, gets a
   fresh ``ready`` at the new position instead of every row.
 * A delete carries an empty ``payload``.
+* Losing access to what it watches closes the socket with ``4403``, and the
+  session ending closes it with ``4401``, rather than leaving it open and
+  silent.
 """
 
 from __future__ import annotations
@@ -29,20 +32,20 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.log.log import get_logger
-from app.modules.datastore.api.live_socket import (
+from app.core.live.config import live_settings
+from app.core.live.connection import LiveConnection
+from app.core.live.protocol import (
+    CLOSE_FORBIDDEN,
     CLOSE_UNAUTHENTICATED,
-    accept_and_authenticate,
-    close_code_for,
-    serve,
+    LiveAccessDenied,
+    LiveUnavailable,
 )
-from app.modules.datastore.domain.live import (
-    LiveCursorExpired,
-    LiveHubUnavailable,
-    SubscribeRequest,
-)
+from app.core.live.sessions import SessionWatch, end_for_session
+from app.core.live.socket import accept_and_authenticate, close_code_for, serve
+from app.core.log.log import get_logger
+from app.modules.datastore.domain.live import LiveCursorExpired, SubscribeRequest
 from app.modules.datastore.services.live import live_hubs
-from app.modules.datastore.services.live.connection import LiveConnection
+from app.modules.datastore.services.live.subscription import LegacyFrames
 from app.modules.datastore.services.wiring import build_table_service
 
 logger = get_logger(__name__)
@@ -94,9 +97,10 @@ async def datastore_changes_ws(
         ),
     ),
 ) -> None:
-    user_id = await accept_and_authenticate(websocket)
-    if user_id is None:
+    session = await accept_and_authenticate(websocket)
+    if session is None:
         return
+    user_id = session.user_id
     try:
         await _authorize(pod_id, user_id, table)
     # The base class: a missing pod permission is raised by core authorization
@@ -106,26 +110,30 @@ async def datastore_changes_ws(
         await websocket.close(code=close_code_for(exc.status_code), reason=exc.message)
         return
 
-    registry = live_hubs()
     connection = LiveConnection(
         pod_id=pod_id,
         user_id=user_id,
         send_text=websocket.send_text,
-        queue_bytes=registry.settings.live_socket_queue_bytes,
-        legacy=True,
+        queue_bytes=live_settings.live_socket_queue_bytes,
+        frames=LegacyFrames(),
+        # Its client has no frame for "unsubscribed": losing access to what it
+        # watches closes the socket (4403), which that client stops on.
+        ends_with_subscription=True,
     )
-    hub = await registry.hub(pod_id)
-    hub.attach(connection)
+    hub = await live_hubs().hub(pod_id)
     try:
         await hub.subscribe(
             connection,
-            SubscribeRequest(
-                op="subscribe", id=_LEGACY_SUBSCRIPTION, table=table, since=since
-            ),
-            max_subscriptions=1,
+            SubscribeRequest(id=_LEGACY_SUBSCRIPTION, table=table, since=since),
+            legacy=True,
         )
-    except SQLAlchemyError, OSError, LiveCursorExpired, LiveHubUnavailable:
-        hub.detach(connection)
+    except LiveAccessDenied as denied:
+        # Access checked above and lost since: stop, as the old SDK does on 4403.
+        connection.close()
+        await websocket.close(code=CLOSE_FORBIDDEN, reason=denied.message)
+        return
+    except SQLAlchemyError, OSError, LiveCursorExpired, LiveUnavailable:
+        connection.close()
         logger.error(
             "datastore.live.socket_rejected", pod_id=str(pod_id), exc_info=True
         )
@@ -134,4 +142,10 @@ async def datastore_changes_ws(
             reason="Internal error while starting the datastore changes websocket.",
         )
         return
-    await serve(websocket, connection, hub, max_subscriptions=1, keep_slot=False)
+    watch = SessionWatch(session)
+
+    async def keep() -> None:
+        if not await watch.still_valid():
+            end_for_session(connection)
+
+    await serve(websocket, connection, handle=None, session=session, keep=keep)

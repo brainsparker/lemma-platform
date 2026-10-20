@@ -1,6 +1,6 @@
 """Asking another pod: the tool half of ``services/pod_ask_service.py``.
 
-Part of messaging because it is the same move as ``message_user`` -- reaching
+Part of messaging because it is the same move as ``channel_post`` -- reaching
 someone outside this conversation, who answers in their own thread with their
 own tools -- and it lands the same way: the answer arrives here as a new turn,
 so the asking agent ends its turn instead of waiting.

@@ -674,15 +674,15 @@ fixed-window:
 
 | Limit | Scope | Default |
 | --- | --- | --- |
-| Notifications | per pod, per recipient, per hour | 20 |
+| Pushes to a member outside the app | per pod, per recipient, per hour | 20 |
 | Outbound emails | per pod, per day | 200 |
 
 The second is the one that matters for a shared domain: an agent messaging five
 hundred different people once each never trips the first. Both fail *open* if
 Redis is unreachable — "nobody can be told anything while Redis is down" is the
-wrong way for a notification system to fail. Over the email budget the
-notification is still created and still in the recipient's Lemma inbox; only the
-mail is declined.
+wrong way for a ceiling on a runaway loop to fail. Either way the line is
+already in the recipient's channel in Lemma; past a limit only the push or the
+mail is declined, and its delivery says why.
 
 ## Storage
 
@@ -840,6 +840,10 @@ the default does not apply to them.
 ```dotenv
 # USD a month. Unset (empty) means no default ceiling.
 USAGE_CONTACTS_MONTHLY_DEFAULT_USD=50
+# How many contacts the organization's bots may answer at all -- people an
+# agent has replied to, not everybody in a group. Unset (empty) means no
+# default ceiling.
+USAGE_CONTACTS_MAX_DEFAULT=500
 ```
 
 ### When the cost of the work cannot be established
@@ -1075,6 +1079,7 @@ authoritative answer for anything this document does not name.
 | Agents | `lemma-backend/app/modules/agent/config.py` |
 | Chat surfaces | `lemma-backend/app/modules/agent_surfaces/config.py` |
 | Connectors | `lemma-backend/app/modules/connectors/config.py` |
+| Contacts: phone region, daily lines to a contact | `lemma-backend/app/modules/contacts/config.py` |
 | Datastore and document processing | `lemma-backend/app/modules/datastore/config.py` |
 | Pod bundles | `lemma-backend/app/modules/pod_bundle/config.py` |
 | Apps, icons, schedules | `app/modules/{apps,icon,schedule}/config.py` |

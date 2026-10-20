@@ -125,6 +125,7 @@ class EnvelopeDeliveryMixin:
         then the thing being asked.
         """
         collected: dict[str, list[PartDelivery]] = {}
+        text_id: str | None = None
 
         def record(part: str, outcome: PartDelivery) -> None:
             """Keep every outcome a part had, in order.
@@ -141,15 +142,13 @@ class EnvelopeDeliveryMixin:
             collected.setdefault(part, []).append(outcome)
 
         if envelope.text and envelope.text.strip():
-            record(
-                "text",
-                await self._deliver_text(
-                    credentials=credentials,
-                    event=event,
-                    text=envelope.text,
-                    metadata=metadata,
-                ),
+            outcome, text_id = await self._deliver_text(
+                credentials=credentials,
+                event=event,
+                text=envelope.text,
+                metadata=metadata,
             )
+            record("text", outcome)
         for resource in envelope.resources:
             record(
                 "resources",
@@ -203,7 +202,7 @@ class EnvelopeDeliveryMixin:
 
         # The "nothing landed" check lives in ``deliver`` now, so the one-reply
         # path is held to it too.
-        return DeliveryReceipt(parts=_keyed(collected))
+        return DeliveryReceipt(parts=_keyed(collected), external_message_id=text_id)
 
     def _delivers_one_reply(self) -> bool:
         from app.modules.agent_surfaces.platforms.platform_capabilities import (
@@ -270,9 +269,10 @@ class EnvelopeDeliveryMixin:
         event: ParsedInboundSurfaceEvent,
         text: str,
         metadata: dict[str, Any] | None,
-    ) -> PartDelivery:
+    ) -> tuple[PartDelivery, str | None]:
+        """How the text landed, and the platform's id for the message it went in."""
         try:
-            await self.send_message(
+            message_id = await self.send_message(
                 credentials=credentials, event=event, message=text, metadata=metadata
             )
         except platform_transport_errors():
@@ -282,9 +282,9 @@ class EnvelopeDeliveryMixin:
                 part="text",
                 exc_info=True,
             )
-            return PartDelivery.UNDELIVERED
+            return PartDelivery.UNDELIVERED, None
         # Plain text is not a degradation of anything; it is what was asked for.
-        return PartDelivery.NATIVE
+        return PartDelivery.NATIVE, platform_message_id(message_id)
 
     async def _deliver_choices(
         self,
@@ -489,6 +489,12 @@ class EnvelopeDeliveryMixin:
         # paths disagreed about one delivery, each with a comment explaining why
         # it was right.
         return PartDelivery.DEGRADED if outcome is PartDelivery.NATIVE else outcome
+
+
+def platform_message_id(sent: object) -> str | None:
+    """What a send returned, as the platform's id for the message: only a
+    non-empty string is one (a transport that names nothing returns None)."""
+    return sent if isinstance(sent, str) and sent else None
 
 
 def _file_fallback_text(attachment: EnvelopeFile) -> str:

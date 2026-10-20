@@ -10,7 +10,7 @@ from uuid import UUID
 
 from app.core.domain.realtime import RealtimeChannel
 from app.core.request_context import create_background_task
-from app.modules.datastore.config_live import LiveSettings
+from app.core.live.config import LiveSettings
 from app.modules.datastore.domain.ports import LiveAccessPort, LiveChangeFeedPort
 from app.modules.datastore.services.live.hub import EpochReader, PodHub
 

@@ -11061,10 +11061,14 @@ var LemmaClient = (() => {
         if (contentType) {
           const jsonTypes = ["application/json", "application/problem+json"];
           const isJSON = jsonTypes.some((type) => contentType.toLowerCase().startsWith(type));
+          const textTypes = ["text/", "application/javascript", "application/xml", "application/yaml"];
+          const isText = textTypes.some((type) => contentType.toLowerCase().startsWith(type));
           if (isJSON) {
             return await response.json();
-          } else {
+          } else if (isText) {
             return await response.text();
+          } else {
+            return await response.blob();
           }
         }
       } catch (error) {
@@ -17288,8 +17292,9 @@ var LemmaClient = (() => {
     );
   }
   var ChannelsNamespace = class {
-    constructor(client) {
+    constructor(client, http) {
       __publicField(this, "client", client);
+      __publicField(this, "http", http);
       /** A group channel's sources from the bot's side, and bringing the bot into
        *  a group (a WhatsApp group, a Telegram link). */
       __publicField(this, "sources");
@@ -17493,11 +17498,10 @@ var LemmaClient = (() => {
       );
     }
     /** A file a line shares (a `file` part's `file_id`), read as the line's
-     *  writer reads it. */
+     *  writer reads it: the bytes, as a `Blob` of the file's content type. */
     file(podId, channelId, messageId, fileId) {
-      return this.client.request(
-        () => ChannelsService.channelMessageFile(podId, channelId, messageId, fileId)
-      );
+      const path = [podId, "channels", channelId, "messages", messageId, "files", fileId].map(encodeURIComponent).join("/");
+      return this.http.requestBytes("GET", `/pods/${path}`);
     }
     /** Try a failed or given-up send again, now. */
     retryDelivery(podId, channelId, messageId, deliveryId) {
@@ -20880,7 +20884,7 @@ var LemmaClient = (() => {
       this.organizations = new OrganizationsNamespace(this._generated, this._http);
       this.podSurfaces = new PodSurfacesNamespace(this._generated);
       this.podLinks = new PodLinksNamespace(this._generated);
-      this.channels = new ChannelsNamespace(this._generated);
+      this.channels = new ChannelsNamespace(this._generated, this._http);
       this.contacts = new ContactsNamespace(this._generated);
       this.userSurfaces = new UserSurfacesNamespace(this._generated);
     }

@@ -1,4 +1,5 @@
 import type { GeneratedClientAdapter } from "../generated.js";
+import type { HttpClient } from "../http.js";
 import type { AgentAnswers } from "../openapi_client/models/AgentAnswers.js";
 import type { AgentSeat } from "../openapi_client/models/AgentSeat.js";
 import type { ChannelCreateRequest } from "../openapi_client/models/ChannelCreateRequest.js";
@@ -45,7 +46,10 @@ export class ChannelsNamespace {
    *  a group (a WhatsApp group, a Telegram link). */
   readonly sources: ChannelSourcesNamespace;
 
-  constructor(private readonly client: GeneratedClientAdapter) {
+  constructor(
+    private readonly client: GeneratedClientAdapter,
+    private readonly http: HttpClient,
+  ) {
     this.sources = new ChannelSourcesNamespace(client);
   }
 
@@ -324,11 +328,12 @@ export class ChannelsNamespace {
   }
 
   /** A file a line shares (a `file` part's `file_id`), read as the line's
-   *  writer reads it. */
-  file(podId: string, channelId: string, messageId: string, fileId: string) {
-    return this.client.request(() =>
-      ChannelsService.channelMessageFile(podId, channelId, messageId, fileId),
-    );
+   *  writer reads it: the bytes, as a `Blob` of the file's content type. */
+  file(podId: string, channelId: string, messageId: string, fileId: string): Promise<Blob> {
+    const path = [podId, "channels", channelId, "messages", messageId, "files", fileId]
+      .map(encodeURIComponent)
+      .join("/");
+    return this.http.requestBytes("GET", `/pods/${path}`);
   }
 
   /** Try a failed or given-up send again, now. */

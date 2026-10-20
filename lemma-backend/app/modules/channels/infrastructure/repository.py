@@ -6,7 +6,17 @@ from collections.abc import Awaitable, Callable, Collection, Mapping
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, delete, or_, select, tuple_, update
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    column,
+    delete,
+    or_,
+    select,
+    table,
+    tuple_,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +39,7 @@ from app.modules.channels.infrastructure.models import (
 )
 from app.modules.channels.infrastructure.revisions import touch_channel
 from app.modules.channels.infrastructure.rows import MAX_LINES, channel_entity, now
+from app.modules.identity.contracts.orm import User
 
 #: What a caller may change on a channel through ``change``.
 CHANGEABLE = frozenset(
@@ -266,8 +277,9 @@ class ChannelRepository:
         before: tuple[datetime, UUID] | None = None,
     ) -> list[Channel]:
         """The channels ``viewer`` may see, most recently active first --
-        among ``channel_ids``, when given. ``titled``: whose title holds these
-        words, in any case. ``every_group``: the pod's private groups too, seen
+        among ``channel_ids``, when given. ``titled``: named by every one of
+        these words, in any order and case -- by title, or by whose own
+        channel it is. ``every_group``: the pod's private groups too, seen
         or not (a pod admin's view of a bot's groups)."""
         if channel_ids is not None and not channel_ids:
             return []
@@ -334,6 +346,39 @@ def _like_literal(words: str) -> str:
     return words.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+#: The most words of a list's ``q`` that narrow it.
+_MAX_WORDS = 8
+
+#: A pod's contacts, by the name the pod gave them: a table clause rather than
+#: the contacts module's model, which this module may not import.
+_CONTACTS = table("contacts", column("id"), column("display_name"))
+
+
+def _named_by(word: str) -> ColumnElement[bool]:
+    """The channel's name holds ``word``, in any case: its title, or the name
+    of whose own channel it is -- the member's (or their email), the
+    contact's."""
+    channel = ChannelModel
+    like = f"%{_like_literal(word)}%"
+    member = select(User.id).where(
+        User.id == channel.member_user_id,
+        or_(
+            User.first_name.ilike(like, escape="\\"),
+            User.last_name.ilike(like, escape="\\"),
+            User.email.ilike(like, escape="\\"),
+        ),
+    )
+    contact = select(_CONTACTS.c.id).where(
+        _CONTACTS.c.id == channel.contact_id,
+        _CONTACTS.c.display_name.ilike(like, escape="\\"),
+    )
+    return or_(
+        channel.title.ilike(like, escape="\\"),
+        and_(channel.member_user_id.is_not(None), member.exists()),
+        and_(channel.contact_id.is_not(None), contact.exists()),
+    )
+
+
 def _fields_match(
     *,
     kind: ChannelKind | None,
@@ -349,9 +394,8 @@ def _fields_match(
         conditions.append(channel.kind == kind.value)
     if visibility is not None:
         conditions.append(channel.visibility == visibility.value)
-    if titled is not None and titled.strip():
-        words = _like_literal(titled.strip())
-        conditions.append(channel.title.ilike(f"%{words}%", escape="\\"))
+    if titled is not None:
+        conditions += [_named_by(word) for word in titled.split()[:_MAX_WORDS]]
     if contact_id is not None:
         conditions.append(channel.contact_id == contact_id)
     return conditions

@@ -242,10 +242,12 @@ export class ChannelsNamespace {
     );
   }
 
-  /** The caller has seen the channel up to line `seq`. It never goes back, and
-   *  never past the newest line. */
-  markRead(podId: string, channelId: string, seq: number) {
-    return this.client.request(() => ChannelsService.channelRead(podId, channelId, { seq }));
+  /** The caller has seen the channel's timeline up to line `seq` -- or, with
+   *  `threadRootId`, that thread: a mention is read where it was said. It never
+   *  goes back, and never past the newest line. */
+  markRead(podId: string, channelId: string, seq: number, threadRootId?: string | null) {
+    const body = { seq, ...(threadRootId ? { thread_root_id: threadRootId } : {}) };
+    return this.client.request(() => ChannelsService.channelRead(podId, channelId, body));
   }
 
   // -- lines ------------------------------------------------------------------

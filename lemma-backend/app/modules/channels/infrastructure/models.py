@@ -178,6 +178,11 @@ class ChannelModel(UUIDAuditBase):
     last_seq: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default=text("0")
     )
+    #: How many of its lines are replies in a thread: a reader's unread lines
+    #: are the timeline's, counted by number without them (``inbox``).
+    replies: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
     #: The newest line outside a thread, for lists; no FK (it is a pointer
     #: the timeline keeps, not a relation).
     last_line_id: Mapped[UUID | None] = mapped_column(nullable=True)
@@ -340,6 +345,12 @@ class ChannelReadStateModel(Base):
     channel_id: Mapped[UUID] = mapped_column(primary_key=True)
     pod_id: Mapped[UUID] = mapped_column(nullable=False)
     last_read_seq: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    #: How many of the lines up to ``last_read_seq`` are replies in a thread:
+    #: what is unread in the timeline is ``last_seq - last_read_seq`` less the
+    #: replies since (``ChannelModel.replies - read_replies``).
+    read_replies: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default=text("0")
     )
     created_at: Mapped[datetime] = mapped_column(

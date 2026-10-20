@@ -164,12 +164,23 @@ class Timeline:
         )
 
     async def _read_own(self, channel: Channel, message: ChannelMessage) -> None:
-        """A member has read their own line."""
+        """A member has read where they wrote, up to their own line: the
+        timeline, or -- for a reply -- its thread, and never the timeline:
+        replying is no sign of what else they saw."""
         speaker = _seated_speaker(channel, message)
-        if speaker is not None and speaker.user_id is not None:
-            await self.members.mark_read(
-                channel_id=channel.id, user_id=speaker.user_id, seq=message.seq
+        if speaker is None or speaker.user_id is None:
+            return
+        if message.thread_root_id is not None:
+            await self.members.mark_thread_read(
+                channel_id=channel.id,
+                user_id=speaker.user_id,
+                root_id=message.thread_root_id,
+                seq=message.seq,
             )
+            return
+        await self.members.mark_read(
+            channel_id=channel.id, user_id=speaker.user_id, seq=message.seq
+        )
 
     async def _name(
         self, channel: Channel, message: ChannelMessage, post: Post

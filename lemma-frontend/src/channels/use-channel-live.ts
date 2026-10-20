@@ -49,7 +49,8 @@ export interface ChannelLive {
     typed(threadRootId?: string | null): void;
     /** "I have seen this channel up to line `seq`": over the socket, or
      *  over REST when it is down. Resolves to the read position kept. */
-    markRead(seq: number): Promise<number>;
+    /** Read the timeline to `seq` -- or, with `threadRootId`, that thread. */
+    markRead(seq: number, threadRootId?: string | null): Promise<number>;
 }
 
 /** One channel kept live while it is on screen: its timeline, its threads,
@@ -169,19 +170,21 @@ export function useChannelLive(podId: string, channel: ChannelDetail, visible: b
             .catch(() => { /* a typing note is worth nothing late */ });
     }, [podId, channel.id]);
 
-    const markRead = useCallback(async (seq: number) => {
+    const markRead = useCallback(async (seq: number, threadRootId?: string | null) => {
         let kept = seq;
+        const thread = threadRootId ? { thread_root_id: threadRootId } : {};
         if (liveAvailable() && podLive(podId).status === "open") {
             try {
-                const result = (await podLive(podId).call("read", { channel_id: channel.id, seq })) as { read_seq?: unknown } | null;
+                const result = (await podLive(podId).call("read", { channel_id: channel.id, seq, ...thread })) as { read_seq?: unknown } | null;
                 kept = typeof result?.read_seq === "number" ? result.read_seq : seq;
             } catch {
-                await channelApi(podId).markRead(channel.id, seq);
+                await channelApi(podId).markRead(channel.id, seq, threadRootId);
             }
         } else {
-            await channelApi(podId).markRead(channel.id, seq);
+            await channelApi(podId).markRead(channel.id, seq, threadRootId);
         }
-        cache.setQueryData<ChannelDetail>(channelKey(podId, channel.id), (was) => was ? withReadSeq(was, kept) : was);
+        /* A thread read leaves the timeline's number where it was. */
+        if (!threadRootId) cache.setQueryData<ChannelDetail>(channelKey(podId, channel.id), (was) => was ? withReadSeq(was, kept) : was);
         /* Over the socket, its `inbox.updated` moves the counts everywhere;
            without it, the lists and the inbox are read again. */
         if (!liveAvailable() || podLive(podId).status !== "open") refreshLists(cache, podId);

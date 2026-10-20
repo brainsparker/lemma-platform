@@ -30,10 +30,11 @@ from app.modules.channels.domain.entities import (
     SenderKind,
     Source,
 )
-from app.modules.channels.domain.idempotency import keyed_client_id
+from app.modules.channels.domain.idempotency import member_line_name
 from app.modules.channels.domain.parts import MAX_PARTS, MentionPart, Part
 from app.modules.channels.infrastructure.lines import LineRepository, NewLine
 from app.modules.channels.infrastructure.members import MemberRepository
+from app.modules.channels.infrastructure.names import Names
 from app.modules.channels.infrastructure.mentions import drop_mentions, sync_mentions
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.source_repository import SourceRepository
@@ -42,12 +43,25 @@ from app.modules.channels.services.pushes import push_named
 from app.modules.channels.services.viewers import member_sees
 
 
-class LineRefused(Exception):
-    """What a member asked for cannot be done; the reason is theirs to read."""
+#: A refusal's code when it names none: by its status.
+_CODES = {
+    403: "INSUFFICIENT_PERMISSION",
+    404: "LINE_NOT_FOUND",
+    409: "CHANNEL_CONFLICT",
+    422: "VALIDATION_ERROR",
+}
 
-    def __init__(self, message: str, *, status_code: int = 409) -> None:
+
+class LineRefused(Exception):
+    """What a member asked for cannot be done; the reason is theirs to read,
+    and its ``code`` a client's to match on."""
+
+    def __init__(
+        self, message: str, *, status_code: int = 409, code: str | None = None
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.code = code or _CODES.get(status_code, "CHANNEL_CONFLICT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +73,8 @@ class MemberPost:
     reply_to_id: UUID | None = None
     parts: Sequence[Part] = field(default_factory=tuple)
     client_message_id: str | None = None
+    #: What the client named the line by, for a refusal to say so.
+    named_by: str = "client_message_id"
 
 
 class MemberLines:
@@ -77,14 +93,17 @@ class MemberLines:
         display_name: str | None = None,
     ) -> ChannelMessage:
         if channel.is_archived:
-            raise LineRefused("This channel is archived; bring it back to write here")
+            raise LineRefused(
+                "This channel is archived; bring it back to write here",
+                code="CHANNEL_ARCHIVED",
+            )
         if len(post.parts) > MAX_PARTS:
             raise LineRefused(f"At most {MAX_PARTS} parts", status_code=422)
         root = await self._thread_root(channel, post.thread_root_id)
         # The member's own name for the line, in their own namespace: a client
         # can never pick a name the pod's own writers use (``run:``, ``wf:``,
         # ``channel-line:`` ...) nor another member's.
-        client_id = keyed_client_id(post.client_message_id, user_id=user_id)
+        client_id = member_line_name(post.client_message_id, user_id=user_id)
         if client_id is not None:
             earlier = await self.lines.named(channel.id, client_id)
             if earlier is not None:
@@ -118,7 +137,7 @@ class MemberLines:
             message.sender.user_id != user_id
         ):
             # Somebody else's line under the same name: never theirs to replay.
-            raise LineRefused("That client_message_id names somebody else's line")
+            raise LineRefused(f"That {post.named_by} names somebody else's line")
         return message
 
     async def _thread_root(
@@ -149,6 +168,12 @@ class MemberLines:
         self, channel: Channel, parts: Sequence[Part]
     ) -> tuple[list[Principal], list[UUID]]:
         named = await Naming(self.uow).of(channel, parts)
+        if named.unknown:
+            raise LineRefused(
+                ", ".join(dict.fromkeys(named.unknown))
+                + " is not one of this pod's agents.",
+                status_code=422,
+            )
         if named.refused:
             raise LineRefused(
                 ", ".join(dict.fromkeys(named.refused))
@@ -188,6 +213,11 @@ class MemberLines:
     ) -> ChannelMessage:
         """``None`` keeps the text, or the parts."""
         line = await self._own(channel, message_id, user_id=user_id)
+        if line.is_deleted:
+            raise LineRefused("That line was deleted")
+        if text is None and parts is None:
+            # Nothing named, nothing changed: not an edit.
+            return line
         body = (line.text if text is None else text).strip()
         if not body:
             raise LineRefused("Say something, or delete it", status_code=422)
@@ -277,7 +307,7 @@ def _replayed(
     same name now asks for a different line."""
     sender = earlier.sender
     if sender.kind is not SenderKind.MEMBER or sender.user_id != user_id:
-        raise LineRefused("That client_message_id names somebody else's line")
+        raise LineRefused(f"That {post.named_by} names somebody else's line")
     same = (
         earlier.members_only == post.members_only
         and earlier.thread_root_id == (root.id if root else None)
@@ -291,7 +321,7 @@ def _replayed(
     )
     if not same:
         raise LineRefused(
-            "That client_message_id was used for another line; name this one anew",
+            f"That {post.named_by} was used for another line; name this one anew",
             status_code=422,
         )
     return earlier
@@ -313,19 +343,21 @@ def carried_to(channel: Channel, sources: Sequence[Source]) -> UUID | None:
 
 @dataclass(frozen=True, slots=True)
 class Named:
-    """Who a line's parts name: the people who may be told of it, the agents,
-    and the names of anybody it may not name."""
+    """Who a line's parts name: the people who may be told of it, the pod's
+    agents, the names of anybody it may not name, and of any agent that is
+    not the pod's."""
 
     people: list[Principal]
     agents: list[UUID]
     refused: list[str]
+    unknown: list[str] = field(default_factory=list)
 
 
 class Naming:
     """The rule for naming somebody in a channel: a member must be able to see
-    it, a contact must be in it. A member's line naming anybody else is
-    refused; a line heard on a platform keeps its words, and only the people
-    who may see the channel are told."""
+    it, a contact must be in it, an agent must be the pod's. A member's line
+    naming anybody else is refused; a line heard on a platform keeps its
+    words, and only the people who may see the channel are told."""
 
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
         self.uow = uow
@@ -351,10 +383,22 @@ class Naming:
                     people.append(person)
                 else:
                     refused.append(part.name or "A contact")
+        named_agents = list(dict.fromkeys(agents))
+        known = await Names(self.uow).agents(
+            pod_id=channel.pod_id, agent_ids=named_agents
+        )
+        unknown = [
+            part.name or "That agent"
+            for part in parts
+            if isinstance(part, MentionPart)
+            and part.kind == "AGENT"
+            and part.id not in known
+        ]
         return Named(
             people=list(dict.fromkeys(people)),
-            agents=list(dict.fromkeys(agents)),
+            agents=[agent_id for agent_id in named_agents if agent_id in known],
             refused=refused,
+            unknown=unknown,
         )
 
     async def _member_sees(self, channel: Channel, user_id: UUID) -> bool:

@@ -73,7 +73,8 @@ export interface ChannelApi {
     edit(channelId: string, lineId: string, text: string, parts?: readonly Part[]): Promise<Line>;
     remove(channelId: string, lineId: string): Promise<void>;
     /** The reader has seen the channel up to line `seq`. */
-    markRead(channelId: string, seq: number): Promise<void>;
+    /** Read the timeline to `seq` -- or, with `threadRootId`, that thread. */
+    markRead(channelId: string, seq: number, threadRootId?: string | null): Promise<void>;
     create(body: { title: string; topic: string | null; members: string[]; visibility: Visibility }): Promise<ChannelDetail>;
     update(channelId: string, change: ChannelChange): Promise<ChannelDetail>;
     /** Delete a group made in Lemma, and its timeline. */
@@ -188,8 +189,8 @@ function liveApi(podId: string): ChannelApi {
         async remove(channelId, lineId) {
             await client().channels.deleteMessage(podId, channelId, lineId);
         },
-        async markRead(channelId, seq) {
-            await client().channels.markRead(podId, channelId, seq);
+        async markRead(channelId, seq, threadRootId) {
+            await client().channels.markRead(podId, channelId, seq, threadRootId);
         },
         async create(body) {
             return detail(await client().channels.create(podId, body));

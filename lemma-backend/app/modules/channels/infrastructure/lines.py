@@ -124,6 +124,8 @@ def _advance(head: HeldHead, row: ChannelMessageModel) -> None:
         head.line_at = row.created_at
     else:
         head.take(row.thread_root_id)
+        head.replies += 1
+        head.values["replies"] = head.replies
 
 
 async def _in_its_channel(write: Awaitable[object]) -> None:
@@ -178,7 +180,9 @@ class LineRepository:
             channel_id=channel_id,
             pod_id=head.pod_id,
             seq=head.last_seq + 1,
-            body=line.text,
+            # Postgres text holds no NUL: a member's is refused at the API,
+            # and one heard on a platform is dropped from what it said.
+            body=line.text.replace("\x00", ""),
             parts=dump_parts(list(line.parts)),
             source_id=line.source_id,
             target_source_id=line.target_source_id,
@@ -310,7 +314,8 @@ class LineRepository:
         return message_entity(row) if row is not None else None
 
     async def delete(self, message_id: UUID) -> ChannelMessage | None:
-        """Forget what a line said; it keeps its place in the timeline."""
+        """Forget what a line said; it keeps its place in the timeline. A
+        reply deleted no longer counts on its thread."""
         await self._changing(message_id)
         row = await self.session.scalar(
             update(ChannelMessageModel)
@@ -326,7 +331,22 @@ class LineRepository:
             )
             .returning(ChannelMessageModel)
         )
-        return message_entity(row) if row is not None else None
+        if row is None:
+            return None
+        if row.thread_root_id is not None:
+            await self._uncount_reply(row)
+        return message_entity(row)
+
+    async def _uncount_reply(self, reply: ChannelMessageModel) -> None:
+        """A deleted reply leaves its thread's count; the root, whose count
+        its readers are shown, is sent again."""
+        await next_rev(self.session, reply.channel_id, message_id=reply.thread_root_id)
+        thread = ChannelThreadModel
+        await self.session.execute(
+            update(thread)
+            .where(thread.root_id == reply.thread_root_id)
+            .values(reply_count=func.greatest(thread.reply_count - 1, 0))
+        )
 
     async def _changing(self, message_id: UUID) -> None:
         """The line is about to change: a change of its channel, taken before
@@ -350,6 +370,23 @@ class LineRepository:
         if found is None:
             return None
         return message_entity(found[0], question=found[1])
+
+    async def counted(self, line: ChannelMessage) -> ChannelMessage:
+        """The line with its thread's count, when it is a thread's root: read
+        from ``channel_threads`` alone."""
+        thread = ChannelThreadModel
+        found = (
+            await self.session.execute(
+                select(thread.reply_count, thread.last_reply_at).where(
+                    thread.root_id == line.id
+                )
+            )
+        ).first()
+        if found is None:
+            return line
+        return line.model_copy(
+            update={"reply_count": int(found[0]), "last_reply_at": found[1]}
+        )
 
     async def by_ids(self, ids: Sequence[UUID]) -> dict[UUID, ChannelMessage]:
         if not ids:
@@ -401,15 +438,34 @@ class LineRepository:
         return await self._with_replies(rows)
 
     async def thread(
-        self, root_id: UUID, *, limit: int, after_seq: int | None = None
+        self,
+        root_id: UUID,
+        *,
+        limit: int,
+        after_seq: int | None = None,
+        before_seq: int | None = None,
+        newest: bool = False,
     ) -> list[ChannelMessage]:
+        """A thread's replies oldest first: from its start, after
+        ``after_seq`` -- or, ``newest`` or before ``before_seq``, the page
+        that ends there."""
         message = ChannelMessageModel
         statement = _with_question().where(message.thread_root_id == root_id)
         if after_seq is not None:
             statement = statement.where(message.seq > after_seq)
-        rows = await self.session.execute(
-            statement.order_by(message.seq).limit(max(1, min(limit, MAX_LINES)))
+        if before_seq is not None:
+            statement = statement.where(message.seq < before_seq)
+        size = max(1, min(limit, MAX_LINES))
+        backwards = newest or before_seq is not None
+        rows = list(
+            await self.session.execute(
+                statement.order_by(
+                    message.seq.desc() if backwards else message.seq
+                ).limit(size)
+            )
         )
+        if backwards:
+            rows.reverse()
         return [message_entity(row[0], question=row[1]) for row in rows]
 
     async def changed_since(

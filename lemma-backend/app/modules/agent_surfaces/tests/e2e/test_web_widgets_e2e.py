@@ -39,6 +39,7 @@ from app.modules.datastore.events.contact_merged_work import (
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.events.visitor_retention import sweep_web_visitors
+from app.modules.agent_surfaces.services.channel_deliveries import WAITS_IN_WEB_CHAT
 from app.modules.agent_surfaces.tests.e2e.helpers import _messages_for_conversation
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     run_scripted_agent_run,
@@ -911,6 +912,8 @@ async def test_a_members_line_waits_in_a_web_contacts_chat(
     await send_deliveries()
     [delivery] = await deliveries_of_line(written["id"])
     assert (delivery.platform, delivery.status.value) == ("WEB", "SENT")
+    # Said as it is: in their chat, not in front of them.
+    assert delivery.reason == WAITS_IN_WEB_CHAT
     history = await authenticated_client.get(
         f"/public/web/{key}/history", headers=_as(visitor)
     )
@@ -1345,6 +1348,16 @@ async def test_two_browsers_that_prove_one_email_carry_on_in_one_conversation(
         )
     )
     assert list(in_channel) == [on_laptop]
+    # What the phone said before is still in its chat, and in the one the
+    # agent answers from: the conversation that kept the seat holds it too.
+    history = await authenticated_client.get(
+        f"/public/web/{key}/history", headers=_as(phone)
+    )
+    assert history.status_code == 200, history.text
+    texts = [message["text"] for message in history.json()["messages"]]
+    for said in ("Hi from my laptop", "Hi from my phone", "Hello again.", "Still me"):
+        assert said in texts, (said, texts)
+    assert texts.count("Hi from my phone") == 1
 
 
 async def _carry_out_merges() -> None:

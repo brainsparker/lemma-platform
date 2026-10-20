@@ -66,10 +66,17 @@ class Outcome:
 
     @classmethod
     def delivered(
-        cls, platform: str | None, *, external_message_id: str | None = None
+        cls,
+        platform: str | None,
+        *,
+        external_message_id: str | None = None,
+        reason: str | None = None,
     ) -> Outcome:
         return cls(
-            Result.SENT, platform=platform, external_message_id=external_message_id
+            Result.SENT,
+            platform=platform,
+            external_message_id=external_message_id,
+            reason=reason,
         )
 
     @classmethod

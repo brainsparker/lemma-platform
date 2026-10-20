@@ -121,6 +121,14 @@ from app.modules.contacts.contracts.outreach import (
 )
 
 logger = get_logger(__name__)
+
+#: A line to a web chat is in their chat, not in front of them: nothing tells
+#: a visitor who left that it is there.
+WAITS_IN_WEB_CHAT = (
+    "In their web chat: they see it when they next open it. Nothing tells them "
+    "sooner -- the web chat sends no email."
+)
+
 meter = metrics.get_meter(__name__)
 deliveries_done = meter.create_counter(
     "lemma.channels.deliveries",
@@ -303,7 +311,7 @@ class ChannelDeliveries:
         if platform == WEB:
             # Nobody to hand it to: it waits in their web chat for the next visit.
             await self._to_their_conversation(channel, conversation_id, line, None)
-            return Outcome.delivered(platform)
+            return Outcome.delivered(platform, reason=WAITS_IN_WEB_CHAT)
         if answer:
             return await self.answers.send(
                 delivery=work.delivery,
@@ -537,6 +545,7 @@ class ChannelDeliveries:
                         platform=outcome.platform or "LEMMA",
                         external_message_id=outcome.external_message_id,
                         provider_status=status,
+                        reason=outcome.reason,
                     )
                 case Result.SKIPPED if outcome.hold_for is not None:
                     await delivery_folded(

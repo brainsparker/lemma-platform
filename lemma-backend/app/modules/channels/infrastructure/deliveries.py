@@ -362,12 +362,13 @@ class DeliveryRepository:
         platform: str,
         external_message_id: str | None,
         provider_status: str | None = None,
+        reason: str | None = None,
     ) -> None:
         await self._settle(
             delivery_id,
             DeliveryStatus.SENT,
             code=None,
-            reason=None,
+            reason=reason,
             platform=platform,
             provider_status=provider_status,
             external_message_id=func.coalesce(

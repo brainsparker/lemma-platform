@@ -137,6 +137,15 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
         markRead(target).catch(() => { marked.current = was; });
     }, [visible, shown, progress, timeline.isPending, timeline.lines, channel.lastSeq, channel.me.readSeq, markRead, heldBack, inbox.isPending]);
 
+    /* A reply naming the reader is read in its thread, not the timeline:
+       while that thread is open on screen, it is read to the newest line. */
+    const openThreadNamesMe = side === "thread" && threadRoot !== null
+        && (inbox.data?.mentioned ?? []).some((one) => one.channelId === channel.id && one.threadRootId === threadRoot);
+    useEffect(() => {
+        if (!visible || !shown || !openThreadNamesMe || !threadRoot) return;
+        markRead(channel.lastSeq, threadRoot).catch(() => { /* read again when the inbox next says so */ });
+    }, [visible, shown, openThreadNamesMe, threadRoot, channel.lastSeq, markRead]);
+
     const people = useMemo(
         () => mentionables(agents.data ?? [], channel.members.map((one) => one.person), me, channelReaders(channel, pod.members)),
         [agents.data, channel, pod.members, me],

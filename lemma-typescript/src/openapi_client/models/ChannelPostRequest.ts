@@ -7,7 +7,7 @@ import type { LinkPart } from './LinkPart.js';
 import type { MentionPart } from './MentionPart.js';
 export type ChannelPostRequest = {
     /**
-     * The client's name for this line: sending it again is the same line.
+     * The client's name for this line: sending it again is the same line. Shown back on the line to its writer, as sent.
      */
     client_message_id?: (string | null);
     /**

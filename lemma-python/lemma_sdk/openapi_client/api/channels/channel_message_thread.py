@@ -18,6 +18,8 @@ def _get_kwargs(
     message_id: UUID,
     *,
     after_seq: int | None | Unset = UNSET,
+    before_seq: int | None | Unset = UNSET,
+    newest: bool | Unset = False,
     limit: int | Unset = 50,
 ) -> dict[str, Any]:
 
@@ -29,6 +31,15 @@ def _get_kwargs(
     else:
         json_after_seq = after_seq
     params["after_seq"] = json_after_seq
+
+    json_before_seq: int | None | Unset
+    if isinstance(before_seq, Unset):
+        json_before_seq = UNSET
+    else:
+        json_before_seq = before_seq
+    params["before_seq"] = json_before_seq
+
+    params["newest"] = newest
 
     params["limit"] = limit
 
@@ -54,6 +65,26 @@ def _parse_response(
         response_200 = ThreadResponse.from_dict(response.json())
 
         return response_200
+
+    if response.status_code == 400:
+        response_400 = ErrorResponse.from_dict(response.json())
+
+        return response_400
+
+    if response.status_code == 403:
+        response_403 = ErrorResponse.from_dict(response.json())
+
+        return response_403
+
+    if response.status_code == 404:
+        response_404 = ErrorResponse.from_dict(response.json())
+
+        return response_404
+
+    if response.status_code == 409:
+        response_409 = ErrorResponse.from_dict(response.json())
+
+        return response_409
 
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
@@ -84,17 +115,23 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     after_seq: int | None | Unset = UNSET,
+    before_seq: int | None | Unset = UNSET,
+    newest: bool | Unset = False,
     limit: int | Unset = 50,
 ) -> Response[ErrorResponse | ThreadResponse]:
     """List Thread
 
-     A thread: its first line, and its replies oldest first after `after_seq`.
+     A thread: its first line, and a page of its replies, oldest first
+    within it -- from the start, after `after_seq`, before `before_seq`, or
+    (`newest`) the latest.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
         after_seq (int | None | Unset):
+        before_seq (int | None | Unset):
+        newest (bool | Unset): The newest page of replies, rather than the first. Default: False.
         limit (int | Unset):  Default: 50.
 
     Raises:
@@ -110,6 +147,8 @@ def sync_detailed(
         channel_id=channel_id,
         message_id=message_id,
         after_seq=after_seq,
+        before_seq=before_seq,
+        newest=newest,
         limit=limit,
     )
 
@@ -127,17 +166,23 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     after_seq: int | None | Unset = UNSET,
+    before_seq: int | None | Unset = UNSET,
+    newest: bool | Unset = False,
     limit: int | Unset = 50,
 ) -> ErrorResponse | ThreadResponse | None:
     """List Thread
 
-     A thread: its first line, and its replies oldest first after `after_seq`.
+     A thread: its first line, and a page of its replies, oldest first
+    within it -- from the start, after `after_seq`, before `before_seq`, or
+    (`newest`) the latest.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
         after_seq (int | None | Unset):
+        before_seq (int | None | Unset):
+        newest (bool | Unset): The newest page of replies, rather than the first. Default: False.
         limit (int | Unset):  Default: 50.
 
     Raises:
@@ -154,6 +199,8 @@ def sync(
         message_id=message_id,
         client=client,
         after_seq=after_seq,
+        before_seq=before_seq,
+        newest=newest,
         limit=limit,
     ).parsed
 
@@ -165,17 +212,23 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     after_seq: int | None | Unset = UNSET,
+    before_seq: int | None | Unset = UNSET,
+    newest: bool | Unset = False,
     limit: int | Unset = 50,
 ) -> Response[ErrorResponse | ThreadResponse]:
     """List Thread
 
-     A thread: its first line, and its replies oldest first after `after_seq`.
+     A thread: its first line, and a page of its replies, oldest first
+    within it -- from the start, after `after_seq`, before `before_seq`, or
+    (`newest`) the latest.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
         after_seq (int | None | Unset):
+        before_seq (int | None | Unset):
+        newest (bool | Unset): The newest page of replies, rather than the first. Default: False.
         limit (int | Unset):  Default: 50.
 
     Raises:
@@ -191,6 +244,8 @@ async def asyncio_detailed(
         channel_id=channel_id,
         message_id=message_id,
         after_seq=after_seq,
+        before_seq=before_seq,
+        newest=newest,
         limit=limit,
     )
 
@@ -206,17 +261,23 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     after_seq: int | None | Unset = UNSET,
+    before_seq: int | None | Unset = UNSET,
+    newest: bool | Unset = False,
     limit: int | Unset = 50,
 ) -> ErrorResponse | ThreadResponse | None:
     """List Thread
 
-     A thread: its first line, and its replies oldest first after `after_seq`.
+     A thread: its first line, and a page of its replies, oldest first
+    within it -- from the start, after `after_seq`, before `before_seq`, or
+    (`newest`) the latest.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
         after_seq (int | None | Unset):
+        before_seq (int | None | Unset):
+        newest (bool | Unset): The newest page of replies, rather than the first. Default: False.
         limit (int | Unset):  Default: 50.
 
     Raises:
@@ -234,6 +295,8 @@ async def asyncio(
             message_id=message_id,
             client=client,
             after_seq=after_seq,
+            before_seq=before_seq,
+            newest=newest,
             limit=limit,
         )
     ).parsed

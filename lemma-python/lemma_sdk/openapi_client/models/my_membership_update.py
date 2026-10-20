@@ -8,6 +8,9 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
+from ..models.my_membership_update_notify_via_type_0_item import (
+    MyMembershipUpdateNotifyViaType0Item,
+)
 from ..models.notify_level import NotifyLevel
 from ..types import UNSET, Unset
 
@@ -22,12 +25,12 @@ class MyMembershipUpdate:
         Attributes:
             muted_until (datetime.datetime | None | Unset):
             notify (None | NotifyLevel | Unset):
-            notify_via (list[str] | None | Unset):
+            notify_via (list[MyMembershipUpdateNotifyViaType0Item] | None | Unset):
     """
 
     muted_until: datetime.datetime | None | Unset = UNSET
     notify: None | NotifyLevel | Unset = UNSET
-    notify_via: list[str] | None | Unset = UNSET
+    notify_via: list[MyMembershipUpdateNotifyViaType0Item] | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -51,7 +54,10 @@ class MyMembershipUpdate:
         if isinstance(self.notify_via, Unset):
             notify_via = UNSET
         elif isinstance(self.notify_via, list):
-            notify_via = self.notify_via
+            notify_via = []
+            for notify_via_type_0_item_data in self.notify_via:
+                notify_via_type_0_item = notify_via_type_0_item_data.value
+                notify_via.append(notify_via_type_0_item)
 
         else:
             notify_via = self.notify_via
@@ -106,7 +112,9 @@ class MyMembershipUpdate:
 
         notify = _parse_notify(d.pop("notify", UNSET))
 
-        def _parse_notify_via(data: object) -> list[str] | None | Unset:
+        def _parse_notify_via(
+            data: object,
+        ) -> list[MyMembershipUpdateNotifyViaType0Item] | None | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
@@ -114,12 +122,19 @@ class MyMembershipUpdate:
             try:
                 if not isinstance(data, list):
                     raise TypeError()
-                notify_via_type_0 = cast(list[str], data)
+                notify_via_type_0 = []
+                _notify_via_type_0 = data
+                for notify_via_type_0_item_data in _notify_via_type_0:
+                    notify_via_type_0_item = MyMembershipUpdateNotifyViaType0Item(
+                        notify_via_type_0_item_data
+                    )
+
+                    notify_via_type_0.append(notify_via_type_0_item)
 
                 return notify_via_type_0
             except TypeError, ValueError, AttributeError, KeyError:
                 pass
-            return cast(list[str] | None | Unset, data)
+            return cast(list[MyMembershipUpdateNotifyViaType0Item] | None | Unset, data)
 
         notify_via = _parse_notify_via(d.pop("notify_via", UNSET))
 

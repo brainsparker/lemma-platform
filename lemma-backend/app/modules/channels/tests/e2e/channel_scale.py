@@ -257,6 +257,15 @@ async def _seed_platform(session: AsyncSession) -> None:
         FROM channel_messages m JOIN platform_channels c ON c.id = m.channel_id
         """)
     )
+    # Read where it was said, as reading the timeline marks it.
+    await session.execute(
+        text(f"""
+        UPDATE channel_mentions m SET read_at = m.created_at
+        FROM platform_channels c
+        WHERE c.id = m.channel_id
+          AND m.seq <= {_OTHER_LINES} - m.seq % {_OTHER_SEATS}
+        """)
+    )
     await session.execute(
         text("""
         INSERT INTO channel_questions
@@ -319,6 +328,18 @@ async def _seed_lines(session: AsyncSession, params: dict[str, object]) -> None:
 async def _seed_changes(session: AsyncSession, seeded: str) -> None:
     """Each seeded line as its channel's change of the same number (the
     channel's ``last_rev`` is its line count), and its thread's count."""
+    await session.execute(
+        text(f"""
+        UPDATE channels c SET replies = r.replies
+        FROM (
+          SELECT m.channel_id, count(*) AS replies
+          FROM channel_messages m JOIN {seeded} s ON s.id = m.channel_id
+          WHERE m.thread_root_id IS NOT NULL
+          GROUP BY m.channel_id
+        ) r
+        WHERE c.id = r.channel_id
+        """)
+    )
     await session.execute(
         text(f"""
         INSERT INTO channel_changes (channel_id, rev, message_id, pod_id, at)
@@ -410,6 +431,27 @@ async def _seed_attention(session: AsyncSession, params: dict[str, object]) -> N
         FROM channel_messages m JOIN seed_channels c ON c.id = m.channel_id
         WHERE m.thread_root_id IS NULL
           AND m.seq % 10 = 0
+        """),
+        params,
+    )
+    # What the member read is read: its replies counted, and the lines naming
+    # them up to there -- as reading the timeline through the API leaves it.
+    await session.execute(
+        text("""
+        UPDATE channel_read_state r SET read_replies = (
+          SELECT count(*) FROM channel_messages m
+          WHERE m.channel_id = r.channel_id AND m.seq <= r.last_read_seq
+            AND m.thread_root_id IS NOT NULL
+        )
+        FROM seed_channels c WHERE c.id = r.channel_id
+        """)
+    )
+    await session.execute(
+        text("""
+        UPDATE channel_mentions m SET read_at = m.created_at
+        FROM channel_read_state r
+        WHERE r.channel_id = m.channel_id AND r.user_id = m.user_id
+          AND m.seq <= r.last_read_seq AND m.pod_id = :pod
         """),
         params,
     )

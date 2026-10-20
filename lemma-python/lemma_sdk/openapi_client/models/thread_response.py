@@ -19,16 +19,19 @@ T = TypeVar("T", bound="ThreadResponse")
 class ThreadResponse:
     """
     Attributes:
-        has_more (bool):
+        has_more (bool): Whether there are more replies in the direction read: newer ones, or with `before_seq` or
+            `newest`, older ones.
         items (list[ChannelMessageResponse]): Replies, oldest first.
         root (ChannelMessageResponse):
-        next_after_seq (int | None | Unset):
+        next_after_seq (int | None | Unset): Pass as `after_seq` for the newer page.
+        next_before_seq (int | None | Unset): Reading backwards: pass as `before_seq` for the older page.
     """
 
     has_more: bool
     items: list[ChannelMessageResponse]
     root: ChannelMessageResponse
     next_after_seq: int | None | Unset = UNSET
+    next_before_seq: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -47,6 +50,12 @@ class ThreadResponse:
         else:
             next_after_seq = self.next_after_seq
 
+        next_before_seq: int | None | Unset
+        if isinstance(self.next_before_seq, Unset):
+            next_before_seq = UNSET
+        else:
+            next_before_seq = self.next_before_seq
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -58,6 +67,8 @@ class ThreadResponse:
         )
         if next_after_seq is not UNSET:
             field_dict["next_after_seq"] = next_after_seq
+        if next_before_seq is not UNSET:
+            field_dict["next_before_seq"] = next_before_seq
 
         return field_dict
 
@@ -86,11 +97,21 @@ class ThreadResponse:
 
         next_after_seq = _parse_next_after_seq(d.pop("next_after_seq", UNSET))
 
+        def _parse_next_before_seq(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        next_before_seq = _parse_next_before_seq(d.pop("next_before_seq", UNSET))
+
         thread_response = cls(
             has_more=has_more,
             items=items,
             root=root,
             next_after_seq=next_after_seq,
+            next_before_seq=next_before_seq,
         )
 
         thread_response.additional_properties = d

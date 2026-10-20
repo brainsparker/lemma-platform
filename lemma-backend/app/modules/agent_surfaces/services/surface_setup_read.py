@@ -2,25 +2,35 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from app.core.config import settings
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     AgentSurfaceStatus,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.setup_actions import build_surface_setup_actions
+from app.modules.agent_surfaces.domain.ports import SurfaceInstallationRepositoryPort
+from app.modules.agent_surfaces.domain.setup_actions import (
+    SurfaceSetupAction,
+    build_surface_setup_actions,
+)
 from app.modules.agent_surfaces.domain.surface_representation import (
     SurfaceConnection,
     SurfaceConnectionStatus,
 )
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
+from app.modules.agent_surfaces.services.surface_problems import surface_problem
+from app.modules.channels.contracts.places import surface_heard_from
 
 
 class SurfaceSetupReadMixin:
+    #: ``AgentSurfaceService``'s, which composes this.
+    surface_repository: SurfaceInstallationRepositoryPort
+
     async def get_surface_setup_by_name(
         self,
         *,
@@ -80,6 +90,7 @@ class SurfaceSetupReadMixin:
                 else None
             ),
         )
+        actions = await self._as_the_platform_sees_it(surface, actions)
         pending_consent = bool(
             admin_consent and admin_consent["required"] and not admin_consent["granted"]
         )
@@ -98,6 +109,35 @@ class SurfaceSetupReadMixin:
             "actions": actions,
             "guide": guide,
         }
+
+    async def _as_the_platform_sees_it(
+        self, surface: AgentSurfaceEntity, actions: list[SurfaceSetupAction]
+    ) -> list[SurfaceSetupAction]:
+        """The checklist corrected by what the platform has said since."""
+        if surface.surface_type is SurfacePlatform.WHATSAPP and actions:
+            # The repository's unit of work is the request's SQLAlchemy one.
+            uow = cast(SqlAlchemyUnitOfWork, self.surface_repository.uow)
+            if await surface_heard_from(uow, surface.id):
+                # Messages are arriving: the webhook is set, whatever the
+                # checklist says. Kept as reference, not as work.
+                actions = [
+                    action.model_copy(update={"informational": True})
+                    if action.key == "whatsapp_webhook"
+                    else action
+                    for action in actions
+                ]
+        problem = await surface_problem(surface)
+        if problem is not None:
+            # Whatever else is done, a surface the platform refuses is not ready.
+            actions = [
+                SurfaceSetupAction(
+                    key="surface_problem",
+                    title="Fix this surface",
+                    description=problem,
+                ),
+                *actions,
+            ]
+        return actions
 
     async def _slack_verification_gaps(
         self, *, surface, is_custom_app: bool

@@ -285,6 +285,23 @@ async def test_a_mail_clients_one_click_post_opts_the_address_out(
     assert verdict.code is RefusalCode.SUPPRESSED
 
 
+async def test_a_link_signed_for_a_deleted_pod_says_it_no_longer_works(
+    async_client,
+):
+    """Signed, so not a forgery -- but its pod is gone, and there is nothing
+    to keep the opt-out against. It used to fail on the pod's foreign key."""
+    token = unsubscribe_token(uuid4(), IdentityKind.EMAIL, EMAIL)
+
+    clicked = await async_client.post(
+        "/public/contacts/unsubscribe",
+        params={"token": token},
+        data={"List-Unsubscribe": "One-Click"},
+    )
+
+    assert clicked.status_code == 404, clicked.text
+    assert "This link no longer works" in clicked.text
+
+
 # ------------------------------------------------------------ windows and caps
 
 

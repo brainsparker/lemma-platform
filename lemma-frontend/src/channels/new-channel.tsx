@@ -25,6 +25,10 @@ export function NewChannel({ pod, onClose, onMade }: {
     const [visibility, setVisibility] = useState<Visibility>("PUBLIC");
     const nameField = useRef<HTMLInputElement>(null);
     useEffect(() => { nameField.current?.focus(); }, []);
+    /* The pod's members were read when the space opened, and are kept a
+       while: anybody who joined since is asked for again here, where they
+       are offered. */
+    useEffect(() => { void cache.invalidateQueries({ queryKey: ["pod-detail", pod.id], exact: true }); }, [cache, pod.id]);
     /* People, not teammates; and not the reader, who is in it already. */
     const people = pod.members.filter((member): member is Member & { userId: string } =>
         member.kind !== "teammate" && Boolean(member.userId) && member.userId !== me);
@@ -72,8 +76,8 @@ export function NewChannel({ pod, onClose, onMade }: {
                         <ul className="cnew__list">
                             {people.map((member) => (
                                 <li key={member.userId}>
-                                    <label className="gsheet__check">
-                                        <input type="checkbox" checked={members.has(member.userId)} onChange={(event) => toggle(member.userId, event.target.checked)} />
+                                    <label className="gsheet__check" htmlFor={ids + "-member-" + member.userId}>
+                                        <input id={ids + "-member-" + member.userId} type="checkbox" aria-label={member.name} checked={members.has(member.userId)} onChange={(event) => toggle(member.userId, event.target.checked)} />
                                         <span>{member.name}</span>
                                     </label>
                                 </li>

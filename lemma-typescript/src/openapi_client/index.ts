@@ -93,7 +93,7 @@ export { ChannelKind } from './models/ChannelKind.js';
 export type { ChannelListResponse } from './models/ChannelListResponse.js';
 export type { ChannelMemberListResponse } from './models/ChannelMemberListResponse.js';
 export type { ChannelMemberResponse } from './models/ChannelMemberResponse.js';
-export type { ChannelMessageResponse } from './models/ChannelMessageResponse.js';
+export { ChannelMessageResponse } from './models/ChannelMessageResponse.js';
 export type { ChannelMessagesResponse } from './models/ChannelMessagesResponse.js';
 export type { ChannelPostRequest } from './models/ChannelPostRequest.js';
 export type { ChannelRef } from './models/ChannelRef.js';

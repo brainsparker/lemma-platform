@@ -23,6 +23,11 @@ adapter knows them.
 
 from __future__ import annotations
 
+from uuid import UUID
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.contacts.contracts import contact_handles
+
 from app.modules.contacts.domain.handles import (
     host_handle,
     host_issuer,
@@ -43,6 +48,7 @@ from app.modules.contacts.services.outreach import (
     may_send,
     opt_out,
     opt_out_by_token,
+    opted_out_handles,
 )
 from app.modules.contacts.services.unsubscribe import (
     UnsubscribeTarget,
@@ -50,6 +56,16 @@ from app.modules.contacts.services.unsubscribe import (
     unsubscribe_headers,
     unsubscribe_link,
 )
+
+
+async def opted_out(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_id: UUID
+) -> bool:
+    """Whether a handle of this contact asked the pod to stop writing to it --
+    what a member is shown on the contact's channel."""
+    handles = await contact_handles(uow, pod_id=pod_id, contact_id=contact_id)
+    return bool(await opted_out_handles(uow, handles, pod_id=pod_id))
+
 
 #: The send metadata key an email's unsubscribe token travels under, from the
 #: delivery that asked ``may_send`` to the mail adapter that writes headers.
@@ -73,6 +89,8 @@ __all__ = [
     "may_send",
     "opt_out",
     "opt_out_by_token",
+    "opted_out",
+    "opted_out_handles",
     "read_unsubscribe_token",
     "unsubscribe_headers",
     "unsubscribe_link",

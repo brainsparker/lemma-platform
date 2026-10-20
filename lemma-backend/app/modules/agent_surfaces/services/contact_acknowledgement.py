@@ -1,7 +1,8 @@
 """Telling a contact a person will reply, when no agent will.
 
-A contact whose channel has its agents switched off is answered by a member,
-whenever one gets to it. Until then the pod may say so once -- its own line,
+A contact whose channel has its agents switched off, or who was handed to a
+member who has not written to them yet, is answered by a member, whenever one
+gets to it. Until then the pod may say so once -- its own line,
 set in the pod's settings (``config.contacts.auto_acknowledge``), for example
 "Thanks, someone from Acme will reply". Once per *wait*: from the contact's
 first unanswered message until a member writes to them, or their case is
@@ -55,9 +56,10 @@ async def acknowledge_contact(
     conversation_id: UUID,
     now: datetime | None = None,
 ) -> str | None:
-    """Say the pod's acknowledgement to this contact, if it is due: their
-    channel's agents are off, the pod set one, it is the first of this wait,
-    and they may be written to. Returns what was said -- for their
+    """Say the pod's acknowledgement to this contact, if it is due: no agent
+    answers them -- their channel's agents are off, or a member they have not
+    heard from yet holds them -- the pod set one, it is the first of this
+    wait, and they may be written to. Returns what was said -- for their
     conversation, which is where a web chat shows it -- or ``None``."""
     text = await pod_auto_acknowledgement(uow.session, pod_id)
     if text is None:
@@ -68,7 +70,7 @@ async def acknowledge_contact(
         channel is None
         or channel.kind is not ChannelKind.CONTACT
         or channel.contact_id is None
-        or channel.agents_answer
+        or (channel.agents_answer and not _handed_to_a_member(channel))
     ):
         return None
     source = _where_they_wrote(await sources_of(uow, channel.id))
@@ -101,6 +103,15 @@ async def acknowledge_contact(
         platform=source.platform,
     )
     return text
+
+
+def _handed_to_a_member(channel: Channel) -> bool:
+    """A member holds the contact and has not written to them yet: the agent
+    is quiet, and nobody has said anything. A member in the conversation is
+    answering them, and is not announced on every line."""
+    return (
+        channel.assignee_user_id is not None and channel.assignee_last_line_at is None
+    )
 
 
 def _where_they_wrote(sources: list[Source]) -> Source | None:

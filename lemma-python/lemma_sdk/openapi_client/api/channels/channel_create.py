@@ -46,6 +46,26 @@ def _parse_response(
 
         return response_201
 
+    if response.status_code == 400:
+        response_400 = ErrorResponse.from_dict(response.json())
+
+        return response_400
+
+    if response.status_code == 403:
+        response_403 = ErrorResponse.from_dict(response.json())
+
+        return response_403
+
+    if response.status_code == 404:
+        response_404 = ErrorResponse.from_dict(response.json())
+
+        return response_404
+
+    if response.status_code == 409:
+        response_409 = ErrorResponse.from_dict(response.json())
+
+        return response_409
+
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
 
@@ -79,7 +99,8 @@ def sync_detailed(
 
      A group made in Lemma: public unless asked otherwise, with its maker as
     its owner and the members and agents named in it. The same
-    `Idempotency-Key` from the same member returns the group it made.
+    `Idempotency-Key` from the same member returns the group it made; sent
+    with another title, topic or visibility, it is refused (422).
 
     Args:
         pod_id (UUID):
@@ -118,7 +139,8 @@ def sync(
 
      A group made in Lemma: public unless asked otherwise, with its maker as
     its owner and the members and agents named in it. The same
-    `Idempotency-Key` from the same member returns the group it made.
+    `Idempotency-Key` from the same member returns the group it made; sent
+    with another title, topic or visibility, it is refused (422).
 
     Args:
         pod_id (UUID):
@@ -152,7 +174,8 @@ async def asyncio_detailed(
 
      A group made in Lemma: public unless asked otherwise, with its maker as
     its owner and the members and agents named in it. The same
-    `Idempotency-Key` from the same member returns the group it made.
+    `Idempotency-Key` from the same member returns the group it made; sent
+    with another title, topic or visibility, it is refused (422).
 
     Args:
         pod_id (UUID):
@@ -189,7 +212,8 @@ async def asyncio(
 
      A group made in Lemma: public unless asked otherwise, with its maker as
     its owner and the members and agents named in it. The same
-    `Idempotency-Key` from the same member returns the group it made.
+    `Idempotency-Key` from the same member returns the group it made; sent
+    with another title, topic or visibility, it is refused (422).
 
     Args:
         pod_id (UUID):

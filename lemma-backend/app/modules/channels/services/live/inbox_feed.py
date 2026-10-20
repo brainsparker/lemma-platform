@@ -25,6 +25,7 @@ channel they never saw is never named to them.
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
@@ -36,7 +37,7 @@ from app.modules.channels.api.access import Caller
 from app.modules.channels.domain.access import may_see
 from app.modules.channels.domain.entities import Channel
 from app.modules.channels.infrastructure.access import visible_to
-from app.modules.channels.infrastructure.inbox import InboxReads
+from app.modules.channels.infrastructure.inbox import InboxReads, Totals, Unread
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.models import (
     ChannelMemberModel,
@@ -56,8 +57,9 @@ from app.modules.channels.services.live.events import (
 from app.modules.channels.services.live.readers import caller_for
 from app.modules.channels.services.live.subscriptions import InboxSub
 
-#: Lines one channel's change is searched for new questions in.
-_QUESTION_SCAN = 50
+#: New questions one channel's change is searched for: past it, the reader's
+#: ``waiting`` count still moves; only the ``question.waiting`` events stop.
+_QUESTION_SCAN = 200
 #: The channels a reader is taken to have seen when they subscribe: the most
 #: recently active this many. One quieter than all of them that they then lose
 #: sight of is not cleared over the socket; their next ``/inbox`` read clears it.
@@ -75,6 +77,11 @@ class InboxFeed:
         #: ``SEEN_AT_JOIN`` at first, plus those sent to them since; dropped
         #: with the reader's last subscription.
         self._seen: dict[UUID, set[UUID]] = {}
+        #: memory: per reader, what they were last told: each channel's
+        #: counts, and their totals. A channel whose counts did not move is
+        #: not sent again; one never sent was nothing to them (``Unread()``).
+        #: Dropped with the reader's last subscription.
+        self._told: dict[UUID, _Told] = {}
 
     def __bool__(self) -> bool:
         return bool(self.subs)
@@ -90,6 +97,12 @@ class InboxFeed:
             self._heads = await pod_heads(uow, self.pod_id)
         if sub.user_id not in self._seen:
             self._seen[sub.user_id] = await _seen_by(uow, sub.caller)
+        if sub.user_id not in self._told:
+            # The totals they fetched with ``/inbox``, near enough: a first
+            # change that leaves them as they are is not sent.
+            self._told[sub.user_id] = _Told(
+                totals=await InboxReads(uow.session).totals(sub.caller.viewer)
+            )
         self.subs.setdefault(sub.user_id, set()).add(sub)
 
     def release(self, sub: InboxSub) -> None:
@@ -100,6 +113,7 @@ class InboxFeed:
         if not subs:
             self.subs.pop(sub.user_id, None)
             self._seen.pop(sub.user_id, None)
+            self._told.pop(sub.user_id, None)
         if not self.subs:
             self._heads = None
 
@@ -125,7 +139,7 @@ class InboxFeed:
             uow, dirty, everything=everything, changed_since=changed_since
         )
         for_user = self._readers_of(moved, reads)
-        shown: dict[UUID, tuple[set[UUID], set[UUID]]] = {}
+        shown: dict[UUID, _Shown] = {}
         if for_user:
             wanted = {channel_id for ids in for_user.values() for channel_id in ids}
             channels = await ChannelRepository(uow.session).by_ids(wanted)
@@ -139,16 +153,28 @@ class InboxFeed:
                     channels,
                     views,
                     joined.get(user_id, set()),
+                    reshaped={
+                        channel_id
+                        for channel_id, (before, after) in moved.items()
+                        if after.changed_rev > before.changed_rev
+                    },
                 )
         # Everyone told: only now do the heads and what each reader saw move.
         self._heads.update(now)
         for channel_id in gone:
             self._heads.pop(channel_id, None)
-        for user_id, (added, lost) in shown.items():
+        for user_id, told in shown.items():
             seen = self._seen.get(user_id)
             if seen is not None:
-                seen |= added
-                seen -= lost
+                seen |= told.added
+                seen -= told.lost
+            if user_id in self.subs:
+                memory = self._told.setdefault(user_id, _Told())
+                memory.unread.update(told.unread)
+                for channel_id in told.lost:
+                    memory.unread.pop(channel_id, None)
+                if told.totals is not None:
+                    memory.totals = told.totals
 
     def _readers_of(
         self,
@@ -206,13 +232,54 @@ class InboxFeed:
         channels: dict[UUID, Channel],
         views: dict[UUID, LinesView],
         joined: set[UUID],
-    ) -> tuple[set[UUID], set[UUID]]:
-        """Offer the reader their counts; the channels newly shown to them
-        and those they lost sight of, for the caller to remember."""
+        *,
+        reshaped: Collection[UUID],
+    ) -> _Shown:
+        """Offer the reader what moved for them; what they were shown, for
+        the caller to remember once everyone is told.
+
+        Only numbers that moved are sent. A channel whose counts are as the
+        reader was last told -- a line in a group they are not in, say --
+        costs them no totals read and no frame, unless the channel itself
+        changed (``reshaped``: archived, its members or settings), which can
+        move their totals alone."""
         subs = [sub for sub in self.subs.get(user_id, ()) if sub.active]
         if not subs:
-            return set(), set()
+            return _Shown()
         caller = subs[0].caller
+        shown, lost = self._in_sight(user_id, caller, channel_ids, channels, joined)
+        if not shown and not lost:
+            return _Shown()
+        added = {channel.id for channel in shown}
+        told = self._told.get(user_id, _Told())
+        inbox = InboxReads(uow.session)
+        unread = await inbox.unread(caller.viewer, shown)
+        moved = _moved_counts(unread, told.unread, added)
+        questions = _questions_for(views, shown, user_id)
+        news = bool(moved or lost or questions)
+        if not news and not added & set(reshaped):
+            return _Shown(added=added)
+        totals = await inbox.totals(caller.viewer)
+        if not news and totals == told.totals:
+            return _Shown(added=added)
+        if not moved and not lost:
+            # Only the totals moved: they ride one channel's event.
+            moved = _moved_counts(unread, {}, [shown[0].id], every=True)
+        events = _events(shown, lost, set(moved), unread, totals, questions)
+        for sub in subs:
+            sub.connection.offer_events(sub.id, None, events)
+        return _Shown(added=added, lost=set(lost), unread=moved, totals=totals)
+
+    def _in_sight(
+        self,
+        user_id: UUID,
+        caller: Caller,
+        channel_ids: set[UUID],
+        channels: dict[UUID, Channel],
+        joined: set[UUID],
+    ) -> tuple[list[Channel], list[UUID]]:
+        """Of the channels that moved, those the reader may see, and those
+        they saw and no longer may."""
         seen = self._seen.get(user_id, set())
         shown: list[Channel] = []
         lost: list[UUID] = []
@@ -224,22 +291,7 @@ class InboxFeed:
                 shown.append(channel)
             elif channel_id in seen:
                 lost.append(channel_id)
-        if not shown and not lost:
-            return set(), set()
-        inbox = InboxReads(uow.session)
-        unread = await inbox.unread(caller.viewer, shown)
-        totals = await inbox.totals(caller.viewer)
-        events: list[str] = []
-        for channel in shown:
-            events.append(inbox_updated(channel.id, unread.get(channel.id), totals))
-            view = views.get(channel.id)
-            if view is not None:
-                events.extend(question_waiting(view, user_id))
-        # What they can no longer see counts for nothing: the badge clears.
-        events.extend(inbox_updated(channel_id, None, totals) for channel_id in lost)
-        for sub in subs:
-            sub.connection.offer_events(sub.id, None, events)
-        return {channel.id for channel in shown}, set(lost)
+        return shown, lost
 
     async def recheck(
         self, uow: SqlAlchemyUnitOfWork, end: Callable[[InboxSub, str], None]
@@ -266,6 +318,72 @@ class InboxFeed:
                 )
 
 
+def _moved_counts(
+    now: Mapping[UUID, Unread],
+    before: Mapping[UUID, Unread],
+    channel_ids: Collection[UUID],
+    *,
+    every: bool = False,
+) -> dict[UUID, Unread]:
+    """Of ``channel_ids``, those whose counts are not as they were (with
+    ``every``, all of them), with their counts now; absent is ``Unread()``."""
+    return {
+        channel_id: now.get(channel_id, Unread())
+        for channel_id in channel_ids
+        if every or now.get(channel_id, Unread()) != before.get(channel_id, Unread())
+    }
+
+
+def _questions_for(
+    views: Mapping[UUID, LinesView], shown: list[Channel], reader_id: UUID
+) -> dict[UUID, list[str]]:
+    """Per channel, the questions newly waiting on the reader."""
+    found = {
+        channel.id: question_waiting(views[channel.id], reader_id)
+        for channel in shown
+        if channel.id in views
+    }
+    return {channel_id: events for channel_id, events in found.items() if events}
+
+
+def _events(
+    shown: list[Channel],
+    lost: list[UUID],
+    sent: set[UUID],
+    unread: Mapping[UUID, Unread],
+    totals: Totals,
+    questions: Mapping[UUID, list[str]],
+) -> list[str]:
+    """The reader's events: the counts of ``sent``, the questions newly
+    waiting on them, and what they can no longer see counted as nothing --
+    its badge clears."""
+    events: list[str] = []
+    for channel in shown:
+        if channel.id in sent:
+            events.append(inbox_updated(channel.id, unread.get(channel.id), totals))
+        events.extend(questions.get(channel.id, ()))
+    events.extend(inbox_updated(channel_id, None, totals) for channel_id in lost)
+    return events
+
+
+@dataclass(slots=True)
+class _Told:
+    """What one reader was last told."""
+
+    unread: dict[UUID, Unread] = field(default_factory=dict)
+    totals: Totals | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Shown:
+    """What one drain told one reader."""
+
+    added: set[UUID] = field(default_factory=set)
+    lost: set[UUID] = field(default_factory=set)
+    unread: dict[UUID, Unread] = field(default_factory=dict)
+    totals: Totals | None = None
+
+
 def _same(before: Caller, after: Caller) -> bool:
     return (
         before.viewer == after.viewer
@@ -285,12 +403,19 @@ async def _new_lines(
     for channel_id, (before, after) in moved.items():
         channel = channels.get(channel_id)
         if channel is not None and after.seq > before.seq:
+            # Only the new lines asking a question: a burst of chatter around
+            # one does not push it out of the scan.
             lines = await LineRepository(uow.session).changed_since(
-                channel_id, after_rev=before.rev, limit=_QUESTION_SCAN
+                channel_id,
+                after_rev=before.rev,
+                limit=_QUESTION_SCAN,
+                up_to_rev=after.rev,
+                asked_after_seq=before.seq,
             )
-            views[channel_id] = await lines_view(
-                uow, channel, lines, since_seq=before.seq
-            )
+            if lines:
+                views[channel_id] = await lines_view(
+                    uow, channel, lines, since_seq=before.seq
+                )
     return views
 
 

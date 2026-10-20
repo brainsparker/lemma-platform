@@ -9,6 +9,7 @@ anybody may leave a channel they are in, and join a public group (or, holding
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Query, status
@@ -19,6 +20,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.channels.api.access import (
+    ERRORS,
     Caller,
     CallerDep,
     conflict,
@@ -28,6 +30,7 @@ from app.modules.channels.api.access import (
     require_manage,
     unprocessable,
     visible,
+    wrong_kind,
 )
 from app.modules.channels.api.controller import seat_agents, seat_people
 from app.modules.channels.api.schemas import (
@@ -48,13 +51,17 @@ from app.modules.channels.domain.entities import (
     Principal,
     SeatedBy,
     SenderKind,
+    Visibility,
 )
 from app.modules.channels.infrastructure.members import MAX_MEMBERS, MemberRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
+from app.modules.channels.services.reading import NotInChannel, read_to
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/pods/{pod_id}/channels", tags=["Channels"])
+router = APIRouter(
+    prefix="/pods/{pod_id}/channels", tags=["Channels"], responses=ERRORS
+)
 
 
 @router.post(
@@ -123,7 +130,7 @@ async def _group(
 ) -> Channel:
     channel = await visible(uow, caller, channel_id)
     if channel.kind is not ChannelKind.GROUP:
-        raise conflict("Only a group's members can be changed")
+        raise wrong_kind("Only a group's members can be changed")
     return channel
 
 
@@ -145,7 +152,7 @@ async def join_channel(
     let them into; it is logged. Joining one already joined is nothing."""
     channel, by_right = await _joinable(uow, caller, channel_id)
     if channel.kind is ChannelKind.DIRECT:
-        raise conflict("A member's own channel is theirs alone")
+        raise wrong_kind("A member's own channel is theirs alone")
     await MemberRepository(uow.session).add_person(
         channel, Principal.member(caller.user_id), seated_by=SeatedBy.JOINED
     )
@@ -192,12 +199,59 @@ async def leave_channel(
     pod_id: UUID, channel_id: UUID, uow: UoWDep, caller: CallerDep
 ) -> None:
     """Leave a channel. Leaving one not joined is nothing; a member's own
-    channel cannot be left."""
+    channel cannot be left, nor a private group by the last person in it (409
+    `LAST_MEMBER`). A group's last owner leaving hands it to whoever has been
+    in it longest."""
     channel = await visible(uow, caller, channel_id)
     if channel.kind is ChannelKind.DIRECT:
-        raise conflict("A member's own channel is theirs alone")
+        raise wrong_kind("A member's own channel is theirs alone")
+    await _keeps_its_people(uow, channel, caller.user_id, change="leave")
     await MemberRepository(uow.session).remove(channel.id, user_id=caller.user_id)
     await uow.commit()
+
+
+async def _keeps_its_people(
+    uow: SqlAlchemyUnitOfWork,
+    channel: Channel,
+    user_id: UUID,
+    *,
+    change: Literal["leave", "remove", "demote"],
+) -> None:
+    """A group keeps an owner, and a private one somebody in it.
+
+    The last person cannot leave a private group, nor be taken out of it --
+    nobody could find it again (``LAST_MEMBER``); a group nobody needs is
+    deleted. Its last owner leaving hands it to whoever has been in it
+    longest; an owner taking out or stepping down the last owner is refused
+    (``LAST_OWNER``) -- they make somebody else an owner first."""
+    if channel.kind is not ChannelKind.GROUP:
+        return
+    members = MemberRepository(uow.session)
+    seat = await members.of_user(channel.id, user_id)
+    if seat is None:
+        return
+    if (
+        change != "demote"
+        and channel.visibility is Visibility.PRIVATE
+        and await members.someone_else(channel.id, user_id) is None
+    ):
+        raise conflict(
+            "Nobody else is in this private group, so nobody could find it "
+            "again: delete it instead",
+            code="LAST_MEMBER",
+        )
+    if seat.role is not MemberRole.OWNER or await members.someone_else(
+        channel.id, user_id, role=MemberRole.OWNER
+    ):
+        return
+    if change != "leave":
+        raise conflict(
+            "This is the group's last owner: make somebody else an owner first",
+            code="LAST_OWNER",
+        )
+    successor = await members.someone_else(channel.id, user_id)
+    if successor is not None:
+        await members.set_role(channel.id, successor, MemberRole.OWNER)
 
 
 @router.patch(
@@ -234,7 +288,7 @@ async def update_my_membership(
     if not await MemberRepository(uow.session).set_prefs(
         channel.id, caller.user_id, values
     ):
-        raise conflict("Join this channel first")
+        raise conflict("Join this channel first", code="NOT_JOINED")
     await uow.commit()
     return await channel_detail(uow, caller, channel)
 
@@ -248,12 +302,22 @@ async def update_my_membership(
 async def mark_read(
     pod_id: UUID, channel_id: UUID, body: ReadRequest, uow: UoWDep, caller: CallerDep
 ) -> ReadResponse:
-    """The reader has seen the channel up to line `seq`: it never goes back,
-    and never past the newest line. Mentions up to it are read too."""
+    """The reader has seen the timeline up to line `seq`: it never goes back,
+    and never past the newest line. Lines of the timeline naming them up to
+    it are read too; replies naming them are not -- with `thread_root_id`,
+    the reader has seen that thread up to `seq`, and what named them there is
+    read, while the timeline's `read_seq` stays where it was."""
     channel = await visible(uow, caller, channel_id)
-    read_seq = await MemberRepository(uow.session).mark_read(
-        channel_id=channel.id, user_id=caller.user_id, seq=body.seq
-    )
+    try:
+        read_seq = await read_to(
+            uow,
+            channel,
+            user_id=caller.user_id,
+            seq=body.seq,
+            thread_root_id=body.thread_root_id,
+        )
+    except NotInChannel:
+        raise missing("Line") from None
     await uow.commit()
     return ReadResponse(read_seq=read_seq)
 
@@ -296,9 +360,11 @@ async def update_member(
             raise unprocessable("A member takes `role`: owner or member")
         if await members.of_user(channel.id, member_id) is None:
             raise missing("Member")
+        if role is not MemberRole.OWNER:
+            await _keeps_its_people(uow, channel, member_id, change="demote")
         await members.set_role(channel.id, member_id, role)
     else:
-        raise conflict("A contact's place in a channel has nothing to change")
+        raise wrong_kind("A contact's place in a channel has nothing to change")
     await uow.commit()
     return await channel_detail(uow, caller, channel)
 
@@ -318,15 +384,20 @@ async def remove_member(
     caller: CallerDep,
 ) -> None:
     """Take somebody out of a group -- its owners' or an editor's -- or leave a
-    channel oneself."""
+    channel oneself. A group keeps an owner, and a private one somebody in it
+    (409 `LAST_OWNER`, `LAST_MEMBER`): its last owner leaving hands it on."""
     channel = await visible(uow, caller, channel_id)
     leaving = kind is SenderKind.MEMBER and member_id == caller.user_id
     if channel.kind is ChannelKind.DIRECT:
-        raise conflict("A member's own channel is theirs alone")
+        raise wrong_kind("A member's own channel is theirs alone")
     if not leaving:
         if channel.kind is not ChannelKind.GROUP:
-            raise conflict("Only a group's members can be changed")
+            raise wrong_kind("Only a group's members can be changed")
         await require_manage(uow, caller, channel)
+    if kind is SenderKind.MEMBER:
+        await _keeps_its_people(
+            uow, channel, member_id, change="leave" if leaving else "remove"
+        )
     removed = await MemberRepository(uow.session).remove(
         channel.id,
         user_id=member_id if kind is SenderKind.MEMBER else None,

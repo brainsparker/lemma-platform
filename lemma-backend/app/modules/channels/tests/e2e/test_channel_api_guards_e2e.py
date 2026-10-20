@@ -55,6 +55,12 @@ async def test_a_replayed_create_shows_the_group_only_to_who_may_still_see_it(
     assert again.status_code == 201, again.text
     assert again.json()["id"] == made.json()["id"]
 
+    # The group keeps an owner: the editor takes it over first.
+    promoted = await pod.client(pod.editor).patch(
+        f"{pod.base}/{made.json()['id']}/members/MEMBER:{pod.editor['id']}",
+        json={"role": "owner"},
+    )
+    assert promoted.status_code == 200, promoted.text
     removed = await pod.client(pod.editor).delete(
         f"{pod.base}/{made.json()['id']}/members/MEMBER:{pod.user['id']}"
     )

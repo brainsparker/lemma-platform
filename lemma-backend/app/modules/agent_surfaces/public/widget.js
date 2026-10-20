@@ -664,6 +664,13 @@
       if (busy) showTyping();
     } else if (frame.type === "fill") {
       onFill(frame);
+    } else if (frame.type === "error") {
+      /* The run failed: what was written stays, and the visitor is told a
+         person will answer. "done" follows. */
+      hideTyping();
+      if (live) live.finish();
+      live = null;
+      if (frame.text) new Reply(false).finish(frame.text);
     } else if (frame.type === "done") {
       if (live) live.finish();
       live = null;

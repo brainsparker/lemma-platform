@@ -60,6 +60,7 @@ __all__ = [
     "reply_address",
     "shared_places_of_pod",
     "shared_places_of_surfaces",
+    "surface_heard_from",
     "surfaces_hearing",
 ]
 
@@ -224,6 +225,12 @@ async def place_by_request(
     return await SourceRepository(uow.session).by_request_on_surfaces(
         request_id=request_id, surface_ids=surface_ids, platform=platform
     )
+
+
+async def surface_heard_from(uow: SqlAlchemyUnitOfWork, surface_id: UUID) -> bool:
+    """Whether anybody has written to this surface's bot: what it receives
+    arrives."""
+    return await AccountRepository(uow.session).surface_heard_from(surface_id)
 
 
 async def surfaces_hearing(

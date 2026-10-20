@@ -45,6 +45,26 @@ def _parse_response(
 
         return response_200
 
+    if response.status_code == 400:
+        response_400 = ErrorResponse.from_dict(response.json())
+
+        return response_400
+
+    if response.status_code == 403:
+        response_403 = ErrorResponse.from_dict(response.json())
+
+        return response_403
+
+    if response.status_code == 404:
+        response_404 = ErrorResponse.from_dict(response.json())
+
+        return response_404
+
+    if response.status_code == 409:
+        response_409 = ErrorResponse.from_dict(response.json())
+
+        return response_409
+
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
 
@@ -76,8 +96,11 @@ def sync_detailed(
 ) -> Response[ErrorResponse | ReadResponse]:
     """Mark Read
 
-     The reader has seen the channel up to line `seq`: it never goes back,
-    and never past the newest line. Mentions up to it are read too.
+     The reader has seen the timeline up to line `seq`: it never goes back,
+    and never past the newest line. Lines of the timeline naming them up to
+    it are read too; replies naming them are not -- with `thread_root_id`,
+    the reader has seen that thread up to `seq`, and what named them there is
+    read, while the timeline's `read_seq` stays where it was.
 
     Args:
         pod_id (UUID):
@@ -114,8 +137,11 @@ def sync(
 ) -> ErrorResponse | ReadResponse | None:
     """Mark Read
 
-     The reader has seen the channel up to line `seq`: it never goes back,
-    and never past the newest line. Mentions up to it are read too.
+     The reader has seen the timeline up to line `seq`: it never goes back,
+    and never past the newest line. Lines of the timeline naming them up to
+    it are read too; replies naming them are not -- with `thread_root_id`,
+    the reader has seen that thread up to `seq`, and what named them there is
+    read, while the timeline's `read_seq` stays where it was.
 
     Args:
         pod_id (UUID):
@@ -147,8 +173,11 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | ReadResponse]:
     """Mark Read
 
-     The reader has seen the channel up to line `seq`: it never goes back,
-    and never past the newest line. Mentions up to it are read too.
+     The reader has seen the timeline up to line `seq`: it never goes back,
+    and never past the newest line. Lines of the timeline naming them up to
+    it are read too; replies naming them are not -- with `thread_root_id`,
+    the reader has seen that thread up to `seq`, and what named them there is
+    read, while the timeline's `read_seq` stays where it was.
 
     Args:
         pod_id (UUID):
@@ -183,8 +212,11 @@ async def asyncio(
 ) -> ErrorResponse | ReadResponse | None:
     """Mark Read
 
-     The reader has seen the channel up to line `seq`: it never goes back,
-    and never past the newest line. Mentions up to it are read too.
+     The reader has seen the timeline up to line `seq`: it never goes back,
+    and never past the newest line. Lines of the timeline naming them up to
+    it are read too; replies naming them are not -- with `thread_root_id`,
+    the reader has seen that thread up to `seq`, and what named them there is
+    read, while the timeline's `read_seq` stays where it was.
 
     Args:
         pod_id (UUID):

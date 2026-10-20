@@ -20,6 +20,7 @@ import pytest_asyncio
 import httpx
 import uvicorn
 
+from app.core.server_limits import WS_MAX_BYTES
 from app.modules.datastore.config import datastore_settings
 from app.modules.function.config import function_settings
 from app.core.config import settings
@@ -455,6 +456,7 @@ async def backend_server(
         access_log=False,
         lifespan="on",
         ws="websockets-sansio",
+        ws_max_size=WS_MAX_BYTES,
     )
     server = uvicorn.Server(config)
     server_task = asyncio.create_task(server.serve())

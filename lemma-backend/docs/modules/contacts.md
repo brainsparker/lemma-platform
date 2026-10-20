@@ -37,7 +37,10 @@ the merge moves it too.
 
 - `GET /pods/{pod_id}/contacts` and `GET /pods/{pod_id}/contacts/{id}`: takes
   `conversation.read`. Pages with an opaque `cursor` / `next_cursor`
-  (`created_at` and id).
+  (`created_at` and id); `q` keeps those whose name or a handle holds it (a
+  number as typed, spaces and all). Each contact has a `label` -- their name,
+  else their email address or number -- and each handle says whether it
+  `opted_out`.
 - `PATCH /pods/{pod_id}/contacts/{id}`: rename; takes `pod.update`.
 - `DELETE /pods/{pod_id}/contacts/{id}`: forget a contact; takes
   `pod.member.manage`. A merged contact's id forgets the person it became, as

@@ -128,6 +128,7 @@ _NAME_TO_MODULE = {
     'ChannelMemberListResponse': 'channel_member_list_response',
     'ChannelMemberResponse': 'channel_member_response',
     'ChannelMessageResponse': 'channel_message_response',
+    'ChannelMessageResponseVisibility': 'channel_message_response_visibility',
     'ChannelMessagesResponse': 'channel_messages_response',
     'ChannelPostRequest': 'channel_post_request',
     'ChannelRef': 'channel_ref',
@@ -372,6 +373,7 @@ _NAME_TO_MODULE = {
     'MessageResponseSchema': 'message_response_schema',
     'MyMembershipResponse': 'my_membership_response',
     'MyMembershipUpdate': 'my_membership_update',
+    'MyMembershipUpdateNotifyViaType0Item': 'my_membership_update_notify_via_type_0_item',
     'MyUsageLimitsResponse': 'my_usage_limits_response',
     'MyUsageLimitsResponsePlanTypeType0': 'my_usage_limits_response_plan_type_type_0',
     'NavigationOrganizationResponse': 'navigation_organization_response',
@@ -819,6 +821,7 @@ if TYPE_CHECKING:
     from .channel_member_list_response import ChannelMemberListResponse
     from .channel_member_response import ChannelMemberResponse
     from .channel_message_response import ChannelMessageResponse
+    from .channel_message_response_visibility import ChannelMessageResponseVisibility
     from .channel_messages_response import ChannelMessagesResponse
     from .channel_post_request import ChannelPostRequest
     from .channel_ref import ChannelRef
@@ -1063,6 +1066,7 @@ if TYPE_CHECKING:
     from .message_response_schema import MessageResponseSchema
     from .my_membership_response import MyMembershipResponse
     from .my_membership_update import MyMembershipUpdate
+    from .my_membership_update_notify_via_type_0_item import MyMembershipUpdateNotifyViaType0Item
     from .my_usage_limits_response import MyUsageLimitsResponse
     from .my_usage_limits_response_plan_type_type_0 import MyUsageLimitsResponsePlanTypeType0
     from .navigation_organization_response import NavigationOrganizationResponse
@@ -1523,6 +1527,7 @@ __all__ = [
     'ChannelMemberListResponse',
     'ChannelMemberResponse',
     'ChannelMessageResponse',
+    'ChannelMessageResponseVisibility',
     'ChannelMessagesResponse',
     'ChannelPostRequest',
     'ChannelRef',
@@ -1767,6 +1772,7 @@ __all__ = [
     'MessageResponseSchema',
     'MyMembershipResponse',
     'MyMembershipUpdate',
+    'MyMembershipUpdateNotifyViaType0Item',
     'MyUsageLimitsResponse',
     'MyUsageLimitsResponsePlanTypeType0',
     'NavigationOrganizationResponse',

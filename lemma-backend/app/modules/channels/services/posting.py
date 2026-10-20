@@ -164,12 +164,23 @@ class Timeline:
         )
 
     async def _read_own(self, channel: Channel, message: ChannelMessage) -> None:
-        """A member has read their own line."""
+        """A member has read where they wrote, up to their own line: the
+        timeline, or -- for a reply -- its thread, and never the timeline:
+        replying is no sign of what else they saw."""
         speaker = _seated_speaker(channel, message)
-        if speaker is not None and speaker.user_id is not None:
-            await self.members.mark_read(
-                channel_id=channel.id, user_id=speaker.user_id, seq=message.seq
+        if speaker is None or speaker.user_id is None:
+            return
+        if message.thread_root_id is not None:
+            await self.members.mark_thread_read(
+                channel_id=channel.id,
+                user_id=speaker.user_id,
+                root_id=message.thread_root_id,
+                seq=message.seq,
             )
+            return
+        await self.members.mark_read(
+            channel_id=channel.id, user_id=speaker.user_id, seq=message.seq
+        )
 
     async def _name(
         self, channel: Channel, message: ChannelMessage, post: Post
@@ -195,15 +206,15 @@ class Timeline:
         """The agents that answer a member's line written in Lemma -- wherever
         it is carried: those it names, those in the channel that answer every
         line, and -- in a member's own channel with none -- the pod's agent.
-        A line heard on a platform is answered there, by ``agent_surfaces``."""
+        A line heard on a platform is answered there, by ``agent_surfaces``.
+        A members' note is answered only by the agents it names -- as a note
+        -- never by one answering every line: notes are members talking."""
         sender = message.sender
-        if (
-            sender.kind is not SenderKind.MEMBER
-            or message.heard_outside
-            or message.members_only
-        ):
+        if sender.kind is not SenderKind.MEMBER or message.heard_outside:
             return []
         answering = list(dict.fromkeys(post.mentioned_agents))
+        if message.members_only:
+            return answering
         for member in await self.members.agents(channel.id):
             if (
                 member.answers is AgentAnswers.EVERY_LINE

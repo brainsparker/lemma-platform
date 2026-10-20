@@ -19,6 +19,7 @@ import { channelTitle, newestSeq, personName, platformsOf, whoAnswers, type Chan
 import { linesKey, refreshLists, useChannel, useLines } from "./queries";
 import { readTarget, unseenThreadMention, usePageShown } from "./read-state";
 import { platformName } from "./sources";
+import { MentionablesContext } from "./mention-picker";
 import { ThreadPanel } from "./thread-panel";
 import { Timeline } from "./timeline";
 import { useAbilities } from "./use-abilities";
@@ -76,6 +77,9 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
     const agents = useQuery({ queryKey: ["agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 5 * 60_000 });
     const [side, setSide] = useState<"about" | "thread" | null>(null);
     const [threadRoot, setThreadRoot] = useState<string | null>(null);
+    /* Asked each time the reader opens a thread to reply in it: their next
+       words go there, not into the channel's box. */
+    const [replyAsked, setReplyAsked] = useState(0);
     const [pin, setPin] = useState(0);
     const [highlight, setHighlight] = useState<LineFocus | null>(null);
     /* Where the unread lines began when it was opened: the "New" mark
@@ -90,7 +94,7 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
             const asked = takeFocus(channel.id);
             if (!asked) return;
             setHighlight(asked);
-            if (asked.threadRootId) { setThreadRoot(asked.threadRootId); setSide("thread"); }
+            if (asked.threadRootId) { setThreadRoot(asked.threadRootId); setSide("thread"); setReplyAsked(0); }
         };
         if (visible) take();
         return onFocusAsked((id) => { if (id === channel.id) take(); });
@@ -137,6 +141,15 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
         markRead(target).catch(() => { marked.current = was; });
     }, [visible, shown, progress, timeline.isPending, timeline.lines, channel.lastSeq, channel.me.readSeq, markRead, heldBack, inbox.isPending]);
 
+    /* A reply naming the reader is read in its thread, not the timeline:
+       while that thread is open on screen, it is read to the newest line. */
+    const openThreadNamesMe = side === "thread" && threadRoot !== null
+        && (inbox.data?.mentioned ?? []).some((one) => one.channelId === channel.id && one.threadRootId === threadRoot);
+    useEffect(() => {
+        if (!visible || !shown || !openThreadNamesMe || !threadRoot) return;
+        markRead(channel.lastSeq, threadRoot).catch(() => { /* read again when the inbox next says so */ });
+    }, [visible, shown, openThreadNamesMe, threadRoot, channel.lastSeq, markRead]);
+
     const people = useMemo(
         () => mentionables(agents.data ?? [], channel.members.map((one) => one.person), me, channelReaders(channel, pod.members)),
         [agents.data, channel, pod.members, me],
@@ -171,6 +184,8 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
     }, [live.answering, agentName]);
 
     return (
+        /* Who the box a line is changed in can name: as the composer's. */
+        <MentionablesContext.Provider value={people}>
         <div className="cpage" data-side={side ?? undefined}>
             <div className="cpage__main">
                 <header className="cpage__head">
@@ -222,7 +237,7 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
                     loadingOlder={timeline.isFetchingNextPage}
                     onOlder={() => void timeline.fetchNextPage()}
                     onRetry={() => void timeline.refetch()}
-                    onThread={(line) => { setThreadRoot(line.id); setSide("thread"); }}
+                    onThread={(line) => { setThreadRoot(line.id); setSide("thread"); setReplyAsked((was) => was + 1); }}
                     pin={pin}
                     visible={visible}
                     mayWrite={may.write}
@@ -259,11 +274,13 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
                     agentName={agentName}
                     highlight={highlight?.threadRootId ? highlight.lineId : null}
                     typing={threadTyping}
+                    replyAsked={replyAsked}
                     onTyping={live.typed}
                     onClose={() => { setSide(null); setThreadRoot(null); }}
                 />
             )}
             {side === "about" && <ChannelPanel pod={pod} channel={channel} may={may} onClose={() => setSide(null)} onLeft={onOpenChannels} />}
         </div>
+        </MentionablesContext.Provider>
     );
 }

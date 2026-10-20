@@ -1,9 +1,11 @@
 import type { GeneratedClientAdapter } from "../generated.js";
+import type { HttpClient } from "../http.js";
 import type { AgentAnswers } from "../openapi_client/models/AgentAnswers.js";
 import type { AgentSeat } from "../openapi_client/models/AgentSeat.js";
 import type { ChannelCreateRequest } from "../openapi_client/models/ChannelCreateRequest.js";
 import type { ChannelEditRequest } from "../openapi_client/models/ChannelEditRequest.js";
 import type { ChannelKind } from "../openapi_client/models/ChannelKind.js";
+import type { ChannelMessageResponse } from "../openapi_client/models/ChannelMessageResponse.js";
 import type { ChannelPostRequest } from "../openapi_client/models/ChannelPostRequest.js";
 import type { ChannelUpdateRequest } from "../openapi_client/models/ChannelUpdateRequest.js";
 import type { ContactStatus } from "../openapi_client/models/ContactStatus.js";
@@ -14,6 +16,13 @@ import type { Visibility } from "../openapi_client/models/Visibility.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 import { ChannelsService } from "../openapi_client/services/ChannelsService.js";
 import { ChannelSourcesNamespace } from "./channel-sources.js";
+
+/** A change to one of the caller's own lines: absent is unchanged, `parts:
+ *  null` clears them. */
+export type ChannelLineEdit = {
+  text?: string | null;
+  parts?: ChannelPostRequest["parts"] | null;
+};
 
 /** An agent seated in a group: by id (answers when named), or with when it answers. */
 export type ChannelAgentSeat = string | { id: string; answers?: AgentAnswers | `${AgentAnswers}` };
@@ -45,7 +54,10 @@ export class ChannelsNamespace {
    *  a group (a WhatsApp group, a Telegram link). */
   readonly sources: ChannelSourcesNamespace;
 
-  constructor(private readonly client: GeneratedClientAdapter) {
+  constructor(
+    private readonly client: GeneratedClientAdapter,
+    private readonly http: HttpClient,
+  ) {
     this.sources = new ChannelSourcesNamespace(client);
   }
 
@@ -231,10 +243,12 @@ export class ChannelsNamespace {
     );
   }
 
-  /** The caller has seen the channel up to line `seq`. It never goes back, and
-   *  never past the newest line. */
-  markRead(podId: string, channelId: string, seq: number) {
-    return this.client.request(() => ChannelsService.channelRead(podId, channelId, { seq }));
+  /** The caller has seen the channel's timeline up to line `seq` -- or, with
+   *  `threadRootId`, that thread: a mention is read where it was said. It never
+   *  goes back, and never past the newest line. */
+  markRead(podId: string, channelId: string, seq: number, threadRootId?: string | null) {
+    const body = { seq, ...(threadRootId ? { thread_root_id: threadRootId } : {}) };
+    return this.client.request(() => ChannelsService.channelRead(podId, channelId, body));
   }
 
   // -- lines ------------------------------------------------------------------
@@ -293,11 +307,13 @@ export class ChannelsNamespace {
   }
 
   /** Change what one of the caller's own lines says: absent is unchanged,
-   *  `parts: null` clears them. */
-  edit(podId: string, channelId: string, messageId: string, body: ChannelEditRequest | string) {
+   *  `parts: null` clears them. Parts sent replace the line's parts, and
+   *  name whoever their mentions name, as a post does. */
+  edit(podId: string, channelId: string, messageId: string, body: ChannelLineEdit | string) {
     const edit = typeof body === "string" ? { text: body } : body;
     return this.client.request(() =>
-      ChannelsService.channelMessageUpdate(podId, channelId, messageId, edit),
+      // The generated type flattens `parts` to `null`: the API takes a list.
+      ChannelsService.channelMessageUpdate(podId, channelId, messageId, edit as ChannelEditRequest),
     );
   }
 
@@ -316,6 +332,15 @@ export class ChannelsNamespace {
     );
   }
 
+  /** Share an agent's answer made with the caller's own access with
+   *  everybody in the channel (`can_share` on the line). Until then only the
+   *  caller reads it; sharing it again changes nothing. */
+  share(podId: string, channelId: string, messageId: string) {
+    return this.client.request(() =>
+      ChannelsService.channelMessageShare(podId, channelId, messageId),
+    );
+  }
+
   /** Where a line went outside Lemma, and what became of each send. */
   deliveries(podId: string, channelId: string, messageId: string) {
     return this.client.request(() =>
@@ -324,11 +349,12 @@ export class ChannelsNamespace {
   }
 
   /** A file a line shares (a `file` part's `file_id`), read as the line's
-   *  writer reads it. */
-  file(podId: string, channelId: string, messageId: string, fileId: string) {
-    return this.client.request(() =>
-      ChannelsService.channelMessageFile(podId, channelId, messageId, fileId),
-    );
+   *  writer reads it: the bytes, as a `Blob` of the file's content type. */
+  file(podId: string, channelId: string, messageId: string, fileId: string): Promise<Blob> {
+    const path = [podId, "channels", channelId, "messages", messageId, "files", fileId]
+      .map(encodeURIComponent)
+      .join("/");
+    return this.http.requestBytes("GET", `/pods/${path}`);
   }
 
   /** Try a failed or given-up send again, now. */

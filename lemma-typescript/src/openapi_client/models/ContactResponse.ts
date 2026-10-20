@@ -16,4 +16,8 @@ export type ContactResponse = {
      * Known only by the browser they wrote from: a web visitor nobody has vouched for yet.
      */
     is_anonymous?: boolean;
+    /**
+     * What to call them: their name, else the handle they are known by (an email address, a number), else that they are a web visitor.
+     */
+    label: string;
 };

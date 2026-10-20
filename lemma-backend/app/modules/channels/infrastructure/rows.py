@@ -81,6 +81,7 @@ def channel_entity(row: ChannelModel) -> Channel:
         agents_answer=row.agents_answer,
         hand_back_after_hours=row.hand_back_after_hours,
         last_seq=row.last_seq,
+        replies=row.replies,
         last_line_id=row.last_line_id,
         last_line_at=row.last_line_at,
         **(_case_fields(case) if case is not None else {}),
@@ -161,6 +162,29 @@ def principal_of(user_id: UUID | None, contact_id: UUID | None) -> Principal | N
     return None
 
 
+def sender_values(sender: Sender) -> dict[str, object]:
+    """A sender as the columns of its line."""
+    behalf = sender.on_behalf_of
+    return {
+        "sender_kind": sender.kind.value,
+        "sender_user_id": sender.user_id,
+        "sender_contact_id": sender.contact_id,
+        "sender_agent_id": sender.agent_id,
+        "on_behalf_user_id": behalf.user_id if behalf else None,
+        "on_behalf_contact_id": behalf.contact_id if behalf else None,
+        "sender_name": sender.display_name[:255] if sender.display_name else None,
+    }
+
+
+def nameless(row: ChannelMessageModel) -> bool:
+    """Said by somebody nobody could name: no member, no contact."""
+    return (
+        row.sender_kind == SenderKind.CONTACT.value
+        and row.sender_contact_id is None
+        and row.sender_user_id is None
+    )
+
+
 def sender_of(row: ChannelMessageModel) -> Sender:
     return Sender(
         kind=SenderKind(row.sender_kind),
@@ -235,6 +259,8 @@ def message_entity(
         thread_root_id=row.thread_root_id,
         edited_at=row.edited_at,
         deleted_at=row.deleted_at,
+        shared_at=row.shared_at,
+        deleted_by_user_id=row.deleted_by_user_id,
         question=question_entity(question) if question is not None else None,
         reply_count=reply_count,
         last_reply_at=last_reply_at,

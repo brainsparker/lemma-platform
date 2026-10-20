@@ -290,7 +290,6 @@ class ChannelsHub:
                     on_release=self._release_channel,
                 )
                 connection.subscriptions[subscription_id] = sub
-                connection.offer_subscribed(subscription_id, since or head.cursor)
                 await self._send_gap(uow, sub, channel, head, since)
                 if sub.active:
                     # Nothing awaited from here: a delta relayed now reaches
@@ -311,16 +310,15 @@ class ChannelsHub:
         head: Head,
         since: str | None,
     ) -> None:
+        """Say it is subscribed -- at ``since``, where a client dropping before
+        its gap resumes, or at the head it must resync to -- then the gap."""
         if since is None:
+            sub.connection.offer_subscribed(sub.id, head.cursor)
             return
-        gap = await gap_since(
-            uow,
-            sub,
-            channel,
-            head,
-            since,
-            limit=self._settings.live_max_changes_per_batch,
-        )
+        limit = self._settings.live_max_changes_per_batch
+        gap = await gap_since(uow, sub, channel, head, since, limit=limit)
+        resync = isinstance(gap, ResyncReason)
+        sub.connection.offer_subscribed(sub.id, head.cursor if resync else since)
         if isinstance(gap, ResyncReason):
             self._resync(sub, gap)
         else:
@@ -341,9 +339,10 @@ class ChannelsHub:
                     on_release=self._release_inbox,
                 )
                 connection.subscriptions[subscription_id] = sub
+                if not connection.closed:  # A failed join is an error, not subscribed.
+                    await self.inbox.join(uow, sub)
                 connection.offer_subscribed(subscription_id, None)
                 if not connection.closed:
-                    await self.inbox.join(uow, sub)
                     # Their answers are followed from now, so the channel
                     # they open next is sent each whole.
                     self._answers.follow_for(sub.user_id)

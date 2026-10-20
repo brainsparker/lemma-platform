@@ -27,6 +27,7 @@ from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.api.access import (
+    ERRORS,
     Caller,
     CallerDep,
     conflict,
@@ -37,6 +38,7 @@ from app.modules.channels.api.access import (
     require_manage,
     unprocessable,
     visible,
+    wrong_kind,
 )
 from app.modules.channels.api.schemas import (
     CONTACT_FIELDS,
@@ -46,6 +48,7 @@ from app.modules.channels.api.schemas import (
     ChannelDetailResponse,
     ChannelListResponse,
     ChannelUpdateRequest,
+    UserText,
 )
 from app.modules.channels.api.views import channel_detail, channel_rows
 from app.modules.channels.contracts.source_settings import (
@@ -72,7 +75,9 @@ from app.modules.channels.infrastructure.source_repository import SourceReposito
 from app.modules.contacts.contracts import contact_by_id
 from app.modules.pod.contracts.members import pod_member_holds, pod_member_id
 
-router = APIRouter(prefix="/pods/{pod_id}/channels", tags=["Channels"])
+router = APIRouter(
+    prefix="/pods/{pod_id}/channels", tags=["Channels"], responses=ERRORS
+)
 
 #: Namespace for channel ids derived from an ``Idempotency-Key``. Fixed for
 #: good: a change would let a retry spanning a deploy make a second channel.
@@ -113,11 +118,15 @@ async def list_channels(
             "contact's own channel are private."
         ),
     ),
-    q: str | None = Query(
+    q: UserText | None = Query(
         default=None,
         min_length=1,
         max_length=200,
-        description="Only channels whose title holds these words, in any case.",
+        description=(
+            "Only channels named by every one of these words, in any order and "
+            "case: by title, or -- a member's or a contact's own channel -- by "
+            "whose it is."
+        ),
     ),
     archived: bool = Query(default=False),
     contact_id: UUID | None = Query(
@@ -254,7 +263,8 @@ async def create_channel(
 ) -> ChannelDetailResponse:
     """A group made in Lemma: public unless asked otherwise, with its maker as
     its owner and the members and agents named in it. The same
-    `Idempotency-Key` from the same member returns the group it made."""
+    `Idempotency-Key` from the same member returns the group it made; sent
+    with another title, topic or visibility, it is refused (422)."""
     channels = ChannelRepository(uow.session)
     title, topic = body.title, body.topic or None
     if idempotency_key is None:
@@ -286,6 +296,15 @@ async def create_channel(
             # A replay shows the group only to whoever may still see it: made
             # private since, or they were taken out of it, it is not theirs.
             channel = await visible(uow, caller, channel.id)
+            if (channel.title, channel.topic, channel.visibility) != (
+                title,
+                topic,
+                body.visibility,
+            ):
+                raise unprocessable(
+                    "That Idempotency-Key was used for another group; "
+                    "send a new key for this one"
+                )
     if made:
         await seat_people(uow, channel, body.members, added_by=caller.user_id)
         await seat_agents(
@@ -457,7 +476,7 @@ def _check_fields(
     }[channel.kind]
     wrong = named - allowed
     if wrong:
-        raise conflict(
+        raise wrong_kind(
             f"A {channel.kind.value} channel has no {', '.join(sorted(wrong))} to change"
         )
     cleared = {field for field in named & NOT_CLEARABLE if getattr(body, field) is None}
@@ -511,6 +530,13 @@ async def _change_contact(
         ):
             raise unprocessable("Only a member who may see contacts can be assigned")
         await cases.assign(channel.id, assignee, by=caller.user_id)
+        # Seated, so the contact's lines reach them: unread, inbox and push.
+        await MemberRepository(uow.session).add_person(
+            channel,
+            Principal.member(assignee),
+            seated_by=SeatedBy.JOINED if assignee == caller.user_id else SeatedBy.ADDED,
+            added_by_user_id=caller.user_id,
+        )
     elif handing_back or "assignee" in named:
         await cases.assign(channel.id, None, by=caller.user_id)
     if "status" in named:
@@ -532,9 +558,12 @@ async def delete_channel(
     admin's. A channel an outside place feeds is archived instead."""
     channel = await visible(uow, caller, channel_id)
     if channel.kind is not ChannelKind.GROUP:
-        raise conflict("Only a group can be deleted")
+        raise wrong_kind("Only a group can be deleted")
     if await SourceRepository(uow.session).of_channel(channel.id):
-        raise conflict("An outside place feeds this channel: archive it instead")
+        raise conflict(
+            "An outside place feeds this channel: archive it instead",
+            code="CHANNEL_HAS_SOURCES",
+        )
     await require_manage(uow, caller, channel)
     await ChannelRepository(uow.session).delete(channel.id)
     await uow.commit()

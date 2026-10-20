@@ -48,10 +48,20 @@ def _parse_response(
 
         return response_201
 
+    if response.status_code == 404:
+        response_404 = ErrorResponse.from_dict(response.json())
+
+        return response_404
+
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
 
         return response_422
+
+    if response.status_code == 429:
+        response_429 = ErrorResponse.from_dict(response.json())
+
+        return response_429
 
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
@@ -81,7 +91,9 @@ def sync_detailed(
     """Send Notice
 
      Tell another member of the pod something, in their own channel. The
-    same `Idempotency-Key` from the same member is the same notice.
+    same `Idempotency-Key` from the same member is the same notice; sent with
+    other text, it is refused (422). A member sends at most
+    `NOTICES_PER_MINUTE` a minute (429).
 
     Args:
         pod_id (UUID):
@@ -122,7 +134,9 @@ def sync(
     """Send Notice
 
      Tell another member of the pod something, in their own channel. The
-    same `Idempotency-Key` from the same member is the same notice.
+    same `Idempotency-Key` from the same member is the same notice; sent with
+    other text, it is refused (422). A member sends at most
+    `NOTICES_PER_MINUTE` a minute (429).
 
     Args:
         pod_id (UUID):
@@ -158,7 +172,9 @@ async def asyncio_detailed(
     """Send Notice
 
      Tell another member of the pod something, in their own channel. The
-    same `Idempotency-Key` from the same member is the same notice.
+    same `Idempotency-Key` from the same member is the same notice; sent with
+    other text, it is refused (422). A member sends at most
+    `NOTICES_PER_MINUTE` a minute (429).
 
     Args:
         pod_id (UUID):
@@ -197,7 +213,9 @@ async def asyncio(
     """Send Notice
 
      Tell another member of the pod something, in their own channel. The
-    same `Idempotency-Key` from the same member is the same notice.
+    same `Idempotency-Key` from the same member is the same notice; sent with
+    other text, it is refused (422). A member sends at most
+    `NOTICES_PER_MINUTE` a minute (429).
 
     Args:
         pod_id (UUID):

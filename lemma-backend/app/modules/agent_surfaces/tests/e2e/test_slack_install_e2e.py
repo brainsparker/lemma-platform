@@ -1,180 +1,485 @@
 """Adding Lemma to Slack from "Add to Slack", end to end.
 
-Sign in, Slack's consent, and the workspace adopts itself: Lemma's app becomes
-its manager and says hello with the teammate to add first.
+Through the real install route, the real connect-request callback (only the
+token exchange with Slack is faked) and the real work table: the grant is
+announced as ``ConnectorAccountConnected``, and ``surface.slack_workspace_
+installed`` adopts the workspace only for a grant "Add to Slack" started and
+its starter finished in their own browser. Adoption is the manager binding,
+which owes the installer one welcome.
+
+Each test has a workspace of its own: a binding is one per workspace.
 """
 
 from __future__ import annotations
 
-from urllib.parse import parse_qs, urlsplit
-from uuid import UUID, uuid4
+import asyncio
+from typing import Any
+from urllib.parse import parse_qs, urlencode, urlsplit
+from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent_surfaces.infrastructure.slack_manager_models import (
-    SlackManagerInstallModel,
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import facts
+from app.modules.agent_surfaces.domain.slack_manager import (
+    SLACK_WORKSPACE_INSTALL_PURPOSE,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (  # noqa: E501
+    SlackManagerRepository,
 )
 from app.modules.agent_surfaces.platforms.slack import manager_blocks as views
 from app.modules.agent_surfaces.services.slack_install import adopt_workspace
-from app.modules.agent_surfaces.tests.e2e.helpers import E2E_SLACK_APP_ID
-from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
-from app.modules.agent_surfaces.tests.e2e.test_slack_manager_e2e import (
-    TEAM,
-    _bind,
-    _manager_account,
-    _slack_accepts_an_orgs_own_app,
-    _uow_factory,
+from app.modules.agent_surfaces.tests.e2e.helpers import (
+    E2E_SLACK_APP_ID,
+    _ensure_connector,
 )
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+    clean_surface_work,  # noqa: F401  (fixture)
+    drain,
+    scalar,
+)
+from app.modules.agent_surfaces.tests.e2e.test_slack_manager_e2e import (
+    _granted,
+    _manager,
+    _member,
+    _registry,
+    _slack_account,
+    _Workspace,
+    lemmas_app,  # noqa: F401  (fixture)
+)
+from app.modules.connectors.contracts.facts import ConnectorAccountConnected
+from app.modules.connectors.domain.account import OAuthCredentials
+from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+from app.modules.connectors.infrastructure.models.connect_request import (
+    ConnectRequest,
+)
+from app.modules.connectors.services.auth.lemma_auth_provider import (
+    LemmaAuthProvider,
+)
+from app.modules.connectors.tests.support.fake_auth_provider import FakeAuthProvider
+from app.modules.test_support.e2e_base import _create_org, _sign_up_verified_user
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.drives_work,
+    pytest.mark.usefixtures("clean_surface_work", "lemmas_app"),
+]
 
-
-@pytest.fixture(autouse=True)
-def lemma_app(monkeypatch):
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.config.surface_settings.slack_app_id",
-        E2E_SLACK_APP_ID,
-    )
-
-
-async def _adopt(fixed_test_user, account) -> bool:
-    async with _uow_factory()() as uow:
-        return await adopt_workspace(
-            uow,
-            user_id=UUID(fixed_test_user["id"]),
-            organization_id=account.organization_id,
-            account_id=account.id,
-        )
-
-
-async def _organizations_of(db_session: AsyncSession, fixed_test_user) -> set:
-    rows = await db_session.execute(
-        text("SELECT organization_id FROM organization_members WHERE user_id = :user"),
-        {"user": UUID(fixed_test_user["id"])},
-    )
-    return {row[0] for row in rows}
-
-
-async def test_lemmas_grant_for_an_unheld_workspace_adopts_it_and_says_hello(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
-):
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-
-    assert await _adopt(fixed_test_user, account)
-
-    install = await db_session.scalar(
-        select(SlackManagerInstallModel).where(SlackManagerInstallModel.team_id == TEAM)
-    )
-    assert install is not None and install.organization_id == account.organization_id
-    welcome = await wait_for_messages(message_store, "SLACK", min_count=1)
-    assert "Lemma is in Acme" in welcome[-1]["text"]
-    # The one thing worth doing next, as a button: add the first teammate.
-    assert views.ADD_ACTION_ID in str(welcome[-1].get("blocks"))
-
-
-async def test_a_second_grant_for_the_same_workspace_says_nothing_more(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
-):
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    assert await _adopt(fixed_test_user, account)
-    before = len(message_store.get_all("SLACK"))
-
-    assert not await _adopt(fixed_test_user, account)
-    assert len(message_store.get_all("SLACK")) == before
+CALLBACK = "/connectors/connect-requests/oauth/callback"
+INSTALLED_KIND = "surface.slack_workspace_installed"
+#: Lemma's Slack app as the deployment configures it: the catalog asks for the
+#: bot's scopes and, as ``user_scope``, the connecting person's own.
+INSTALLABLE_SLACK: dict[str, object] = {
+    "kind": "http",
+    "auth_scheme": "OAUTH2",
+    "supports_org_custom_oauth": True,
+    "oauth2_defaults": {
+        "authorization_url": "https://slack.com/oauth/v2/authorize",
+        "token_url": "https://slack.com/api/oauth.v2.access",
+        "default_scopes": ["chat:write,im:write"],
+        "extra_params": {"user_scope": "im:history,search:read"},
+    },
+    "system_oauth": {
+        "client_id_env": "SLACK_CLIENT_ID",
+        "client_secret_env": "SLACK_CLIENT_SECRET",
+    },
+}
 
 
-async def test_a_workspace_another_organization_holds_is_not_adopted(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
-):
-    from app.modules.identity.infrastructure.models.organization_models import (
-        Organization,
-    )
-
-    other = Organization(
-        name="Other", slug=f"other-{uuid4().hex[:8]}", join_policy="INVITE_ONLY"
-    )
-    db_session.add(other)
-    await db_session.flush()
-    db_session.add(
-        SlackManagerInstallModel(
-            team_id=TEAM,
-            organization_id=other.id,
-            account_id=(
-                await _manager_account(db_session, fixed_test_user, fake_slack)
-            ).id,
-            bot_user_id="U-ELSEWHERE",
-        )
-    )
-    await db_session.commit()
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-
-    assert not await _adopt(fixed_test_user, account)
-    install = await db_session.scalar(
-        select(SlackManagerInstallModel).where(SlackManagerInstallModel.team_id == TEAM)
-    )
-    assert install is not None and install.organization_id == other.id
-    # Not silent: the app that was installed says why it is not staying.
-    told = await wait_for_messages(message_store, "SLACK", min_count=1)
-    assert "Lemma couldn't join this workspace" in told[-1]["text"]
-    assert "another Lemma organization" in told[-1]["text"]
-
-
-async def test_binding_from_the_web_says_hello_too(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
-):
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-
-    welcome = await wait_for_messages(message_store, "SLACK", min_count=1)
-    assert "Lemma is in Acme" in welcome[-1]["text"]
-
-
-async def test_add_to_slack_answers_with_slacks_consent_for_lemmas_app(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    monkeypatch,
-):
-    """Signed in, with an organization already: straight to Slack's consent,
-    against the organization's install of Lemma's own app."""
+@pytest.fixture
+async def slack_set_up(db_session: AsyncSession, monkeypatch):
+    """This server has Lemma's own Slack app: a client id and secret to send
+    people to Slack's consent with. Restored after, for the next test."""
     monkeypatch.setenv("SLACK_CLIENT_ID", "1234.lemma")
     monkeypatch.setenv("SLACK_CLIENT_SECRET", "lemma-secret")
-    await _manager_account(db_session, fixed_test_user, fake_slack)  # the connector row
-    memberships = await _organizations_of(db_session, fixed_test_user)
-    restore = await _slack_accepts_an_orgs_own_app(db_session)
-    try:
-        response = await authenticated_client.post("/surface-setup/slack/install")
-    finally:
-        await restore()
+    connector = await _ensure_connector(db_session, "slack")
+    before = connector.kinds
+    connector.kinds = [INSTALLABLE_SLACK]
+    await db_session.commit()
+    yield
+    connector.kinds = before
+    await db_session.commit()
+
+
+def _slack_answers(monkeypatch, fake_slack: Any, workspace: _Workspace) -> None:
+    """Slack's answer to the token exchange: Lemma's app installed in this
+    workspace, by this Slack user. Everything else is the real callback."""
+    answer = OAuthCredentials.model_validate(
+        {
+            "access_token": f"xoxb-{workspace.manager_bot.lower()}",
+            "api_base_url": fake_slack.base_url,
+            "raw_response": {
+                "app_id": E2E_SLACK_APP_ID,
+                "bot_user_id": workspace.manager_bot,
+                "team": {"id": workspace.team, "name": "Acme"},
+                "authed_user": {"id": workspace.installer},
+                "api_base_url": fake_slack.base_url,
+            },
+        }
+    )
+    fake = FakeAuthProvider(on_exchange=lambda *_: answer)
+
+    async def exchange(self, *args, **kwargs):
+        return await fake.exchange_code_for_credentials(*args, **kwargs)
+
+    monkeypatch.setattr(LemmaAuthProvider, "exchange_code_for_credentials", exchange)
+
+
+async def _add_to_slack(client: AsyncClient, organization_id: str, **headers) -> Any:
+    return await client.post(
+        "/surface-setup/slack/install",
+        json={"organization_id": organization_id},
+        headers=headers or None,
+    )
+
+
+async def _slack_comes_back(client: AsyncClient, consent_url: str, **headers) -> str:
+    """The browser back from Slack's consent: the redirect the callback answers."""
+    state = parse_qs(urlsplit(consent_url).query)["state"][0]
+    response = await client.get(
+        f"{CALLBACK}?{urlencode({'state': state, 'code': 'c'})}",
+        headers=headers or None,
+    )
+    assert response.status_code == 303, response.text
+    return response.headers["location"]
+
+
+async def _installs_of(db_session: AsyncSession, organization_id: str) -> list:
+    db_session.expire_all()
+    return list(
+        (
+            await db_session.scalars(
+                select(AuthConfig).where(
+                    AuthConfig.organization_id == UUID(organization_id)
+                )
+            )
+        ).all()
+    )
+
+
+def _welcomes(fake_slack: Any) -> list[dict[str, Any]]:
+    return [
+        message
+        for message in fake_slack._store.get_all("SLACK")
+        if "Lemma is in" in str(message.get("text"))
+    ]
+
+
+async def _bound_to(team_id: str) -> UUID | None:
+    async with async_session_maker() as session:
+        row = await SlackManagerRepository(session).install_for_team(team_id)
+        return row.organization_id if row is not None else None
+
+
+# -- starting -------------------------------------------------------------------
+
+
+async def test_add_to_slack_asks_for_lemmas_bot_alone_on_the_organizations_install(
+    authenticated_client, db_session, fixed_test_org, slack_set_up
+):
+    org_id = fixed_test_org["id"]
+    available = await authenticated_client.get("/surface-setup/slack/install")
+    assert available.json() == {"available": True}
+
+    response = await _add_to_slack(authenticated_client, org_id)
 
     assert response.status_code == 200, response.text
-    # The organization they are in, the one checked: nothing provisioned beside it.
-    assert await _organizations_of(db_session, fixed_test_user) == memberships
-    url = response.json()["authorization_url"]
-    assert url.startswith("https://slack.com/oauth/v2/authorize")
-    assert parse_qs(urlsplit(url).query)["client_id"] == ["1234.lemma"]
+    consent = urlsplit(response.json()["authorization_url"])
+    query = parse_qs(consent.query)
+    assert consent.netloc == "slack.com" and query["client_id"] == ["1234.lemma"]
+    assert query["scope"] == ["chat:write,im:write"]
+    # The installer's own messages are not what adding the manager needs.
+    assert "user_scope" not in query
+    (install,) = await _installs_of(db_session, org_id)
+    # The same install, by the same name, the web app's Connect makes.
+    assert (install.name, install.config_source) == ("slack", "SYSTEM_DEFAULT")
+    request = await db_session.scalar(
+        select(ConnectRequest).where(ConnectRequest.auth_config_id == install.id)
+    )
+    assert request is not None
+    assert request.attributes["purpose"] == SLACK_WORKSPACE_INSTALL_PURPOSE
+    assert request.attributes["return_to"] == "/slack/installed"
+
+
+async def test_two_starts_at_once_make_one_install_and_neither_fails(
+    authenticated_client, db_session, fixed_test_org, slack_set_up
+):
+    """A double click, or React running the start twice: both miss the
+    install, one create is refused for its name, and reads the other's."""
+    org_id = fixed_test_org["id"]
+    both = await asyncio.gather(
+        *(_add_to_slack(authenticated_client, org_id) for _ in range(3))
+    )
+    assert [r.status_code for r in both] == [200, 200, 200], [r.text for r in both]
+    assert len(await _installs_of(db_session, org_id)) == 1
+
+
+async def test_without_slack_set_up_here_nothing_is_made(
+    authenticated_client, db_session, fixed_test_org, monkeypatch
+):
+    monkeypatch.delenv("SLACK_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SLACK_CLIENT_SECRET", raising=False)
+    available = await authenticated_client.get("/surface-setup/slack/install")
+    assert available.json() == {"available": False}
+
+    response = await _add_to_slack(authenticated_client, fixed_test_org["id"])
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "SLACK_NOT_SET_UP"
+    assert await _installs_of(db_session, fixed_test_org["id"]) == []
+
+
+async def test_a_member_who_cannot_add_installs_is_refused_before_anything_is_made(
+    authenticated_client, async_client, db_session, fixed_test_org, slack_set_up
+):
+    member = await _sign_up_verified_user(async_client)
+    await _member(db_session, member, fixed_test_org["id"])
+    stranger = await _sign_up_verified_user(async_client)
+
+    for who in (member, stranger):
+        response = await _add_to_slack(
+            async_client,
+            fixed_test_org["id"],
+            Authorization=f"Bearer {who['token']}",
+        )
+        assert response.status_code == 403, response.text
+    assert await _installs_of(db_session, fixed_test_org["id"]) == []
+
+
+# -- coming back ----------------------------------------------------------------
+
+
+async def test_the_grant_coming_back_adopts_the_workspace_and_welcomes_once(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    slack_set_up,
+    monkeypatch,
+):
+    workspace = _Workspace()
+    _slack_answers(monkeypatch, fake_slack, workspace)
+    org_id = test_pod["organization_id"]
+
+    started = await _add_to_slack(authenticated_client, org_id)
+    landed = await _slack_comes_back(
+        authenticated_client, started.json()["authorization_url"]
+    )
+    assert urlsplit(landed).path == "/slack/installed"
+    assert parse_qs(urlsplit(landed).query)["connect"] == ["connected"]
+    await drain(_registry())
+
+    assert str(await _bound_to(workspace.team)) == org_id
+    async with async_session_maker() as session:
+        proven = await SlackManagerRepository(session).person(
+            workspace.team, workspace.installer
+        )
+    assert str(proven) == fixed_test_user["id"]
+    (welcome,) = _welcomes(fake_slack)
+    assert "Lemma is in Acme" in welcome["text"]
+    # The one thing worth doing next, as a button: add the first teammate.
+    assert views.ADD_ACTION_ID in str(welcome["blocks"])
+    assert views.teammate_value(test_pod["id"], test_pod["id"]) in str(
+        welcome["blocks"]
+    )
+
+    # Somebody who already has Slack connected adds Lemma again: their grant
+    # is renewed, not refused as "already connected", and nobody is
+    # welcomed twice.
+    again = await _add_to_slack(authenticated_client, org_id)
+    landed = await _slack_comes_back(
+        authenticated_client, again.json()["authorization_url"]
+    )
+    assert parse_qs(urlsplit(landed).query)["connect"] == ["connected"]
+    await drain(_registry())
+    assert str(await _bound_to(workspace.team)) == org_id
+    assert len(_welcomes(fake_slack)) == 1
+
+
+async def test_an_ordinary_slack_connect_adopts_nothing_and_says_nothing(
+    authenticated_client,
+    async_client,
+    db_session,
+    test_pod,
+    fake_slack,
+    slack_set_up,
+    monkeypatch,
+):
+    """Lemma's app is also the ordinary Slack connector: connecting it for an
+    agent's tools, even by an owner, is never "Add to Slack"."""
+    workspace = _Workspace()
+    _slack_answers(monkeypatch, fake_slack, workspace)
+    org_id = test_pod["organization_id"]
+    install = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/auth-configs",
+        json={"connector_id": "slack", "config_source": "SYSTEM_DEFAULT"},
+    )
+    assert install.status_code in (200, 201), install.text
+    started = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/connect-requests",
+        json={"auth_config_id": install.json()["id"]},
+    )
+    assert started.status_code == 200, started.text
+
+    landed = await _slack_comes_back(
+        authenticated_client, started.json()["authorization_url"]
+    )
+    assert parse_qs(urlsplit(landed).query)["connect"] == ["connected"]
+    await drain(_registry())
+
+    assert await scalar(
+        "SELECT count(*) FROM work_items WHERE kind = :kind", kind=INSTALLED_KIND
+    ) == 0
+    assert await _bound_to(workspace.team) is None
+    assert fake_slack._store.get_all("SLACK") == []
+
+    # A member who may not bind reconnecting Slack: nothing is queued at all,
+    # so nothing can say "Lemma couldn't join" to them.
+    member = await _sign_up_verified_user(async_client)
+    await _member(db_session, member, org_id)
+    async with async_session_maker() as session:
+        queued = await facts.emit(
+            SqlAlchemyUnitOfWork(session),
+            ConnectorAccountConnected(
+                account_id=UUID(parse_qs(urlsplit(landed).query)["account"][0]),
+                auth_config_id=UUID(install.json()["id"]),
+                connector_id="slack",
+                organization_id=UUID(org_id),
+                user_id=UUID(member["id"]),
+                browser_bound=True,
+                renewed=True,
+            ),
+        )
+        await session.commit()
+    assert queued == 0
+
+
+async def test_a_consent_link_finished_in_another_session_adopts_nothing(
+    authenticated_client,
+    async_client,
+    db_session,
+    test_pod,
+    fake_slack,
+    slack_set_up,
+    monkeypatch,
+):
+    """The attacker starts "Add to Slack" and sends the consent link to a Slack
+    admin, who approves it in their own browser: the grant lands on the
+    attacker's account, and adopts nothing and links nobody."""
+    workspace = _Workspace()
+    _slack_answers(monkeypatch, fake_slack, workspace)
+    started = await _add_to_slack(authenticated_client, test_pod["organization_id"])
+    victim = await _sign_up_verified_user(async_client)
+
+    await _slack_comes_back(
+        async_client,
+        started.json()["authorization_url"],
+        Authorization=f"Bearer {victim['token']}",
+    )
+    await drain(_registry())
+
+    assert await scalar(
+        "SELECT count(*) FROM work_items WHERE kind = :kind", kind=INSTALLED_KIND
+    ) == 0
+    assert await _bound_to(workspace.team) is None
+    async with async_session_maker() as session:
+        linked = await SlackManagerRepository(session).person(
+            workspace.team, workspace.installer
+        )
+    assert linked is None
+    assert fake_slack._store.get_all("SLACK") == []
+
+
+async def test_two_organizations_adding_one_workspace_get_one_binding_and_one_refusal(
+    authenticated_client,
+    async_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+):
+    workspace = _Workspace()
+    other = await _sign_up_verified_user(async_client)
+    other_org = UUID(str((await _create_org(async_client, other["token"]))["id"]))
+    second_installer = f"U{workspace.installer[1:]}2"
+
+    async def grant(user_id: str, organization_id: UUID, installer: str):
+        account = await _slack_account(
+            db_session,
+            user_id=user_id,
+            organization_id=organization_id,
+            config_source="SYSTEM_DEFAULT",
+            raw={
+                "app_id": E2E_SLACK_APP_ID,
+                "bot_user_id": workspace.manager_bot,
+                "team": {"id": workspace.team, "name": "Acme"},
+                "authed_user": {"id": installer},
+            },
+            fake_slack=fake_slack,
+            token=f"xoxb-{installer.lower()}",
+        )
+        await _granted(db_session, account)
+        return ConnectorAccountConnected(
+            account_id=account.id,
+            auth_config_id=account.auth_config_id,
+            connector_id="slack",
+            organization_id=organization_id,
+            user_id=UUID(user_id),
+            purpose=SLACK_WORKSPACE_INSTALL_PURPOSE,
+            browser_bound=True,
+        )
+
+    ours = await grant(
+        fixed_test_user["id"], UUID(test_pod["organization_id"]), workspace.installer
+    )
+    theirs = await grant(other["id"], other_org, second_installer)
+
+    async def adopt(fact: ConnectorAccountConnected) -> bool:
+        async with async_session_maker() as session:
+            return await adopt_workspace(SqlAlchemyUnitOfWork(session), fact) is not None
+
+    outcomes = await asyncio.gather(adopt(ours), adopt(theirs))
+    assert sorted(outcomes) == [False, True]
+    await drain(_registry())
+
+    held_by = await _bound_to(workspace.team)
+    loser = second_installer if held_by == ours.organization_id else workspace.installer
+    told = [
+        message
+        for message in fake_slack._store.get_all("SLACK")
+        if "couldn't join" in str(message.get("text"))
+    ]
+    assert len(told) == 1
+    assert "another Lemma organization" in told[0]["text"]
+    assert loser in str(told[0])
+    assert len(_welcomes(fake_slack)) == 1
+
+
+async def test_binding_from_a_pods_reach_sheet_welcomes_once(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+):
+    workspace = _Workspace()
+    account, response = await _manager(
+        authenticated_client,
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+    )
+    assert response.status_code == 200, response.text
+    # Bound again -- a retried request, a second click: the same binding.
+    again = await authenticated_client.put(
+        f"/pods/{test_pod['id']}/surface-setup/slack/manager",
+        json={"account_id": str(account.id)},
+    )
+    assert again.status_code == 200, again.text
+    await drain(_registry())
+
+    (welcome,) = _welcomes(fake_slack)
+    assert "Lemma is in Acme" in welcome["text"]

@@ -31,6 +31,9 @@ SURFACE_SLACK_MANAGER: Final = "surface.slack_manager"
 #: A Slack grant a manager flow started, finished (a ``ConnectorAccountConnected``
 #: subscriber): a teammate's app allowed from Slack becomes its surface.
 SURFACE_SLACK_APP_ALLOWED: Final = "surface.slack_app_allowed"
+#: Lemma's own Slack app added from "Add to Slack" (a ``ConnectorAccountConnected``
+#: subscriber): the workspace the grant names gets Lemma's app as its manager.
+SURFACE_SLACK_WORKSPACE_INSTALLED: Final = "surface.slack_workspace_installed"
 #: One DM from Lemma's own Slack app to a person, owed by the change that staged it.
 SURFACE_SLACK_MANAGER_MESSAGE: Final = "surface.slack_manager_message"
 #: A teammate's first word in a channel the manager handed it.
@@ -67,7 +70,8 @@ def slack_manager_key(source_event_id: str) -> str:
 
 
 def slack_manager_message_key(cause: str) -> str:
-    """One message per cause: ``welcome:<install id>``, ``allowed:<account id>``."""
+    """One message per cause: ``welcome:<install id>``, ``allowed:<account id>``,
+    ``install-refused:<account id>``."""
     return f"slack-manager-message:{cause}"
 
 
@@ -89,6 +93,7 @@ __all__ = [
     "SURFACE_SLACK_MANAGER",
     "SURFACE_SLACK_MANAGER_MESSAGE",
     "SURFACE_SLACK_TEAMMATE_HELLO",
+    "SURFACE_SLACK_WORKSPACE_INSTALLED",
     "ingest_key",
     "channel_delivery_key",
     "channel_delivery_target_key",

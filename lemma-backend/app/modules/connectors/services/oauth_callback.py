@@ -436,8 +436,16 @@ async def _persist_account(
             user_id, auth_config.id, provider_account_id
         )
         # A healthy account for this identity blocks a duplicate connect; an
-        # unhealthy one is updated in place below (a genuine reconnect).
-        if account is not None and account.status == AccountStatus.CONNECTED:
+        # unhealthy one is updated in place below (a genuine reconnect). A
+        # request another module started for a purpose is renewed in place
+        # either way: its starter asked for a fresh grant -- Lemma's Slack app
+        # added to a workspace by someone who already connected Slack -- and
+        # "already connected" would end the flow it started.
+        if (
+            account is not None
+            and account.status == AccountStatus.CONNECTED
+            and purpose_of(pending_request) is None
+        ):
             raise AccountAlreadyConnectedError(connector.id)
     else:
         account = await service.account_repository.get_by_user_and_auth_config(

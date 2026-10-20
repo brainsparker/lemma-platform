@@ -421,29 +421,30 @@ def welcome(
 ) -> tuple[str, list[dict[str, object]]]:
     """The manager's first word to whoever installed it.
 
-    ``first`` is ``(pod_id, name)`` of a teammate not in Slack yet: the one
-    thing worth doing next, as a button, rather than a tour.
+    ``first`` is ``(teammate_value(...), name)`` of a teammate not in Slack
+    yet: the one thing worth doing next, as a button, rather than a tour.
     """
-    where = team_name or "your workspace"
+    where = escape(team_name) if team_name else "your workspace"
     text = (
         f"Lemma is in {where}. Teammates answer here under their own names, and "
         "I set them up."
     )
     blocks: list[dict[str, object]] = [{"type": "section", "text": _text(text)}]
     if first is not None:
-        pod_id, name = first
+        value, name = first
         blocks.append(
             {
                 "type": "section",
                 "text": _text(
-                    f"*{name}* is your first teammate. Add it, and it answers here."
+                    f"*{escape(name)}* is your first teammate. Add it, and it "
+                    "answers here."
                 ),
                 "accessory": {
                     "type": "button",
                     "style": "primary",
                     "text": _plain(f"Add {name}"[:75]),
                     "action_id": ADD_ACTION_ID,
-                    "value": pod_id,
+                    "value": value,
                 },
             }
         )

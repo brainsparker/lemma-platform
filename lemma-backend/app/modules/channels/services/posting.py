@@ -195,15 +195,15 @@ class Timeline:
         """The agents that answer a member's line written in Lemma -- wherever
         it is carried: those it names, those in the channel that answer every
         line, and -- in a member's own channel with none -- the pod's agent.
-        A line heard on a platform is answered there, by ``agent_surfaces``."""
+        A line heard on a platform is answered there, by ``agent_surfaces``.
+        A members' note is answered only by the agents it names -- as a note
+        -- never by one answering every line: notes are members talking."""
         sender = message.sender
-        if (
-            sender.kind is not SenderKind.MEMBER
-            or message.heard_outside
-            or message.members_only
-        ):
+        if sender.kind is not SenderKind.MEMBER or message.heard_outside:
             return []
         answering = list(dict.fromkeys(post.mentioned_agents))
+        if message.members_only:
+            return answering
         for member in await self.members.agents(channel.id):
             if (
                 member.answers is AgentAnswers.EVERY_LINE

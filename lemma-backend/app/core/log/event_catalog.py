@@ -56,6 +56,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.channel_answer.not_a_pod_agent.observed': EventSpec('warning', frozenset({'agent_id', 'channel_id', 'pod_id'})),
     'agent.channel_answer.refused.observed': EventSpec('warning', frozenset({'agent_id', 'channel_id', 'pod_id', 'reason'})),
     'agent.channel_background.unreadable.degraded': EventSpec('warning', frozenset({'message_id'})),
+    'agent.contact_run.failed.observed': EventSpec('info', frozenset({'called_for_person', 'conversation_id', 'pod_id', 'run_id', 'uncounted'})),
     'agent.contact_tools.function_not_completed.observed': EventSpec('info', frozenset({'function_name', 'status'})),
     'agent.context_brief.askable_pods_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),
     'agent.context_brief.file_inventory_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),

@@ -59,6 +59,7 @@ __all__ = [
     "normalize_handle",
     "note_answered",
     "note_inbound",
+    "note_never_answered",
     "open_anonymous_contact",
     "open_contact",
     "prove_handle",
@@ -220,6 +221,16 @@ async def note_answered(
 ) -> bool:
     """An agent answered this contact. Whether it was the first time."""
     return await ContactRepository(uow.session).note_answered(
+        pod_id=pod_id, contact_id=contact_id
+    )
+
+
+async def note_never_answered(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_id: UUID
+) -> bool:
+    """The run this contact was let in for failed, and none ever answered
+    them: they no longer take a place in the count. Whether they had one."""
+    return await ContactRepository(uow.session).note_never_answered(
         pod_id=pod_id, contact_id=contact_id
     )
 

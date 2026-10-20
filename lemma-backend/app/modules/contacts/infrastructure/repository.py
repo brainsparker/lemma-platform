@@ -384,6 +384,19 @@ class ContactRepository:
         )
         return bool(result.rowcount)
 
+    async def note_never_answered(self, *, pod_id: UUID, contact_id: UUID) -> bool:
+        """Take back ``note_answered``; whether they had been marked."""
+        result = await self.session.execute(
+            update(ContactModel)
+            .where(
+                ContactModel.id == contact_id,
+                ContactModel.pod_id == pod_id,
+                ContactModel.answered_at.is_not(None),
+            )
+            .values(answered_at=None)
+        )
+        return bool(result.rowcount)
+
     async def answered_in_organization(self, organization_id: UUID) -> int:
         """How many contacts any agent of the organization's pods has answered.
 

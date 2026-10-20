@@ -14,6 +14,13 @@ L2 while the agent works on L1 has the answer under L1, where they asked. What
 the run is shown of the channel around the line is kept as which lines, never
 what they said (``channels.contracts.backgrounds``).
 
+In a group each line is a thread of its own, so a line in another thread
+never joins a run answering one: it waits for that run to end and is answered
+by its own (``LineWaits``). A run that fails or is stopped says so where it
+was asked, and one refused before it started says why; the answer to
+somebody the agent asked for the member comes back to the member, after the
+line that set it asking.
+
 Both halves are safe to run twice. The turn is started with the line as its
 client id, so a retried job finds the turn it already started; the answer is
 posted with the run as its client id, so a retried post is the same line.
@@ -33,12 +40,18 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.core.redaction import redact_text
 from app.core.text.thinking_tags import strip_context_echo, strip_thinking_tokens
 from app.modules.agent.contracts import channel_conversations
+from app.modules.agent.contracts.run_failures import user_safe_stored_reason
 from app.modules.agent.contracts.run_replies import (
+    RunReplyMaterial,
     answer_line_client_id,
     run_reply_material,
 )
+from app.modules.agent.domain.asked_questions import line_client_id
+from app.modules.agent.domain.pod_asks import HANDED_BACK_SOURCES
+from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
 from app.modules.agent.domain.queued_messages import (
     DURING_ACTIVE_RUN,
     STEERED_INTO_RUN,
@@ -48,6 +61,8 @@ from app.modules.agent.infrastructure.models.conversation import (
     ConversationModel,
     MessageModel,
 )
+from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.services.channel_background import LEMMA_CHANNEL
 from app.modules.agent.services.live_conversation import CONVERSATION_STREAM
 from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.channels.contracts import (
@@ -62,6 +77,8 @@ from app.modules.channels.contracts import (
     post,
 )
 from app.modules.channels.contracts.answers import (
+    line_answered_in,
+    lines_of_run,
     answers_of_run,
     settle_answers,
     start_answering,
@@ -79,10 +96,19 @@ logger = get_logger(__name__)
 
 #: The most lines of the channel a run answering a line is shown.
 IN_APP_CONTEXT_LINES = 30
-#: What a turn started by a line in Lemma says it came from.
-LEMMA_CHANNEL = "lemma_channel"
 #: The most messages one run is taken to have read: a burst steered into it.
 MAX_LINES_A_RUN_READS = 50
+#: What a line says when its run failed and left no reason of its own.
+COULD_NOT_ANSWER = "I couldn't answer this: something went wrong on my side."
+#: What a line says when its run was stopped before it answered.
+STOPPED_BEFORE_ANSWERING = "I was stopped before I finished answering this."
+#: The most of a refusal's or a failure's reason a line repeats.
+MAX_REASON_CHARS = 300
+
+
+class LineWaits(Exception):
+    """The line is in another thread of a group than the run its agent is
+    working on there: it waits for that run to end, and starts its own."""
 
 
 def turn_client_id(message_id: UUID) -> str:
@@ -124,12 +150,12 @@ async def answer_line(
 
 def _answerable(line: ChannelMessage) -> bool:
     """A member's own line written in Lemma -- wherever it was carried -- still
-    there. One heard on a platform is answered there."""
+    there. One heard on a platform is answered there. A members' note is
+    answered too, by the agents it names, as a note (``_post_answer``)."""
     return (
         line.sender.kind is SenderKind.MEMBER
         and line.sender.user_id is not None
         and not line.heard_outside
-        and not line.members_only
         and not line.is_deleted
     )
 
@@ -173,6 +199,8 @@ async def _answer_as(
             agent_id=agent_id,
             agent_name=agent_name,
         )
+        if await _answering_another_thread(uow, channel, line, conversation_id):
+            raise LineWaits(line.id)
         await start_answering(
             uow,
             message_id=line.id,
@@ -222,9 +250,81 @@ async def _answer_as(
             agent_id=str(agent_id),
             reason=refused.code,
         )
+        # Nothing of the turn stays; the member hears why, where they asked.
+        await uow.rollback()
+        await _say_refused(
+            uow, channel=channel, line=line, agent_id=agent_id, refused=refused
+        )
+        await uow.commit()
         return None
     finally:
         reset_current_context(token)
+
+
+async def _answering_another_thread(
+    uow: SqlAlchemyUnitOfWork,
+    channel: Channel,
+    line: ChannelMessage,
+    conversation_id: UUID,
+) -> bool:
+    """Whether the member's conversation in a group is busy answering a line
+    in another thread. Joining that run would answer this line under that
+    one; it waits instead. In a member's own channel, which reads as a chat,
+    a line said meanwhile joins the run, as a person adds to what they asked.
+
+    Under the conversation's lock, taken as a turn takes it: the run ending
+    meanwhile either ended before this read or waits for this transaction,
+    so a line found waiting is never one its run's end has already passed by.
+    """
+    if channel.kind is not ChannelKind.GROUP:
+        return False
+    conversations = ConversationRepository(uow)
+    await conversations.lock_conversation(conversation_id)
+    running = await conversations.get_active_agent_run_for_update(conversation_id)
+    if running is None:
+        return False
+    answering = [
+        found
+        for line_id in await lines_of_run(uow, running.id)
+        if line_id != line.id and (found := await line_by_id(uow, line_id))
+    ]
+    if not answering:
+        return False
+    return all(_thread_of(other) != _thread_of(line) for other in answering)
+
+
+def _thread_of(line: ChannelMessage) -> UUID:
+    return line.thread_root_id or line.id
+
+
+async def _say_refused(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    channel: Channel,
+    line: ChannelMessage,
+    agent_id: UUID,
+    refused: DomainError,
+) -> None:
+    """The agent's line saying it will not answer, and the reason it was
+    given -- an error's own sentence, written for whoever reads it."""
+    reason = _clipped(refused.message)
+    assert line.sender.user_id is not None  # an answerable line's
+    await _post_line(
+        uow,
+        channel=channel,
+        line=line,
+        agent_id=agent_id,
+        for_user_id=line.sender.user_id,
+        text=f"I can't answer this: {reason}" if reason else COULD_NOT_ANSWER,
+        client_message_id=line_client_id(f"refused:{line.id}:{agent_id}"),
+    )
+
+
+def _clipped(reason: str | None) -> str:
+    clean = " ".join(redact_text(reason or "").split())
+    if len(clean) > MAX_REASON_CHARS:
+        clean = clean[: MAX_REASON_CHARS - 1].rstrip() + "…"
+    return clean
 
 
 async def _members_conversation(
@@ -272,6 +372,10 @@ def turn_metadata(
         "channel_id": str(channel.id),
         "channel_message_id": str(line.id),
     }
+    if line.members_only:
+        # A note among members: its answer is one too, and nothing said for
+        # it is repeated anywhere it would be carried.
+        metadata[PRIVATE_NOTE_KEY] = True
     if channel.title:
         metadata["channel_name"] = channel.title
     if line.sender.display_name:
@@ -301,19 +405,29 @@ async def post_run_answer(
     paused: bool = False,
 ) -> ChannelMessage | None:
     """A finished run's answer, as the agent's line in the thread of the
-    oldest line in Lemma it answers. Nothing for a run answering none.
+    oldest line in Lemma it answers. Nothing for a run answering none -- but
+    a run woken by the answers of people the agent asked for the member
+    answers that member, after the line that set it asking
+    (``_post_handed_back``).
 
     ``answered``: the run ended with an answer, rather than failing, stopping
     or pausing; either way the lines' readers hear they are no longer being
-    answered, once this commits. ``paused``: it is waiting on somebody, and
-    the run that carries it on answers the same lines.
+    answered, once this commits, and a run that failed or was stopped says
+    so in the answer's place. ``paused``: it is waiting on somebody, and the
+    run that carries it on answers the same lines.
     """
-    read, carries_on = await _lines_read_by(uow, run_id, conversation_id)
+    read, carries_on, handed_back = await _lines_read_by(uow, run_id, conversation_id)
     answers = await answers_of_run(
         uow, conversation_id=conversation_id, line_ids=read, carries_on=carries_on
     )
     conversation = await uow.session.get(ConversationModel, conversation_id)
-    if not answers or conversation is None:
+    if conversation is None:
+        return None
+    if not answers:
+        if handed_back and answered and not paused:
+            return await _post_handed_back(
+                uow, run_id=run_id, conversation=conversation
+            )
         return None
     lines = [await line_by_id(uow, answer.message_id) for answer in answers]
     said = [line for line in lines if line is not None]
@@ -330,11 +444,25 @@ async def post_run_answer(
             )
     if paused:
         return None
-    posted = (
-        await _post_answer(uow, run_id=run_id, conversation=conversation, line=said[0])
-        if answered and said and not said[0].is_deleted
-        else None
-    )
+    posted: ChannelMessage | None = None
+    if said and not said[0].is_deleted:
+        material = await run_reply_material(uow, run_id)
+        if answered:
+            posted = await _post_answer(
+                uow,
+                run_id=run_id,
+                conversation=conversation,
+                line=said[0],
+                material=material,
+            )
+        else:
+            await _post_why_unanswered(
+                uow,
+                run_id=run_id,
+                conversation=conversation,
+                line=said[0],
+                material=material,
+            )
     await settle_answers(
         uow, answers, run_id=run_id, answered_with=posted.id if posted else None
     )
@@ -343,10 +471,11 @@ async def post_run_answer(
 
 async def _lines_read_by(
     uow: SqlAlchemyUnitOfWork, run_id: UUID, conversation_id: UUID
-) -> tuple[list[UUID], bool]:
+) -> tuple[list[UUID], bool, bool]:
     """The lines in Lemma whose words this run read -- the one that started
-    it and any steered into it, oldest first -- and whether it carries on a
-    paused run, which no message of its own started.
+    it and any steered into it, oldest first -- whether it carries on a
+    paused run, which no message of its own started, and whether it read the
+    answers to what its conversation asked of somebody else.
 
     Not a message that joined it and was never read: the run that delivers it
     answers it (``conversation_turns.start_queued_followup``).
@@ -378,7 +507,38 @@ async def _lines_read_by(
                 lines.append(UUID(line_id))
             except ValueError:
                 continue
-    return lines, not any(row[2] for row in rows)
+    handed_back = any(row[0] in HANDED_BACK_SOURCES for row in rows)
+    return lines, not any(row[2] for row in rows), handed_back
+
+
+async def _post_handed_back(
+    uow: SqlAlchemyUnitOfWork, *, run_id: UUID, conversation: ConversationModel
+) -> ChannelMessage | None:
+    """The answer of a run woken by the people the agent asked, in a member's
+    conversation in a channel of Lemma: after the line the conversation took
+    up last, in its thread -- where the member asked it to ask them.
+
+    Only a conversation a member opened by writing in Lemma: one on a
+    platform is answered there by ``agent_surfaces``, and Lemma's own chat
+    shows its answers itself.
+    """
+    if (
+        conversation.user_id is None
+        or conversation.contact_id is not None
+        or (conversation.conversation_metadata or {}).get("source") != LEMMA_CHANNEL
+    ):
+        return None
+    line_id = await line_answered_in(uow, conversation.id)
+    line = await line_by_id(uow, line_id) if line_id else None
+    if line is None or line.is_deleted:
+        return None
+    return await _post_answer(
+        uow,
+        run_id=run_id,
+        conversation=conversation,
+        line=line,
+        material=await run_reply_material(uow, run_id),
+    )
 
 
 async def _post_answer(
@@ -387,16 +547,80 @@ async def _post_answer(
     run_id: UUID,
     conversation: ConversationModel,
     line: ChannelMessage,
+    material: RunReplyMaterial | None,
 ) -> ChannelMessage | None:
-    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
-    material = await run_reply_material(uow, run_id)
-    if material is None or material.private or not material.answer:
+    if material is None or not material.answer:
+        return None
+    if material.private and not line.members_only:
         return None
     # The same boundary as a platform's answer: no reasoning, and none of the
     # platform's own context blocks a model repeated back.
     text = strip_context_echo(strip_thinking_tokens(material.answer))
     if not text:
         return None
+    return await _post_line(
+        uow,
+        channel=await channel_by_id(uow, line.channel_id),
+        line=line,
+        agent_id=effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id),
+        for_user_id=conversation.user_id,
+        text=text,
+        client_message_id=answer_client_id(run_id),
+        conversation_id=conversation.id,
+        run_id=run_id,
+    )
+
+
+async def _post_why_unanswered(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    run_id: UUID,
+    conversation: ConversationModel,
+    line: ChannelMessage,
+    material: RunReplyMaterial | None,
+) -> ChannelMessage | None:
+    """A run that failed, or was stopped, says so where its answer would be:
+    otherwise the member reads the agent start, and then nothing."""
+    if material is None:
+        return None
+    if material.status == "FAILED":
+        reason = _clipped(user_safe_stored_reason(material.error))
+        text = f"I couldn't answer this: {reason}" if reason else COULD_NOT_ANSWER
+    elif material.status == "STOPPED":
+        text = STOPPED_BEFORE_ANSWERING
+    else:
+        return None
+    return await _post_line(
+        uow,
+        channel=await channel_by_id(uow, line.channel_id),
+        line=line,
+        agent_id=effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id),
+        for_user_id=conversation.user_id,
+        text=text,
+        client_message_id=answer_client_id(run_id),
+        conversation_id=conversation.id,
+        run_id=run_id,
+        carried=False,
+    )
+
+
+async def _post_line(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    channel: Channel | None,
+    line: ChannelMessage,
+    agent_id: UUID,
+    for_user_id: UUID,
+    text: str,
+    client_message_id: str,
+    conversation_id: UUID | None = None,
+    run_id: UUID | None = None,
+    carried: bool = True,
+) -> ChannelMessage | None:
+    """The agent's line answering ``line``, said for the member, where an
+    answer to it goes. ``carried``: it follows the line to a group's place,
+    as an answer does; a word about why there is none stays in Lemma. A
+    note's answer is a note, carried nowhere."""
     agent_name = (
         None  # the pod's own assistant is named by the channel, as the pod
         if is_pod_default_agent(agent_id, pod_id=line.pod_id)
@@ -404,21 +628,23 @@ async def _post_answer(
             select(AgentModel.name).where(AgentModel.id == agent_id)
         )
     )
-    channel = await channel_by_id(uow, line.channel_id)
     in_thread, place = _where_the_answer_goes(channel, line)
+    if not carried or line.members_only:
+        place = None
     return await post(
         uow,
         channel_id=line.channel_id,
         line=NewLine(
             sender=Sender.agent(
                 agent_id,
-                on_behalf_of=Principal.member(conversation.user_id),
+                on_behalf_of=Principal.member(for_user_id),
                 display_name=agent_name,
             ),
             text=text,
             target_source_id=place,
-            client_message_id=answer_client_id(run_id),
-            conversation_id=conversation.id,
+            members_only=line.members_only,
+            client_message_id=client_message_id,
+            conversation_id=conversation_id,
             agent_run_id=run_id,
             thread_root_id=in_thread,
             reply_to_id=line.id,
@@ -444,8 +670,11 @@ def _where_the_answer_goes(
 
 
 __all__ = [
+    "COULD_NOT_ANSWER",
     "IN_APP_CONTEXT_LINES",
     "LEMMA_CHANNEL",
+    "LineWaits",
+    "STOPPED_BEFORE_ANSWERING",
     "answer_client_id",
     "answer_line",
     "turn_client_id",

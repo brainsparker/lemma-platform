@@ -67,6 +67,7 @@ def four_steps(function_name: str, member_id: str) -> tuple[list[dict], list[dic
         {
             "id": "approve",
             "type": "FORM",
+            "label": "Approve the refund",
             "config": {
                 "input_schema": FORM_SCHEMA,
                 "assignee_pod_member_id": member_id,
@@ -152,6 +153,14 @@ async def test_a_function_time_decision_form_flow_runs_on_work_items(
         )
         == 1
     )
+    # Named by the label its author gave the step, not only the workflow's.
+    said = await flows.scalar(
+        "SELECT m.body FROM channel_questions q"
+        " JOIN channel_messages m ON m.id = q.message_id"
+        " WHERE q.kind = 'FORM' AND q.ref LIKE :ref",
+        ref=f"wf:{run['id']}:%",
+    )
+    assert "Approve the refund" in str(said)
 
     assert await _expiries(flows, resolved=False) == 1
 

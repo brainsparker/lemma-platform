@@ -11,6 +11,7 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationSummary,
 )
 from app.core.api.schemas import BaseSchema
+from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.connector import AuthScheme, ConnectorKind
 
 
@@ -300,7 +301,7 @@ class AuthConfigCreateSchema(BaseModel):
             "connector offers only one."
         ),
     )
-    config_source: str = "SYSTEM_DEFAULT"
+    config_source: AuthConfigSource = AuthConfigSource.SYSTEM_DEFAULT
     config: Optional[Dict[str, Any]] = None
     name: Optional[str] = None
 

@@ -186,14 +186,26 @@ export interface OutreachSent {
 }
 
 /** The handles a member can write to first: an address, a number on
- *  WhatsApp, a Telegram account. A chat on the website or a colleague in
- *  another company's Slack waits for them to write. */
+ *  WhatsApp, a Telegram account -- or, when they left none of those, their
+ *  chat on the website, where the line waits for their next visit (the one
+ *  their site signed them in to, if it did). A colleague in another
+ *  company's Slack or Teams waits for them to write. */
 export function writableHandles(contact: Pick<Contact, "handles">): ContactHandle[] {
-    return contact.handles.filter((handle) => handle.kind === "EMAIL" || handle.kind === "PHONE" || handle.kind === "TELEGRAM");
+    const reached = contact.handles.filter((handle) => handle.kind === "EMAIL" || handle.kind === "PHONE" || handle.kind === "TELEGRAM");
+    if (reached.length > 0) return reached;
+    const onTheSite = contact.handles.find((handle) => handle.kind === "HOST") ?? contact.handles.find((handle) => handle.kind === "WEB");
+    return onTheSite ? [onTheSite] : [];
+}
+
+/** Whether a line to this handle waits in their chat on the website. */
+export function waitsOnTheSite(handle: Pick<ContactHandle, "kind">): boolean {
+    return handle.kind === "HOST" || handle.kind === "WEB";
 }
 
 /** What a member is told after writing to a contact first. */
 export function outreachSaid(sent: Pick<OutreachSent, "status" | "reason" | "platform">): string {
+    if (sent.platform === "WEB" && sent.status === "SENT") return "In their chat on your website, for when they next open it.";
+    if (sent.platform === "WEB" && sent.status === "PENDING") return "In their channel, on its way to their chat on your website.";
     const where = sent.platform === "WHATSAPP" ? "WhatsApp" : sent.platform === "TELEGRAM" ? "Telegram" : "email";
     switch (sent.status) {
         case "SENT": return "Sent by " + where + ". It is in their channel.";

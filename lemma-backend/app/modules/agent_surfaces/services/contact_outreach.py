@@ -15,12 +15,19 @@ Where each handle is reached is the platform's rule:
   approved templates, which are not built here.
 * **Telegram**, only where they have written to the bot: a bot cannot start
   a chat.
-* Anything else -- a Slack or Teams user, a web visitor, a host app's user --
-  is answered where they write, never written to first.
+* **A web chat** -- a visitor's browser, or a customer the site signed in --
+  any time, while the chat is still theirs to come back to: the line waits in
+  it, and they read it on their next visit. There is nobody to hand it to, so
+  its delivery is ``SENT`` once it is in their chat, as an answer there is
+  (``channel_deliveries``). A browser's chat is its session's; a signed-in
+  customer's is their latest live one on a widget for the product that named
+  them. One that has ended is never opened again, so nothing is written to it.
+* Anything else -- a Slack or Teams user from another company -- is answered
+  where they write, never written to first.
 
 What may be sent is the contacts module's to say (``contacts.contracts.outreach``):
-opt-out first, then the handle, then the platform's window. Refused, nothing
-is posted; the member reads why.
+opt-out first, then the handle, then the platform's window (a web chat has
+none). Refused, nothing is posted; the member reads why.
 """
 
 from __future__ import annotations
@@ -38,6 +45,10 @@ from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (  # noqa: E501
     SurfaceRepository,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.web_widget_repository import (  # noqa: E501
+    WebWidgetRepository,
+)
+from app.modules.agent_surfaces.services.channel_lines import WEB
 from app.modules.agent_surfaces.services.contact_reach import reach_for
 from app.modules.agent_surfaces.services.notification_channels import can_cold_open
 from app.modules.channels.contracts import (
@@ -62,9 +73,15 @@ from app.modules.contacts.contracts import (
     normalize_handle,
 )
 from app.modules.contacts.contracts.outreach import (
+    Address,
     OutreachKind,
     RefusalCode,
+    SendWindow,
     may_send,
+)
+from app.modules.contacts.contracts.visitor_sessions import (
+    VisitorStrength,
+    visitor_session,
 )
 
 #: The platforms a handle of each kind is written to on.
@@ -73,6 +90,16 @@ _PLATFORMS: dict[IdentityKind, tuple[SurfacePlatform, ...]] = {
     IdentityKind.PHONE: (SurfacePlatform.WHATSAPP,),
     IdentityKind.TELEGRAM: (SurfacePlatform.TELEGRAM,),
 }
+
+#: The handles a web chat reaches: a browser's session, and a customer the
+#: site signed in.
+_ON_THE_WEB = frozenset({IdentityKind.WEB, IdentityKind.HOST})
+
+#: Why a web chat handle is refused: no chat of theirs is left to wait in.
+NO_CHAT_TO_COME_BACK_TO = (
+    "They have no chat on your website to come back to, so they would never "
+    "see it. Answer them when they next write."
+)
 
 #: The most surfaces of a pod looked through for one that writes email.
 _SURFACES_READ = 100
@@ -128,7 +155,10 @@ class ContactOutreach:
         channel = await contact_channel(
             self.uow, pod_id=outreach.pod_id, contact_id=contact.id
         )
-        source = await self._place(channel.id, outreach.pod_id, contact.id, handle)
+        now = now or datetime.now(timezone.utc)
+        source = await self._place(
+            channel.id, outreach.pod_id, contact.id, handle, now=now
+        )
         await self._allowed(outreach.pod_id, contact.id, handle, source, now=now)
         try:
             line = await write_as_member(
@@ -161,10 +191,19 @@ class ContactOutreach:
         return Reached(line=line, delivery=delivery)
 
     async def _place(
-        self, channel_id: UUID, pod_id: UUID, contact_id: UUID, handle: ContactHandle
+        self,
+        channel_id: UUID,
+        pod_id: UUID,
+        contact_id: UUID,
+        handle: ContactHandle,
+        *,
+        now: datetime,
     ) -> Source:
-        """The place this handle is reached at: the one the contact was heard
-        from last, else -- email only -- the pod's mailbox's, opened now."""
+        """The place this handle is reached at: for a web chat, one they can
+        still come back to; otherwise the one the contact was heard from last,
+        else -- email only -- the pod's mailbox's, opened now."""
+        if handle.kind in _ON_THE_WEB:
+            return await self._web_chat(channel_id, pod_id, handle, now=now)
         platforms = {platform.value for platform in _PLATFORMS.get(handle.kind, ())}
         if not platforms:
             raise OutreachRefused(
@@ -207,6 +246,43 @@ class ContactOutreach:
             home=ContactsHome(contact_id=contact_id),
         )
 
+    async def _web_chat(
+        self, channel_id: UUID, pod_id: UUID, handle: ContactHandle, *, now: datetime
+    ) -> Source:
+        """Their chat on the pod's website that they can still come back to,
+        most recently heard first: never opened here, since only a visitor
+        writing opens one."""
+        for source in await sources_of(self.uow, channel_id):
+            if source.platform == WEB and await self._comes_back_to(
+                pod_id, source, handle, now=now
+            ):
+                return source
+        raise OutreachRefused(NO_CHAT_TO_COME_BACK_TO)
+
+    async def _comes_back_to(
+        self, pod_id: UUID, source: Source, handle: ContactHandle, *, now: datetime
+    ) -> bool:
+        """Whether this web chat is the handle's, and still live. A browser's
+        handle is its session; a signed-in customer's chat is one their site
+        vouched for, on a widget speaking for the product that named them."""
+        try:
+            session_id = UUID(source.external_user_id or "")
+        except ValueError:
+            return False
+        if handle.kind is IdentityKind.WEB and str(session_id) != handle.value:
+            return False
+        session = await visitor_session(self.uow, session_id)
+        if session is None or not session.is_live(now):
+            return False
+        if handle.kind is IdentityKind.WEB:
+            return True
+        if session.strength is not VisitorStrength.HOST:
+            return False
+        widget = await WebWidgetRepository(self.uow.session).get(
+            pod_id=pod_id, widget_id=session.widget_id
+        )
+        return widget is not None and widget.host_issuer == handle.issuer
+
     async def _mailbox(self, pod_id: UUID) -> AgentSurfaceEntity | None:
         surfaces, _ = await SurfaceRepository(self.uow).list_by_pod(
             pod_id, limit=_SURFACES_READ
@@ -229,14 +305,19 @@ class ContactOutreach:
         handle: ContactHandle,
         source: Source,
         *,
-        now: datetime | None,
+        now: datetime,
     ) -> None:
-        reach = reach_for(
-            source.platform,
-            address=handle.value,
-            # The place's own window where it has been heard from; a place
-            # just opened has only the handle's.
-            last_inbound_at=source.last_inbound_at or handle.last_inbound_at,
+        reach: tuple[Address, SendWindow | None] | None = (
+            # A web chat has no window: the line waits for their next visit.
+            (Address(kind=handle.kind, value=handle.value), None)
+            if source.platform == WEB
+            else reach_for(
+                source.platform,
+                address=handle.value,
+                # The place's own window where it has been heard from; a place
+                # just opened has only the handle's.
+                last_inbound_at=source.last_inbound_at or handle.last_inbound_at,
+            )
         )
         if reach is None:
             raise OutreachRefused("Lemma cannot write first to a handle like that.")
@@ -247,7 +328,7 @@ class ContactOutreach:
             contact_id=contact_id,
             to=address,
             kind=OutreachKind.MEMBER_LINE,
-            at=now or datetime.now(timezone.utc),
+            at=now,
             window=window,
         )
         if verdict.allowed:

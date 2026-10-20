@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from rich import box
+from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.rule import Rule
@@ -224,7 +225,7 @@ class ChatRenderer:
             return
         if event_type == "error":
             self._end_answer_line()
-            console.print(f"[red]Error:[/red] {event.data}")
+            console.print(f"[red]Error:[/red] {escape(str(event.data))}")
             self.seen_terminal = True
             self.error_text = str(event.data)
             return
@@ -239,7 +240,7 @@ class ChatRenderer:
             self._end_answer_line()
             status = _status_text(event.data) or event_type
             style = "dim green" if event_type == "completed" else "dim yellow"
-            console.print(f"[{style}]{status}[/{style}]")
+            console.print(f"[{style}]{escape(str(status))}[/{style}]")
             return
         self._status(event.data)
 
@@ -385,7 +386,7 @@ class ChatRenderer:
         if not text:
             return
         self._end_answer_line()
-        console.print(f"[dim]{text}[/dim]")
+        console.print(f"[dim]{escape(text)}[/dim]")
 
     def _tool_call(self, message: dict[str, Any]) -> None:
         name = str(message.get("tool_name") or "tool")
@@ -396,19 +397,19 @@ class ChatRenderer:
         if not self.verbose:
             return
         self._end_answer_line()
-        console.print(f"[dim]> {name}[/dim]")
+        console.print(f"[dim]> {escape(name)}[/dim]")
 
     def _tool_return(self, message: dict[str, Any]) -> None:
         if not self.verbose:
             return
         self._end_answer_line()
         name = str(message.get("tool_name") or "tool")
-        console.print(f"[dim]< {name} returned[/dim]")
+        console.print(f"[dim]< {escape(name)} returned[/dim]")
 
     def _start_answer(self) -> None:
         if self.started_answer:
             return
-        console.print(f"\n[bold green]{self.agent}[/bold green]")
+        console.print(f"\n[bold green]{escape(str(self.agent))}[/bold green]")
         self.started_answer = True
         self.answer_line_open = True
 
@@ -449,7 +450,7 @@ def render_chat_header(
 def render_user_message(message: str) -> None:
     console.print()
     console.print("[bold cyan]You[/bold cyan]")
-    console.print(message)
+    console.print(message, markup=False)
 
 
 def read_chat_prompt() -> str:

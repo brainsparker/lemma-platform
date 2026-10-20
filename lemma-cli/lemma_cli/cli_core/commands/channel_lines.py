@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 import typer
 
+from ..channel_view import render_lines
 from ..confirm import confirm_destructive
 from ..io import emit, to_plain
 from ..payload import read_json
@@ -17,14 +18,19 @@ messages_app = typer.Typer(help="A channel's lines: read, write, edit, answer.")
 deliveries_app = typer.Typer(help="Where a line went outside Lemma, and retrying it.")
 
 
-def _run(ctx: typer.Context, pod: str | None, call: Callable[[Any], Any]) -> None:
+def _run(
+    ctx: typer.Context,
+    pod: str | None,
+    call: Callable[[Any], Any],
+    render: Callable[[Any, Any], None] = emit,
+) -> None:
     """Call the pod's SDK and print what comes back."""
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx, lambda client, s: to_plain(call(pod_client(client, s, pod)))
     )
     if result is not None:
-        emit(state, result)
+        render(state, result)
 
 
 # -- lines ---------------------------------------------------------------------------
@@ -50,6 +56,7 @@ def list_messages(
         lambda p: p.channels.messages(
             channel_id, limit=limit, before_seq=before_seq, after_seq=after_seq
         ),
+        render_lines,
     )
 
 
@@ -71,6 +78,7 @@ def list_thread(
         lambda p: p.channels.thread(
             channel_id, message_id, limit=limit, after_seq=after_seq
         ),
+        render_lines,
     )
 
 

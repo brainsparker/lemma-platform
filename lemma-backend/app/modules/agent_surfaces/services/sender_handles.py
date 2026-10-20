@@ -2,17 +2,23 @@
 
 A contact is a handle something trustworthy vouched for: the WhatsApp number in
 a payload Meta signed, the Telegram user id in one Telegram did, an email
-address the receiving mail service authenticated, a Slack user from another
-company in an event Slack signed. Nothing else -- not a display name, not an
-address typed into a message -- makes somebody a contact.
+address the receiving mail service authenticated, a Slack user in an event
+Slack signed. Nothing else -- not a display name, not an address typed into a
+message -- makes somebody a contact.
 
 Where they wrote decides which handles count:
 
 * **In a private chat** (``private_handle``) only the platforms a stranger can
-  reach the pod's own bot on: WhatsApp, Telegram, email. A person writing to a
-  workspace bot on Slack or Teams is in that workspace -- the pod's own people.
+  reach the pod's own bot on: WhatsApp, Telegram, email.
 * **In a group** (``group_handle``) also a Slack sender from the other company
   in a channel shared with it: there, they are the pod's outsiders.
+* **A Slack user, by their own workspace** (``workspace_handle``): the name
+  for anybody else on Slack -- a colleague in a workspace the pod's
+  organization holds, privately or in a group. Nothing here decides that they
+  are one (``slack_workspace_people`` does, after the sender is resolved), so
+  neither of the two above returns it: the group log, which runs before
+  anything knows whether a sender is in the pod, must not open a contact for a
+  member it has not recognised yet.
 
 A handle with nothing left once normalised -- a "number" of punctuation --
 names nobody, and is dropped rather than opened as a contact.
@@ -54,6 +60,18 @@ def group_handle(parsed: ParsedInboundSurfaceEvent) -> SenderHandle | None:
     if parsed.platform is SurfacePlatform.SLACK:
         return _normalised(parsed, _slack_outsider_handle(parsed))
     return _normalised(parsed, _chat_or_mail_handle(parsed))
+
+
+def workspace_handle(parsed: ParsedInboundSurfaceEvent) -> SenderHandle | None:
+    """``{their own team}:{their user}`` for any Slack sender Slack names a team for.
+
+    Their own team, never the installing one (``tenant_id``): a person from
+    another workspace named under this one would be a second contact for the
+    same person ``group_handle`` already knows by their own.
+    """
+    if parsed.platform is not SurfacePlatform.SLACK:
+        return None
+    return _normalised(parsed, _slack_handle(parsed))
 
 
 def _normalised(
@@ -114,12 +132,21 @@ def _slack_outsider_handle(
 ) -> tuple[IdentityKind, str, bool] | None:
     """``{their team}:{their user}`` for a sender from the other company.
 
-    Only one Slack marked as another workspace's, in a channel shared with it:
-    anybody in the pod's own workspace is a colleague, never a contact.
+    Only one Slack marked as another workspace's, in a channel shared with it.
+    Somebody in the pod's own workspace is a contact only once resolution has
+    said they are not in the pod (``workspace_handle``).
     """
-    metadata = parsed.metadata
-    team = metadata.get("sender_team_id")
+    if not parsed.metadata.get("sender_is_external"):
+        return None
+    return _slack_handle(parsed)
+
+
+def _slack_handle(
+    parsed: ParsedInboundSurfaceEvent,
+) -> tuple[IdentityKind, str, bool] | None:
+    # Vouched for: the event that names them is one Slack signed.
+    team = parsed.metadata.get("sender_team_id")
     user = parsed.sender_external_user_id
-    if not metadata.get("sender_is_external") or not isinstance(team, str) or not user:
+    if not isinstance(team, str) or not team or not user:
         return None
     return IdentityKind.SLACK, f"{team}:{user}", True

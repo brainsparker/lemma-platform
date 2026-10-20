@@ -141,7 +141,9 @@ export function handleText(handle: ContactHandle): string {
     if (handle.kind === "PHONE") return "+" + handle.value.replace(/^\+/, "");
     if (handle.kind === "TELEGRAM") return "Telegram " + handle.value;
     if (handle.kind === "HOST") return "Signed in on your site";
-    if (handle.kind === "SLACK") return "Slack, from another company";
+    // A colleague in a workspace the organization holds is one too, so it
+    // says only where they write from, not whose company they are in.
+    if (handle.kind === "SLACK") return "Slack";
     if (handle.kind === "TEAMS") return "Teams, from another company";
     if (handle.kind === "WEB") return "Chat on your website";
     return handle.value;

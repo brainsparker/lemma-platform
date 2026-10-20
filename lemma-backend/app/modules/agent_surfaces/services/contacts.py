@@ -7,8 +7,11 @@ unless the bot is the pod's own and its contact policy says otherwise (see
 
 * **Who they are** is a handle something trustworthy vouched for: the WhatsApp
   number in a payload Meta signed, the Telegram user id in one Telegram did, an
-  email address the receiving mail service authenticated. Nothing else -- not a
-  display name, not an address typed into a message -- makes somebody a contact.
+  email address the receiving mail service authenticated, and -- on a bot in a
+  Slack workspace the pod's organization holds -- a full member of that
+  workspace in an event Slack signed (``slack_workspace_people``). Nothing
+  else -- not a display name, not an address typed into a message -- makes
+  somebody a contact.
 * **Where it runs.** In a private conversation of their own, belonging to the
   member who looks after the bot's contacts and marked with the contact's id,
   so every run in it authorizes as nobody and reads only what is Public (see
@@ -47,6 +50,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
     SurfaceCredentialMode,
+    SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
@@ -68,6 +72,9 @@ from app.modules.agent_surfaces.services.outsider_limits import ContactTurnLimit
 from app.modules.agent_surfaces.services.sender_handles import (
     SenderHandle,
     private_handle,
+)
+from app.modules.agent_surfaces.services.slack_workspace_people import (
+    WorkspacePeople,
 )
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
@@ -211,11 +218,13 @@ class ContactDoor:
         membership: SurfacePodMembershipPort,
         limiter: ContactTurnLimiter | None = None,
         windows: ContactWindows | None = None,
+        people: WorkspacePeople | None = None,
     ) -> None:
         self.uow = uow
         self.membership = membership
         self.limiter = limiter or ContactTurnLimiter()
         self.windows = windows or ContactWindows()
+        self.people = people or WorkspacePeople(uow)
 
     async def preferences(
         self,
@@ -230,6 +239,11 @@ class ContactDoor:
         Asked of every private message to the pod's own bot from somebody not
         in the pod, before anything else about them: an opt-out holds with
         nobody looking after contacts, and for a handle no contact has yet.
+
+        Not on Slack: nothing the pod sends reaches a Slack handle but an
+        answer, so there is nothing to opt out of, and a colleague typing
+        "stop" to a bot means the conversation, not the pod's mail. It is
+        answered as anything else they write.
         """
         handle = private_handle(parsed)
         if not parsed.is_dm or handle is None or not is_pods_own_bot(surface):
@@ -288,12 +302,35 @@ class ContactDoor:
             not parsed.is_dm
             or policy.answer is ContactAnswer.OFF
             or not is_pods_own_bot(surface)
-            or private_handle(parsed) is None
+            or (
+                parsed.platform is not SurfacePlatform.SLACK
+                and private_handle(parsed) is None
+            )
         ):
             return False
-        if sender.internal_user_id is None:
-            return True
-        return not await self._in_pod(sender.internal_user_id, surface.pod_id)
+        if sender.internal_user_id is not None and await self._in_pod(
+            sender.internal_user_id, surface.pod_id
+        ):
+            return False
+        return await self._contact_handle_of(surface, parsed, sender) is not None
+
+    async def _contact_handle_of(
+        self,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        sender: ResolvedSurfaceUser,
+    ) -> SenderHandle | None:
+        """The handle a private message from outside the pod names its sender by.
+
+        On Slack, only a full member of a workspace the pod's organization
+        holds has one (``slack_workspace_people``): anybody else writing to a
+        workspace bot privately is refused, as before.
+        """
+        if parsed.platform is SurfacePlatform.SLACK:
+            return await self.people.colleague_handle(
+                surface, parsed, sender, private=True
+            )
+        return private_handle(parsed)
 
     async def prepare(
         self,
@@ -311,7 +348,7 @@ class ContactDoor:
         reached. Each is either somebody we cannot be sure is there, something
         that must not be answered, or somebody we already decided not to.
         """
-        handle = private_handle(parsed)
+        handle = await self._contact_handle_of(surface, parsed, sender)
         owner = surface.config.contacts.looked_after_by
         if (
             handle is None

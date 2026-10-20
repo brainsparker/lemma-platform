@@ -682,6 +682,7 @@ async def test_a_member_who_writes_holds_the_contact_until_they_go_quiet(
     assert any("the agent answers them again" in line.body for line in told)
 
 
+@pytest.mark.drives_work
 async def test_a_member_assigned_a_contact_is_told_when_they_write(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,

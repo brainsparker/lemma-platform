@@ -253,7 +253,10 @@ async def test_a_transfer_is_only_for_its_own_host_with_its_own_bytes(
     host_id = UUID(mine["host_id"])
 
     staged = await store.stage_for_host(
-        host_id=host_id, workspace=uuid4(), data=b"secret file", ttl_seconds=60
+        host_id=host_id,
+        workspace=uuid4(),
+        data=b"secret file",
+        ttl_seconds=60,
     )
     path = f"/agent-host/transfers/{staged.id}"
     # No credential, a made-up one, and another paired host: none of them.

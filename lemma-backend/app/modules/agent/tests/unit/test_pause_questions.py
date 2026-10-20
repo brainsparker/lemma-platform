@@ -102,7 +102,7 @@ def test_an_approval_line_shows_the_action_and_masks_its_secrets():
         )
     )
     assert secret not in text and secret not in str(question)
-    assert "api.example.com" in text
+    assert "https://api.example.com/x" in text
 
     text, question = shown(approval({"cmd": "echo " + "x" * 10_000}))
     assert len(str(question["action_text"])) <= MAX_ACTION_CHARS

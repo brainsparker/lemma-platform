@@ -83,9 +83,10 @@ def _wants_full_width(metadata: Mapping[str, object] | None) -> bool:
     caller, the same seam ``agent_display_name`` and ``attachments`` already
     travel on. A body is a readable 640px column unless somebody says
     otherwise, which is right for a reply and wrong for the occasional message
-    whose whole point is a wide table or layout.
+    whose whole point is a wide table or layout. Only a real ``True`` asks: the
+    metadata is untyped, and ``bool("false")`` would drop the cap.
     """
-    return bool((metadata or {}).get("full_width"))
+    return (metadata or {}).get("full_width") is True
 
 
 def _idempotency_key(metadata: dict[str, Any] | None) -> str | None:

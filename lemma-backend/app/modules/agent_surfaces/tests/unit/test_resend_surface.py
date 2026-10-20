@@ -128,6 +128,27 @@ async def test_a_full_width_reply_reaches_the_send_uncapped():
     assert "max-width:640px" not in html
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asked", ["false", "true", 1, None])
+async def test_only_a_real_true_lifts_the_width_cap(asked):
+    """The metadata is untyped: a string "false" must not read as yes."""
+    service = ResendPlatformService(
+        {"api_key": "re_test", "from_address": "pod-1@ops.lemma.work"}
+    )
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.RESEND,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="<root@example.com>",
+        message_text="the question",
+        reply_target={"recipient_email": "bob@example.com", "subject": "Standup"},
+    )
+
+    with platform_http(answer_json({"id": "email-1"})) as http:
+        await service.send_message(event, "hello", {"full_width": asked})
+
+    assert "max-width:640px" in http.json_of(http.requests[-1])["html"]
+
+
 async def test_a_resend_surface_without_an_address_is_refused(monkeypatch):
     """The `pod-<hex>@` fallback is gone, and its absence is the point.
 

@@ -1119,24 +1119,12 @@ export const liveSource: PodSource = {
         return { teamId: bound.team_id, teamName: bound.team_name ?? null };
     },
 
-    async previewSlackPerson(link: SlackPersonLink) {
-        const preview = await lemma().podSurfaces.previewSlackPerson({
+    async startSlackSignIn(link: SlackPersonLink): Promise<string> {
+        const started = await lemma().podSurfaces.startSlackSignIn({
             team_id: link.teamId,
             slack_user_id: link.slackUserId,
-            expires: link.expires,
-            signature: link.signature,
         });
-        return { teamName: preview.team_name ?? null, slackUserName: preview.slack_user_name ?? null };
-    },
-
-    async linkSlackPerson(link: SlackPersonLink): Promise<SlackManagedWorkspace> {
-        const linked = await lemma().podSurfaces.linkSlackPerson({
-            team_id: link.teamId,
-            slack_user_id: link.slackUserId,
-            expires: link.expires,
-            signature: link.signature,
-        });
-        return { teamId: linked.team_id, teamName: linked.team_name ?? null };
+        return started.authorization_url;
     },
 
     async addCustomApp(

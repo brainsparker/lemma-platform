@@ -96,8 +96,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/public/web/{public_key}/messages` | `public.web.message.send` | Web Send Message |
 | POST | `/public/web/{public_key}/rows` | `public.web.row.add` | Web Add Row |
 | POST | `/public/web/{public_key}/session` | `public.web.session.start` | Web Start Session |
-| POST | `/surface-setup/slack/people` | `agent.surface.slack_person.link` | Link Slack Person |
-| POST | `/surface-setup/slack/people/preview` | `agent.surface.slack_person.preview` | Preview Slack Person Link |
+| POST | `/surface-setup/slack/people/sign-in` | `agent.surface.slack_person.sign_in` | Start Slack Sign In |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |

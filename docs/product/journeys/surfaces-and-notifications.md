@@ -896,6 +896,37 @@ Public, the way a group's people from outside it are.
 
 ---
 
+### PS-SURF-052 — Lemma's own Slack app sets a workspace's teammates up, and answers nobody
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_slack_manager_e2e.py`
+> and `connectors/tests/e2e/test_account_connected_fact_e2e.py`. A scenario
+> needs a forged Slack workspace that signs as Lemma's own app and completes
+> Sign in with Slack, which the forged chats do not yet.
+
+- The system shall make a Slack workspace one organization's when an owner or
+  editor installs Lemma's own app there from their own signed-in browser, and
+  shall refuse a second organization rather than move it.
+- The system shall know a Slack user as a Lemma person only by Slack's own
+  word -- the install that names its installer, or Sign in with Slack started by
+  that person from their own Home tab and finished in the same Lemma session as
+  that same Slack user -- and never by a profile email or a link somebody else
+  sent.
+- The system shall show each known person, on Lemma's Home tab in Slack, the
+  teammates they can see in the organization, one per agent, with "Add to
+  Slack" for those not there yet, and shall finish adding one once Slack's
+  Allow comes back, without a visit to Lemma.
+- When Lemma's app is invited to a channel, the system shall ask the inviter
+  which teammate joins, bring that teammate in under its own name with the
+  group hello, keep the channel as private as Slack says it is, and leave.
+- The system shall never answer a question through Lemma's own app, and
+  nothing said to it shall reach a pod.
+
+**Contracts:** `agent.surface.slack_manager.list`,
+`agent.surface.slack_manager.bind`, `agent.surface.slack_person.sign_in`
+
+---
+
 ## Not covered here
 
 | Concern | Where it lives |

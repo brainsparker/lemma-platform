@@ -6,7 +6,7 @@ import type { TelegramManagedBotSetupRequest } from "../openapi_client/models/Te
 import type { SlackAppCreateRequest } from "../openapi_client/models/SlackAppCreateRequest.js";
 import type { SlackConfigurationTokenRequest } from "../openapi_client/models/SlackConfigurationTokenRequest.js";
 import type { SlackManagerBindRequest } from "../openapi_client/models/SlackManagerBindRequest.js";
-import type { SlackPersonLinkRequest } from "../openapi_client/models/SlackPersonLinkRequest.js";
+import type { SlackSignInRequest } from "../openapi_client/models/SlackSignInRequest.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 
 /**
@@ -205,7 +205,8 @@ export class PodSurfacesNamespace {
   /**
    * Make Lemma's own app the manager of the workspace an account authorised it
    * in. The workspace becomes the organization's, and the person who
-   * authorised it is known in Slack from then on.
+   * authorised it is known in Slack from then on. Only for a grant this
+   * browser finished signed in as the caller.
    */
   bindSlackManager(podId: string, request: SlackManagerBindRequest) {
     return this.client.request(() =>
@@ -214,22 +215,14 @@ export class PodSurfacesNamespace {
   }
 
   /**
-   * Prove the signed-in person is the Slack user whose App Home showed the
-   * "Connect your Lemma account" link these values came from.
+   * Start Sign in with Slack for the signed-in person, to prove they are the
+   * Slack user their App Home's "Connect your Lemma account" link was for.
+   * Returns Slack's sign-in page; the callback connects only when it sees this
+   * same Lemma session and Slack names that same Slack user and workspace.
    */
-  /**
-   * Whose Slack account a "Connect your Lemma account" link would connect,
-   * checked and named without connecting anything -- so the page can ask first.
-   */
-  previewSlackPerson(request: SlackPersonLinkRequest) {
+  startSlackSignIn(request: SlackSignInRequest) {
     return this.client.request(() =>
-      AgentSurfacesService.agentSurfaceSlackPersonPreview(request),
-    );
-  }
-
-  linkSlackPerson(request: SlackPersonLinkRequest) {
-    return this.client.request(() =>
-      AgentSurfacesService.agentSurfaceSlackPersonLink(request),
+      AgentSurfacesService.agentSurfaceSlackPersonSignIn(request),
     );
   }
 }

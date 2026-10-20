@@ -16,8 +16,8 @@ import type { SlackConfigurationTokenRequest } from '../models/SlackConfiguratio
 import type { SlackManagedWorkspaceListResponse } from '../models/SlackManagedWorkspaceListResponse.js';
 import type { SlackManagedWorkspaceResponse } from '../models/SlackManagedWorkspaceResponse.js';
 import type { SlackManagerBindRequest } from '../models/SlackManagerBindRequest.js';
-import type { SlackPersonLinkPreviewResponse } from '../models/SlackPersonLinkPreviewResponse.js';
-import type { SlackPersonLinkRequest } from '../models/SlackPersonLinkRequest.js';
+import type { SlackSignInRequest } from '../models/SlackSignInRequest.js';
+import type { SlackSignInResponse } from '../models/SlackSignInResponse.js';
 import type { SurfaceCreateRequest } from '../models/SurfaceCreateRequest.js';
 import type { SurfacePlatformSetupGuide } from '../models/SurfacePlatformSetupGuide.js';
 import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
@@ -233,6 +233,9 @@ export class AgentSurfacesService {
      * Bind Slack Manager
      * Make Lemma's own app this workspace's manager. The workspace becomes the
      * organization's, and the person who authorised it is known in Slack.
+     *
+     * Only for a grant this browser finished signed in as the caller: a consent
+     * link somebody else completed is refused.
      * @param podId
      * @param requestBody
      * @returns SlackManagedWorkspaceResponse Successful Response
@@ -710,41 +713,22 @@ export class AgentSurfacesService {
         });
     }
     /**
-     * Link Slack Person
-     * Say that the signed-in person is the Slack user whose App Home showed the link.
-     * @param requestBody
-     * @returns SlackManagedWorkspaceResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentSurfaceSlackPersonLink(
-        requestBody: SlackPersonLinkRequest,
-    ): CancelablePromise<SlackManagedWorkspaceResponse> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/surface-setup/slack/people',
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Preview Slack Person Link
-     * Say whose Slack account this link would connect to the signed-in person.
+     * Start Slack Sign In
+     * Start Sign in with Slack for the signed-in person, to prove they are the
+     * Slack user their App Home's link was for.
      *
-     * Connects nothing. The page shows it and asks first, so a link somebody
-     * else sent cannot connect their Slack account to yours unannounced.
+     * Connects nothing. The callback connects only when it sees this same Lemma
+     * session and Slack names this same Slack user and workspace.
      * @param requestBody
-     * @returns SlackPersonLinkPreviewResponse Successful Response
+     * @returns SlackSignInResponse Successful Response
      * @throws ApiError
      */
-    public static agentSurfaceSlackPersonPreview(
-        requestBody: SlackPersonLinkRequest,
-    ): CancelablePromise<SlackPersonLinkPreviewResponse> {
+    public static agentSurfaceSlackPersonSignIn(
+        requestBody: SlackSignInRequest,
+    ): CancelablePromise<SlackSignInResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/surface-setup/slack/people/preview',
+            url: '/surface-setup/slack/people/sign-in',
             body: requestBody,
             mediaType: 'application/json',
             errors: {

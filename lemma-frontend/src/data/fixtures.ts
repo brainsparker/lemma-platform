@@ -3020,16 +3020,10 @@ export const fixtureSource: PodSource = {
         slackManagedWorkspaces = [bound];
         return bound;
     },
-    async previewSlackPerson() {
+    async startSlackSignIn(link: SlackPersonLink) {
         await wait(300);
-        return { teamName: "Sample workspace", slackUserName: "Sam Rivera" };
-    },
-    async linkSlackPerson(link: SlackPersonLink) {
-        await wait(400);
-        if (link.expires * 1000 < Date.now()) {
-            throw new Error("That link has expired. Open Lemma's Home tab in Slack and connect again.");
-        }
-        return { teamId: link.teamId, teamName: "Sample workspace" };
+        // The sample has no Slack: come straight back as if it said yes.
+        return `/slack/connect?connected=1&team=${encodeURIComponent(link.teamId)}`;
     },
     async addCustomApp() {
         await wait(600);

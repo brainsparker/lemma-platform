@@ -17,7 +17,10 @@ from ..openapi_client.api.agent_surfaces import (
     agent_surface_slack_app_creation_forget,
     agent_surface_slack_app_creation_list,
     agent_surface_slack_app_creation_save,
+    agent_surface_slack_manager_bind,
+    agent_surface_slack_manager_list,
     agent_surface_slack_manifest,
+    agent_surface_slack_person_sign_in,
     agent_surface_telegram_managed_get,
     agent_surface_telegram_managed_start,
     agent_surface_update,
@@ -46,6 +49,17 @@ from ..openapi_client.models.slack_app_workspace_response import (
 from ..openapi_client.models.slack_configuration_token_request import (
     SlackConfigurationTokenRequest,
 )
+from ..openapi_client.models.slack_managed_workspace_list_response import (
+    SlackManagedWorkspaceListResponse,
+)
+from ..openapi_client.models.slack_managed_workspace_response import (
+    SlackManagedWorkspaceResponse,
+)
+from ..openapi_client.models.slack_manager_bind_request import (
+    SlackManagerBindRequest,
+)
+from ..openapi_client.models.slack_sign_in_request import SlackSignInRequest
+from ..openapi_client.models.slack_sign_in_response import SlackSignInResponse
 from ..openapi_client.models.surface_create_request import SurfaceCreateRequest
 from ..openapi_client.models.surface_platform_setup_guide import (
     SurfacePlatformSetupGuide,
@@ -199,6 +213,37 @@ class PodSurfaces(BoundResource):
             body=request,
             body_model=SlackAppCreateRequest,
             **kwargs,
+        )
+
+    def slack_managed_workspaces(self) -> SlackManagedWorkspaceListResponse:
+        """The Slack workspaces Lemma's own app manages for this pod's
+        organization. Lemma's app answers nobody: it is where a workspace sees
+        its teammates, adds one, and hands one a channel."""
+        return self._call(agent_surface_slack_manager_list, self._pod_uuid())
+
+    def bind_slack_manager(
+        self, request: SlackManagerBindRequest | dict
+    ) -> SlackManagedWorkspaceResponse:
+        """Make Lemma's own app the manager of the workspace an account
+        (``account_id``) authorised it in. Only for a grant finished in a
+        browser signed in as the caller."""
+        return self._call(
+            agent_surface_slack_manager_bind,
+            self._pod_uuid(),
+            body=request,
+            body_model=SlackManagerBindRequest,
+        )
+
+    def start_slack_sign_in(
+        self, request: SlackSignInRequest | dict
+    ) -> SlackSignInResponse:
+        """Start Sign in with Slack, proving the signed-in person is the Slack
+        user (``team_id``, ``slack_user_id``) their App Home's link was for.
+        Open the returned ``authorization_url`` in the same browser session."""
+        return self._call(
+            agent_surface_slack_person_sign_in,
+            body=request,
+            body_model=SlackSignInRequest,
         )
 
     def start_telegram_bot_setup(

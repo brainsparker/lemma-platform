@@ -42,8 +42,8 @@ Resend address.
 | `surface_receiver_state` | One cursor per polling receiver (Telegram offset, Resend cursor, the Telegram manager bot), written in the transaction that stores the messages before it, so a receiver that moves to another worker resumes without a gap or a duplicate |
 | `slack_configuration_tokens` | An organization's Slack app configuration token per workspace: what lets Lemma create a teammate's own Slack app with `apps.manifest.create`. It is a person's token -- Slack creates every app as the Slack user who generated it (`slack_user_id`) -- so an owner or editor pastes its refresh token once and Lemma rotates it before use. Both halves are encrypted with the secret cipher and listed in `crypto.rotation.REGISTRY`. Refresh tokens are treated as single-use: `generation` moves on every stored pair, `rotation_claimed_until` is one rotator's lease on the database clock, `refused_at` marks a stored token Slack no longer accepts (cleared by the next paste), and `saved_at` is when a person last pasted one. Per (organization, workspace): several organizations may make their own teammates' apps in one workspace. Forgetting it does not revoke it at Slack, which offers no call to do so: it stays valid until its owner revokes it there |
 | `slack_pending_app_bindings` | A teammate's Slack app waiting for the account its authorisation makes, unique per (agent, workspace) and per install (`auth_config_id`, cascading with it). Lemma creating the app writes one (`source` `WEB`; `SLACK` from Lemma's Home tab), a retried create answers from it, and `surfaces.slack_unauthorised_apps` deletes from Slack, with their installs, the apps nobody authorised within a week. `app_id` is null for an app the person brought, which Lemma never deletes |
-| `slack_manager_installs` | Lemma's own Slack app in a workspace and the one organization it belongs to (unique per workspace and per connector account). Unlike configuration tokens, one organization per workspace: it is where that workspace's people meet the organization |
-| `slack_workspace_people` | Slack users proven to be Lemma people across a workspace, by the install itself (`INSTALL`) or Sign in with Slack (`OIDC`); one Slack user per Lemma user per workspace. Not `surface_verified_identities`, which is scoped to one installation and written after an emailed code |
+| `slack_manager_installs` | Lemma's own Slack app in a workspace and the one organization it belongs to (unique per workspace and per connector account). Unlike configuration tokens, one organization per workspace: it is where that workspace's people meet the organization. Bound from a grant of Lemma's app finished in the binder's own browser session (`PUT .../slack/manager`); a second organization is refused, never moved, and removing Lemma's app in Slack (`app_uninstalled`) deletes the row and frees the workspace. `bot_user_id` is the manager bot, which `tokens_revoked` and a teammate's own join compare against |
+| `slack_workspace_people` | Slack users proven to be Lemma people across a workspace, by Slack's own word: the install's grant naming its installer (`INSTALL`), or Sign in with Slack (`OIDC`, `services/slack_person_proof.py`); never a profile email, which a workspace admin can edit. One Slack user per Lemma user per workspace, both ways. A proof is written through to `agent_surface_external_users.resolved_user_id` (and any other Slack user of that workspace cached as the same person is cleared), so identity resolution and the group log see it. Not `surface_verified_identities`, which is scoped to one installation and written after an emailed code |
 
 Where a message was said, and where a conversation's answer goes, are the
 `channels` module's: every thread sits on a channel source, which keeps how to
@@ -83,6 +83,8 @@ impossible to leave stale.
 | `/surfaces/webhooks/{platform}`, `/surfaces/{surface_id}/webhook` | Platform-wide or direct webhook ingest/verification |
 | `/surfaces/teams/admin-consent/callback` | Teams tenant consent completion |
 | `/pods/{pod_id}/members/{member}/notices` | `POST {text}`: tell another member something, as a line in their own channel, pushed to them like any line of theirs (`services/direct_messages.py`). `member` is a pod member id, user id or email; takes `channel.write`; the same `Idempotency-Key` from the same caller is the same notice |
+| `/pods/{pod_id}/surface-setup/slack/manager` | `GET` the workspaces Lemma's own Slack app manages for the pod's organization; `PUT {account_id}` binds one from a grant of Lemma's app this browser finished |
+| `/surface-setup/slack/people/sign-in` | `POST {team_id, slack_user_id}`: start Sign in with Slack for the signed-in person; its callback (`.../sign-in/callback`, not in the client spec) records the proof |
 | `/pods/{pod_id}/channels/{c}/sources/{s}`, `/channels/whatsapp-groups`, `/channels/telegram-links` | A group source's settings (who answers its outsiders, and whether), starting a WhatsApp group (`Idempotency-Key`, `services/group_start_keys.py`) and minting a Telegram add-to-group link -- under the channel the group is, but here, since they talk to the platforms. The bot's settings page lists its groups with `GET /channels?source_surface=`, through the lister `api/controllers/source_controller.py` registers (`channels.contracts.source_settings`) |
 
 ## Ingress and egress
@@ -597,6 +599,57 @@ is answered *for the pod*, in a group the pod has opened to them.
   either keeps its kind. `surface_send_message` from a note's run is refused.
   In a contact's conversation a note is the keeper's alone: no later turn of
   the contact's reads it.
+
+### Lemma's own Slack app manages a workspace
+
+One Slack app is one bot user, so each teammate answers in Slack through an app
+of its own (`slack_app_provisioning.py`). Lemma's own app is the workspace's
+**manager**, and answers nobody (`services/slack_manager.py`): its Home tab is
+the roster of the viewer's teammates, one row per agent with an app there and
+an "Add to Slack" for each pod's own agent that has none
+(`slack_manager_bots.py`); invited to a channel, it asks the inviter which
+teammate should join, invites that bot (`conversations.invite`, public or
+private, so teammates need no `channels:join`), and leaves. A DM or mention is
+answered with who does answer.
+
+- **Its own lane.** A delivery is the manager's when Lemma's app signed it, no
+  teammate's surface receives it, and Lemma's app manages that workspace --
+  `_verify_inbound_request` returns that as `InboundVerification.manager_team`,
+  never as an empty receiver list. The controller decides it once, before
+  onboarding and before `accept()`: nothing the manager receives becomes a
+  `surface_inbound_messages` row, is classified, or reaches
+  `apply_group_updates` (where its own `channel_left` would read as the bot
+  leaving and archive the teammate's mirror). What Slack's three seconds
+  require -- opening a modal, answering a submission -- is answered in the
+  request; everything else is one `surface.slack_manager` item carrying ids,
+  keyed by Slack's event id. **Webhook only**: the manager has no surface, so
+  Socket Mode never reaches it.
+- **Secrets typed into its modal** (a configuration refresh token, a hand-made
+  app's client and signing secrets) never go into a work item: the request
+  encrypts them with the secret cipher into Redis for ten minutes
+  (`slack_manager_form.py`) and the item carries a reference.
+- **Proof of a person** is Slack's: the install grant names its installer, and
+  everybody else signs in with Slack from their Home's link. The link says only
+  whom it was shown to; the callback requires the same Lemma session that
+  started it, that Slack names that same user and workspace, and that the
+  person is in the workspace's organization. A link sent by somebody else is
+  refused, whoever opens it.
+- **Handing a channel over** writes the teammate's route and place first --
+  private unless Slack says the channel is public -- then invites; a refused
+  invite takes both back. The teammate's own `member_joined_channel`, invited by
+  the manager bot, prompts nobody. Its first word is the group hello
+  (`group_hello.hello_for`), which says the pod keeps what is said there.
+- **An Allow from Slack finishes itself.** The modal's connect request carries
+  the purpose `slack_teammate_app`; connectors' `ConnectorAccountConnected`
+  (new and renewed grants) feeds `surface.slack_app_allowed`, which makes the
+  teammate's surface for the pending row's agent and deletes the row. An
+  ordinary Slack connect has no purpose and is never one.
+- **Its messages are Slack-native**, not channel lines: the manager belongs to
+  an organization, not a pod, and has no channel to deliver through. Views,
+  modals and ephemerals answer whoever just acted; a message that is owed ("X
+  is in Slack now", a teammate's hello) is a work item
+  (`surface.slack_manager_message`, `surface.slack_teammate_hello`) staged in
+  the transaction that owes it and keyed by its cause.
 
 ## Authorization and security
 

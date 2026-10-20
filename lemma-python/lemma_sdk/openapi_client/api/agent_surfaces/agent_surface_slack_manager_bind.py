@@ -76,6 +76,9 @@ def sync_detailed(
      Make Lemma's own app this workspace's manager. The workspace becomes the
     organization's, and the person who authorised it is known in Slack.
 
+    Only for a grant this browser finished signed in as the caller: a consent
+    link somebody else completed is refused.
+
     Args:
         pod_id (UUID):
         body (SlackManagerBindRequest):
@@ -111,6 +114,9 @@ def sync(
      Make Lemma's own app this workspace's manager. The workspace becomes the
     organization's, and the person who authorised it is known in Slack.
 
+    Only for a grant this browser finished signed in as the caller: a consent
+    link somebody else completed is refused.
+
     Args:
         pod_id (UUID):
         body (SlackManagerBindRequest):
@@ -140,6 +146,9 @@ async def asyncio_detailed(
 
      Make Lemma's own app this workspace's manager. The workspace becomes the
     organization's, and the person who authorised it is known in Slack.
+
+    Only for a grant this browser finished signed in as the caller: a consent
+    link somebody else completed is refused.
 
     Args:
         pod_id (UUID):
@@ -173,6 +182,9 @@ async def asyncio(
 
      Make Lemma's own app this workspace's manager. The workspace becomes the
     organization's, and the person who authorised it is known in Slack.
+
+    Only for a grant this browser finished signed in as the caller: a consent
+    link somebody else completed is refused.
 
     Args:
         pod_id (UUID):

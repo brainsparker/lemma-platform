@@ -6,20 +6,20 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
-from ...models.slack_person_link_preview_response import SlackPersonLinkPreviewResponse
-from ...models.slack_person_link_request import SlackPersonLinkRequest
+from ...models.slack_sign_in_request import SlackSignInRequest
+from ...models.slack_sign_in_response import SlackSignInResponse
 from ...types import Response
 
 
 def _get_kwargs(
     *,
-    body: SlackPersonLinkRequest,
+    body: SlackSignInRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/surface-setup/slack/people/preview",
+        "url": "/surface-setup/slack/people/sign-in",
     }
 
     _kwargs["json"] = body.to_dict()
@@ -32,9 +32,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | SlackPersonLinkPreviewResponse | None:
+) -> ErrorResponse | SlackSignInResponse | None:
     if response.status_code == 200:
-        response_200 = SlackPersonLinkPreviewResponse.from_dict(response.json())
+        response_200 = SlackSignInResponse.from_dict(response.json())
 
         return response_200
 
@@ -51,7 +51,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | SlackPersonLinkPreviewResponse]:
+) -> Response[ErrorResponse | SlackSignInResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -63,24 +63,25 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
-    body: SlackPersonLinkRequest,
-) -> Response[ErrorResponse | SlackPersonLinkPreviewResponse]:
-    """Preview Slack Person Link
+    body: SlackSignInRequest,
+) -> Response[ErrorResponse | SlackSignInResponse]:
+    """Start Slack Sign In
 
-     Say whose Slack account this link would connect to the signed-in person.
+     Start Sign in with Slack for the signed-in person, to prove they are the
+    Slack user their App Home's link was for.
 
-    Connects nothing. The page shows it and asks first, so a link somebody
-    else sent cannot connect their Slack account to yours unannounced.
+    Connects nothing. The callback connects only when it sees this same Lemma
+    session and Slack names this same Slack user and workspace.
 
     Args:
-        body (SlackPersonLinkRequest): The values in the link a Slack user's App Home showed them.
+        body (SlackSignInRequest): Whom the App Home link was for.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | SlackPersonLinkPreviewResponse]
+        Response[ErrorResponse | SlackSignInResponse]
     """
 
     kwargs = _get_kwargs(
@@ -97,24 +98,25 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient | Client,
-    body: SlackPersonLinkRequest,
-) -> ErrorResponse | SlackPersonLinkPreviewResponse | None:
-    """Preview Slack Person Link
+    body: SlackSignInRequest,
+) -> ErrorResponse | SlackSignInResponse | None:
+    """Start Slack Sign In
 
-     Say whose Slack account this link would connect to the signed-in person.
+     Start Sign in with Slack for the signed-in person, to prove they are the
+    Slack user their App Home's link was for.
 
-    Connects nothing. The page shows it and asks first, so a link somebody
-    else sent cannot connect their Slack account to yours unannounced.
+    Connects nothing. The callback connects only when it sees this same Lemma
+    session and Slack names this same Slack user and workspace.
 
     Args:
-        body (SlackPersonLinkRequest): The values in the link a Slack user's App Home showed them.
+        body (SlackSignInRequest): Whom the App Home link was for.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | SlackPersonLinkPreviewResponse
+        ErrorResponse | SlackSignInResponse
     """
 
     return sync_detailed(
@@ -126,24 +128,25 @@ def sync(
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
-    body: SlackPersonLinkRequest,
-) -> Response[ErrorResponse | SlackPersonLinkPreviewResponse]:
-    """Preview Slack Person Link
+    body: SlackSignInRequest,
+) -> Response[ErrorResponse | SlackSignInResponse]:
+    """Start Slack Sign In
 
-     Say whose Slack account this link would connect to the signed-in person.
+     Start Sign in with Slack for the signed-in person, to prove they are the
+    Slack user their App Home's link was for.
 
-    Connects nothing. The page shows it and asks first, so a link somebody
-    else sent cannot connect their Slack account to yours unannounced.
+    Connects nothing. The callback connects only when it sees this same Lemma
+    session and Slack names this same Slack user and workspace.
 
     Args:
-        body (SlackPersonLinkRequest): The values in the link a Slack user's App Home showed them.
+        body (SlackSignInRequest): Whom the App Home link was for.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | SlackPersonLinkPreviewResponse]
+        Response[ErrorResponse | SlackSignInResponse]
     """
 
     kwargs = _get_kwargs(
@@ -158,24 +161,25 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient | Client,
-    body: SlackPersonLinkRequest,
-) -> ErrorResponse | SlackPersonLinkPreviewResponse | None:
-    """Preview Slack Person Link
+    body: SlackSignInRequest,
+) -> ErrorResponse | SlackSignInResponse | None:
+    """Start Slack Sign In
 
-     Say whose Slack account this link would connect to the signed-in person.
+     Start Sign in with Slack for the signed-in person, to prove they are the
+    Slack user their App Home's link was for.
 
-    Connects nothing. The page shows it and asks first, so a link somebody
-    else sent cannot connect their Slack account to yours unannounced.
+    Connects nothing. The callback connects only when it sees this same Lemma
+    session and Slack names this same Slack user and workspace.
 
     Args:
-        body (SlackPersonLinkRequest): The values in the link a Slack user's App Home showed them.
+        body (SlackSignInRequest): Whom the App Home link was for.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | SlackPersonLinkPreviewResponse
+        ErrorResponse | SlackSignInResponse
     """
 
     return (

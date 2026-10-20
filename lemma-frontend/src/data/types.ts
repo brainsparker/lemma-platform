@@ -706,11 +706,9 @@ export interface PodSource {
     /** Make Lemma's own app the manager of the workspace this account
      *  authorised it in. */
     bindSlackManager(podId: string, accountId: string): Promise<SlackManagedWorkspace>;
-    /** Whose Slack account a link would connect, before connecting it. */
-    previewSlackPerson(link: SlackPersonLink): Promise<{ teamName: string | null; slackUserName: string | null }>;
-    /** Prove the signed-in person is the Slack user whose App Home showed the
-     *  link these values came from. */
-    linkSlackPerson(link: SlackPersonLink): Promise<SlackManagedWorkspace>;
+    /** Start Sign in with Slack, to prove the signed-in person is the Slack
+     *  user their App Home's link was for. Returns Slack's page to open. */
+    startSlackSignIn(link: SlackPersonLink): Promise<string>;
     /** Register an app the organization made itself, so its credentials are
      *  what the authorisation runs against. Returns the auth config to
      *  authorise. */
@@ -841,10 +839,9 @@ export interface SlackManagedWorkspace {
     teamName: string | null;
 }
 
-/** The values in the "Connect your Lemma account" link from Slack. */
+/** Whom the "Connect your Lemma account" link from Slack was shown to. It
+ *  proves nothing by itself: Sign in with Slack does. */
 export interface SlackPersonLink {
     teamId: string;
     slackUserId: string;
-    expires: number;
-    signature: string;
 }

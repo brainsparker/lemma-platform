@@ -3,11 +3,9 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
- * The values in the link a Slack user's App Home showed them.
+ * Whom the App Home link was for.
  */
-export type SlackPersonLinkRequest = {
-    expires: number;
-    signature: string;
+export type SlackSignInRequest = {
     slack_user_id: string;
     team_id: string;
 };

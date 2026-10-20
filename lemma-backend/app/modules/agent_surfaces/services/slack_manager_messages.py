@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from uuid import UUID
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -55,6 +55,9 @@ from app.modules.agent_surfaces.services.slack_manager_context import (
 )
 
 logger = get_logger(__name__)
+
+#: Block Kit as the views build it, checked once as the JSON a work item carries.
+_AS_JSON = TypeAdapter(list[dict[str, JsonValue]])
 
 
 class SlackSendDeferred(Exception):
@@ -110,7 +113,9 @@ async def stage_welcome(
     after Lemma was removed is a new one, and is welcomed again."""
     if not installer_slack_user_id:
         return
-    ctx = await load_context(uow, team_id=team_id, slack_user_id=installer_slack_user_id)
+    ctx = await load_context(
+        uow, team_id=team_id, slack_user_id=installer_slack_user_id
+    )
     if ctx is None:
         return
     waiting = [
@@ -131,7 +136,7 @@ async def stage_welcome(
         team_id=team_id,
         slack_user_id=installer_slack_user_id,
         text=text,
-        blocks=blocks,
+        blocks=_AS_JSON.validate_python(blocks),
         cause=f"welcome:{install_id}",
     )
 

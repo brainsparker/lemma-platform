@@ -146,9 +146,7 @@ async def bind_slack_manager(
     return _response(bound)
 
 
-@people_router.get(
-    "/install", operation_id="agent.surface.slack_install.availability"
-)
+@people_router.get("/install", operation_id="agent.surface.slack_install.availability")
 async def slack_install_availability(
     user: CurrentUser, uow: UoWDep
 ) -> SlackInstallAvailabilityResponse:

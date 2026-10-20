@@ -626,13 +626,6 @@ class ConnectorService:
         purpose: str | None = None,
         omit_authorize_params: frozenset[str] = frozenset(),
     ) -> ConnectRequestEntity:
-        """Start a connect request; the consent page is its ``authorization_url``.
-
-        ``omit_authorize_params`` drops some of the install's own authorize
-        parameters for this request only (``ResolvedAuthInstall.
-        without_authorize_params``), for a caller that wants less than the
-        catalog asks for.
-        """
         await self._require_org_member(user_id=user_id, organization_id=organization_id)
         auth_config = await self._resolve_auth_config(
             organization_id=organization_id,

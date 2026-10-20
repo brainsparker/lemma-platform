@@ -350,9 +350,12 @@ async def test_an_ordinary_slack_connect_adopts_nothing_and_says_nothing(
     assert parse_qs(urlsplit(landed).query)["connect"] == ["connected"]
     await drain(_registry())
 
-    assert await scalar(
-        "SELECT count(*) FROM work_items WHERE kind = :kind", kind=INSTALLED_KIND
-    ) == 0
+    assert (
+        await scalar(
+            "SELECT count(*) FROM work_items WHERE kind = :kind", kind=INSTALLED_KIND
+        )
+        == 0
+    )
     assert await _bound_to(workspace.team) is None
     assert fake_slack._store.get_all("SLACK") == []
 
@@ -401,9 +404,12 @@ async def test_a_consent_link_finished_in_another_session_adopts_nothing(
     )
     await drain(_registry())
 
-    assert await scalar(
-        "SELECT count(*) FROM work_items WHERE kind = :kind", kind=INSTALLED_KIND
-    ) == 0
+    assert (
+        await scalar(
+            "SELECT count(*) FROM work_items WHERE kind = :kind", kind=INSTALLED_KIND
+        )
+        == 0
+    )
     assert await _bound_to(workspace.team) is None
     async with async_session_maker() as session:
         linked = await SlackManagerRepository(session).person(
@@ -459,7 +465,9 @@ async def test_two_organizations_adding_one_workspace_get_one_binding_and_one_re
 
     async def adopt(fact: ConnectorAccountConnected) -> bool:
         async with async_session_maker() as session:
-            return await adopt_workspace(SqlAlchemyUnitOfWork(session), fact) is not None
+            return (
+                await adopt_workspace(SqlAlchemyUnitOfWork(session), fact) is not None
+            )
 
     outcomes = await asyncio.gather(adopt(ours), adopt(theirs))
     assert sorted(outcomes) == [False, True]

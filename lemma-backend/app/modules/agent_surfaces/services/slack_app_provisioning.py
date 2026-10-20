@@ -87,6 +87,23 @@ from app.modules.pod.contracts.members import pod_name
 
 logger = get_logger(__name__)
 
+
+async def _finished[T](work: Awaitable[T]) -> T:
+    """``work`` run to its end even if this task is cancelled meanwhile.
+
+    ``asyncio.shield`` alone keeps the work going but lets the cancellation
+    unwind the caller at once, and the caller's ``async with`` then closes the
+    session the work is still using. So a cancellation here waits for the work
+    to finish, then goes on.
+    """
+    task = asyncio.ensure_future(work)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
+
+
 SLACK_CONNECTOR_ID = "slack"
 #: Rotate a little before Slack's 12 hours are up, so a token never expires
 #: between being read and being used.
@@ -352,7 +369,7 @@ class SlackAppProvisioner:
             # The install committed inside the connectors module, so a rollback
             # would undo nothing: undo it by hand, and the app with it, even
             # when what interrupted us was a cancellation.
-            await asyncio.shield(
+            await _finished(
                 self._undo(
                     request,
                     created=created,
@@ -473,11 +490,11 @@ class SlackAppProvisioner:
             )
             raise SlackAppCreationTokenExpiredError(team_id) from None
         except BaseException:
-            await asyncio.shield(self._release_rotation(row_id, generation))
+            await _finished(self._release_rotation(row_id, generation))
             raise
         # Slack has spent the old refresh token now: a cancellation before the
         # new pair is committed would lose it, so the store is shielded.
-        stored = await asyncio.shield(self._store_rotation(row_id, generation, rotated))
+        stored = await _finished(self._store_rotation(row_id, generation, rotated))
         if not stored:
             # A person pasted a new token while this rotated the old one; theirs
             # is kept, and this access token is still good to use once.

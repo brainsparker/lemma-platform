@@ -409,9 +409,11 @@ async def test_a_rotation_cancelled_after_slack_answers_still_keeps_the_pair(
     store = SlackConfigurationTokenRepository.store_rotation
 
     async def slow_store(self, *args, **kwargs):
+        stored = await store(self, *args, **kwargs)
+        # The row is written and not yet committed: cancel here.
         storing.set()
         await asyncio.sleep(0.3)
-        return await store(self, *args, **kwargs)
+        return stored
 
     monkeypatch.setattr(SlackConfigurationTokenRepository, "store_rotation", slow_store)
 
@@ -425,8 +427,9 @@ async def test_a_rotation_cancelled_after_slack_answers_still_keeps_the_pair(
     await asyncio.wait_for(storing.wait(), timeout=5)
     request.cancel()
     with pytest.raises(asyncio.CancelledError):
+        # Raised only once the store has committed: the session is not closed
+        # under it.
         await request
-    await asyncio.sleep(0.5)  # the shielded store finishes on its own
     monkeypatch.undo()
 
     assert len(fake.rotated) == 1
